@@ -534,7 +534,8 @@ async fn record_block_deliveries<S: StorageActorTrait>(
             continue;
         };
         let message = public_tx.message();
-        let Some(emission) = extract_emission(message.program_id, &message.instruction_data) else {
+        let message_program_id = lee_core::program::ProgramId::from(message.program_account_id);
+        let Some(emission) = extract_emission(message_program_id, &message.instruction_data) else {
             continue;
         };
 
@@ -562,7 +563,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
                 src_block_id: block.header.block_id,
                 src_block_hash: block_hash.0,
                 src_tx_index,
-                src_program_id: message.program_id,
+                src_program_id: message_program_id,
             },
             emission.target_program_id,
             &emission.target_accounts,

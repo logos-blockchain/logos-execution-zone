@@ -29,7 +29,7 @@ fn main() {
     let [faucet_pre, vault_pda_pre] = [pre_states[0].clone(), pre_states[1].clone()];
 
     let chained_calls = vec![ChainedCall {
-        program_id: faucet_program_id,
+        program_account_id: faucet_program_id.into(),
         instruction_data: to_vec(&faucet_core::Instruction::GenesisTransferVault {
             vault_program_id,
             recipient_id,

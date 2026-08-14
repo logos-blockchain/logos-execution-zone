@@ -121,7 +121,7 @@ pub fn new_definition(
         ..vault_a.clone()
     };
     let call_token_a = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![user_holding_a.clone(), vault_a_authorized],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_a_amount.into(),
@@ -136,7 +136,7 @@ pub fn new_definition(
         ..vault_b.clone()
     };
     let call_token_b = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![user_holding_b.clone(), vault_b_authorized],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_b_amount.into(),
@@ -150,7 +150,7 @@ pub fn new_definition(
         ..pool_definition_lp.clone()
     };
     let call_token_lp = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![pool_lp_authorized, user_holding_lp.clone()],
         &instruction,
     )

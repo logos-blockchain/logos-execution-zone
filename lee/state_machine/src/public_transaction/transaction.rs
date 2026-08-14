@@ -91,7 +91,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id(),
+            crate::test_methods::simple_balance_transfer().id().into(),
             vec![addr1, addr2],
             nonces,
             instruction,
@@ -169,7 +169,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id(),
+            crate::test_methods::simple_balance_transfer().id().into(),
             vec![addr1, addr1],
             nonces,
             instruction,
@@ -189,7 +189,7 @@ pub mod tests {
         let nonces = vec![0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id(),
+            crate::test_methods::simple_balance_transfer().id().into(),
             vec![addr1, addr2],
             nonces,
             instruction,
@@ -209,7 +209,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id(),
+            crate::test_methods::simple_balance_transfer().id().into(),
             vec![addr1, addr2],
             nonces,
             instruction,
@@ -230,7 +230,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 1_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id(),
+            crate::test_methods::simple_balance_transfer().id().into(),
             vec![addr1, addr2],
             nonces,
             instruction,
@@ -247,7 +247,7 @@ pub mod tests {
     fn empty_transaction_is_rejected() {
         let state = state_for_tests();
         let message = Message::new_preserialized(
-            crate::test_methods::simple_balance_transfer().id(),
+            crate::test_methods::simple_balance_transfer().id().into(),
             vec![],
             vec![],
             vec![0; 4],
@@ -264,7 +264,7 @@ pub mod tests {
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
-        let unknown_program_id = [0xdead_beef; 8];
+        let unknown_program_id: AccountId = [0xdead_beef_u32; 8].into();
         let message =
             Message::try_new(unknown_program_id, vec![addr1, addr2], nonces, instruction).unwrap();
 

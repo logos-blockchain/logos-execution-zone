@@ -36,7 +36,7 @@ fn main() {
     let mut chained_calls = Vec::new();
     for _i in 0..num_chain_calls {
         let new_chained_call = ChainedCall {
-            program_id: simple_transfer_id,
+            program_account_id: simple_transfer_id.into(),
             instruction_data: call_instruction_data.clone(),
             pre_states: vec![running_sender_pre.clone(), running_recipient_pre.clone()], /* <- Account order permutation here */
             pda_seeds: pda_seed.iter().copied().collect(),

@@ -147,7 +147,7 @@ fn dispatch(
         let mut call_pre_states = vec![marker.clone()];
         call_pre_states.extend(target_accounts.clone());
         let call = ChainedCall {
-            program_id: msg.target_program_id,
+            program_account_id: msg.target_program_id.into(),
             pre_states: call_pre_states,
             instruction_data: call_instruction_data,
             pda_seeds: vec![],

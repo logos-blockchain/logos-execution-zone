@@ -77,7 +77,7 @@ async fn main() {
             let account_id = account_id.parse().unwrap();
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
-                program.id(),
+                program.id().into(),
                 vec![account_id],
                 nonces,
                 instruction,
@@ -116,7 +116,7 @@ async fn main() {
             let to = to.parse().unwrap();
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
-                program.id(),
+                program.id().into(),
                 vec![from, to],
                 nonces,
                 instruction,

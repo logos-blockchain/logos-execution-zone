@@ -82,7 +82,7 @@ fn create_emits_chained_call_for_uninitialized_ata() {
 
     assert_eq!(post_states.len(), 3);
     assert_eq!(chained_calls.len(), 1);
-    assert_eq!(chained_calls[0].program_id, TOKEN_PROGRAM_ID);
+    assert_eq!(chained_calls[0].program_account_id, TOKEN_PROGRAM_ID.into());
 }
 
 #[test]

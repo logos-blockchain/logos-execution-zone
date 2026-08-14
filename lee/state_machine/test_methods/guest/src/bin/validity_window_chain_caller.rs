@@ -33,7 +33,7 @@ fn main() {
     ))
     .unwrap();
     let chained_call = ChainedCall {
-        program_id: chained_program_id,
+        program_account_id: chained_program_id.into(),
         instruction_data: chained_instruction,
         pre_states,
         pda_seeds: vec![],

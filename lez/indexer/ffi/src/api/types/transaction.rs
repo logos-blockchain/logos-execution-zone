@@ -2,13 +2,12 @@ use indexer_service_protocol::{
     AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
     EphemeralPublicKey, HashType, Nullifier, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
-    ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
+    ProgramDeploymentTransaction, Proof, PublicActionWithID, PublicKey, PublicMessage,
     PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
-    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature,
-    FfiVec,
+    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiVec,
     account::FfiAccount,
     vectors::{
         FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList,
@@ -50,7 +49,9 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PublicMessage {
-                program_id: ProgramId(value.message.program_id.data),
+                program_account_id: AccountId {
+                    value: value.message.program_account_id.data,
+                },
                 account_ids: {
                     let std_vec: Vec<_> = value.message.account_ids.into();
                     std_vec
@@ -87,7 +88,7 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
 
 #[repr(C)]
 pub struct FfiPublicMessage {
-    pub program_id: FfiProgramId,
+    pub program_account_id: FfiBytes32,
     pub account_ids: FfiAccountIdList,
     pub nonces: FfiNonceList,
     pub instruction_data: FfiInstructionDataList,
@@ -96,14 +97,14 @@ pub struct FfiPublicMessage {
 impl From<PublicMessage> for FfiPublicMessage {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
         } = value;
 
         Self {
-            program_id: program_id.into(),
+            program_account_id: program_account_id.into(),
             account_ids: account_ids
                 .into_iter()
                 .map(Into::into)

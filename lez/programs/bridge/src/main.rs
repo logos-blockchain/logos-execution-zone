@@ -91,7 +91,7 @@ fn main() {
                 bridge_for_vault.is_authorized = true;
                 let chained_calls = vec![
                     ChainedCall::new(
-                        vault_program_id,
+                        vault_program_id.into(),
                         vec![bridge_for_vault, recipient_vault],
                         &vault_core::Instruction::Transfer {
                             recipient_id,

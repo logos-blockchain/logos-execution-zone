@@ -1,42 +1,22 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{
-    account::Nonce,
-    program::{InstructionData, ProgramId},
-};
+use lee_core::{account::Nonce, program::InstructionData};
 use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::LeeError, program::Program};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x00";
 
-#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    pub program_id: ProgramId,
+    pub program_account_id: AccountId,
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
 }
 
-impl std::fmt::Debug for Message {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let program_id_hex = hex::encode(
-            self.program_id
-                .iter()
-                .flat_map(|n| n.to_le_bytes())
-                .collect::<Vec<u8>>(),
-        );
-        f.debug_struct("Message")
-            .field("program_id", &program_id_hex)
-            .field("account_ids", &self.account_ids)
-            .field("nonces", &self.nonces)
-            .field("instruction_data", &self.instruction_data)
-            .finish()
-    }
-}
-
 impl Message {
     pub fn try_new<T: BorshSerialize>(
-        program_id: ProgramId,
+        program_account_id: AccountId,
         account_ids: Vec<AccountId>,
         nonces: Vec<Nonce>,
         instruction: T,
@@ -44,7 +24,7 @@ impl Message {
         let instruction_data = Program::serialize_instruction(instruction)?;
 
         Ok(Self {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
@@ -53,13 +33,13 @@ impl Message {
 
     #[must_use]
     pub const fn new_preserialized(
-        program_id: ProgramId,
+        program_account_id: AccountId,
         account_ids: Vec<AccountId>,
         nonces: Vec<Nonce>,
         instruction_data: InstructionData,
     ) -> Self {
         Self {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
@@ -88,15 +68,16 @@ mod tests {
 
     use super::{Message, PREFIX};
 
-    // program_id [1_u32; 8], each word as LE u32.
-    const PROGRAM_ID_BYTES: [u8; 32] = [
+    // AccountId::from([1_u32; 8]), each word as LE u32 — From<ProgramId> is a direct byte
+    // reinterpretation, so this is also that ProgramId's LE bytes.
+    const PROGRAM_ACCOUNT_ID_BYTES: [u8; 32] = [
         1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
         0, 0,
     ];
 
     fn pinned_message(instruction_data: Vec<u8>) -> Message {
         Message::new_preserialized(
-            [1_u32; 8],
+            AccountId::new(PROGRAM_ACCOUNT_ID_BYTES),
             vec![AccountId::new([42; 32])],
             vec![Nonce(5)],
             instruction_data,
@@ -125,7 +106,7 @@ mod tests {
         // account_ids: u32 len=1 then AccountId([42; 32]); nonces: u32 len=1 then LE u128;
         // instruction_data: u32 len=0.
         let expected_borsh: Vec<u8> = [
-            &PROGRAM_ID_BYTES[..],
+            &PROGRAM_ACCOUNT_ID_BYTES[..],
             &[1, 0, 0, 0],
             &[42; 32],
             &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -141,7 +122,7 @@ mod tests {
         // instruction_data is Vec<u8>: u32 len=3 then the raw bytes, one wire byte per element —
         // pins the element width (the pre-borsh wire carried one u32 word per element).
         let expected_borsh: Vec<u8> = [
-            &PROGRAM_ID_BYTES[..],
+            &PROGRAM_ACCOUNT_ID_BYTES[..],
             &[1, 0, 0, 0],
             &[42; 32],
             &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],

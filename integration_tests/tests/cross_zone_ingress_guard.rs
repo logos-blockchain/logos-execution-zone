@@ -57,7 +57,7 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
     };
     let seen_id = inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id);
     let message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         vec![inbox_config_account_id(inbox_id), seen_id],
         vec![],
         Instruction::Dispatch(msg),

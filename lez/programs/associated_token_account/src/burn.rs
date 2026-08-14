@@ -32,7 +32,7 @@ pub fn burn_from_associated_token_account(
     holder_ata_auth.is_authorized = true;
 
     let chained_call = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![token_definition.clone(), holder_ata_auth],
         &token_core::Instruction::Burn {
             amount_to_burn: amount,

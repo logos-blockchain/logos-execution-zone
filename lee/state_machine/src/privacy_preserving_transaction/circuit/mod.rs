@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
-    account::AccountWithMetadata,
+    account::{AccountId, AccountWithMetadata},
     from_frame,
     program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
     to_frame,
@@ -97,7 +97,7 @@ pub fn execute_and_prove_with_padded_inputs(
     let mut program_outputs = Vec::new();
 
     let initial_call = ChainedCall {
-        program_id: initial_program.id(),
+        program_account_id: AccountId::from(initial_program.id()),
         instruction_data,
         pre_states,
         pda_seeds: vec![],
@@ -132,12 +132,17 @@ pub fn execute_and_prove_with_padded_inputs(
         env_builder.add_assumption(inner_receipt);
 
         for new_call in program_output.chained_calls.into_iter().rev() {
-            let next_program = dependencies.get(&new_call.program_id).ok_or(
+            let new_call_program_id = ProgramId::from(new_call.program_account_id);
+            let next_program = dependencies.get(&new_call_program_id).ok_or(
                 InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                    program_id: new_call.program_id,
+                    program_id: new_call_program_id,
                 },
             )?;
-            chained_calls.push_front((new_call, next_program, Some(chained_call.program_id)));
+            chained_calls.push_front((
+                new_call,
+                next_program,
+                Some(ProgramId::from(chained_call.program_account_id)),
+            ));
         }
 
         chain_calls_counter = chain_calls_counter

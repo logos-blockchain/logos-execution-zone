@@ -85,7 +85,7 @@ impl TpsTestManager {
             let owner_vault_id =
                 vault_core::compute_vault_account_id(vault_program_id, *account_id);
             let message = putx::Message::try_new(
-                vault_program_id,
+                vault_program_id.into(),
                 vec![*account_id, owner_vault_id],
                 vec![Nonce(0_u128)],
                 vault_core::Instruction::Claim { amount: 10 },
@@ -135,7 +135,7 @@ impl TpsTestManager {
             .map(|pair| {
                 let amount: u128 = 1;
                 let message = putx::Message::try_new(
-                    program.id(),
+                    program.id().into(),
                     [pair[0].1, pair[1].1].to_vec(),
                     [Nonce(1_u128)].to_vec(),
                     authenticated_transfer_core::Instruction::Transfer { amount },
