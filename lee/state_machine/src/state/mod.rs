@@ -5,7 +5,7 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
     account::{Account, AccountId, Data},
-    program::PROGRAM_STORAGE_OWNER,
+    program::{PROGRAM_STORAGE_OWNER, ProgramId},
 };
 
 use crate::{
@@ -279,6 +279,18 @@ impl V03State {
     #[must_use]
     pub fn get_account_by_id_ref(&self, account_id: AccountId) -> Option<&Account> {
         self.public_state.get(&account_id)
+    }
+
+    /// Looks up a deployed program's storage account by its `ProgramId`, verifying it is
+    /// actually owned by [`PROGRAM_STORAGE_OWNER`].
+    ///
+    /// An account at `AccountId::from(program_id)` that lacks this ownership isn't a deployed
+    /// program, whatever its contents — this is the single place that distinction is enforced,
+    /// so callers never have to remember to re-check it themselves.
+    #[must_use]
+    pub fn get_program(&self, program_id: ProgramId) -> Option<&Account> {
+        let account = self.get_account_by_id_ref(AccountId::from(program_id))?;
+        (account.program_owner == PROGRAM_STORAGE_OWNER).then_some(account)
     }
 
     #[must_use]
