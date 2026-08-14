@@ -98,7 +98,7 @@ impl ValidatedStateDiff {
         };
 
         let initial_caller_data = CallerData {
-            program_id: None,
+            caller_account_id: None,
             authorized_accounts: signer_account_ids.iter().copied().collect(),
         };
 
@@ -130,7 +130,7 @@ impl ValidatedStateDiff {
                 chained_call.instruction_data
             );
             let mut program_output = program.execute(
-                caller_data.program_id.map(AccountId::from),
+                caller_data.caller_account_id,
                 &chained_call.pre_states,
                 &chained_call.instruction_data,
             )?;
@@ -140,7 +140,7 @@ impl ValidatedStateDiff {
             );
 
             let authorized_pdas = compute_public_authorized_pdas(
-                caller_data.program_id.map(AccountId::from),
+                caller_data.caller_account_id,
                 &chained_call.pda_seeds,
             );
 
@@ -194,9 +194,9 @@ impl ValidatedStateDiff {
 
             // Verify that the program output's caller_account_id matches the actual caller.
             ensure!(
-                program_output.caller_account_id == caller_data.program_id.map(AccountId::from),
+                program_output.caller_account_id == caller_data.caller_account_id,
                 InvalidProgramBehaviorError::MismatchedCallerProgramId {
-                    expected: caller_data.program_id.map(AccountId::from),
+                    expected: caller_data.caller_account_id,
                     actual: program_output.caller_account_id,
                 }
             );
@@ -287,7 +287,7 @@ impl ValidatedStateDiff {
                 chained_calls.push_front((
                     new_call,
                     CallerData {
-                        program_id: Some(program_id),
+                        caller_account_id: Some(chained_call.program_account_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
