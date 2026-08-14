@@ -16,8 +16,8 @@ fn unchanged_post_states(
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -25,7 +25,7 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "Bridge cannot be invoked through chain calls"
     );
 
@@ -44,7 +44,7 @@ fn main() {
 
             assert_eq!(
                 bridge.account_id,
-                bridge_core::compute_bridge_account_id(self_program_id),
+                bridge_core::compute_bridge_account_id(self_account_id.into()),
                 "First account must be bridge PDA"
             );
 
@@ -56,7 +56,7 @@ fn main() {
 
             assert_eq!(
                 receipt.account_id,
-                bridge_core::deposit_receipt_account_id(self_program_id, l1_deposit_op_id),
+                bridge_core::deposit_receipt_account_id(self_account_id.into(), l1_deposit_op_id),
                 "Third account must be the deposit-receipt PDA"
             );
 
@@ -115,7 +115,7 @@ fn main() {
 
             // assert_eq!(
             //     bridge.account_id,
-            //     bridge_core::compute_bridge_account_id(self_program_id),
+            //     bridge_core::compute_bridge_account_id(self_account_id.into()),
             //     "Second account must be bridge PDA"
             // );
 
@@ -137,8 +137,8 @@ fn main() {
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         pre_states_clone,
         post_states,

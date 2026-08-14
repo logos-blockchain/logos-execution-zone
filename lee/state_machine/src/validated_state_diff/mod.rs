@@ -98,7 +98,7 @@ impl ValidatedStateDiff {
         };
 
         let initial_caller_data = CallerData {
-            program_id: None,
+            caller_account_id: None,
             authorized_accounts: signer_account_ids.iter().copied().collect(),
         };
 
@@ -130,7 +130,7 @@ impl ValidatedStateDiff {
                 chained_call.instruction_data
             );
             let mut program_output = program.execute(
-                caller_data.program_id,
+                caller_data.caller_account_id,
                 &chained_call.pre_states,
                 &chained_call.instruction_data,
             )?;
@@ -139,8 +139,10 @@ impl ValidatedStateDiff {
                 chained_call.program_account_id, program_output
             );
 
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
+            let authorized_pdas = compute_public_authorized_pdas(
+                caller_data.caller_account_id,
+                &chained_call.pda_seeds,
+            );
 
             // Account is authorized if it is either in the caller's authorized accounts or in the
             // list of PDAs the caller has authorized.
@@ -181,21 +183,21 @@ impl ValidatedStateDiff {
                 );
             }
 
-            // Verify that the program output's self_program_id matches the expected program ID.
+            // Verify that the program output's self_account_id matches the expected program ID.
             ensure!(
-                AccountId::from(program_output.self_program_id) == chained_call.program_account_id,
+                program_output.self_account_id == chained_call.program_account_id,
                 InvalidProgramBehaviorError::MismatchedProgramId {
                     expected: chained_call.program_account_id,
-                    actual: AccountId::from(program_output.self_program_id)
+                    actual: program_output.self_account_id
                 }
             );
 
-            // Verify that the program output's caller_program_id matches the actual caller.
+            // Verify that the program output's caller_account_id matches the actual caller.
             ensure!(
-                program_output.caller_program_id == caller_data.program_id,
+                program_output.caller_account_id == caller_data.caller_account_id,
                 InvalidProgramBehaviorError::MismatchedCallerProgramId {
-                    expected: caller_data.program_id,
-                    actual: program_output.caller_program_id,
+                    expected: caller_data.caller_account_id,
+                    actual: program_output.caller_account_id,
                 }
             );
 
@@ -288,7 +290,7 @@ impl ValidatedStateDiff {
                 chained_calls.push_front((
                     new_call,
                     CallerData {
-                        program_id: Some(program_id),
+                        caller_account_id: Some(chained_call.program_account_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
@@ -481,7 +483,7 @@ impl ValidatedStateDiff {
 
 #[derive(Debug)]
 struct CallerData {
-    program_id: Option<ProgramId>,
+    caller_account_id: Option<AccountId>,
     authorized_accounts: HashSet<AccountId>,
 }
 

@@ -130,7 +130,7 @@ impl ExecutionState {
         let mut program_outputs_iter = program_outputs.into_iter();
         let mut chain_calls_counter = 0;
 
-        while let Some((chained_call, caller_program_id)) = chained_calls.pop_front() {
+        while let Some((chained_call, caller_account_id)) = chained_calls.pop_front() {
             assert!(
                 chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
                 "Max chained calls depth is exceeded"
@@ -161,20 +161,20 @@ impl ExecutionState {
                 |_: Infallible| unreachable!("Infallible error is never constructed"),
             );
 
-            // Verify that the program output's self_program_id matches the expected program ID.
+            // Verify that the program output's self_account_id matches the expected program ID.
             // This ensures the proof commits to which program produced the output.
             assert_eq!(
-                program_output.self_program_id, current_program_id,
-                "Program output self_program_id does not match chained call program_id"
+                program_output.self_account_id, chained_call.program_account_id,
+                "Program output self_account_id does not match chained call program_account_id"
             );
 
-            // Verify that the program output's caller_program_id matches the actual caller.
+            // Verify that the program output's caller_account_id matches the actual caller.
             // This prevents a malicious user from privately executing an internal function
-            // by spoofing caller_program_id (e.g. passing caller_program_id = self_program_id
+            // by spoofing caller_account_id (e.g. passing caller_account_id = self_account_id
             // to bypass access control checks).
             assert_eq!(
-                program_output.caller_program_id, caller_program_id,
-                "Program output caller_program_id does not match actual caller"
+                program_output.caller_account_id, caller_account_id,
+                "Program output caller_account_id does not match actual caller"
             );
 
             // Check that the program is well behaved.
@@ -189,13 +189,14 @@ impl ExecutionState {
             }
 
             for next_call in program_output.chained_calls.iter().rev() {
-                chained_calls.push_front((next_call.clone(), Some(current_program_id)));
+                chained_calls
+                    .push_front((next_call.clone(), Some(chained_call.program_account_id)));
             }
 
             execution_state.validate_and_sync_states(
                 account_identities,
                 current_program_id,
-                caller_program_id,
+                caller_account_id,
                 &chained_call.pda_seeds,
                 program_output.pre_states,
                 program_output.post_states,
@@ -254,7 +255,7 @@ impl ExecutionState {
         &mut self,
         account_identities: &[InputAccountIdentity],
         program_id: ProgramId,
-        caller_program_id: Option<ProgramId>,
+        caller_account_id: Option<AccountId>,
         caller_pda_seeds: &[PdaSeed],
         output_pre_states: Vec<AccountWithMetadata>,
         output_post_states: Vec<AccountPostState>,
@@ -301,7 +302,7 @@ impl ExecutionState {
                         &mut self.authorized_accounts,
                         pre_account_id,
                         pre_state_position,
-                        caller_program_id,
+                        caller_account_id,
                         caller_pda_seeds,
                         previous_is_authorized,
                     );
@@ -536,7 +537,7 @@ fn bind_private_pda_position(
 /// previously-seen authorization or a matching caller seed (under the public or private
 /// derivation). When a caller seed matches, also records the `(caller, seed) → account_id`
 /// family binding and, for the private form, marks the position in
-/// `private_pda_bound_positions`. Only reachable when `caller_program_id.is_some()`,
+/// `private_pda_bound_positions`. Only reachable when `caller_account_id.is_some()`,
 /// top-level flows have no caller-emitted seeds, so binding at top level must come from the
 /// claim path. Free function so callers can pass individual `&mut self.*` field borrows
 /// without holding a borrow on the surrounding struct's other fields.
@@ -551,12 +552,16 @@ fn resolve_authorization_and_record_bindings(
     authorized_accounts: &mut HashSet<AccountId>,
     pre_account_id: AccountId,
     pre_state_position: usize,
-    caller_program_id: Option<ProgramId>,
+    caller_account_id: Option<AccountId>,
     caller_pda_seeds: &[PdaSeed],
     previous_is_authorized: bool,
 ) -> bool {
+    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
+    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact.
+    // `for_public_pda`/`for_private_pda`'s derivation formula is pinned to the caller's actual
+    // image id, not its dispatch-facing `AccountId`.
     let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> =
-        caller_program_id.and_then(|caller| {
+        caller_account_id.map(ProgramId::from).and_then(|caller| {
             caller_pda_seeds.iter().find_map(|seed| {
                 if AccountId::for_public_pda(&caller, seed) == pre_account_id {
                     return Some((*seed, false, caller));

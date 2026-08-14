@@ -4,7 +4,7 @@ use cross_zone_inbox_core::{
     inbox_source_marker_account_id,
 };
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata},
     program::{
         AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
         read_lee_inputs,
@@ -18,8 +18,8 @@ fn unchanged(pre: &AccountWithMetadata) -> AccountPostState {
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -27,21 +27,21 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "Inbox is only invoked as a top-level sequencer-origin transaction"
     );
 
     match instruction {
         Instruction::Dispatch(msg) => dispatch(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_words,
             &msg,
         ),
         Instruction::InitConfig(config) => init_config(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_words,
             &config,
@@ -51,8 +51,8 @@ fn main() {
 
 /// Delivers a finalized peer message to its target program, no-op on replay.
 fn dispatch(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
     msg: &CrossZoneMessage,
@@ -61,6 +61,11 @@ fn dispatch(
         msg.l1_inclusion_witness.is_none(),
         "l1_inclusion_witness must be None in v1"
     );
+
+    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
+    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
+    // for the PDA-derivation helpers below, which are pinned to the actual image id.
+    let self_program_id = ProgramId::from(self_account_id);
 
     // pre_states layout: [config, seen_shard, source marker, then the target accounts].
     let mut accounts = pre_states.into_iter();
@@ -158,8 +163,8 @@ fn dispatch(
     output_pre_states.extend(target_accounts);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         output_pre_states,
         post_states,
@@ -170,8 +175,8 @@ fn dispatch(
 
 /// Writes the inbox config into the config PDA exactly once at genesis.
 fn init_config(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
     config: &InboxConfig,
@@ -181,7 +186,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config_meta.account_id,
-        inbox_config_account_id(self_program_id),
+        inbox_config_account_id(self_account_id.into()),
         "account must be the inbox config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
@@ -191,8 +196,7 @@ fn init_config(
     // rewriting its own config data on a later call.
     if config_meta.account != Account::default() {
         assert_eq!(
-            config_meta.account.program_owner,
-            self_program_id.into(),
+            config_meta.account.program_owner, self_account_id,
             "inbox config PDA is owned by another program"
         );
         assert_eq!(
@@ -211,8 +215,8 @@ fn init_config(
         AccountPostState::new_claimed_if_default(config_account, Claim::Pda(inbox_config_seed()));
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![config_meta],
         vec![config_post],

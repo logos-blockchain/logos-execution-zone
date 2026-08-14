@@ -203,7 +203,7 @@ impl Case {
             pre_states,
             instruction_words,
         } = self;
-        let caller_program_id: Option<ProgramId> = None;
+        let caller_account_id: Option<ProgramId> = None;
 
         // One warmup pass discarded, then `exec_iters` samples. The executor has
         // large per-call setup overhead (ELF parsing, env init); reporting both
@@ -215,7 +215,7 @@ impl Case {
             let mut env_builder = ExecutorEnv::builder();
             env_builder
                 .write(&program.id())?
-                .write(&caller_program_id)?
+                .write(&caller_account_id)?
                 .write(&pre_states)?
                 .write(&instruction_words)?;
             let env = env_builder.build()?;
@@ -241,7 +241,7 @@ impl Case {
             let mut env_builder = ExecutorEnv::builder();
             env_builder
                 .write(&program.id())?
-                .write(&caller_program_id)?
+                .write(&caller_account_id)?
                 .write(&pre_states)?
                 .write(&instruction_words)?;
             let env = env_builder.build()?;

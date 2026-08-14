@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::AccountWithMetadata,
+    account::{AccountId, AccountWithMetadata},
     program::{InstructionData, ProgramId, ProgramOutput},
 };
 use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor, serde::to_vec};
@@ -54,7 +54,7 @@ impl Program {
 
     pub(crate) fn execute(
         &self,
-        caller_program_id: Option<ProgramId>,
+        caller_account_id: Option<AccountId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &InstructionData,
     ) -> Result<ProgramOutput, LeeError> {
@@ -62,8 +62,8 @@ impl Program {
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
         Self::write_inputs(
-            self.id,
-            caller_program_id,
+            AccountId::from(self.id),
+            caller_account_id,
             pre_states,
             instruction_data,
             &mut env_builder,
@@ -87,17 +87,17 @@ impl Program {
 
     /// Writes inputs to `env_builder` in the order expected by the programs.
     pub(crate) fn write_inputs(
-        program_id: ProgramId,
-        caller_program_id: Option<ProgramId>,
+        self_account_id: AccountId,
+        caller_account_id: Option<AccountId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &[u32],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
         env_builder
-            .write(&program_id)
+            .write(&self_account_id)
             .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         env_builder
-            .write(&caller_program_id)
+            .write(&caller_account_id)
             .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         let pre_states = pre_states.to_vec();
         env_builder

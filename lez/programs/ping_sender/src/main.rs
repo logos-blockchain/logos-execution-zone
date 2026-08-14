@@ -1,6 +1,6 @@
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata},
     program::{
         AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
         read_lee_inputs,
@@ -13,8 +13,8 @@ use ping_core::{
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -22,7 +22,7 @@ fn main() {
     ) = read_lee_inputs::<SenderInstruction>();
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "ping_sender is only invoked as a top-level user transaction"
     );
 
@@ -34,8 +34,8 @@ fn main() {
             payload,
             ordinal,
         } => send(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_words,
             target_zone,
@@ -45,8 +45,8 @@ fn main() {
             ordinal,
         ),
         SenderInstruction::InitConfig { outbox_program_id } => init_config(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_words,
             outbox_program_id,
@@ -59,8 +59,8 @@ fn main() {
     reason = "the emission fields are passed through verbatim"
 )]
 fn send(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
     target_zone: [u8; 32],
@@ -78,7 +78,7 @@ fn send(
     // skip the real outbox and leave no record of itself.
     assert_eq!(
         config.account_id,
-        sender_config_account_id(self_program_id),
+        sender_config_account_id(self_account_id.into()),
         "first account must be the ping-sender config PDA"
     );
     let outbox_program_id = read_outbox(&config.account.data.clone().into_inner())
@@ -99,8 +99,8 @@ fn send(
     let config_post = AccountPostState::new(config.account.clone());
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![config, outbox.clone()],
         vec![config_post, AccountPostState::new(outbox.account)],
@@ -111,8 +111,8 @@ fn send(
 
 /// Writes the outbox program id into the config PDA exactly once at genesis.
 fn init_config(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
     outbox_program_id: ProgramId,
@@ -122,7 +122,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        sender_config_account_id(self_program_id),
+        sender_config_account_id(self_account_id.into()),
         "account must be the ping-sender config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
@@ -131,8 +131,7 @@ fn init_config(
     // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
     if config.account != Account::default() {
         assert_eq!(
-            config.account.program_owner,
-            self_program_id.into(),
+            config.account.program_owner, self_account_id,
             "ping-sender config PDA is owned by another program"
         );
         assert_eq!(
@@ -151,8 +150,8 @@ fn init_config(
         AccountPostState::new_claimed_if_default(config_account, Claim::Pda(sender_config_seed()));
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![config],
         vec![config_post],

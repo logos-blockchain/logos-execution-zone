@@ -32,8 +32,8 @@ type Instruction = (PdaSeed, ProgramId, u128, bool);
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (pda_seed, simple_transfer_id, amount, is_withdraw),
         },
@@ -63,8 +63,8 @@ fn main() {
         .with_pda_seeds(vec![pda_seed]);
 
         ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             instruction_words,
             pre_states,
             vec![pda_post, recipient_post],
@@ -87,8 +87,8 @@ fn main() {
             .with_pda_seeds(vec![pda_seed]);
 
         ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             instruction_words,
             pre_states,
             vec![pda_post],

@@ -160,7 +160,7 @@ fn flash_swap_self_call_targets_correct_program() {
 #[test]
 fn flash_swap_standalone_invariant_check_rejected() {
     // Calling InvariantCheck directly (not as a chained self-call) should fail
-    // because caller_program_id will be None.
+    // because caller_account_id will be None.
     let initiator = crate::test_methods::flash_swap_initiator();
     let token = crate::test_methods::simple_balance_transfer();
 
@@ -192,7 +192,7 @@ fn flash_swap_standalone_invariant_check_rejected() {
     let result = state.transition_from_public_transaction(&tx, 1, 0);
     assert!(
         result.is_err(),
-        "standalone InvariantCheck should be rejected (caller_program_id is None)"
+        "standalone InvariantCheck should be rejected (caller_account_id is None)"
     );
 }
 
@@ -214,7 +214,7 @@ fn malicious_self_program_id_rejected_in_public_execution() {
     let result = state.transition_from_public_transaction(&tx, 1, 0);
     assert!(
         result.is_err(),
-        "program with wrong self_program_id in output should be rejected"
+        "program with wrong self_account_id in output should be rejected"
     );
 }
 
@@ -236,6 +236,6 @@ fn malicious_caller_program_id_rejected_in_public_execution() {
     let result = state.transition_from_public_transaction(&tx, 1, 0);
     assert!(
         result.is_err(),
-        "program with spoofed caller_program_id in output should be rejected"
+        "program with spoofed caller_account_id in output should be rejected"
     );
 }
