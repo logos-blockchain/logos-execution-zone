@@ -26,9 +26,13 @@ fn program_transaction<T: borsh::BorshSerialize>(
     account_id: AccountId,
     instruction: T,
 ) -> PublicTransaction {
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], instruction)
-            .expect("test instruction must serialize");
+    let message = public_transaction::Message::try_new(
+        program_id.into(),
+        vec![account_id],
+        vec![],
+        instruction,
+    )
+    .expect("test instruction must serialize");
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     PublicTransaction::new(message, witness_set)
 }

@@ -54,7 +54,7 @@ fn main() {
         // The circuit's assert_authorization_and_record_bindings establishes the
         // private PDA (seed, npk) binding when pda_seeds match the private PDA derivation.
         let auth_call = ChainedCall::new(
-            simple_transfer_id,
+            simple_transfer_id.into(),
             vec![pda_pre.account_id, recipient_pre.account_id],
             &amount,
         )
@@ -79,8 +79,9 @@ fn main() {
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
         // to authorize the PDA. simple_transfer will claim it with Claim::Authorized.
-        let auth_call = ChainedCall::new(simple_transfer_id, vec![pda_pre.account_id], &amount)
-            .with_pda_seeds(vec![pda_seed]);
+        let auth_call =
+            ChainedCall::new(simple_transfer_id.into(), vec![pda_pre.account_id], &amount)
+                .with_pda_seeds(vec![pda_seed]);
 
         ProgramOutput::new(
             self_program_id,

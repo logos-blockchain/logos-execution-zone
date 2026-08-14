@@ -29,7 +29,7 @@ fn main() {
     let claimed = AccountPostState::new_claimed(pre.account.clone(), Claim::Pda(claim_seed));
 
     let chained_call = ChainedCall {
-        program_id: callee_program_id,
+        program_account_id: callee_program_id.into(),
         instruction_data: to_vec(&()).unwrap(),
         pre_state_ids: vec![pre.account_id],
         pda_seeds: vec![delegated_seed],

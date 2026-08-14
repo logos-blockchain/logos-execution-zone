@@ -34,7 +34,7 @@ fn main() {
         post_states,
     )
     .with_chained_calls(vec![ChainedCall {
-        program_id: callee_program_id,
+        program_account_id: callee_program_id.into(),
         instruction_data: callee_instruction,
         pre_state_ids: vec![undeclared_account_id],
         pda_seeds: vec![],

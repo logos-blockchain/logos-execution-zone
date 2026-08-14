@@ -95,7 +95,7 @@ fn main() {
             let transfer_instruction =
                 borsh::to_vec(&amount_out).expect("transfer instruction serialization");
             let call_1 = ChainedCall {
-                program_id: token_program_id,
+                program_account_id: token_program_id.into(),
                 pre_state_ids: vec![vault_pre.account_id, receiver_pre.account_id],
                 instruction_data: transfer_instruction,
                 pda_seeds: vec![PdaSeed::new([0_u8; 32])],
@@ -104,7 +104,7 @@ fn main() {
             // Chained call 2: User callback. The callback may run arbitrary logic (arbitrage,
             // etc.) and is expected to return funds to the vault.
             let call_2 = ChainedCall {
-                program_id: callback_program_id,
+                program_account_id: callback_program_id.into(),
                 pre_state_ids: vec![vault_pre.account_id, receiver_pre.account_id],
                 instruction_data: callback_instruction_data,
                 pda_seeds: vec![],
@@ -120,7 +120,7 @@ fn main() {
                 borsh::to_vec(&FlashSwapInstruction::InvariantCheck { min_vault_balance })
                     .expect("invariant instruction serialization");
             let call_3 = ChainedCall {
-                program_id: self_program_id, // self-referential chained call
+                program_account_id: self_program_id.into(), // self-referential chained call
                 pre_state_ids: vec![vault_pre.account_id],
                 instruction_data: invariant_instruction,
                 pda_seeds: vec![],

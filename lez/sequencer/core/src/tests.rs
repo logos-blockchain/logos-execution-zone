@@ -223,7 +223,7 @@ fn tx_is_bridge_deposit(
         return false;
     };
 
-    if public_tx.message.program_id != programs::bridge().id() {
+    if public_tx.message.program_account_id != programs::bridge().id().into() {
         return false;
     }
 
@@ -1640,7 +1640,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
     // be dropped because their diffs touch the clock accounts.
     let crafted_clock_tx = {
         let message = lee::public_transaction::Message::try_new(
-            programs::clock().id(),
+            programs::clock().id().into(),
             system_accounts::clock_account_ids().to_vec(),
             vec![],
             42_u64,
@@ -1703,7 +1703,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let timestamp: u64 = 0;
 
     let message = lee::public_transaction::Message::try_new(
-        clock_chain_caller_id,
+        clock_chain_caller_id.into(),
         system_accounts::clock_account_ids().to_vec(),
         vec![], // no signers
         (clock_program_id, timestamp),
@@ -1882,7 +1882,7 @@ fn time_locked_transfer_transaction(
 ) -> PublicTransaction {
     let program_id = test_programs::time_locked_transfer().id();
     let message = lee::public_transaction::Message::try_new(
-        program_id,
+        program_id.into(),
         vec![from, to, clock_account_id],
         vec![Nonce(from_nonce)],
         (amount, deadline),
@@ -2009,7 +2009,7 @@ fn pinata_cooldown_transaction(
 ) -> PublicTransaction {
     let program_id = test_programs::pinata_cooldown().id();
     let message = lee::public_transaction::Message::try_new(
-        program_id,
+        program_id.into(),
         vec![pinata_id, winner_id, clock_account_id],
         vec![],
         (),
@@ -2194,7 +2194,7 @@ fn pda_mechanism_with_pinata_token_program() {
     // Submit a solution to the pinata program to claim the prize
     let solution: u128 = 989_106;
     let message = lee::public_transaction::Message::try_new(
-        pinata_token.id(),
+        pinata_token.id().into(),
         vec![
             pinata_definition_id,
             pinata_token_holding_id,
@@ -2230,7 +2230,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     .unwrap();
     let withdraw_tx = {
         let message = lee::public_transaction::Message::try_new(
-            programs::bridge().id(),
+            programs::bridge().id().into(),
             vec![system_accounts::bridge_account_id()],
             vec![],
             bridge_core::Instruction::Withdraw {
@@ -3700,7 +3700,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![funding_id, ownership_id, config_id],
         vec![Nonce(0), Nonce(0)],
         sequencer_stake_core::Instruction::Stake {
@@ -3746,7 +3746,7 @@ fn stake_transaction(
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![
             funding_id,
             ownership_id,
@@ -3820,7 +3820,7 @@ fn unstake_request_transaction(
 ) -> PublicTransaction {
     let (ownership_id, ownership_key) = ownership;
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![ownership_id, config_slot],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
@@ -3861,7 +3861,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
     // Donate into the claimed ownership account: a balance increase needs no
     // ownership of the target.
     let message = lee::public_transaction::Message::try_new(
-        programs::authenticated_transfer().id(),
+        programs::authenticated_transfer().id().into(),
         vec![funding_id, ownership_id],
         vec![state.get_account_by_id(funding_id).nonce],
         authenticated_transfer_core::Instruction::Transfer { amount: donation },
@@ -4058,7 +4058,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 
     // Full exit, releasing back to the (now drained) funding account.
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![
             ownership_id,
             system_accounts::sequencer_stake_config_account_id(),
@@ -4161,7 +4161,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     ));
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![
             stake_id,
             system_accounts::sequencer_stake_config_account_id(),
@@ -4389,15 +4389,15 @@ fn a_misspelled_mint_cap_key_fails_route_parse() {
 #[test]
 fn genesis_cross_zone_transactions_follow_the_declaration() {
     let cross_zone_ids = [
-        programs::cross_zone_inbox().id(),
-        programs::cross_zone_outbox().id(),
-        programs::ping_sender().id(),
-        programs::ping_receiver().id(),
-        programs::bridge_lock().id(),
-        programs::wrapped_token().id(),
+        AccountId::from(programs::cross_zone_inbox().id()),
+        programs::cross_zone_outbox().id().into(),
+        programs::ping_sender().id().into(),
+        programs::ping_receiver().id().into(),
+        programs::bridge_lock().id().into(),
+        programs::wrapped_token().id().into(),
     ];
     let tx_program = |tx: &LeeTransaction| match tx {
-        LeeTransaction::Public(public) => public.message().program_id,
+        LeeTransaction::Public(public) => public.message().program_account_id,
         LeeTransaction::PrivacyPreserving(_) | LeeTransaction::ProgramDeployment(_) => {
             unreachable!("genesis holds only public transactions")
         }
@@ -4435,11 +4435,11 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     assert_eq!(
         cross_zone_txs,
         vec![
-            programs::wrapped_token().id(),
-            programs::ping_sender().id(),
-            programs::ping_receiver().id(),
-            programs::bridge_lock().id(),
-            programs::cross_zone_inbox().id(),
+            programs::wrapped_token().id().into(),
+            programs::ping_sender().id().into(),
+            programs::ping_receiver().id().into(),
+            programs::bridge_lock().id().into(),
+            programs::cross_zone_inbox().id().into(),
         ],
         "the four InitConfigs then the inbox config, in the fixed order"
     );

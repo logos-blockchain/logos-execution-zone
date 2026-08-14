@@ -92,7 +92,7 @@ fn main() {
 
                 let chained_calls = vec![
                     ChainedCall::new(
-                        vault_program_id,
+                        vault_program_id.into(),
                         vec![bridge.account_id, recipient_vault.account_id],
                         &vault_core::Instruction::Transfer {
                             recipient_id,

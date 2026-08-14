@@ -83,7 +83,7 @@ fn main() {
     pinata_definition_post.data = data.next_data();
 
     let chained_call = ChainedCall::new(
-        pinata_token_holding_post.program_owner.into(),
+        pinata_token_holding_post.program_owner,
         vec![
             pinata_token_holding.account_id,
             winner_token_holding.account_id,

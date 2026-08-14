@@ -42,7 +42,7 @@ pub fn ping_emission(
         payload: payload.to_vec(),
         ordinal: 0,
     };
-    let message = Message::try_new(programs::ping_sender().id(), vec![], vec![], send)
+    let message = Message::try_new(programs::ping_sender().id().into(), vec![], vec![], send)
         .expect("emission serializes");
     LeeTransaction::Public(PublicTransaction::new(
         message,

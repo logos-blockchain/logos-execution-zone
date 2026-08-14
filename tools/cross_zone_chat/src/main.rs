@@ -469,16 +469,16 @@ async fn scan_zone(state: Arc<AppState>, label: &'static str) {
                         let LeeTransaction::Public(public) = tx else {
                             continue;
                         };
-                        let program_id = public.message.program_id;
+                        let program_id = public.message.program_account_id;
                         let data = &public.message.instruction_data;
                         // A tx targets at most one of these programs; check both
                         // independently rather than chaining (avoids an empty else).
-                        if program_id == inbox_id
+                        if program_id == inbox_id.into()
                             && let Some(text) = decode_inbox_text(data)
                         {
                             state.mark_delivered(label, &text, next);
                         }
-                        if program_id == sender_id
+                        if program_id == sender_id.into()
                             && let Some(ordinal) = decode_send_ordinal(data)
                         {
                             state.mark_source_block(label, ordinal, next);
@@ -569,7 +569,7 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
     let sender_id = programs::ping_sender().id();
     let outbox_account = outbox_pda(outbox_id, sender_id, &other_zone, ordinal);
     let message = Message::try_new(
-        sender_id,
+        sender_id.into(),
         vec![sender_config_account_id(sender_id), outbox_account],
         vec![],
         send,

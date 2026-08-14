@@ -37,7 +37,7 @@ pub fn create_associated_token_account(
         AccountPostState::new(ata_account.account.clone()),
     ];
     let chained_call = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![token_definition.account_id, ata_account.account_id],
         &token_core::Instruction::InitializeAccount,
     )

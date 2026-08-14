@@ -163,7 +163,7 @@ pub(crate) fn build_slash_tx(
 ) -> Result<LeeTransaction> {
     let program_id = programs::sequencer_stake().id();
     let message = Message::try_new(
-        program_id,
+        program_id.into(),
         vec![
             ownership_id,
             sequencer_stake_core::slash_sink_account_id(program_id),

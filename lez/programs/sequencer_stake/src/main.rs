@@ -228,14 +228,14 @@ fn stake(
     let config_account_post = AccountPostState::new(config_account_new);
 
     let mover_call = ChainedCall {
-        program_id: mover_program_id,
+        program_account_id: mover_program_id.into(),
         pre_state_ids: vec![funding_account.account_id, ownership_account.account_id],
         instruction_data: mover_instruction_data,
         pda_seeds: Vec::new(),
     };
 
     let confirm_call = ChainedCall::new(
-        self_program_id,
+        self_program_id.into(),
         vec![ownership_account.account_id],
         &Instruction::ConfirmStake {
             expected_balance_after,

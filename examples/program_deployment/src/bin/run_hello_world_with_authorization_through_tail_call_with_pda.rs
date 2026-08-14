@@ -51,7 +51,8 @@ async fn main() {
     let instruction_data = ();
     let nonces = vec![];
     let signing_keys = [];
-    let message = Message::try_new(program.id(), account_ids, nonces, instruction_data).unwrap();
+    let message =
+        Message::try_new(program.id().into(), account_ids, nonces, instruction_data).unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 

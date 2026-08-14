@@ -54,7 +54,7 @@ fn main() {
     let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
 
     let chained_call = ChainedCall {
-        program_id: hello_world_program_id(),
+        program_account_id: hello_world_program_id().into(),
         instruction_data: chained_call_instruction_data,
         pre_state_ids: vec![pre_state.account_id],
         pda_seeds: vec![PDA_SEED],

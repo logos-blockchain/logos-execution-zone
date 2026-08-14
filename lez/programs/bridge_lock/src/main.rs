@@ -217,7 +217,7 @@ fn lock(
         AccountPostState::new_claimed_if_default(escrow_account, Claim::Pda(escrow_seed()));
 
     let call = ChainedCall::new(
-        outbox_program_id,
+        outbox_program_id.into(),
         vec![outbox.account_id],
         &OutboxInstruction::Emit {
             target_zone,

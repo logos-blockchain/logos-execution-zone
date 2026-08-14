@@ -11,7 +11,7 @@ fn program_should_fail_if_modifies_nonces() {
     let account_ids = vec![account_id];
     let program_id = crate::test_methods::nonce_changer().id();
     let message =
-        public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
+        public_transaction::Message::try_new(program_id.into(), account_ids, vec![], ()).unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -35,7 +35,7 @@ fn program_should_fail_if_output_accounts_exceed_inputs() {
     let account_ids = vec![AccountId::new([1; 32])];
     let program_id = crate::test_methods::extra_output().id();
     let message =
-        public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
+        public_transaction::Message::try_new(program_id.into(), account_ids, vec![], ()).unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -62,7 +62,7 @@ fn program_should_fail_with_missing_output_accounts() {
     let account_ids = vec![AccountId::new([1; 32]), AccountId::new([2; 32])];
     let program_id = crate::test_methods::missing_output().id();
     let message =
-        public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
+        public_transaction::Message::try_new(program_id.into(), account_ids, vec![], ()).unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -116,7 +116,7 @@ fn program_should_fail_if_it_drops_a_declared_account() {
     let account_ids = vec![AccountId::new([1; 32]), AccountId::new([2; 32])];
     let program_id = crate::test_methods::dropped_account().id();
     let message =
-        public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
+        public_transaction::Message::try_new(program_id.into(), account_ids, vec![], ()).unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -155,7 +155,8 @@ fn program_should_fail_if_modifies_program_owner_with_only_non_default_program_o
     assert_eq!(account.data, Account::default().data);
     let program_id = crate::test_methods::program_owner_changer().id();
     let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
+        public_transaction::Message::try_new(program_id.into(), vec![account_id], vec![], ())
+            .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -185,7 +186,8 @@ fn program_should_fail_if_modifies_program_owner_with_only_non_default_balance()
     assert_eq!(account.data, Account::default().data);
     let program_id = crate::test_methods::program_owner_changer().id();
     let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
+        public_transaction::Message::try_new(program_id.into(), vec![account_id], vec![], ())
+            .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -215,7 +217,8 @@ fn program_should_fail_if_modifies_program_owner_with_only_non_default_nonce() {
     assert_eq!(account.data, Account::default().data);
     let program_id = crate::test_methods::program_owner_changer().id();
     let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
+        public_transaction::Message::try_new(program_id.into(), vec![account_id], vec![], ())
+            .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -245,7 +248,8 @@ fn program_should_fail_if_modifies_program_owner_with_only_non_default_data() {
     assert_ne!(account.data, Account::default().data);
     let program_id = crate::test_methods::program_owner_changer().id();
     let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
+        public_transaction::Message::try_new(program_id.into(), vec![account_id], vec![], ())
+            .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -273,7 +277,7 @@ fn program_should_fail_if_transfers_balance_from_non_owned_account() {
         program_id.into()
     );
     let message = public_transaction::Message::try_new(
-        program_id,
+        program_id.into(),
         vec![sender_account_id, receiver_account_id],
         vec![],
         balance_to_move,
@@ -287,8 +291,8 @@ fn program_should_fail_if_transfers_balance_from_non_owned_account() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id, owner_account_id, executing_program_id }
-        ))) if err_account_id == sender_account_id && owner_account_id != program_id.into() && executing_program_id == program_id
+            ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id, owner_account_id, executing_account_id }
+        ))) if err_account_id == sender_account_id && owner_account_id != program_id.into() && executing_account_id == program_id.into()
     ));
 }
 
@@ -308,7 +312,7 @@ fn program_should_fail_if_modifies_data_of_non_owned_account() {
         program_id.into()
     );
     let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], vec![0_u8])
+        public_transaction::Message::try_new(program_id.into(), vec![account_id], vec![], vec![0_u8])
             .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
@@ -318,8 +322,8 @@ fn program_should_fail_if_modifies_data_of_non_owned_account() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::UnauthorizedDataModification { account_id: err_account_id, executing_program_id }
-        ))) if err_account_id == account_id && executing_program_id == program_id
+            ExecutionValidationError::UnauthorizedDataModification { account_id: err_account_id, executing_account_id }
+        ))) if err_account_id == account_id && executing_account_id == program_id.into()
     ));
 }
 
@@ -333,7 +337,8 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
     let program_id = crate::test_methods::minter().id();
 
     let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
+        public_transaction::Message::try_new(program_id.into(), vec![account_id], vec![], ())
+            .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -363,9 +368,13 @@ fn program_should_fail_if_it_references_an_undeclared_account() {
         Program::serialize_instruction(()).unwrap(),
         undeclared_account_id,
     );
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], instruction)
-            .unwrap();
+    let message = public_transaction::Message::try_new(
+        program_id.into(),
+        vec![account_id],
+        vec![],
+        instruction,
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -394,7 +403,7 @@ fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
         .with_test_programs();
     let program_id = crate::test_methods::injects_undeclared_pre_state().id();
     let message = public_transaction::Message::try_new(
-        program_id,
+        program_id.into(),
         vec![account_id],
         vec![],
         fabricated_account_id,
@@ -435,9 +444,13 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
     let balance_to_burn: u128 = 1;
     assert!(state.get_account_by_id(account_id).balance > balance_to_burn);
 
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], balance_to_burn)
-            .unwrap();
+    let message = public_transaction::Message::try_new(
+        program_id.into(),
+        vec![account_id],
+        vec![],
+        balance_to_burn,
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
     let result = state.transition_from_public_transaction(&tx, 2, 0);
@@ -470,7 +483,7 @@ fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
 
     // The forwarder names both accounts for the callee; the callee journals only the first.
     let message = public_transaction::Message::try_new(
-        crate::test_methods::non_delegating_forwarder().id(),
+        crate::test_methods::non_delegating_forwarder().id().into(),
         vec![AccountId::new([1; 32]), AccountId::new([2; 32])],
         vec![],
         (owner, Vec::<u8>::new(), true, Vec::<PdaSeed>::new()),

@@ -461,12 +461,19 @@ mod tests {
         let with = initial_state(true);
         let without = initial_state(false);
         for id in cross_zone_ids {
-            assert!(with.get_program(id).is_some(), "registered when declared");
             assert!(
-                without.get_program(id).is_none(),
+                with.get_program(id.into()).is_some(),
+                "registered when declared"
+            );
+            assert!(
+                without.get_program(id.into()).is_none(),
                 "absent when not declared"
             );
         }
-        assert!(without.get_program(programs::faucet().id()).is_some());
+        assert!(
+            without
+                .get_program(programs::faucet().id().into())
+                .is_some()
+        );
     }
 }

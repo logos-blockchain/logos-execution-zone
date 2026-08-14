@@ -140,7 +140,7 @@ mod inner {
 
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
             let message = public_transaction::Message::try_new(
-                bridge().id(),
+                bridge().id().into(),
                 vec![
                     bridge_core::compute_bridge_account_id(bridge().id()),
                     vault_core::compute_vault_account_id(vault().id(), recipient_id),

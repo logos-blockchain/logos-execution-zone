@@ -28,7 +28,7 @@ fn main() {
     let second_post = AccountPostState::new(second.account.clone());
 
     let chained_call = ChainedCall {
-        program_id: simple_transfer_id,
+        program_account_id: simple_transfer_id.into(),
         instruction_data: to_vec(&amount).unwrap(),
         pre_state_ids: vec![first.account_id, second.account_id],
         pda_seeds: vec![seed],

@@ -29,7 +29,7 @@ fn main() {
     let chained_calls = chain
         .into_iter()
         .map(|(program_id, call_instruction_data)| ChainedCall {
-            program_id,
+            program_account_id: program_id.into(),
             pre_state_ids: pre_state_ids.clone(),
             instruction_data: call_instruction_data,
             pda_seeds: vec![],

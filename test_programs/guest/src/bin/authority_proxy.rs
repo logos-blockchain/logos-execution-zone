@@ -21,7 +21,7 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     let chained_call = ChainedCall {
-        program_id: target_program_id,
+        program_account_id: target_program_id.into(),
         instruction_data: target_instruction_data,
         pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
         pda_seeds: pda_seed.into_iter().collect(),

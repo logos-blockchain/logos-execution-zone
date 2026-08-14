@@ -129,7 +129,7 @@ pub fn execute_and_prove_with_padded_inputs(
     let mut next_position: usize = 0;
 
     let initial_call = ChainedCall {
-        program_id: initial_program.id(),
+        program_account_id: AccountId::from(initial_program.id()),
         instruction_data,
         pre_state_ids,
         pda_seeds: vec![],
@@ -248,7 +248,7 @@ pub fn execute_and_prove_with_padded_inputs(
             // A successful claim reassigns ownership; the guest doesn't write this into its own
             // post_state, the circuit does it afterward, so predict it here too.
             let program_owner = if post.required_claim().is_some() {
-                AccountId::from(chained_call.program_id)
+                chained_call.program_account_id
             } else {
                 post.account().program_owner
             };
@@ -278,15 +278,16 @@ pub fn execute_and_prove_with_padded_inputs(
         env_builder.add_assumption(inner_receipt);
 
         for new_call in program_output.chained_calls.into_iter().rev() {
-            let next_program = dependencies.get(&new_call.program_id).ok_or(
+            let new_call_program_id = ProgramId::from(new_call.program_account_id);
+            let next_program = dependencies.get(&new_call_program_id).ok_or(
                 InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                    program_id: new_call.program_id,
+                    program_id: new_call_program_id,
                 },
             )?;
             chained_calls.push_front((
                 new_call,
                 next_program,
-                Some(chained_call.program_id),
+                Some(ProgramId::from(chained_call.program_account_id)),
                 authorized_output_accounts.clone(),
             ));
         }

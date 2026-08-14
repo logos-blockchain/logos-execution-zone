@@ -246,13 +246,13 @@ impl From<EncryptedAccountData>
 impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::public_transaction::Message {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
         } = value;
         Self {
-            program_id: program_id.into(),
+            program_account_id: program_account_id.into(),
             account_ids: account_ids.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
@@ -263,13 +263,13 @@ impl From<lee::public_transaction::Message> for PublicMessage {
 impl From<PublicMessage> for lee::public_transaction::Message {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
         } = value;
         Self::new_preserialized(
-            program_id.into(),
+            program_account_id.into(),
             account_ids.into_iter().map(Into::into).collect(),
             nonces
                 .iter()

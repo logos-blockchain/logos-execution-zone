@@ -408,7 +408,7 @@ fn an_unowned_account_with_history_may_be_echoed_byte_identically() {
     };
     let pre = AccountWithMetadata::new(account.clone(), true, AccountId::new([7; 32]));
     let post = AccountPostState::new(account);
-    assert!(validate_execution(&[pre], &[post], [9; 8]).is_ok());
+    assert!(validate_execution(&[pre], &[post], [9; 8].into()).is_ok());
 }
 
 /// Any modification of an unowned non-default account still needs ownership.
@@ -424,7 +424,7 @@ fn modifying_an_unowned_account_with_history_is_still_refused() {
     grown.balance += 1;
     let post = AccountPostState::new(grown);
     assert!(matches!(
-        validate_execution(&[pre], &[post], [9; 8]),
+        validate_execution(&[pre], &[post], [9; 8].into()),
         Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id })
             if account_id == AccountId::new([7; 32])
     ));
@@ -442,7 +442,7 @@ fn a_claimed_echo_of_an_unowned_account_with_history_is_refused() {
     let pre = AccountWithMetadata::new(account.clone(), true, AccountId::new([7; 32]));
     let post = AccountPostState::new_claimed(account, Claim::Authorized);
     assert!(matches!(
-        validate_execution(&[pre], &[post], [9; 8]),
+        validate_execution(&[pre], &[post], [9; 8].into()),
         Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id })
             if account_id == AccountId::new([7; 32])
     ));
@@ -453,5 +453,5 @@ fn a_claimed_echo_of_an_unowned_account_with_history_is_refused() {
 fn a_first_claim_of_a_fresh_account_still_passes() {
     let pre = AccountWithMetadata::new(Account::default(), true, AccountId::new([7; 32]));
     let post = AccountPostState::new_claimed(Account::default(), Claim::Authorized);
-    assert!(validate_execution(&[pre], &[post], [9; 8]).is_ok());
+    assert!(validate_execution(&[pre], &[post], [9; 8].into()).is_ok());
 }

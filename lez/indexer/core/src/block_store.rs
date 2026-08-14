@@ -491,7 +491,7 @@ mod tests {
 
     fn invoke_emitter_tx(events: Vec<ProgramEvent>) -> LeeTransaction {
         let message = lee::public_transaction::Message::try_new(
-            test_methods::EVENT_EMITTER_ID,
+            test_methods::EVENT_EMITTER_ID.into(),
             vec![AccountId::new([42; 32])],
             vec![],
             EmitterInstruction {

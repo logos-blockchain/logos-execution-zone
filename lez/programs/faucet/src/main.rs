@@ -49,7 +49,7 @@ fn main() {
 
             vec![
                 ChainedCall::new(
-                    vault_program_id,
+                    vault_program_id.into(),
                     vec![faucet.account_id, recipient_vault.account_id],
                     &vault_core::Instruction::Transfer {
                         recipient_id,
@@ -72,7 +72,7 @@ fn main() {
 
             vec![
                 ChainedCall::new(
-                    faucet.account.program_owner.into(),
+                    faucet.account.program_owner,
                     vec![faucet.account_id, recipient.account_id],
                     &authenticated_transfer_core::Instruction::Transfer { amount },
                 )

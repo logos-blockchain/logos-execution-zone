@@ -28,7 +28,7 @@ fn main() {
     assert_eq!(pre_states.len(), 2);
 
     let chained_calls = vec![ChainedCall {
-        program_id: faucet_program_id,
+        program_account_id: faucet_program_id.into(),
         instruction_data: to_vec(&faucet_core::Instruction::GenesisTransferVault {
             vault_program_id,
             recipient_id,

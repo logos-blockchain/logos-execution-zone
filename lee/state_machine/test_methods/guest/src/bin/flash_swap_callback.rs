@@ -62,7 +62,7 @@ fn main() {
             borsh::to_vec(&instruction.amount).expect("transfer instruction serialization");
 
         chained_calls.push(ChainedCall {
-            program_id: instruction.token_program_id,
+            program_account_id: instruction.token_program_id.into(),
             pre_state_ids: vec![receiver_pre.account_id, vault_pre.account_id],
             instruction_data: transfer_instruction,
             pda_seeds: vec![PdaSeed::new([1_u8; 32])],

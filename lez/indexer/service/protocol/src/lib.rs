@@ -225,7 +225,7 @@ pub struct PrivacyPreservingTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
-    pub program_id: ProgramId,
+    pub program_account_id: AccountId,
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,

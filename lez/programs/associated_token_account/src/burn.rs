@@ -29,7 +29,7 @@ pub fn burn_from_associated_token_account(
         AccountPostState::new(token_definition.account.clone()),
     ];
     let chained_call = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![token_definition.account_id, holder_ata.account_id],
         &token_core::Instruction::Burn {
             amount_to_burn: amount,

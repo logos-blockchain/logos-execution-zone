@@ -131,13 +131,6 @@ typedef struct FfiBlockHeader {
   FfiSignature signature;
 } FfiBlockHeader;
 
-/**
- * Program ID - 8 u32 values (32 bytes total).
- */
-typedef struct FfiProgramId {
-  uint32_t data[8];
-} FfiProgramId;
-
 typedef struct FfiBytes32 FfiAccountId;
 
 typedef struct FfiVec_FfiAccountId {
@@ -174,7 +167,7 @@ typedef struct FfiVec_u8 {
 typedef struct FfiVec_u8 FfiInstructionDataList;
 
 typedef struct FfiPublicMessage {
-  struct FfiProgramId program_id;
+  struct FfiBytes32 program_account_id;
   FfiAccountIdList account_ids;
   FfiNonceList nonces;
   FfiInstructionDataList instruction_data;
@@ -393,6 +386,13 @@ typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
   struct FfiVec_FfiTransaction *value;
   enum OperationStatus error;
 } PointerResult_FfiVec_FfiTransaction_____OperationStatus;
+
+/**
+ * Program ID - 8 u32 values (32 bytes total).
+ */
+typedef struct FfiProgramId {
+  uint32_t data[8];
+} FfiProgramId;
 
 /**
  * 8-byte array type for event selectors.
