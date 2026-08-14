@@ -141,6 +141,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
     ) -> Self::Reply {
         // Only produce on our turn.
         if !self.sequencer.is_our_turn() {
+            self.sequencer.update_committee_absence().await;
             info!("Not our turn to produce a block, skipping");
             return Ok(());
         }
@@ -150,6 +151,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
         // The head rewinds under us when the sdk orphans our own unfinalized
         // blocks, and recovers once they finalize, so this is a wait.
         if let Some(high_water) = self.sequencer.rewound_below_published().await {
+            self.sequencer.update_committee_absence().await;
             warn!(
                 "Skipping turn: head rewound to {} but block {high_water} is already inscribed; \
                  waiting for the channel to restore it",

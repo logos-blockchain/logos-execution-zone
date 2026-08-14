@@ -140,6 +140,8 @@ pub struct SequencerCore<
     watchers: TaskGroup,
     /// Channel tip slot as of the last committee-config submission.
     last_committee_submission_slot: Option<Slot>,
+    /// Gates `FinalizeUnstake` on the committee removal being final.
+    committee_absence: committee_discovery::CommitteeAbsence,
 }
 
 impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
@@ -417,6 +419,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             block_publisher,
             watchers,
             last_committee_submission_slot: None,
+            committee_absence: committee_discovery::CommitteeAbsence::default(),
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
@@ -676,11 +679,28 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         })
     }
 
+    /// Updates the absence record from a fresh read of the live committee, and
+    /// returns that committee. `None` if the read failed, which is not the same
+    /// as an empty committee.
+    ///
+    /// Worth calling off-turn: a key seen back in the committee resets its clock.
+    pub async fn update_committee_absence(
+        &mut self,
+    ) -> Option<Vec<sequencer_stake_core::SequencerKey>> {
+        let live_accredited_keys = self.live_accredited_sequencer_keys().await;
+        if let Some(live) = live_accredited_keys.as_deref() {
+            let leaving = self.with_state(committee_discovery::keys_leaving_the_committee);
+            self.committee_absence
+                .observe(live, &leaving, self.chain_height());
+        }
+        live_accredited_keys
+    }
+
     /// Runs everything this sequencer owes its turn: builds a block from
     /// mempool transactions, publishes it via zone-sdk, and submits any
     /// committee-config update the new state calls for.
     pub async fn run_production_turn(&mut self) -> Result<u64> {
-        let live_accredited_keys = self.live_accredited_sequencer_keys().await;
+        let live_accredited_keys = self.update_committee_absence().await;
 
         let BlockWithMeta {
             block,
@@ -975,6 +995,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             mut working_state,
             pending_dispatches,
             finalize_unstake_txs,
+            finalized_height,
+            committee_update,
         ) = {
             let chain = self.chain.lock().await;
             let tip = chain.head_tip();
@@ -1004,12 +1026,18 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 }
             }
 
+            // Committee membership follows finalized state only.
+            let committee_update = live_accredited_keys
+                .and_then(|keys| committee_discovery::committee_update(chain.final_state(), keys));
+
             (
                 prev,
                 height,
                 chain.head_state().clone(),
                 pending,
                 build_finalize_unstake_txs(chain.head_state()),
+                chain.final_tip().map(|final_tip| final_tip.block_id),
+                committee_update,
             )
         };
 
@@ -1151,7 +1179,12 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             // met (mempool: whoever wants it finalized resubmits;
             // discovery-sourced: reconstructed fresh next block), so it
             // doesn't need requeuing here.
-            if !finalize_unstake_is_includable(&working_state, &tx, live_accredited_keys) {
+            if !finalize_unstake_is_includable(
+                &working_state,
+                &tx,
+                &self.committee_absence,
+                finalized_height,
+            ) {
                 continue;
             }
 
@@ -1215,9 +1248,6 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         );
 
         sequencer_core_metrics::record_block_creation_time(now.elapsed());
-
-        let committee_update = live_accredited_keys
-            .and_then(|keys| committee_discovery::committee_update(&working_state, keys));
 
         Ok(BlockWithMeta {
             block,
@@ -2119,16 +2149,18 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
 fn finalize_unstake_is_includable(
     state: &lee::V03State,
     tx: &LeeTransaction,
-    live_accredited_keys: Option<&[sequencer_stake_core::SequencerKey]>,
+    committee_absence: &committee_discovery::CommitteeAbsence,
+    finalized_height: Option<u64>,
 ) -> bool {
     let Some(ownership_id) = finalize_unstake_ownership_account(tx) else {
         return true;
     };
-    // Without a committee snapshot there is nothing to check a FinalizeUnstake
-    // against, so none is includable this block.
-    live_accredited_keys.is_some_and(|live_accredited_keys| {
-        committee_discovery::finalize_unstake_is_valid(state, ownership_id, live_accredited_keys)
-    })
+    committee_discovery::finalize_unstake_is_valid(
+        state,
+        ownership_id,
+        committee_absence,
+        finalized_height,
+    )
 }
 
 /// The ownership account a `FinalizeUnstake` call targets, or `None` if `tx`

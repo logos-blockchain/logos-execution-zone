@@ -1270,9 +1270,54 @@ async fn build_block_from_mempool() {
     assert_eq!(sequencer.chain_height().await, genesis_height);
 }
 
+#[tokio::test]
+async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
+    // Genesis stakes the bootstrap key, so the head wants it accredited already.
+    let (mut sequencer, mempool_handle) = common_setup().await;
+
+    assert!(
+        sequencer
+            .build_block_from_mempool(Some(&[]))
+            .unwrap()
+            .committee_update
+            .is_none(),
+        "an unfinalized stake must not move the committee"
+    );
+
+    let genesis = sequencer
+        .store
+        .get_block_at_id(lee_core::GENESIS_BLOCK_ID)
+        .unwrap()
+        .unwrap();
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            finalized: vec![(MsgId::from(genesis.header.hash.0), genesis)],
+            ..empty_follow_update()
+        },
+    );
+
+    let wanted = sequencer
+        .build_block_from_mempool(Some(&[]))
+        .unwrap()
+        .committee_update
+        .expect("the stake is irreversible now, so the committee should follow it");
+    assert!(
+        sequencer
+            .build_block_from_mempool(Some(&wanted))
+            .unwrap()
+            .committee_update
+            .is_none(),
+        "a committee that already matches must not be resubmitted"
+    );
+}
+
 #[test]
-fn without_a_committee_snapshot_finalize_unstake_is_not_includable() {
+fn the_committee_gate_holds_back_neither_ordinary_txs_nor_unknown_accounts() {
     let state = V03State::new();
+    let absence = crate::committee_discovery::CommitteeAbsence::default();
     let finalize_unstake = build_finalize_unstake_tx(
         AccountId::new([1; 32]),
         sequencer_stake_core::PendingUnstake {
@@ -1282,26 +1327,19 @@ fn without_a_committee_snapshot_finalize_unstake_is_not_includable() {
     )
     .expect("FinalizeUnstake tx should build");
 
-    // An empty committee is a real answer ("no key is accredited"), so it lets
-    // a full drain through. No answer at all must not.
+    // An ownership account no state knows about is left to the program to reject.
     assert!(finalize_unstake_is_includable(
         &state,
         &finalize_unstake,
-        Some(&[])
-    ));
-    assert!(!finalize_unstake_is_includable(
-        &state,
-        &finalize_unstake,
+        &absence,
         None
     ));
-}
-
-#[test]
-fn a_missing_committee_snapshot_holds_back_nothing_else() {
-    let state = V03State::new();
-    let ordinary_tx = common::test_utils::produce_dummy_empty_transaction();
-
-    assert!(finalize_unstake_is_includable(&state, &ordinary_tx, None));
+    assert!(finalize_unstake_is_includable(
+        &state,
+        &common::test_utils::produce_dummy_empty_transaction(),
+        &absence,
+        None
+    ));
 }
 
 #[tokio::test]
