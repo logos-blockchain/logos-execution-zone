@@ -16,8 +16,7 @@ pub enum SystemSubcommand {
     ///
     /// The account authorizes its own reset. Only public accounts are supported.
     Reclaim {
-        /// Public account to reclaim. Either 32 byte base58 account id string with
-        /// privacy prefix or a label. You must own this account.
+        /// Account to reclaim. Must have authorization.
         #[arg(long)]
         account_id: CliAccountMention,
     },

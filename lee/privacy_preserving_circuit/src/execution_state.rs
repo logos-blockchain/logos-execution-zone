@@ -172,14 +172,9 @@ impl ExecutionState {
                 "Program output caller_program_id does not match actual caller"
             );
 
-            // Check that `program_output` is consistent with the execution of the corresponding
-            // program and that the program is well behaved. The System Program has no guest ELF,
-            // so its clear skips both recursive-proof verification and `validate_execution`: the
-            // clear intentionally violates `validate_execution` (owner → default, data zeroed,
-            // default-owner-with-data: rules 4, 6, 7) and is instead structurally validated here,
-            // which fully pins the prover-supplied post state. Every other program is verified
-            // against its proof and then checked by `validate_execution`.
-            // See the # Programs section for the definition of the `validate_execution` method.
+            // The System Program has no guest ELF and is instead structurally validated here,
+            // Every other program is verified  against its proof and then checked by
+            // `validate_execution`.
             if chained_call.program_id == DEFAULT_PROGRAM_ID {
                 let instruction: SystemInstruction = from_slice(&program_output.instruction_data)
                     .expect("System Program instruction must deserialize");
@@ -195,6 +190,7 @@ impl ExecutionState {
                             .iter()
                             .zip(program_output.post_states.iter())
                         {
+                            // Try to clear each account in pre-states.
                             let expected = match validate_clear(pre) {
                                 Ok(expected) => expected,
                                 Err(err) => panic!(
@@ -202,6 +198,8 @@ impl ExecutionState {
                                     chained_call.program_id
                                 ),
                             };
+
+                            // If the cleared account differs from expected, error.
                             assert_eq!(
                                 post.account(),
                                 &expected,
@@ -211,12 +209,15 @@ impl ExecutionState {
                     }
                 }
             } else {
+                // Check that `program_output` is consistent with the execution of the corresponding
+                // program.
                 let program_output_words =
                     &to_vec(&program_output).expect("program_output must be serializable");
                 env::verify(chained_call.program_id, program_output_words).unwrap_or_else(
                     |_: Infallible| unreachable!("Infallible error is never constructed"),
                 );
 
+                // Check that `program_output` is well behaved.
                 let validated_execution = validate_execution(
                     &program_output.pre_states,
                     &program_output.post_states,

@@ -775,6 +775,8 @@ pub fn validate_execution(
     Ok(())
 }
 
+/// Function for validation of account-clearing. If authorized, defaults the owner
+/// and data, keeping the balance.
 pub fn validate_clear(pre: &AccountWithMetadata) -> Result<Account, ClearValidationError> {
     if !pre.is_authorized {
         return Err(ClearValidationError::NotAuthorized {

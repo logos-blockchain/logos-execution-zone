@@ -122,12 +122,15 @@ impl ValidatedStateDiff {
             };
 
             if chained_call.program_id == DEFAULT_PROGRAM_ID {
+                // If the program is a default one, try to decode the protocol-wide instruction.
                 let instruction: SystemInstruction =
                     risc0_zkvm::serde::from_slice(&chained_call.instruction_data)
                         .map_err(|e| LeeError::InstructionSerializationError(e.to_string()))?;
 
                 match instruction {
                     SystemInstruction::Clear => {
+                        // On a `Clear`, if authorized, wipe a pre-state's owner
+                        // and data.
                         for pre_state in &chained_call.pre_states {
                             let account_id = pre_state.account_id;
                             let pre = AccountWithMetadata::new(
