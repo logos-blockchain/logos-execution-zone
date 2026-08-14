@@ -101,8 +101,8 @@ pub enum InvalidProgramBehaviorError {
 
     #[error("Program ID mismatch: expected {expected:?}, actual {actual:?}")]
     MismatchedProgramId {
-        expected: ProgramId,
-        actual: ProgramId,
+        expected: AccountId,
+        actual: AccountId,
     },
 
     #[error("Caller program ID mismatch: expected {expected:?}, actual {actual:?}")]

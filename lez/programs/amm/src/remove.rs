@@ -118,7 +118,7 @@ pub fn remove_liquidity(
 
     // Chaincall for Token A withdraw
     let call_token_a = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![running_vault_a, user_holding_a.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_a,
@@ -130,7 +130,7 @@ pub fn remove_liquidity(
     )]);
     // Chaincall for Token B withdraw
     let call_token_b = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![running_vault_b, user_holding_b.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_b,
@@ -144,7 +144,7 @@ pub fn remove_liquidity(
     let mut pool_definition_lp_auth = pool_definition_lp.clone();
     pool_definition_lp_auth.is_authorized = true;
     let call_token_lp = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![pool_definition_lp_auth, user_holding_lp.clone()],
         &token_core::Instruction::Burn {
             amount_to_burn: delta_lp,

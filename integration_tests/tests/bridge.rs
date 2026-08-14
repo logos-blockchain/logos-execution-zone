@@ -30,7 +30,7 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let receipt_id = bridge_core::deposit_receipt_account_id(programs::bridge().id(), [0_u8; 32]);
 
     let message = public_transaction::Message::try_new(
-        programs::bridge().id(),
+        programs::bridge().id().into(),
         vec![bridge_account_id, recipient_vault_id, receipt_id],
         vec![],
         bridge_core::Instruction::Deposit {
@@ -79,7 +79,7 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
     let receipt_id = bridge_core::deposit_receipt_account_id(programs::bridge().id(), [0_u8; 32]);
 
     let message = public_transaction::Message::try_new(
-        programs::bridge().id(),
+        programs::bridge().id().into(),
         vec![bridge_account_id, recipient_vault_id, receipt_id],
         vec![],
         bridge_core::Instruction::Deposit {

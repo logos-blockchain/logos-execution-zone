@@ -15,7 +15,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         witness_set,
     } = tx;
     let PublicMessage {
-        program_id,
+        program_account_id,
         account_ids,
         nonces,
         instruction_data,
@@ -25,7 +25,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         proof,
     } = witness_set;
 
-    let program_id_str = program_id.to_string();
+    let program_id_str = program_account_id.to_string();
     let proof_len = proof.map_or(0, |p| p.0.len());
     let signatures_count = signatures_and_public_keys.len();
 

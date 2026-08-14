@@ -41,7 +41,7 @@ pub fn create_associated_token_account(
         ..ata_account.clone()
     };
     let chained_call = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![token_definition.clone(), ata_account_auth],
         &token_core::Instruction::InitializeAccount,
     )

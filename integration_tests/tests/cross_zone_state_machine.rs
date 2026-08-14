@@ -291,7 +291,7 @@ fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> Pub
         payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
         ordinal,
     };
-    let message = Message::try_new(programs::ping_sender().id(), accounts, vec![], send)
+    let message = Message::try_new(programs::ping_sender().id().into(), accounts, vec![], send)
         .expect("build ping_sender message");
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
 }
@@ -335,7 +335,7 @@ fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeErro
     };
 
     let message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         dispatch_accounts(
             inbox_id,
             &msg,
@@ -414,7 +414,7 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
     let record_id = ping_record_pda(receiver_id);
 
     let message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         dispatch_accounts(
             inbox_id,
             &msg,
@@ -551,7 +551,7 @@ fn lock_tx_to(
         ordinal,
     };
     let message = Message::try_new(
-        bridge_lock_id,
+        bridge_lock_id.into(),
         vec![
             bridge_lock_core::config_account_id(bridge_lock_id),
             holder_id,
@@ -851,7 +851,7 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
         ordinal,
     };
     let message = Message::try_new(
-        bridge_lock_id,
+        bridge_lock_id.into(),
         vec![
             decoy_id,
             holder_id,
@@ -915,7 +915,7 @@ fn the_bridge_pins_are_written_once_and_replayable() {
 
     let init = |outbox: lee_core::program::ProgramId, target: lee_core::program::ProgramId| {
         let message = Message::try_new(
-            bridge_lock_id,
+            bridge_lock_id.into(),
             vec![config_id],
             vec![],
             bridge_lock_core::Instruction::InitConfig {
@@ -1025,7 +1025,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     // Unsigned and nonce-free, as genesis builds it: the config PDA has no signer.
     let init = |outbox: lee_core::program::ProgramId| {
         let message = Message::try_new(
-            sender_id,
+            sender_id.into(),
             vec![config_id],
             vec![],
             ping_core::SenderInstruction::InitConfig {
@@ -1991,7 +1991,7 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
         l1_inclusion_witness: None,
     };
     let message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         dispatch_accounts(
             inbox_id,
             &msg,
@@ -2030,7 +2030,7 @@ fn a_top_level_mint_is_refused() {
 
     let marker_id = inbox_source_marker_account_id(inbox_id, &src_zone, src_program_id);
     let message = Message::try_new(
-        wrapped_token_id,
+        wrapped_token_id.into(),
         vec![
             marker_id,
             wrapped_token_core::config_account_id(wrapped_token_id),
@@ -2109,7 +2109,7 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
 
     let message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
         InboxInstruction::Dispatch(msg),
@@ -2162,7 +2162,7 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
 
     let message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
         InboxInstruction::Dispatch(msg),
@@ -2230,7 +2230,7 @@ fn mint_replay_rejected() {
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
 
     let message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
         InboxInstruction::Dispatch(msg),
@@ -2313,7 +2313,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
 
     let record_id = ping_record_pda(receiver_id);
     let message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         dispatch_accounts(
             inbox_id,
             &msg,
@@ -2350,7 +2350,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         l1_inclusion_witness: None,
     };
     let control_message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         dispatch_accounts(
             inbox_id,
             &control_msg,

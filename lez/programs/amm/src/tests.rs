@@ -186,7 +186,7 @@ impl BalanceForTests {
 impl ChainedCallForTests {
     fn cc_swap_token_a_test_1() -> ChainedCall {
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![
                 AccountWithMetadataForTests::user_holding_a(),
                 AccountWithMetadataForTests::vault_a_init(),
@@ -204,7 +204,7 @@ impl ChainedCallForTests {
         vault_b_auth.is_authorized = true;
 
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![vault_b_auth, AccountWithMetadataForTests::user_holding_b()],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
@@ -223,7 +223,7 @@ impl ChainedCallForTests {
         vault_a_auth.is_authorized = true;
 
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![vault_a_auth, AccountWithMetadataForTests::user_holding_a()],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
@@ -237,7 +237,7 @@ impl ChainedCallForTests {
 
     fn cc_swap_token_b_test_2() -> ChainedCall {
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![
                 AccountWithMetadataForTests::user_holding_b(),
                 AccountWithMetadataForTests::vault_b_init(),
@@ -252,7 +252,7 @@ impl ChainedCallForTests {
         let swap_amount: u128 = 498;
 
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![
                 AccountWithMetadataForTests::user_holding_a(),
                 AccountWithMetadataForTests::vault_a_init(),
@@ -270,7 +270,7 @@ impl ChainedCallForTests {
         vault_b_auth.is_authorized = true;
 
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![vault_b_auth, AccountWithMetadataForTests::user_holding_b()],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
@@ -289,7 +289,7 @@ impl ChainedCallForTests {
         vault_a_auth.is_authorized = true;
 
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![vault_a_auth, AccountWithMetadataForTests::user_holding_a()],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
@@ -305,7 +305,7 @@ impl ChainedCallForTests {
         let swap_amount: u128 = 200;
 
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![
                 AccountWithMetadataForTests::user_holding_b(),
                 AccountWithMetadataForTests::vault_b_init(),
@@ -318,7 +318,7 @@ impl ChainedCallForTests {
 
     fn cc_add_token_a() -> ChainedCall {
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![
                 AccountWithMetadataForTests::user_holding_a(),
                 AccountWithMetadataForTests::vault_a_init(),
@@ -331,7 +331,7 @@ impl ChainedCallForTests {
 
     fn cc_add_token_b() -> ChainedCall {
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![
                 AccountWithMetadataForTests::user_holding_b(),
                 AccountWithMetadataForTests::vault_b_init(),
@@ -347,7 +347,7 @@ impl ChainedCallForTests {
         pool_lp_auth.is_authorized = true;
 
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![
                 pool_lp_auth,
                 AccountWithMetadataForTests::user_holding_lp_init(),
@@ -366,7 +366,7 @@ impl ChainedCallForTests {
         vault_a_auth.is_authorized = true;
 
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![vault_a_auth, AccountWithMetadataForTests::user_holding_a()],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::remove_actual_a_successful(),
@@ -383,7 +383,7 @@ impl ChainedCallForTests {
         vault_b_auth.is_authorized = true;
 
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![vault_b_auth, AccountWithMetadataForTests::user_holding_b()],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: 70,
@@ -400,7 +400,7 @@ impl ChainedCallForTests {
         pool_lp_auth.is_authorized = true;
 
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![
                 pool_lp_auth,
                 AccountWithMetadataForTests::user_holding_lp_init(),
@@ -416,7 +416,7 @@ impl ChainedCallForTests {
 
     fn cc_new_definition_token_a() -> ChainedCall {
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![
                 AccountWithMetadataForTests::user_holding_a(),
                 AccountWithMetadataForTests::vault_a_init(),
@@ -429,7 +429,7 @@ impl ChainedCallForTests {
 
     fn cc_new_definition_token_b() -> ChainedCall {
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![
                 AccountWithMetadataForTests::user_holding_b(),
                 AccountWithMetadataForTests::vault_b_init(),
@@ -442,7 +442,7 @@ impl ChainedCallForTests {
 
     fn cc_new_definition_token_lp() -> ChainedCall {
         ChainedCall::new(
-            TOKEN_PROGRAM_ID,
+            TOKEN_PROGRAM_ID.into(),
             vec![
                 AccountWithMetadataForTests::pool_lp_init(),
                 AccountWithMetadataForTests::user_holding_lp_uninit(),
@@ -3016,7 +3016,7 @@ fn new_definition_lp_symmetric_amounts() {
 
     let chained_call_lp = chained_calls[0].clone();
     let expected_lp_call = ChainedCall::new(
-        TOKEN_PROGRAM_ID,
+        TOKEN_PROGRAM_ID.into(),
         vec![
             AccountWithMetadataForTests::pool_lp_init(),
             AccountWithMetadataForTests::user_holding_lp_uninit(),
@@ -3113,7 +3113,7 @@ fn simple_amm_remove() {
     };
 
     let message = public_transaction::Message::try_new(
-        programs::amm().id(),
+        programs::amm().id().into(),
         vec![
             IdForExeTests::pool_definition_id(),
             IdForExeTests::vault_a_id(),
@@ -3190,7 +3190,7 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
     };
 
     let message = public_transaction::Message::try_new(
-        programs::amm().id(),
+        programs::amm().id().into(),
         vec![
             IdForExeTests::pool_definition_id(),
             IdForExeTests::vault_a_id(),
@@ -3275,7 +3275,7 @@ fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
     };
 
     let message = public_transaction::Message::try_new(
-        programs::amm().id(),
+        programs::amm().id().into(),
         vec![
             IdForExeTests::pool_definition_id(),
             IdForExeTests::vault_a_id(),
@@ -3347,7 +3347,7 @@ fn simple_amm_new_definition_uninitialized_pool() {
     };
 
     let message = public_transaction::Message::try_new(
-        programs::amm().id(),
+        programs::amm().id().into(),
         vec![
             IdForExeTests::pool_definition_id(),
             IdForExeTests::vault_a_id(),
@@ -3410,7 +3410,7 @@ fn simple_amm_add() {
     };
 
     let message = public_transaction::Message::try_new(
-        programs::amm().id(),
+        programs::amm().id().into(),
         vec![
             IdForExeTests::pool_definition_id(),
             IdForExeTests::vault_a_id(),
@@ -3472,7 +3472,7 @@ fn simple_amm_swap_1() {
     };
 
     let message = public_transaction::Message::try_new(
-        programs::amm().id(),
+        programs::amm().id().into(),
         vec![
             IdForExeTests::pool_definition_id(),
             IdForExeTests::vault_a_id(),
@@ -3522,7 +3522,7 @@ fn simple_amm_swap_2() {
         token_definition_id_in: IdForExeTests::token_a_definition_id(),
     };
     let message = public_transaction::Message::try_new(
-        programs::amm().id(),
+        programs::amm().id().into(),
         vec![
             IdForExeTests::pool_definition_id(),
             IdForExeTests::vault_a_id(),

@@ -59,7 +59,7 @@ fn test_transaction() -> LeeTransaction {
     let nonces = vec![0_u128.into(), 0_u128.into()];
     let instruction = 1337;
     let message = Message::try_new(
-        test_programs::simple_balance_transfer().id(),
+        test_programs::simple_balance_transfer().id().into(),
         vec![acc1, acc2],
         nonces,
         instruction,

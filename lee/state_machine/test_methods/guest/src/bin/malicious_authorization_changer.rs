@@ -35,7 +35,7 @@ fn main() {
     let instruction_data = to_vec(&balance).unwrap();
 
     let chained_call = ChainedCall {
-        program_id: transfer_program_id,
+        program_account_id: transfer_program_id.into(),
         instruction_data,
         pre_states: vec![authorised_sender, receiver.clone()],
         pda_seeds: vec![],

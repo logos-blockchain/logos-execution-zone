@@ -2085,7 +2085,7 @@ fn build_supply_account_genesis_transaction(
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, *account_id);
 
     let message = Message::try_new(
-        faucet_program_id,
+        faucet_program_id.into(),
         vec![system_accounts::faucet_account_id(), recipient_vault_id],
         Vec::new(),
         faucet_core::Instruction::GenesisTransferVault {
@@ -2105,7 +2105,7 @@ fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTrans
     let bridge_account_id = system_accounts::bridge_account_id();
 
     let message = Message::try_new(
-        faucet_program_id,
+        faucet_program_id.into(),
         vec![system_accounts::faucet_account_id(), bridge_account_id],
         Vec::new(),
         faucet_core::Instruction::GenesisTransferDirect { amount: balance },
@@ -2139,7 +2139,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         bridge_core::deposit_receipt_account_id(bridge_program_id, event.deposit_op_id.0);
 
     let message = Message::try_new(
-        bridge_program_id,
+        bridge_program_id.into(),
         vec![
             system_accounts::bridge_account_id(),
             recipient_vault_id,
@@ -2259,7 +2259,7 @@ fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
 #[must_use]
 fn is_sequencer_only_tx(tx: &LeeTransaction) -> bool {
     matches!(tx, LeeTransaction::Public(tx)
-        if is_sequencer_only_program(tx.message().program_id))
+        if is_sequencer_only_program(lee::ProgramId::from(tx.message().program_account_id)))
 }
 
 /// The cross-zone message an inbox dispatch delivers, or `None` if `tx` is not
@@ -2271,7 +2271,7 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
     };
 
     let message = tx.message();
-    if message.program_id != programs::cross_zone_inbox().id() {
+    if message.program_account_id != programs::cross_zone_inbox().id().into() {
         return None;
     }
 
@@ -2379,7 +2379,7 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     };
 
     let message = tx.message();
-    if message.program_id != programs::bridge().id() {
+    if message.program_account_id != programs::bridge().id().into() {
         return None;
     }
 
@@ -2402,7 +2402,7 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     };
 
     let message = tx.message();
-    if message.program_id != programs::bridge().id() {
+    if message.program_account_id != programs::bridge().id().into() {
         return None;
     }
 

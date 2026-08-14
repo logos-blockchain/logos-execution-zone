@@ -31,7 +31,7 @@ fn main() {
     first_for_callee.is_authorized = true;
 
     let chained_call = ChainedCall {
-        program_id: auth_transfer_id,
+        program_account_id: auth_transfer_id.into(),
         instruction_data: to_vec(&authenticated_transfer_core::Instruction::Transfer { amount })
             .unwrap(),
         pre_states: vec![first_for_callee, second.clone()],

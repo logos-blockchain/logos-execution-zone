@@ -173,7 +173,7 @@ fn build_lock_tx(
         outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
     ];
     // One nonce per signature: the holder signs, at its genesis nonce 0.
-    let message = Message::try_new(bridge_lock_id, accounts, vec![0_u128.into()], lock)
+    let message = Message::try_new(bridge_lock_id.into(), accounts, vec![0_u128.into()], lock)
         .expect("build lock message");
     let witness = WitnessSet::for_message(&message, &[holder_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness))

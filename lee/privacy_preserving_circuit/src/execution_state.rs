@@ -122,7 +122,7 @@ impl ExecutionState {
         };
 
         let initial_call = ChainedCall {
-            program_id,
+            program_account_id: AccountId::from(program_id),
             instruction_data: first_output.instruction_data.clone(),
             pre_states: first_output.pre_states.clone(),
             pda_seeds: Vec::new(),
@@ -147,6 +147,13 @@ impl ExecutionState {
                 panic!("Insufficient program outputs for chained calls");
             };
 
+            // Recover the real `ProgramId` (RISC0 image id) from the account's address: on this
+            // branch every program account lives at the direct `AccountId::from(program_id)`
+            // bijection, so this round-trip is exact. Needed wherever proof verification/PDA
+            // derivation requires the underlying image id rather than the dispatch-facing
+            // `AccountId`.
+            let current_program_id = ProgramId::from(chained_call.program_account_id);
+
             // Check that instruction data in chained call is the instruction data in program output
             assert_eq!(
                 chained_call.instruction_data, program_output.instruction_data,
@@ -157,14 +164,14 @@ impl ExecutionState {
             // program.
             let program_output_words =
                 &to_vec(&program_output).expect("program_output must be serializable");
-            env::verify(chained_call.program_id, program_output_words).unwrap_or_else(
+            env::verify(current_program_id, program_output_words).unwrap_or_else(
                 |_: Infallible| unreachable!("Infallible error is never constructed"),
             );
 
             // Verify that the program output's self_program_id matches the expected program ID.
             // This ensures the proof commits to which program produced the output.
             assert_eq!(
-                program_output.self_program_id, chained_call.program_id,
+                program_output.self_program_id, current_program_id,
                 "Program output self_program_id does not match chained call program_id"
             );
 
@@ -182,18 +189,15 @@ impl ExecutionState {
             let validated_execution = validate_execution(
                 &program_output.pre_states,
                 &program_output.post_states,
-                chained_call.program_id,
+                chained_call.program_account_id,
             );
             if let Err(err) = validated_execution {
-                panic!(
-                    "Invalid program behavior in program {:?}: {err}",
-                    chained_call.program_id
-                );
+                panic!("Invalid program behavior in program {current_program_id:?}: {err}");
             }
 
             let authorized_accounts = execution_state.validate_and_sync_states(
                 account_identities,
-                chained_call.program_id,
+                current_program_id,
                 caller_data,
                 &chained_call.pda_seeds,
                 program_output.pre_states,
@@ -205,7 +209,7 @@ impl ExecutionState {
                 chained_calls.push_front((
                     next_call,
                     CallerData {
-                        program_id: Some(chained_call.program_id),
+                        program_id: Some(current_program_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
