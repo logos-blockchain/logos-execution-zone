@@ -9,11 +9,14 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::{
         AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
-        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow,
-        validate_execution,
+        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput, SystemInstruction,
+        TimestampValidityWindow, validate_clear, validate_execution,
     },
 };
-use risc0_zkvm::{guest::env, serde::to_vec};
+use risc0_zkvm::{
+    guest::env,
+    serde::{from_slice, to_vec},
+};
 
 /// State of the involved accounts before and after program execution.
 pub struct ExecutionState {
@@ -154,12 +157,40 @@ impl ExecutionState {
             );
 
             // Check that `program_output` is consistent with the execution of the corresponding
-            // program.
-            let program_output_words =
-                &to_vec(&program_output).expect("program_output must be serializable");
-            env::verify(chained_call.program_id, program_output_words).unwrap_or_else(
-                |_: Infallible| unreachable!("Infallible error is never constructed"),
-            );
+            // program. The System Program has no guest ELF, so instead of verifying a recursive
+            // proof we structurally validate the clear transition, which fully pins the
+            // prover-supplied post state.
+            if chained_call.program_id == DEFAULT_PROGRAM_ID {
+                let instruction: SystemInstruction = from_slice(&program_output.instruction_data)
+                    .expect("System Program instruction must deserialize");
+                match instruction {
+                    SystemInstruction::Clear => {
+                        assert_eq!(
+                            program_output.pre_states.len(),
+                            program_output.post_states.len(),
+                            "System Program clear pre/post state length mismatch"
+                        );
+                        for (pre, post) in program_output
+                            .pre_states
+                            .iter()
+                            .zip(program_output.post_states.iter())
+                        {
+                            if let Err(err) = validate_clear(pre, post.account()) {
+                                panic!(
+                                    "Invalid clear in program {:?}: {err}",
+                                    chained_call.program_id
+                                );
+                            }
+                        }
+                    }
+                }
+            } else {
+                let program_output_words =
+                    &to_vec(&program_output).expect("program_output must be serializable");
+                env::verify(chained_call.program_id, program_output_words).unwrap_or_else(
+                    |_: Infallible| unreachable!("Infallible error is never constructed"),
+                );
+            }
 
             // Verify that the program output's self_program_id matches the expected program ID.
             // This ensures the proof commits to which program produced the output.
@@ -177,18 +208,22 @@ impl ExecutionState {
                 "Program output caller_program_id does not match actual caller"
             );
 
-            // Check that the program is well behaved.
+            // Check that the program is well behaved. The System Program's clear intentionally
+            // violates `validate_execution` (nonce bump, owner → default, data zeroed) and is
+            // validated by `validate_clear` above instead.
             // See the # Programs section for the definition of the `validate_execution` method.
-            let validated_execution = validate_execution(
-                &program_output.pre_states,
-                &program_output.post_states,
-                chained_call.program_id,
-            );
-            if let Err(err) = validated_execution {
-                panic!(
-                    "Invalid program behavior in program {:?}: {err}",
-                    chained_call.program_id
+            if chained_call.program_id != DEFAULT_PROGRAM_ID {
+                let validated_execution = validate_execution(
+                    &program_output.pre_states,
+                    &program_output.post_states,
+                    chained_call.program_id,
                 );
+                if let Err(err) = validated_execution {
+                    panic!(
+                        "Invalid program behavior in program {:?}: {err}",
+                        chained_call.program_id
+                    );
+                }
             }
 
             let authorized_accounts = execution_state.validate_and_sync_states(

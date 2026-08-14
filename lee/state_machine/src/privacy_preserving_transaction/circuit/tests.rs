@@ -2,10 +2,13 @@
 
 use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
-    Nullifier, NullifierPublicKey, NullifierWitness, PrivacyPreservingCircuitOutput,
-    PrivateWitness, SharedSecretKey, WitnessKind,
+    Nullifier, NullifierPublicKey, NullifierWitness, PrivacyPreservingCircuitInput,
+    PrivacyPreservingCircuitOutput, PrivateWitness, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
-    program::{PdaSeed, PrivateAccountKind},
+    program::{
+        AccountPostState, DEFAULT_PROGRAM_ID, PdaSeed, PrivateAccountKind, ProgramOutput,
+        SystemInstruction,
+    },
 };
 
 use super::*;
@@ -1075,5 +1078,162 @@ fn private_pda_init_at_root_call_may_not_declare_authorization() {
 fn private_pda_update_identifier_mismatch_fails() {
     let result = pda_update_attempt(false, 5, 99);
 
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+}
+
+/// Proves a hand-built circuit input directly, with no guest program run and no proof
+/// assumptions. Mirrors the proving tail of `execute_and_prove_with_padded_inputs`; the System
+/// Program's clear has no guest ELF, so the prover synthesizes its `ProgramOutput`.
+fn prove_synthesized_input(
+    circuit_input: &PrivacyPreservingCircuitInput,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    let mut env_builder = ExecutorEnv::builder();
+    env_builder.write(circuit_input).unwrap();
+    let env = env_builder.build().unwrap();
+    let prove_info = default_prover()
+        .prove_with_opts(env, PRIVACY_PRESERVING_CIRCUIT_ELF, &ProverOpts::succinct())
+        .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
+    let proof = Proof(borsh::to_vec(&prove_info.receipt.inner)?);
+    let output = prove_info
+        .receipt
+        .journal
+        .decode()
+        .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
+    Ok((output, proof))
+}
+
+/// A program-owned regular private note is reclaimed by a System Program `Clear`: the successor
+/// carries the note's update nullifier and a default-owned commitment with the balance preserved
+/// and data zeroed, at the same account id.
+#[test]
+fn private_reclaim_clears_program_owned_note() {
+    let program = crate::test_methods::noop();
+    let keys = test_private_account_keys_1();
+    let identifier: u128 = 7;
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+
+    let pre_account = Account {
+        program_owner: program.id(),
+        balance: 55,
+        data: Data::try_from(vec![1_u8, 2, 3]).unwrap(),
+        nonce: Nonce(3),
+    };
+    let commitment_pre = Commitment::new(&account_id, &pre_account);
+    let mut commitment_set = CommitmentSet::with_capacity(1);
+    commitment_set.extend(std::slice::from_ref(&commitment_pre));
+    let membership_proof = commitment_set.get_proof_for(&commitment_pre).unwrap();
+
+    let pre = AccountWithMetadata::new(pre_account, true, account_id);
+    let cleared = Account {
+        program_owner: DEFAULT_PROGRAM_ID,
+        balance: 55,
+        data: Data::default(),
+        nonce: Nonce(3),
+    };
+
+    let circuit_input = PrivacyPreservingCircuitInput {
+        program_outputs: vec![ProgramOutput::new(
+            DEFAULT_PROGRAM_ID,
+            None,
+            Program::serialize_instruction(SystemInstruction::Clear).unwrap(),
+            vec![pre],
+            vec![AccountPostState::new(cleared)],
+        )],
+        account_identities: vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            identifier,
+            kind: WitnessKind::Regular {
+                ask: Some(keys.ask),
+            },
+            nullifier: NullifierWitness::Update {
+                view_tag: 0,
+                nsk: keys.nsk(),
+                membership_proof,
+            },
+        })],
+        program_id: DEFAULT_PROGRAM_ID,
+        dummy_inputs: vec![],
+    };
+
+    let expected_nullifier = Nullifier::for_account_update(&commitment_pre, &keys.nsk());
+    let expected_post = Account {
+        program_owner: DEFAULT_PROGRAM_ID,
+        balance: 55,
+        data: Data::default(),
+        nonce: Nonce(3).private_account_nonce_increment(&keys.nsk()),
+    };
+    let expected_commitment = Commitment::new(&account_id, &expected_post);
+    let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &expected_post.nonce);
+    let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
+
+    let (output, proof) = prove_synthesized_input(&circuit_input).unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    assert_eq!(output.private_actions.len(), 1);
+    assert_eq!(output.private_actions[0].nullifier, expected_nullifier);
+    assert_eq!(output.private_actions[0].commitment, expected_commitment);
+
+    let (_kind, post) = EncryptionScheme::decrypt(
+        &output.private_actions[0].encrypted_post_state.ciphertext,
+        &ssk,
+        &output.private_actions[0].nullifier,
+    )
+    .unwrap();
+    assert_eq!(post, expected_post);
+}
+
+/// Invariant 2: a witness with no `ask` leaves the note unauthorized, so `validate_clear` rejects
+/// the clear (`NotAuthorized`) and the circuit refuses to prove.
+#[test]
+fn private_reclaim_without_ask_is_rejected() {
+    let program = crate::test_methods::noop();
+    let keys = test_private_account_keys_1();
+    let identifier: u128 = 7;
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+
+    let pre_account = Account {
+        program_owner: program.id(),
+        balance: 55,
+        data: Data::default(),
+        nonce: Nonce(3),
+    };
+    let commitment_pre = Commitment::new(&account_id, &pre_account);
+    let mut commitment_set = CommitmentSet::with_capacity(1);
+    commitment_set.extend(std::slice::from_ref(&commitment_pre));
+    let membership_proof = commitment_set.get_proof_for(&commitment_pre).unwrap();
+
+    let pre = AccountWithMetadata::new(pre_account, false, account_id);
+    let cleared = Account {
+        program_owner: DEFAULT_PROGRAM_ID,
+        balance: 55,
+        data: Data::default(),
+        nonce: Nonce(3),
+    };
+
+    let circuit_input = PrivacyPreservingCircuitInput {
+        program_outputs: vec![ProgramOutput::new(
+            DEFAULT_PROGRAM_ID,
+            None,
+            Program::serialize_instruction(SystemInstruction::Clear).unwrap(),
+            vec![pre],
+            vec![AccountPostState::new(cleared)],
+        )],
+        account_identities: vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            identifier,
+            kind: WitnessKind::Regular { ask: None },
+            nullifier: NullifierWitness::Update {
+                view_tag: 0,
+                nsk: keys.nsk(),
+                membership_proof,
+            },
+        })],
+        program_id: DEFAULT_PROGRAM_ID,
+        dummy_inputs: vec![],
+    };
+
+    let result = prove_synthesized_input(&circuit_input);
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
