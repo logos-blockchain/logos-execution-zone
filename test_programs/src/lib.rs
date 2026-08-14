@@ -58,6 +58,19 @@ pub const fn pda_spend_proxy() -> Program {
 
 #[must_use]
 #[inline]
+pub const fn chained_call_forwarder() -> Program {
+    use guests::{CHAINED_CALL_FORWARDER_ELF, CHAINED_CALL_FORWARDER_ID, CHAINED_CALL_FORWARDER_PATH};
+
+    let _unused = CHAINED_CALL_FORWARDER_PATH;
+
+    Program::new_unchecked(
+        CHAINED_CALL_FORWARDER_ID,
+        Cow::Borrowed(CHAINED_CALL_FORWARDER_ELF),
+    )
+}
+
+#[must_use]
+#[inline]
 pub const fn time_locked_transfer() -> Program {
     use guests::{TIME_LOCKED_TRANSFER_ELF, TIME_LOCKED_TRANSFER_ID, TIME_LOCKED_TRANSFER_PATH};
 
