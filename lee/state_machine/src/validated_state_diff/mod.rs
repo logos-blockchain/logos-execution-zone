@@ -124,7 +124,6 @@ impl ValidatedStateDiff {
                 chained_call.pre_states,
                 chained_call.instruction_data
             );
-
             let mut program_output = if chained_call.program_account_id
                 == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
             {
