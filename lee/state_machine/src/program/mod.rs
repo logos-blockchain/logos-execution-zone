@@ -58,24 +58,9 @@ impl Program {
         pre_states: &[AccountWithMetadata],
         instruction_data: &InstructionData,
     ) -> Result<ProgramOutput, LeeError> {
-        self.execute_with_session_limit(
-            caller_program_id,
-            pre_states,
-            instruction_data,
-            MAX_NUM_CYCLES_PUBLIC_EXECUTION,
-        )
-    }
-
-    fn execute_with_session_limit(
-        &self,
-        caller_program_id: Option<ProgramId>,
-        pre_states: &[AccountWithMetadata],
-        instruction_data: &InstructionData,
-        session_limit: u64,
-    ) -> Result<ProgramOutput, LeeError> {
         // Write inputs to the program
         let mut env_builder = ExecutorEnv::builder();
-        env_builder.session_limit(Some(session_limit));
+        env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
         Self::write_inputs(
             AccountId::from(self.id),
             caller_account_id,
@@ -122,30 +107,6 @@ impl Program {
             .write(&instruction_data)
             .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         Ok(())
-    }
-}
-
-#[cfg(feature = "test-utils")]
-impl Program {
-    /// Test-only: like `execute`, but with a session limit far above the production
-    /// `MAX_NUM_CYCLES_PUBLIC_EXECUTION` cap.
-    ///
-    /// Exists so tests can run a real, possibly large guest program to completion — e.g.
-    /// comparing the loader guest's actual execution against its native dispatch fast-path
-    /// (see `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`) — without hitting the budget that exists
-    /// specifically to bound production dispatch cost, which this is deliberately not testing.
-    pub fn execute_for_test(
-        &self,
-        caller_program_id: Option<ProgramId>,
-        pre_states: &[AccountWithMetadata],
-        instruction_data: &InstructionData,
-    ) -> Result<ProgramOutput, LeeError> {
-        self.execute_with_session_limit(
-            caller_program_id,
-            pre_states,
-            instruction_data,
-            MAX_NUM_CYCLES_PUBLIC_EXECUTION * 64,
-        )
     }
 }
 

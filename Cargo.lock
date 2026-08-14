@@ -6379,14 +6379,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "loader_program"
-version = "0.1.0"
-dependencies = [
- "lee_core",
- "loader_core",
-]
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9442,7 +9434,6 @@ dependencies = [
  "faucet_core",
  "lee",
  "lee_core",
- "loader_core",
  "ping_core",
  "risc0-zkvm",
  "sequencer_stake_core",
