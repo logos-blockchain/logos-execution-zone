@@ -69,7 +69,9 @@ pub const fn pda_spend_proxy() -> Program {
 #[must_use]
 #[inline]
 pub const fn chained_call_forwarder() -> Program {
-    use guests::{CHAINED_CALL_FORWARDER_ELF, CHAINED_CALL_FORWARDER_ID, CHAINED_CALL_FORWARDER_PATH};
+    use guests::{
+        CHAINED_CALL_FORWARDER_ELF, CHAINED_CALL_FORWARDER_ID, CHAINED_CALL_FORWARDER_PATH,
+    };
 
     let _unused = CHAINED_CALL_FORWARDER_PATH;
 
