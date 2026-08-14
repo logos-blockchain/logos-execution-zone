@@ -23,7 +23,8 @@ use crate::{
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
             native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
-            token::TokenProgramAgnosticSubcommand, vault::VaultSubcommand,
+            system_program::SystemSubcommand, token::TokenProgramAgnosticSubcommand,
+            vault::VaultSubcommand,
         },
     },
     config::SequencerConnectionData,
@@ -71,6 +72,9 @@ pub enum Command {
     /// Vault program interaction subcommand.
     #[command(subcommand)]
     Vault(VaultSubcommand),
+    /// System Program interaction subcommand (e.g. reclaim an account).
+    #[command(subcommand)]
+    System(SystemSubcommand),
     /// Bridge program interaction subcommand.
     #[command(subcommand)]
     Bridge(BridgeSubcommand),
@@ -229,6 +233,9 @@ pub async fn execute_subcommand(
         }
         Command::Pinata(pinata_subcommand) => {
             pinata_subcommand.handle_subcommand(wallet_core).await?
+        }
+        Command::System(system_subcommand) => {
+            system_subcommand.handle_subcommand(wallet_core).await?
         }
         Command::CheckHealth => {
             let remote_program_ids = wallet_core
