@@ -14,8 +14,8 @@ type Instruction = (u128, ProgramId);
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (balance, transfer_program_id),
         },
@@ -42,8 +42,8 @@ fn main() {
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![sender.clone(), receiver.clone()],
         vec![

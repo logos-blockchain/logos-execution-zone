@@ -105,14 +105,14 @@ pub fn execute_and_prove_with_padded_inputs(
 
     let mut chained_calls = VecDeque::from_iter([(initial_call, initial_program, None)]);
     let mut chain_calls_counter = 0;
-    while let Some((chained_call, program, caller_program_id)) = chained_calls.pop_front() {
+    while let Some((chained_call, program, caller_account_id)) = chained_calls.pop_front() {
         if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
             return Err(LeeError::MaxChainedCallsDepthExceeded);
         }
 
         let inner_receipt = execute_and_prove_program(
             program,
-            caller_program_id,
+            caller_account_id,
             &chained_call.pre_states,
             &chained_call.instruction_data,
         )?;
@@ -141,7 +141,7 @@ pub fn execute_and_prove_with_padded_inputs(
             chained_calls.push_front((
                 new_call,
                 next_program,
-                Some(ProgramId::from(chained_call.program_account_id)),
+                Some(chained_call.program_account_id),
             ));
         }
 
@@ -182,14 +182,15 @@ pub fn execute_and_prove_with_padded_inputs(
 
 fn execute_and_prove_program(
     program: &Program,
-    caller_program_id: Option<ProgramId>,
+    caller_account_id: Option<AccountId>,
     pre_states: &[AccountWithMetadata],
     instruction_data: &InstructionData,
 ) -> Result<Receipt, LeeError> {
     // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
-    program.write_inputs(
-        caller_program_id,
+    Program::write_inputs(
+        AccountId::from(program.id()),
+        caller_account_id,
         pre_states,
         instruction_data,
         &mut env_builder,

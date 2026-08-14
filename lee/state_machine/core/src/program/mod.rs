@@ -58,8 +58,8 @@ pub type InstructionData = Vec<u8>;
 /// Struct encoding the input to an LEE program.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct ProgramInput<T> {
-    pub self_program_id: ProgramId,
-    pub caller_program_id: Option<ProgramId>,
+    pub self_account_id: AccountId,
+    pub caller_account_id: Option<AccountId>,
     pub pre_states: Vec<AccountWithMetadata>,
     pub instruction: T,
 }
@@ -254,7 +254,7 @@ pub struct ChainedCall {
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
     /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
-    /// mutate the `AccountId` derived from `(caller_program_id, seed)`, regardless of
+    /// mutate the `AccountId` derived from `(caller_account_id, seed)`, regardless of
     /// whether the account is public or private.
     pub pda_seeds: Vec<PdaSeed>,
 }
@@ -475,11 +475,11 @@ pub struct InvalidWindow;
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use = "ProgramOutput does nothing unless written"]
 pub struct ProgramOutput {
-    /// The program ID of the program that produced this output.
-    pub self_program_id: ProgramId,
-    /// The program ID of the caller that invoked this program via a chained call,
+    /// The `AccountId` of the program that produced this output.
+    pub self_account_id: AccountId,
+    /// The `AccountId` of the caller that invoked this program via a chained call,
     /// or `None` if this is a top-level call.
-    pub caller_program_id: Option<ProgramId>,
+    pub caller_account_id: Option<AccountId>,
     /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
     /// The account pre states the program received to produce this output.
@@ -496,15 +496,15 @@ pub struct ProgramOutput {
 
 impl ProgramOutput {
     pub const fn new(
-        self_program_id: ProgramId,
-        caller_program_id: Option<ProgramId>,
+        self_account_id: AccountId,
+        caller_account_id: Option<AccountId>,
         instruction_data: InstructionData,
         pre_states: Vec<AccountWithMetadata>,
         post_states: Vec<AccountPostState>,
     ) -> Self {
         Self {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             instruction_data,
             pre_states,
             post_states,
@@ -677,12 +677,17 @@ pub enum ExecutionValidationError {
 /// `pre_state`.
 #[must_use]
 pub fn compute_public_authorized_pdas(
-    caller_program_id: Option<ProgramId>,
+    caller_account_id: Option<AccountId>,
     pda_seeds: &[PdaSeed],
 ) -> HashSet<AccountId> {
-    let Some(caller) = caller_program_id else {
+    let Some(caller) = caller_account_id else {
         return HashSet::new();
     };
+    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
+    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact.
+    // `for_public_pda`'s derivation formula is pinned to the caller's actual image id, not its
+    // dispatch-facing `AccountId`.
+    let caller = ProgramId::from(caller);
     pda_seeds
         .iter()
         .map(|seed| AccountId::for_public_pda(&caller, seed))
@@ -691,7 +696,6 @@ pub fn compute_public_authorized_pdas(
 
 /// Reads first 4 bytes indicating the length in bytes of the program input bytes.
 /// Afterwards, reads exactly that many payload bytes.
-#[must_use]
 pub fn read_input_frame() -> Vec<u8> {
     let mut len_bytes = [0; 4];
     env::read_slice(&mut len_bytes);
@@ -706,8 +710,8 @@ pub fn read_input_frame() -> Vec<u8> {
 #[must_use]
 pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionData) {
     let ProgramInput {
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         pre_states,
         instruction: instruction_data,
     } = borsh::from_slice::<ProgramInput<InstructionData>>(&read_input_frame())
@@ -716,8 +720,8 @@ pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionDa
         borsh::from_slice(&instruction_data).expect("instruction must decode from borsh");
     (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },

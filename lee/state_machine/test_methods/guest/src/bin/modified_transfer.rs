@@ -64,8 +64,8 @@ fn main() {
     // Read input accounts.
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: balance_to_move,
         },
@@ -83,8 +83,8 @@ fn main() {
         _ => panic!("invalid params"),
     };
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         pre_states,
         post_states,

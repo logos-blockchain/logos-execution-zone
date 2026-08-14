@@ -32,8 +32,8 @@ fn main() {
     // Read inputs
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (),
         },
@@ -70,8 +70,8 @@ fn main() {
     // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
     // called to commit the output.
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![pre_state],
         vec![post_state],

@@ -6,8 +6,8 @@ type Instruction = (ProgramId, u128);
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (simple_transfer_id, amount),
         },
@@ -25,8 +25,8 @@ fn main() {
     let auth_transfer_instruction = borsh::to_vec(&amount).expect("serialization is infallible");
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![],
         vec![],

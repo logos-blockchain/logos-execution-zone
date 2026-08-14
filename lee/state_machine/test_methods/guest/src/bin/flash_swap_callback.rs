@@ -17,9 +17,9 @@
 //!   will fail (vault balance < initial), causing full atomic rollback. This simulates a malicious
 //!   or buggy callback that does not repay the flash loan.
 //!
-//! # Note on `caller_program_id`
+//! # Note on `caller_account_id`
 //!
-//! This program does not enforce any access control on `caller_program_id`.
+//! This program does not enforce any access control on `caller_account_id`.
 //! It is designed to be called by the flash swap initiator but could in principle be
 //! called by any program. In production, a callback would typically verify the caller
 //! if it needs to trust the context it is called from.
@@ -40,8 +40,8 @@ pub struct CallbackInstruction {
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id, // not enforced in this callback
+            self_account_id,
+            caller_account_id, // not enforced in this callback
             pre_states,
             instruction,
         },
@@ -78,8 +78,8 @@ fn main() {
     // The callback itself makes no direct state changes, accounts pass through unchanged.
     // All mutations go through the token program via chained calls.
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![vault_pre.clone(), receiver_pre.clone()],
         vec![

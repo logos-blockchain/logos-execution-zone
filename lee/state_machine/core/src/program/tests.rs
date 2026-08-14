@@ -99,7 +99,7 @@ fn validity_window_from_range_full() {
 
 #[test]
 fn program_output_try_with_block_validity_window_range() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![], vec![])
         .try_with_block_validity_window(10_u64..100)
         .unwrap();
     assert_eq!(output.block_validity_window.start(), Some(10));
@@ -108,7 +108,7 @@ fn program_output_try_with_block_validity_window_range() {
 
 #[test]
 fn program_output_with_block_validity_window_range_from() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![], vec![])
         .with_block_validity_window(10_u64..);
     assert_eq!(output.block_validity_window.start(), Some(10));
     assert_eq!(output.block_validity_window.end(), None);
@@ -116,7 +116,7 @@ fn program_output_with_block_validity_window_range_from() {
 
 #[test]
 fn program_output_with_block_validity_window_range_to() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![], vec![])
         .with_block_validity_window(..100_u64);
     assert_eq!(output.block_validity_window.start(), None);
     assert_eq!(output.block_validity_window.end(), Some(100));
@@ -124,7 +124,7 @@ fn program_output_with_block_validity_window_range_to() {
 
 #[test]
 fn program_output_try_with_block_validity_window_empty_range_fails() {
-    let result = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let result = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![], vec![])
         .try_with_block_validity_window(5_u64..5);
     assert!(result.is_err());
 }
@@ -326,7 +326,7 @@ fn for_private_account_dispatches_correctly() {
 fn compute_public_authorized_pdas_with_seeds() {
     let caller: ProgramId = [1; 8];
     let seed = PdaSeed::new([2; 32]);
-    let result = compute_public_authorized_pdas(Some(caller), &[seed]);
+    let result = compute_public_authorized_pdas(Some(caller.into()), &[seed]);
     let expected = AccountId::for_public_pda(&caller, &seed);
     assert!(result.contains(&expected));
     assert_eq!(result.len(), 1);
