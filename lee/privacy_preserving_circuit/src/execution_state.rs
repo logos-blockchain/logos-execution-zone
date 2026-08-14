@@ -5,7 +5,7 @@ use std::{
 
 use lee_core::{
     Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Data},
     encryption::ViewingPublicKey,
     program::{
         AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
@@ -250,8 +250,8 @@ impl ExecutionState {
             .filter(|(pre_default, post)| pre_default.account != **post)
             .map(|(pre, post)| (pre.account_id, post))
         {
-            assert_ne!(
-                post.program_owner, DEFAULT_PROGRAM_ID,
+            assert!(
+                post.program_owner != DEFAULT_PROGRAM_ID || post.data == Data::default(),
                 "Account {account_id} was modified but not claimed"
             );
         }

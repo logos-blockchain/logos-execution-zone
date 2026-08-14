@@ -126,3 +126,64 @@ fn clear_touches_only_the_named_account() {
     );
     assert_eq!(state.get_account_by_id(bystander), bystander_account);
 }
+
+#[test]
+fn reclaimed_balance_is_spendable_without_claim() {
+    let key = PrivateKey::try_new([1; 32]).unwrap();
+    let id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let recipient = AccountId::new([9; 32]);
+    let transfer = crate::test_methods::modified_transfer_program();
+
+    let mut state = V03State::new().with_test_programs();
+    state.force_insert_account(
+        id,
+        Account {
+            program_owner: HOSTILE_OWNER,
+            balance: 500_000,
+            data: vec![0xca, 0xfe].try_into().unwrap(),
+            nonce: Nonce(0),
+        },
+    );
+    state.force_insert_account(
+        recipient,
+        Account {
+            program_owner: transfer.id(),
+            ..Account::default()
+        },
+    );
+
+    let clear = public_transaction::Message::try_new(
+        DEFAULT_PROGRAM_ID,
+        vec![id],
+        vec![Nonce(0)],
+        SystemInstruction::Clear,
+    )
+    .unwrap();
+    let clear_ws = public_transaction::WitnessSet::for_message(&clear, &[&key]);
+    state
+        .transition_from_public_transaction(&PublicTransaction::new(clear, clear_ws), 1, 0)
+        .unwrap();
+    assert_eq!(
+        state.get_account_by_id(id).program_owner,
+        DEFAULT_PROGRAM_ID
+    );
+    assert_eq!(state.get_account_by_id(id).balance, 500_000);
+
+    let amount: u128 = 1;
+    let spend = public_transaction::Message::try_new(
+        transfer.id(),
+        vec![id, recipient],
+        vec![Nonce(1)],
+        amount,
+    )
+    .unwrap();
+    let spend_ws = public_transaction::WitnessSet::for_message(&spend, &[&key]);
+    state
+        .transition_from_public_transaction(&PublicTransaction::new(spend, spend_ws), 1, 0)
+        .unwrap();
+
+    let spent = state.get_account_by_id(id);
+    assert_eq!(spent.program_owner, DEFAULT_PROGRAM_ID);
+    assert_eq!(spent.data, Data::default());
+    assert!(spent.balance < 500_000);
+}

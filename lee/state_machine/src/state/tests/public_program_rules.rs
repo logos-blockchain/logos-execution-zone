@@ -415,3 +415,72 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
         ))) if total_balance_pre_states == 100.into() && total_balance_post_states == 99.into()
     ));
 }
+
+#[test]
+fn default_owner_credited_without_claim_succeeds() {
+    let sender_key = PrivateKey::try_new([1; 32]).unwrap();
+    let sender = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let recipient = AccountId::new([9; 32]);
+    let transfer = crate::test_methods::modified_transfer_program();
+
+    let mut state = V03State::new().with_test_programs();
+    state.force_insert_account(
+        sender,
+        Account {
+            program_owner: transfer.id(),
+            balance: 500_000,
+            ..Account::default()
+        },
+    );
+    assert_eq!(state.get_account_by_id(recipient), Account::default());
+
+    let amount: u128 = 1;
+    let message = public_transaction::Message::try_new(
+        transfer.id(),
+        vec![sender, recipient],
+        vec![Nonce(0)],
+        amount,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sender_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    let credited = state.get_account_by_id(recipient);
+    assert_eq!(credited.program_owner, Account::default().program_owner);
+    assert_eq!(credited.data, Data::default());
+    assert!(credited.balance > 0);
+}
+
+#[test]
+fn default_owner_left_with_data_still_rejected() {
+    let account_id = AccountId::new([1; 32]);
+    let mut state = V03State::new().with_test_programs();
+    state.force_insert_account(
+        account_id,
+        Account {
+            data: vec![0xca, 0xfe].try_into().unwrap(),
+            ..Account::default()
+        },
+    );
+
+    let program_id = crate::test_methods::noop().id();
+    let message =
+        public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(
+            InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::DataBearingAccountWithDefaultOwner {
+                    account_id: err_account_id
+                }
+            )
+        )) if err_account_id == account_id
+    ));
+}

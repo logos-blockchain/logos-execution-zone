@@ -345,7 +345,7 @@ impl ValidatedStateDiff {
             Some((*account_id, post))
         }) {
             ensure!(
-                post.program_owner != DEFAULT_PROGRAM_ID,
+                post.program_owner != DEFAULT_PROGRAM_ID || post.data == Data::default(),
                 InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
             );
         }
