@@ -8038,6 +8038,7 @@ dependencies = [
  "faucet_core",
  "lee",
  "lee_core",
+ "pinata_core",
  "ping_core",
  "risc0-zkvm",
  "token_core",
