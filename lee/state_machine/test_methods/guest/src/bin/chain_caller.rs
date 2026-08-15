@@ -42,6 +42,7 @@ fn main() {
             instruction_data: call_instruction_data.clone(),
             pre_states: vec![running_sender_pre.clone(), running_recipient_pre.clone()], /* <- Account order permutation here */
             pda_seeds: pda_seed.iter().copied().collect(),
+            raw_payload: None,
         };
         chained_calls.push(new_chained_call);
 

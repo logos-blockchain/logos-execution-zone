@@ -24,7 +24,7 @@ use tokio::test;
 async fn reject_oversized_transaction() -> Result<()> {
     let bytecode = test_programs::claimer().elf().to_vec();
     let (header, segment) = deploy_targets(&bytecode);
-    let tx = LeeTransaction::Public(deploy_transaction(header, segment, bytecode));
+    let tx = LeeTransaction::Public(deploy_transaction(header, segment, &bytecode));
     let tx_size = encoded_tx_size(&tx);
 
     let ctx = MultiZoneTestContextBuilder::default()
@@ -68,7 +68,7 @@ async fn accept_transaction_within_limit() -> Result<()> {
     // qualifies as "a small transaction" the way it did under the legacy path.
     let bytecode = test_programs::claimer().elf().to_vec();
     let (header, segment) = deploy_targets(&bytecode);
-    let tx = LeeTransaction::Public(deploy_transaction(header, segment, bytecode));
+    let tx = LeeTransaction::Public(deploy_transaction(header, segment, &bytecode));
     let tx_size = encoded_tx_size(&tx);
 
     let ctx = MultiZoneTestContextBuilder::default()
@@ -108,14 +108,14 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     let claimer_tx = LeeTransaction::Public(deploy_transaction(
         claimer_header,
         claimer_segment,
-        claimer.elf().to_vec(),
+        claimer.elf(),
     ));
 
     let (chain_caller_header, chain_caller_segment) = deploy_targets(chain_caller.elf());
     let chain_caller_tx = LeeTransaction::Public(deploy_transaction(
         chain_caller_header,
         chain_caller_segment,
-        chain_caller.elf().to_vec(),
+        chain_caller.elf(),
     ));
 
     // Block size to fit only one of the two transactions, leaving some room for headers
@@ -168,12 +168,16 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
                 if public_tx.message.program_account_id != PROGRAM_LOADER_ACCOUNT_ID {
                     return None;
                 }
-                let program_loader_core::Instruction::Deploy { bytecode } =
+                let program_loader_core::Instruction::Deploy { .. } =
                     borsh::from_slice::<program_loader_core::Instruction>(
                         &public_tx.message.instruction_data,
                     )
                     .ok()?;
-                Program::new(bytecode.into()).ok().map(|p| p.id())
+                // `raw_payload` carries only `user_elf` (see `Message::raw_payload`'s doc
+                // comment); `Program::new` needs the full two-ELF `ProgramBinary` blob.
+                let user_elf = public_tx.message.raw_payload.clone()?;
+                let full_binary = program_loader_core::reconstruct_program_binary(&user_elf);
+                Program::new(full_binary.into()).ok().map(|p| p.id())
             })
             .collect()
     };

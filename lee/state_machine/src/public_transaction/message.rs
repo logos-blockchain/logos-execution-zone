@@ -23,8 +23,6 @@ pub struct Message {
     /// bytecode, which is handled natively, see `PROGRAM_LOADER_ACCOUNT_ID`'s doc
     /// comment) belongs here instead of in `instruction_data`, avoiding that ~4x bloat entirely
     /// rather than just packing it more efficiently.
-    ///
-    /// Unused for now — no constructor sets it and no dispatch logic reads it yet.
     pub raw_payload: Option<Vec<u8>>,
 }
 
@@ -60,6 +58,12 @@ impl Message {
             instruction_data,
             raw_payload: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_raw_payload(mut self, raw_payload: Vec<u8>) -> Self {
+        self.raw_payload = Some(raw_payload);
+        self
     }
 
     #[must_use]

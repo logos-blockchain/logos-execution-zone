@@ -10,21 +10,62 @@ const DEPLOY_HEADER_SEED_DOMAIN_SEPARATOR: AccountId =
 const DEPLOY_SEGMENT_SEED_DOMAIN_SEPARATOR: AccountId =
     AccountId::new(*b"/LEZ/v0.3/LoaderDeploySegmentSee");
 
+/// The RISC0 platform/syscall kernel every guest in this codebase runs under.
+///
+/// A function of the RISC0 toolchain version (pinned via `Justfile`'s
+/// `RISC0_DOCKER_CONTAINER_TAG`), not of any individual program. Verified byte-identical across
+/// every guest artifact currently built in this repo, so a `Deploy`'s `user_elf` never needs to
+/// carry it: `execute_deploy` assumes this exact kernel and reconstructs the full two-ELF binary
+/// from it, rather than storing (and transmitting) ~32KB of fully redundant bytes on every single
+/// deployment.
+const KERNEL_ELF: &[u8] = include_bytes!("kernel.bin");
+
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Deploys a new program: writes its `ProgramData` header and one bytecode segment, each
     /// claimed as a PDA of the loader.
     ///
+    /// The bytecode itself travels via the dispatching message's `raw_payload`, not this
+    /// instruction — see `Message::raw_payload`'s doc comment for why.
+    ///
     /// Required accounts (2), in order:
     /// - The target `ProgramData` header PDA account (must be `Account::default()`)
     /// - The target segment PDA account holding the raw bytecode (must be `Account::default()`)
-    Deploy { bytecode: Vec<u8> },
+    Deploy {
+        /// Distinguishes independent deployments of identical bytecode (same `image_id`) from
+        /// one another, so a second deployer never collides with an existing deployment's PDAs.
+        /// Also who may redeploy this same slot in the future once upgrade authority is
+        /// implemented (a future PR) — for now this is a placeholder with no enforcement.
+        /// `AccountId::default()` means no upgrade authority (immutable).
+        update_auth: AccountId,
+    },
+}
+
+/// Extracts the program-specific `user_elf` out of a full two-ELF `ProgramBinary` blob.
+///
+/// `full_binary` is the format `Program::elf()` returns for every program in this codebase — the
+/// inverse of [`reconstruct_program_binary`]. What a `Deploy`'s `raw_payload` should carry.
+pub fn extract_user_elf(full_binary: &[u8]) -> anyhow::Result<Vec<u8>> {
+    Ok(risc0_binfmt::ProgramBinary::decode(full_binary)?
+        .user_elf
+        .to_vec())
+}
+
+/// Rebuilds the full two-ELF `ProgramBinary` blob from just a `user_elf`, assuming [`KERNEL_ELF`].
+///
+/// The inverse of [`extract_user_elf`]. Byte-identical to the original full binary as long as it
+/// was built with the same RISC0 toolchain (true for anything actually deployable on this
+/// network, since the kernel is what makes an ELF executable here at all).
+#[must_use]
+pub fn reconstruct_program_binary(user_elf: &[u8]) -> Vec<u8> {
+    risc0_binfmt::ProgramBinary::new(user_elf, KERNEL_ELF).encode()
 }
 
 /// Derives the PDA seed for a deployed program's `ProgramData` header account.
 ///
 /// Combines the program's content-derived identity (`image_id`), its position in a (currently
-/// always single-segment) split (`segment_count`), and who may redeploy it (`update_auth`).
+/// always single-segment) split (`segment_count`), and `update_auth` — included so multiple
+/// independent deployments of identical bytecode land at distinct accounts instead of colliding.
 ///
 /// Domain-separated from other PDA-seed derivations in the codebase, including
 /// [`segment_pda_seed`], so a header seed can never collide with a segment seed (or
@@ -123,22 +164,24 @@ pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
     )
 }
 
-/// Executes the `Deploy` instruction.
+/// Executes the `Deploy` instruction: verifies `user_elf` decodes as a valid RISC0 program
+/// (combined with the assumed [`KERNEL_ELF`]), derives its header and segment PDAs, and claims
+/// both.
 ///
-/// Verifies `bytecode` decodes as a valid RISC0 program binary, derives its header and segment
-/// PDAs, and claims both. Called natively from dispatch's `PROGRAM_LOADER_ACCOUNT_ID`
-/// shortcut (see that constant's doc comment in `lee_core::program`).
+/// Called natively from dispatch's `PROGRAM_LOADER_ACCOUNT_ID` shortcut (see that constant's
+/// doc comment in `lee_core::program`) — `Deploy` has no guest binary of its own.
 #[must_use]
 pub fn execute_deploy(
     self_account_id: AccountId,
     pre_states: Vec<AccountWithMetadata>,
-    bytecode: Vec<u8>,
+    user_elf: Vec<u8>,
+    update_auth: AccountId,
 ) -> Vec<AccountPostState> {
-    let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode)
-        .expect("bytecode must decode as a valid RISC0 program binary")
+    let image_id: ProgramId = risc0_binfmt::ProgramBinary::new(&user_elf, KERNEL_ELF)
+        .compute_image_id()
+        .expect("user_elf must decode as a valid RISC0 program binary")
         .into();
     let segment_count = 0_u32;
-    let update_auth = AccountId::default();
     let header_seed = header_pda_seed(image_id, segment_count, update_auth);
     let segment_seed = segment_pda_seed(image_id, segment_count, update_auth);
     let header_pda = AccountId::for_public_pda(&self_account_id, &header_seed);
@@ -183,7 +226,7 @@ pub fn execute_deploy(
         ),
         AccountPostState::new_claimed(
             Account {
-                data: Data::try_from(bytecode).expect("elf must fit under DATA_MAX_LENGTH"),
+                data: Data::try_from(user_elf).expect("elf must fit under DATA_MAX_LENGTH"),
                 ..Account::default()
             },
             Claim::Pda(segment_seed),

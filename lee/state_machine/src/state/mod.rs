@@ -230,10 +230,11 @@ impl V03State {
             segment_count,
             update_auth,
         );
+        let user_elf = program_loader_core::extract_user_elf(program.elf())
+            .expect("program.elf() must already be a valid two-ELF ProgramBinary");
         let segment_account = Account {
             program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(program.elf().to_vec())
-                .expect("elf must fit under DATA_MAX_LENGTH"),
+            data: Data::try_from(user_elf).expect("elf must fit under DATA_MAX_LENGTH"),
             ..Account::default()
         };
 
@@ -314,9 +315,11 @@ impl V03State {
     ///
     /// Recognizes only programs deployed via the native `Deploy` dispatch shortcut, owned by
     /// [`PROGRAM_LOADER_ACCOUNT_ID`]: `account.data` decodes as a [`ProgramData`] header
-    /// holding the real `image_id`, and the bytecode itself lives in a second,
+    /// holding the real `image_id`, and the program-specific `user_elf` lives in a second,
     /// separately-addressed segment account derived from that header (see
-    /// `program_loader_core::segment_account_id`).
+    /// `program_loader_core::segment_account_id`), which this reconstructs into the full
+    /// two-ELF binary (see `program_loader_core::reconstruct_program_binary`) before returning
+    /// it.
     ///
     /// Returning the real `image_id` — rather than callers deriving one from the address — is
     /// what makes upgrading a `Deploy`-created program possible: the address never changes, only
@@ -339,8 +342,12 @@ impl V03State {
             header.update_auth,
         );
         let segment = self.get_account_by_id_ref(segment_account_id)?;
-        (segment.program_owner == PROGRAM_LOADER_ACCOUNT_ID)
-            .then(|| (header.image_id, segment.data.to_vec()))
+        (segment.program_owner == PROGRAM_LOADER_ACCOUNT_ID).then(|| {
+            (
+                header.image_id,
+                program_loader_core::reconstruct_program_binary(&segment.data),
+            )
+        })
     }
 
     #[must_use]
