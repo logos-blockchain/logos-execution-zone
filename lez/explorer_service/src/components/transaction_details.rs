@@ -19,6 +19,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         account_ids,
         nonces,
         instruction_data,
+        raw_payload: _,
     } = message;
     let WitnessSet {
         signatures_and_public_keys,

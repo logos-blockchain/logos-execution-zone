@@ -40,6 +40,7 @@ fn main() {
         pre_states,
         instruction_data: auth_transfer_instruction,
         pda_seeds: vec![],
+        raw_payload: None,
     }])
     .write();
 }

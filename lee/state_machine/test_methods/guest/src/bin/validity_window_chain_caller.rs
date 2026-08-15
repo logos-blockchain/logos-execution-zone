@@ -41,6 +41,7 @@ fn main() {
         instruction_data: chained_instruction,
         pre_states,
         pda_seeds: vec![],
+        raw_payload: None,
     };
 
     ProgramOutput::new(

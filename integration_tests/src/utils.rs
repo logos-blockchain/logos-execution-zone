@@ -345,22 +345,32 @@ pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
 
 /// Builds the `PublicTransaction` that deploys `bytecode` to `(header, segment)`.
 ///
-/// `(header, segment)` are the targets [`deploy_targets`] derives for it. Tests should invoke
-/// programs at the returned `header` address afterward, not the program's own bijection
-/// `AccountId::from(image_id)`.
+/// `(header, segment)` are the targets [`deploy_targets`] derives for it. `bytecode` is the full
+/// two-ELF `Program::elf()` blob; this extracts just the `user_elf` for the wire payload, mirroring
+/// what `execute_deploy` expects. Tests should invoke programs at the returned `header` address
+/// afterward, not the program's own bijection `AccountId::from(image_id)`.
 #[must_use]
 pub fn deploy_transaction(
     header: AccountId,
     segment: AccountId,
-    bytecode: Vec<u8>,
+    bytecode: &[u8],
 ) -> lee::PublicTransaction {
+    // Falls back to sending `bytecode` through unmodified when it isn't a well-formed two-ELF
+    // `ProgramBinary` (e.g. deliberately-garbage test input) — extraction is best-effort here so
+    // malformed input still reaches `execute_deploy`'s own rejection path, rather than this
+    // helper itself panicking before the real system ever sees it.
+    let user_elf =
+        program_loader_core::extract_user_elf(bytecode).unwrap_or_else(|_| bytecode.to_vec());
     let message = lee::public_transaction::Message::try_new(
         RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
         vec![header, segment],
         vec![],
-        program_loader_core::Instruction::Deploy { bytecode },
+        program_loader_core::Instruction::Deploy {
+            update_auth: AccountId::default(),
+        },
     )
-    .expect("deploy instruction data should always be serializable");
+    .expect("deploy instruction data should always be serializable")
+    .with_raw_payload(user_elf);
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
     lee::PublicTransaction::new(message, witness_set)
 }

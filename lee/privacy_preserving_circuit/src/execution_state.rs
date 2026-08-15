@@ -148,6 +148,7 @@ impl ExecutionState {
             instruction_data: first_output.instruction_data.clone(),
             pre_states: first_output.pre_states.clone(),
             pda_seeds: Vec::new(),
+            raw_payload: None,
         };
         let initial_caller_data = CallerData {
             caller_account_id: None,
