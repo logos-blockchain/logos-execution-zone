@@ -370,7 +370,9 @@ fn watch_peer(peer: ZoneId, receiver_id: ProgramId) -> CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: peer,
             allowed_routes: vec![CrossZoneRoute {
-                src_program_id: programs::ping_sender().id(),
+                src_account_id: program_loader_core::immutable_deploy_account_id(
+                    programs::ping_sender().id(),
+                ),
                 target_program_id: receiver_id,
             }],
             expected_block_signing_pubkeys: Vec::new(),
@@ -412,7 +414,12 @@ async fn next_free_ordinal(client: &SequencerClient, target_zone: &ZoneId) -> Re
 
     for offset in 0..ORDINAL_PROBE_LIMIT {
         let ordinal = start.wrapping_add(offset);
-        let slot = outbox_pda(outbox_id, emitter, target_zone, ordinal);
+        let slot = outbox_pda(
+            outbox_id,
+            program_loader_core::immutable_deploy_account_id(emitter),
+            target_zone,
+            ordinal,
+        );
         // Retried rather than propagated: by here the run has already paid for a
         // Bedrock bring-up and two sequencer boots, and every other RPC caller
         // in this tool rides out a transient error rather than ending the run.
@@ -517,7 +524,7 @@ async fn poll_finality(state: Arc<AppState>) {
 fn decode_inbox_text(instruction_data: &[u32]) -> Option<String> {
     let instruction: Instruction =
         risc0_zkvm::serde::from_slice::<Instruction, u32>(instruction_data).ok()?;
-    let Instruction::Dispatch(message) = instruction else {
+    let Instruction::Dispatch { message, .. } = instruction else {
         return None;
     };
     decode_payload(&message.payload)
@@ -544,7 +551,7 @@ fn decode_payload(payload: &[u8]) -> Option<String> {
         .collect();
     let instruction: ReceiverInstruction =
         risc0_zkvm::serde::from_slice::<ReceiverInstruction, u32>(&words).ok()?;
-    let ReceiverInstruction::Record { payload: bytes } = instruction else {
+    let ReceiverInstruction::Record { payload: bytes, .. } = instruction else {
         return None;
     };
     Some(String::from_utf8_lossy(&bytes).into_owned())
@@ -557,12 +564,15 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
     let outbox_id = programs::cross_zone_outbox().id();
 
     let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        self_program_id: receiver_id,
         payload: text.as_bytes().to_vec(),
     })
     .expect("serialize record instruction");
     let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
+    let sender_id = programs::ping_sender().id();
     let send = SenderInstruction::Send {
+        self_program_id: sender_id,
         target_zone: other_zone,
         target_program_id: receiver_id,
         target_accounts: vec![
@@ -573,10 +583,14 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
         ordinal,
     };
 
-    let sender_id = programs::ping_sender().id();
-    let outbox_account = outbox_pda(outbox_id, sender_id, &other_zone, ordinal);
+    let outbox_account = outbox_pda(
+        outbox_id,
+        program_loader_core::immutable_deploy_account_id(sender_id),
+        &other_zone,
+        ordinal,
+    );
     let message = Message::try_new(
-        sender_id.into(),
+        program_loader_core::immutable_deploy_account_id(sender_id),
         vec![sender_config_account_id(sender_id), outbox_account],
         vec![],
         send,

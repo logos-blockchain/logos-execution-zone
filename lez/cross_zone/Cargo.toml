@@ -14,6 +14,7 @@ test-utils = []
 [dependencies]
 lee.workspace = true
 lee_core.workspace = true
+program_loader_core.workspace = true
 programs.workspace = true
 common.workspace = true
 cross_zone_inbox_core.workspace = true

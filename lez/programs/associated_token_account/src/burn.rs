@@ -11,7 +11,7 @@ pub fn burn_from_associated_token_account(
     ata_program_id: ProgramId,
     amount: u128,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
-    let token_program_id: lee_core::program::ProgramId = holder_ata.account.program_owner.into();
+    let token_program_id = holder_ata.account.program_owner;
     assert!(owner.is_authorized, "Owner authorization is missing");
     let definition_id = TokenHolding::try_from(&holder_ata.account.data)
         .expect("Holder ATA must hold a valid token")
@@ -32,7 +32,7 @@ pub fn burn_from_associated_token_account(
     holder_ata_auth.is_authorized = true;
 
     let chained_call = ChainedCall::new(
-        token_program_id.into(),
+        token_program_id,
         vec![token_definition.clone(), holder_ata_auth],
         &token_core::Instruction::Burn {
             amount_to_burn: amount,

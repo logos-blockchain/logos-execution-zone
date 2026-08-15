@@ -23,19 +23,28 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     match instruction {
-        Instruction::Mint { recipient, amount } => mint(
+        Instruction::Mint {
+            self_program_id,
+            recipient,
+            amount,
+        } => mint(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_words,
+            self_program_id,
             recipient,
             amount,
         ),
-        Instruction::InitConfig(config) => init_config(
+        Instruction::InitConfig {
+            self_program_id,
+            config,
+        } => init_config(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_words,
+            self_program_id,
             &config,
         ),
         Instruction::RenounceAuthority => renounce_authority(
@@ -59,14 +68,10 @@ fn mint(
     caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
+    self_program_id: lee_core::program::ProgramId,
     recipient: [u8; 32],
     amount: u128,
 ) {
-    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
-    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
-    // for the PDA-derivation helpers below, which are pinned to the actual image id.
-    let self_program_id = lee_core::program::ProgramId::from(self_account_id);
-
     // pre_states: [source marker, config PDA, recipient holding PDA].
     let [marker, config, holding] = <[AccountWithMetadata; 3]>::try_from(pre_states)
         .expect("Mint requires the source marker, config, and recipient holding accounts");
@@ -82,7 +87,7 @@ fn mint(
         .expect("config account holds a wrapped-token config");
     assert_eq!(
         caller_account_id,
-        Some(cfg.minter.into()),
+        Some(cfg.minter),
         "Mint is only callable by the authorized minter (the cross-zone inbox)"
     );
     // The inbox vouches only that the message arrived; which peer sent it is this
@@ -90,9 +95,9 @@ fn mint(
     // anyone's word for it. The marker's address is the source, so re-deriving it
     // from an authorized pair is the whole check.
     assert!(
-        cfg.sources.iter().any(|(src_zone, src_program_id)| {
+        cfg.sources.iter().any(|(src_zone, src_account_id)| {
             marker.account_id
-                == inbox_source_marker_account_id(cfg.minter, src_zone, *src_program_id)
+                == inbox_source_marker_account_id(cfg.minter, src_zone, *src_account_id)
         }),
         "Mint is only callable for a peer source this token authorizes"
     );
@@ -293,6 +298,7 @@ fn init_config(
     caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
+    self_program_id: lee_core::program::ProgramId,
     config_value: &WrappedTokenConfig,
 ) {
     assert!(
@@ -305,7 +311,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        config_account_id(self_account_id.into()),
+        config_account_id(self_program_id),
         "account must be the wrapped-token config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first

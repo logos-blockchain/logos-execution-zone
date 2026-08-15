@@ -110,7 +110,7 @@ impl V03State {
     #[must_use]
     pub fn with_account_owned_by_burner_program(mut self) -> Self {
         let account = Account {
-            program_owner: crate::test_methods::burner().id().into(),
+            program_owner: crate::test_methods::burner().deployed_account_id(),
             balance: 100,
             ..Default::default()
         };
@@ -162,15 +162,15 @@ impl TestPrivateKeys {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CallbackInstruction {
     return_funds: bool,
-    token_program_id: ProgramId,
+    token_program_id: AccountId,
     amount: u128,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
 enum FlashSwapInstruction {
     Initiate {
-        token_program_id: ProgramId,
-        callback_program_id: ProgramId,
+        token_program_id: AccountId,
+        callback_program_id: AccountId,
         amount_out: u128,
         callback_instruction_data: Vec<u32>,
     },
@@ -187,7 +187,8 @@ fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<Acc
             (
                 account_id,
                 Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+                    program_owner: crate::test_methods::simple_balance_transfer()
+                        .deployed_account_id(),
                     balance,
                     ..Account::default()
                 },
@@ -207,10 +208,9 @@ fn transfer_transaction(
 ) -> PublicTransaction {
     let account_ids = vec![from, to];
     let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
-    let program_id = crate::test_methods::simple_balance_transfer().id();
+    let program_id = crate::test_methods::simple_balance_transfer().deployed_account_id();
     let message =
-        public_transaction::Message::try_new(program_id.into(), account_ids, nonces, balance)
-            .unwrap();
+        public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
     PublicTransaction::new(message, witness_set)
 }
@@ -222,7 +222,7 @@ fn build_flash_swap_tx(
     instruction: FlashSwapInstruction,
 ) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
-        initiator.id().into(),
+        initiator.deployed_account_id(),
         vec![vault_id, receiver_id],
         vec![], // no signers — vault is PDA-authorised
         instruction,

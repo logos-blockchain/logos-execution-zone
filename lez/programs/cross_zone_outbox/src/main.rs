@@ -1,7 +1,7 @@
 use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda, outbox_pda_seed};
 use lee_core::{
     account::{Account, AccountWithMetadata},
-    program::{AccountPostState, Claim, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
+    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 fn main() {
@@ -20,37 +20,35 @@ fn main() {
     // immediate chained caller, not the top-level program that cross-zone
     // discovery names; the two coincide only while every emitter refuses to be
     // called by another program, which both do today.
-    let Some(emitter) = caller_account_id.map(ProgramId::from) else {
+    let Some(emitter) = caller_account_id else {
         panic!("Outbox is only callable through a chain call from a user program");
     };
 
-    let (target_zone, target_program_id, target_accounts, payload, ordinal) = match instruction {
-        Instruction::Emit {
-            target_zone,
-            target_program_id,
-            target_accounts,
-            payload,
-            ordinal,
-        } => (
-            target_zone,
-            target_program_id,
-            target_accounts,
-            payload,
-            ordinal,
-        ),
-    };
+    let (self_program_id, target_zone, target_program_id, target_accounts, payload, ordinal) =
+        match instruction {
+            Instruction::Emit {
+                self_program_id,
+                target_zone,
+                target_program_id,
+                target_accounts,
+                payload,
+                ordinal,
+            } => (
+                self_program_id,
+                target_zone,
+                target_program_id,
+                target_accounts,
+                payload,
+                ordinal,
+            ),
+        };
 
     let [outbox] =
         <[AccountWithMetadata; 1]>::try_from(pre_states).expect("Emit requires exactly 1 account");
 
     assert_eq!(
         outbox.account_id,
-        outbox_pda(
-            ProgramId::from(self_account_id),
-            emitter,
-            &target_zone,
-            ordinal
-        ),
+        outbox_pda(self_program_id, emitter, &target_zone, ordinal),
         "Account must be the outbox PDA for (emitter, target_zone, ordinal)"
     );
 

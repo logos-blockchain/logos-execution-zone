@@ -34,7 +34,9 @@ fn main() {
     let (post_states, chained_calls) = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
+            self_program_id,
             vault_program_id,
+            vault_account_id,
             recipient_id,
             amount,
         } => {
@@ -44,7 +46,7 @@ fn main() {
 
             assert_eq!(
                 bridge.account_id,
-                bridge_core::compute_bridge_account_id(self_account_id.into()),
+                bridge_core::compute_bridge_account_id(self_program_id),
                 "First account must be bridge PDA"
             );
 
@@ -56,7 +58,7 @@ fn main() {
 
             assert_eq!(
                 receipt.account_id,
-                bridge_core::deposit_receipt_account_id(self_account_id.into(), l1_deposit_op_id),
+                bridge_core::deposit_receipt_account_id(self_program_id, l1_deposit_op_id),
                 "Third account must be the deposit-receipt PDA"
             );
 
@@ -91,7 +93,7 @@ fn main() {
                 bridge_for_vault.is_authorized = true;
                 let chained_calls = vec![
                     ChainedCall::new(
-                        vault_program_id.into(),
+                        vault_account_id,
                         vec![bridge_for_vault, recipient_vault],
                         &vault_core::Instruction::Transfer {
                             recipient_id,

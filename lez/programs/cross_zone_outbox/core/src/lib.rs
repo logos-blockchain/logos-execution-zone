@@ -25,6 +25,11 @@ pub enum Instruction {
     /// Required accounts (1):
     /// - Outbox PDA account
     Emit {
+        /// This program's own image id. The guest cannot learn this at runtime, so the trusted
+        /// caller supplies it to recompute the outbox slot PDA; a wrong value only fails the
+        /// guest's own self-consistency assertion, since real authorization is independently
+        /// enforced by the state layer against the account's `program_owner`.
+        self_program_id: ProgramId,
         target_zone: ZoneId,
         target_program_id: ProgramId,
         /// Accounts the destination inbox must hand to the target program's
@@ -44,11 +49,11 @@ pub enum Instruction {
 /// watcher and are not stored here.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct OutboxRecord {
-    /// The program that called `Emit`, which is the immediate chained caller.
-    /// Cross-zone discovery names the top-level program instead, so joining a
-    /// record against a delivery is only sound while every emitter refuses to be
-    /// called by another program.
-    pub emitter: ProgramId,
+    /// The dispatch address of the program that called `Emit`, which is the immediate chained
+    /// caller (state-machine verified, via `caller_account_id`). Cross-zone discovery names the
+    /// top-level program instead, so joining a record against a delivery is only sound while
+    /// every emitter refuses to be called by another program.
+    pub emitter: AccountId,
     pub target_zone: ZoneId,
     pub ordinal: u32,
     pub target_program_id: ProgramId,
@@ -69,16 +74,17 @@ impl OutboxRecord {
     }
 }
 
-/// PDA holding one emitted message, keyed by the emitting program, the
-/// destination zone, and a per-emitter per-zone ordinal.
+/// PDA holding one emitted message, keyed by the emitting program's dispatch
+/// address, the destination zone, and a per-emitter per-zone ordinal.
 ///
-/// `emitter` is the program that called `Emit`, which the guest takes from
-/// `caller_account_id` rather than from the instruction. Without it in the
-/// address two programs share a slot and one overwrites the other.
+/// `emitter` is the dispatch address of the program that called `Emit`, which
+/// the guest takes from `caller_account_id` rather than from the instruction.
+/// Without it in the address two programs share a slot and one overwrites the
+/// other.
 #[must_use]
 pub fn outbox_pda(
     outbox_id: ProgramId,
-    emitter: ProgramId,
+    emitter: AccountId,
     target_zone: &ZoneId,
     ordinal: u32,
 ) -> AccountId {
@@ -87,14 +93,12 @@ pub fn outbox_pda(
 
 /// Seed of an outbox message PDA, exposed so the guest can claim the account.
 #[must_use]
-pub fn outbox_pda_seed(emitter: ProgramId, target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
+pub fn outbox_pda_seed(emitter: AccountId, target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 100];
     bytes[..32].copy_from_slice(&OUTBOX_SEED_DOMAIN);
-    for (word, chunk) in emitter.iter().zip(bytes[32..64].chunks_exact_mut(4)) {
-        chunk.copy_from_slice(&word.to_le_bytes());
-    }
+    bytes[32..64].copy_from_slice(emitter.value());
     bytes[64..96].copy_from_slice(target_zone);
     bytes[96..].copy_from_slice(&ordinal.to_le_bytes());
 
@@ -110,7 +114,7 @@ mod tests {
     use super::*;
 
     const OUTBOX: ProgramId = [3; 8];
-    const EMITTER: ProgramId = [4; 8];
+    const EMITTER: AccountId = AccountId::new([4; 32]);
 
     #[test]
     fn outbox_pda_is_unique_per_zone_and_ordinal() {
@@ -136,7 +140,7 @@ mod tests {
     #[test]
     fn outbox_pda_is_unique_per_emitter() {
         let zone = [1; 32];
-        let other: ProgramId = [5; 8];
+        let other = AccountId::new([5; 32]);
 
         assert_ne!(
             outbox_pda(OUTBOX, EMITTER, &zone, 0),
@@ -147,7 +151,7 @@ mod tests {
     #[test]
     fn outbox_record_round_trips() {
         let record = OutboxRecord {
-            emitter: EMITTER,
+            emitter: AccountId::new([4; 32]),
             target_zone: [1; 32],
             ordinal: 7,
             target_program_id: [6; 8],

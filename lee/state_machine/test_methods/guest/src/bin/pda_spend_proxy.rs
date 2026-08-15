@@ -1,5 +1,8 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountPostState, ChainedCall, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+    },
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -7,7 +10,8 @@ use risc0_zkvm::serde::to_vec;
 ///
 /// `pre_states = [pda, recipient]`. Debits the PDA and credits the recipient.
 /// The PDA-to-npk binding is established via `pda_seeds` in the chained call to `simple_transfer`.
-type Instruction = (PdaSeed, u128, ProgramId);
+/// The `AccountId` in the instruction must be the dispatch address of the transfer program.
+type Instruction = (PdaSeed, u128, AccountId);
 
 fn main() {
     let (
@@ -31,7 +35,7 @@ fn main() {
     first_for_callee.is_authorized = true;
 
     let chained_call = ChainedCall {
-        program_account_id: simple_transfer_id.into(),
+        program_account_id: simple_transfer_id,
         instruction_data: to_vec(&amount).unwrap(),
         pre_states: vec![first_for_callee, second.clone()],
         pda_seeds: vec![seed],

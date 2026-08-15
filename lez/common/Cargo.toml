@@ -14,6 +14,7 @@ authenticated_transfer_core.workspace = true
 clock_core.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
+program_loader_core.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true

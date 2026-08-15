@@ -63,8 +63,7 @@ fn new_includes_nullifiers_for_private_accounts() {
 fn insert_program() {
     let mut state = V03State::new();
     let program_to_insert = crate::test_methods::simple_balance_transfer();
-    let program_id = program_to_insert.id();
-    let account_id = lee_core::account::AccountId::from(program_id);
+    let account_id = program_to_insert.deployed_account_id();
     assert!(!state.public_state.contains_key(&account_id));
 
     state.insert_program(&program_to_insert);
@@ -79,7 +78,7 @@ fn get_account_by_account_id_non_default_account() {
     let initial_data = [(
         account_id,
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+            program_owner: crate::test_methods::simple_balance_transfer().deployed_account_id(),
             balance: 100,
             ..Account::default()
         },

@@ -16,6 +16,7 @@ lee.workspace = true
 lee_core.workspace = true
 common.workspace = true
 programs.workspace = true
+program_loader_core.workspace = true
 
 tokio.workspace = true
 key_protocol.workspace = true

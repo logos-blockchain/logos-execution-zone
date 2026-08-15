@@ -37,8 +37,11 @@
 //! - `flash_swap_self_call_targets_correct_program`: zero-amount self-call isolation test
 //! - `flash_swap_standalone_invariant_check_rejected`: `caller_account_id` access control
 
-use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountPostState, ChainedCall, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -54,8 +57,10 @@ pub enum FlashSwapInstruction {
     /// Intermediate account states are computed inside the program from `pre_states` and
     /// `amount_out`.
     Initiate {
-        token_program_id: ProgramId,
-        callback_program_id: ProgramId,
+        /// The dispatch address of the token program.
+        token_program_id: AccountId,
+        /// The dispatch address of the callback program.
+        callback_program_id: AccountId,
         amount_out: u128,
         callback_instruction_data: Vec<u32>,
     },
@@ -124,7 +129,7 @@ fn main() {
             let transfer_instruction =
                 risc0_zkvm::serde::to_vec(&amount_out).expect("transfer instruction serialization");
             let call_1 = ChainedCall {
-                program_account_id: token_program_id.into(),
+                program_account_id: token_program_id,
                 pre_states: vec![vault_authorized, receiver_pre.clone()],
                 instruction_data: transfer_instruction,
                 pda_seeds: vec![PdaSeed::new([0_u8; 32])],
@@ -134,7 +139,7 @@ fn main() {
             // Receives the post-transfer states as its pre_states. The callback may run
             // arbitrary logic (arbitrage, etc.) and is expected to return funds to the vault.
             let call_2 = ChainedCall {
-                program_account_id: callback_program_id.into(),
+                program_account_id: callback_program_id,
                 pre_states: vec![vault_after_transfer, receiver_after_transfer],
                 instruction_data: callback_instruction_data,
                 pda_seeds: vec![],

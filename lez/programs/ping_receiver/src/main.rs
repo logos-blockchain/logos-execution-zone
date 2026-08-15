@@ -23,18 +23,26 @@ fn main() {
     ) = read_lee_inputs::<ReceiverInstruction>();
 
     match instruction {
-        ReceiverInstruction::Record { payload } => record(
+        ReceiverInstruction::Record {
+            self_program_id,
+            payload,
+        } => record(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_words,
+            self_program_id,
             payload,
         ),
-        ReceiverInstruction::InitConfig(config) => init_config(
+        ReceiverInstruction::InitConfig {
+            self_program_id,
+            config,
+        } => init_config(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_words,
+            self_program_id,
             &config,
         ),
         ReceiverInstruction::RenounceAuthority => renounce_authority(
@@ -58,13 +66,9 @@ fn record(
     caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
+    self_program_id: ProgramId,
     payload: Vec<u8>,
 ) {
-    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
-    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
-    // for the PDA-derivation helpers below, which are pinned to the actual image id.
-    let self_program_id = ProgramId::from(self_account_id);
-
     // pre_states: [source marker, config PDA, record PDA].
     let [marker, config, record] = <[AccountWithMetadata; 3]>::try_from(pre_states)
         .expect("Record requires the source marker, config, and record accounts");
@@ -78,15 +82,15 @@ fn record(
         .expect("config account holds a receiver config");
     assert_eq!(
         caller_account_id,
-        Some(cfg.deliverer.into()),
+        Some(cfg.deliverer),
         "Record is only callable by the authorized deliverer (the cross-zone inbox)"
     );
     // Which peer sent it is this program's own business. Without this the record
     // says only that some program on some configured peer wrote it.
     assert!(
-        cfg.sources.iter().any(|(src_zone, src_program_id)| {
+        cfg.sources.iter().any(|(src_zone, src_account_id)| {
             marker.account_id
-                == inbox_source_marker_account_id(cfg.deliverer, src_zone, *src_program_id)
+                == inbox_source_marker_account_id(cfg.deliverer, src_zone, *src_account_id)
         }),
         "Record is only callable for a peer source this receiver authorizes"
     );
@@ -273,6 +277,7 @@ fn init_config(
     caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
+    self_program_id: ProgramId,
     config_value: &ReceiverConfig,
 ) {
     assert!(
@@ -285,7 +290,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        receiver_config_account_id(self_account_id.into()),
+        receiver_config_account_id(self_program_id),
         "account must be the receiver config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first

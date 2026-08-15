@@ -167,8 +167,8 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
                 if public_tx.message.program_account_id != RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID {
                     return None;
                 }
-                let loader_core::Instruction::Deploy { bytecode } =
-                    risc0_zkvm::serde::from_slice::<loader_core::Instruction, u32>(
+                let program_loader_core::Instruction::Deploy { bytecode } =
+                    risc0_zkvm::serde::from_slice::<program_loader_core::Instruction, u32>(
                         &public_tx.message.instruction_data,
                     )
                     .ok()?;

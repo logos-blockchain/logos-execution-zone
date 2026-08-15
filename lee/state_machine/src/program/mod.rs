@@ -46,6 +46,16 @@ impl Program {
         &self.elf
     }
 
+    /// The address this program dispatches at once seeded via [`crate::V03State::with_programs`]
+    /// (or any live `Deploy` submitted with a default `update_auth`) — see
+    /// `program_loader_core::immutable_deploy_account_id`. Not the program's own bijection
+    /// `AccountId::from(self.id())`, which is only meaningful for the legacy
+    /// `ProgramDeploymentTransaction` storage shape.
+    #[must_use]
+    pub fn deployed_account_id(&self) -> AccountId {
+        program_loader_core::immutable_deploy_account_id(self.id)
+    }
+
     pub fn serialize_instruction<T: Serialize>(
         instruction: T,
     ) -> Result<InstructionData, LeeError> {

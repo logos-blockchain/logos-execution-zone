@@ -132,6 +132,11 @@ impl Vault<'_> {
 fn vault_with_auth_dependency() -> ProgramWithDependencies {
     let auth_transfer = programs::authenticated_transfer();
     let mut deps = HashMap::new();
-    deps.insert(auth_transfer.id().into(), auth_transfer);
-    ProgramWithDependencies::new(programs::vault(), deps)
+    deps.insert(
+        program_loader_core::immutable_deploy_account_id(auth_transfer.id()),
+        auth_transfer,
+    );
+    ProgramWithDependencies::new(programs::vault(), deps).with_program_account_id(
+        program_loader_core::immutable_deploy_account_id(programs::vault().id()),
+    )
 }

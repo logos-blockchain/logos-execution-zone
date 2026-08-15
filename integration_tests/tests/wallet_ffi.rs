@@ -634,7 +634,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
@@ -674,7 +674,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
@@ -872,7 +872,7 @@ fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
     };
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
 
     unsafe {
@@ -932,7 +932,7 @@ fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
     };
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
 
     unsafe {

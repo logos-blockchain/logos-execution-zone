@@ -32,7 +32,7 @@ pub fn pinata_account_id() -> AccountId {
 #[must_use]
 pub fn pinata_account() -> Account {
     Account {
-        program_owner: programs::pinata().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(programs::pinata().id()),
         balance: 1_500_000,
         // Difficulty: 3
         data: vec![3; 33].try_into().expect("Should fit"),
@@ -48,7 +48,9 @@ pub fn faucet_account_id() -> AccountId {
 #[must_use]
 pub fn faucet_account() -> Account {
     Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(
+            programs::authenticated_transfer().id(),
+        ),
         balance: u128::MAX,
         ..Account::default()
     }
@@ -62,7 +64,9 @@ pub fn bridge_account_id() -> AccountId {
 #[must_use]
 pub fn bridge_account() -> Account {
     Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(
+            programs::authenticated_transfer().id(),
+        ),
         ..Account::default()
     }
 }
@@ -97,7 +101,7 @@ pub fn sequencer_stake_config_account() -> Account {
 #[must_use]
 pub fn clock_account() -> Account {
     Account {
-        program_owner: programs::clock().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(programs::clock().id()),
         data: ClockAccountData {
             block_id: 0,
             timestamp: 0,

@@ -232,7 +232,7 @@ pub enum TransactionMalformationError {
 #[must_use]
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
-        programs::clock().id().into(),
+        program_loader_core::immutable_deploy_account_id(programs::clock().id()),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
         vec![],
         timestamp,

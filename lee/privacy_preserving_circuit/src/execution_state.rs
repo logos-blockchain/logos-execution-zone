@@ -121,8 +121,18 @@ impl ExecutionState {
             panic!("No program outputs provided");
         };
 
+        // The initial program's real dispatch address. Like every other address in this
+        // circuit, it doesn't have to equal the legacy bijection `AccountId::from(program_id)`
+        // for a `Deploy`-created program — the host supplies the real one via a claim (see
+        // `ProgramImageClaim`'s doc comment) whenever it differs, exactly as it does for every
+        // dependency below.
+        let initial_program_account_id = program_image_claims
+            .iter()
+            .find(|claim| claim.image_id == program_id)
+            .map_or_else(|| AccountId::from(program_id), |claim| claim.account_id);
+
         let initial_call = ChainedCall {
-            program_account_id: AccountId::from(program_id),
+            program_account_id: initial_program_account_id,
             instruction_data: first_output.instruction_data.clone(),
             pre_states: first_output.pre_states.clone(),
             pda_seeds: Vec::new(),
@@ -208,6 +218,7 @@ impl ExecutionState {
 
             execution_state.validate_and_sync_states(
                 account_identities,
+                chained_call.program_account_id,
                 current_program_id,
                 caller_image_id,
                 &chained_call.pda_seeds,
@@ -264,9 +275,14 @@ impl ExecutionState {
     }
 
     /// Validate program pre and post states and populate the execution state.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "breaking out a context struct does not buy us anything here"
+    )]
     fn validate_and_sync_states(
         &mut self,
         account_identities: &[InputAccountIdentity],
+        account_id: AccountId,
         program_id: ProgramId,
         caller_image_id: Option<ProgramId>,
         caller_pda_seeds: &[PdaSeed],
@@ -455,7 +471,7 @@ impl ExecutionState {
                     }
                 }
 
-                post.account_mut().program_owner = AccountId::from(program_id);
+                post.account_mut().program_owner = account_id;
             }
 
             post_states_entry.insert_entry(post.into_account());
