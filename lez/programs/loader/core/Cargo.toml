@@ -14,3 +14,4 @@ borsh.workspace = true
 bytemuck.workspace = true
 risc0-zkvm.workspace = true
 risc0-binfmt.workspace = true
+anyhow.workspace = true

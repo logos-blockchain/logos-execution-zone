@@ -136,6 +136,7 @@ impl ExecutionState {
             instruction_data: first_output.instruction_data.clone(),
             pre_states: first_output.pre_states.clone(),
             pda_seeds: Vec::new(),
+            raw_payload: None,
         };
         let mut chained_calls = VecDeque::from_iter([(initial_call, None, None)]);
 

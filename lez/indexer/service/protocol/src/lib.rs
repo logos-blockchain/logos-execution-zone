@@ -222,6 +222,9 @@ pub struct PublicMessage {
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
+    /// Empty when absent — see `lee::public_transaction::Message::raw_payload`'s doc comment for
+    /// what this carries.
+    pub raw_payload: Vec<u8>,
 }
 
 pub type InstructionData = Vec<u32>;

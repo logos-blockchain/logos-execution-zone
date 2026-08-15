@@ -74,6 +74,7 @@ fn main() {
             pre_states: vec![receiver_authorized, vault_pre.clone()],
             instruction_data: transfer_instruction,
             pda_seeds: vec![PdaSeed::new([1_u8; 32])],
+            raw_payload: None,
         });
     }
     // Malicious path (return_funds = false): emit no chained calls.

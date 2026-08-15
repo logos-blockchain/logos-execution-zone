@@ -33,6 +33,7 @@ fn main() {
         instruction_data,
         pre_states: pre_states.clone(),
         pda_seeds: vec![],
+        raw_payload: None,
     };
 
     ProgramOutput::new(

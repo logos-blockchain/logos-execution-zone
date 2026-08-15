@@ -67,6 +67,7 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
                     std_vec.into_iter().map(Into::into).collect()
                 },
                 instruction_data: value.message.instruction_data.into(),
+                raw_payload: value.message.raw_payload.into(),
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: {
@@ -93,6 +94,8 @@ pub struct FfiPublicMessage {
     pub account_ids: FfiAccountIdList,
     pub nonces: FfiNonceList,
     pub instruction_data: FfiInstructionDataList,
+    /// Empty when absent — see `PublicMessage::raw_payload`'s doc comment.
+    pub raw_payload: FfiVecU8,
 }
 
 impl From<PublicMessage> for FfiPublicMessage {
@@ -102,6 +105,7 @@ impl From<PublicMessage> for FfiPublicMessage {
             account_ids,
             nonces,
             instruction_data,
+            raw_payload,
         } = value;
 
         Self {
@@ -117,6 +121,7 @@ impl From<PublicMessage> for FfiPublicMessage {
                 .collect::<Vec<_>>()
                 .into(),
             instruction_data: instruction_data.into(),
+            raw_payload: raw_payload.into(),
         }
     }
 }

@@ -39,6 +39,7 @@ fn main() {
             .unwrap(),
         pre_states: vec![first.clone(), second.clone()],
         pda_seeds: vec![seed],
+        raw_payload: None,
     };
 
     ProgramOutput::new(

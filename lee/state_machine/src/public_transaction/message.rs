@@ -13,6 +13,18 @@ pub struct Message {
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
+    /// An optional large raw byte payload, carried alongside `instruction_data` rather than
+    /// packed into it.
+    ///
+    /// `instruction_data` is word-serialized (`risc0_zkvm::serde`) so it can be read inside a
+    /// RISC0 guest; that format encodes a `Vec<u8>` at 4 bytes per word, since it doesn't route
+    /// through the serializer's `serialize_bytes`. `Message` itself, in contrast, is
+    /// borsh-encoded on the wire, which packs `Vec<u8>` byte-for-byte. So a large payload that
+    /// only needs to reach *native* dispatch logic (never a real guest — e.g. `Deploy`'s program
+    /// bytecode, which is handled natively, see `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc
+    /// comment) belongs here instead of in `instruction_data`, avoiding that ~4x bloat entirely
+    /// rather than just packing it more efficiently.
+    pub raw_payload: Option<Vec<u8>>,
 }
 
 impl Message {
@@ -29,6 +41,7 @@ impl Message {
             account_ids,
             nonces,
             instruction_data,
+            raw_payload: None,
         })
     }
 
@@ -44,7 +57,14 @@ impl Message {
             account_ids,
             nonces,
             instruction_data,
+            raw_payload: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_raw_payload(mut self, raw_payload: Vec<u8>) -> Self {
+        self.raw_payload = Some(raw_payload);
+        self
     }
 
     #[must_use]
@@ -89,6 +109,8 @@ mod tests {
         // nonces: u32 len=1, then Nonce(5) as LE u128
         let nonces_bytes: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let instruction_data_bytes: &[u8] = &[0_u8; 4];
+        // raw_payload: None
+        let raw_payload_bytes: &[u8] = &[0_u8];
 
         let expected_borsh_vec: Vec<u8> = [
             account_id_bytes,
@@ -96,6 +118,7 @@ mod tests {
             account_ids_bytes,
             nonces_bytes,
             instruction_data_bytes,
+            raw_payload_bytes,
         ]
         .concat();
         let expected_borsh: &[u8] = &expected_borsh_vec;

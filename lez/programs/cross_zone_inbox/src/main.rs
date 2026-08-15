@@ -156,6 +156,7 @@ fn dispatch(
             pre_states: call_pre_states,
             instruction_data,
             pda_seeds: vec![],
+            raw_payload: None,
         };
         (seen_post, vec![call])
     };
