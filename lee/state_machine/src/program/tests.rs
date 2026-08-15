@@ -27,7 +27,12 @@ fn program_execution() {
         ..Account::default()
     };
     let program_output = program
-        .execute(None, &[sender, recipient], &instruction_data)
+        .execute(
+            AccountId::from(program.id()),
+            None,
+            &[sender, recipient],
+            &instruction_data,
+        )
         .unwrap();
 
     let [sender_post, recipient_post] = program_output.post_states.try_into().unwrap();

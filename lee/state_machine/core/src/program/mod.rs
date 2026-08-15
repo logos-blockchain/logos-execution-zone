@@ -22,8 +22,20 @@ pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
 
 /// Reserved `AccountId` for the native "Deploy" dispatch shortcut.
 ///
-/// `SHA256("/LEE/v0.3/AccountId/State/" || "DeploymentProgram")`, each padded to 32 bytes.
-pub const DEPLOYMENT_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new(hex!(
+/// `SHA256(domain_separator || label)`, where `domain_separator` is
+/// `/LEE/v0.3/AccountId/State/` and `label` is `DeploymentProgram`, each padded with trailing
+/// zero bytes to 32 bytes before concatenation — the same domain-separation construction used
+/// throughout this module, just with no variable input, since this is a single fixed address
+/// rather than a per-caller derivation.
+///
+/// Dispatch recognizes this exact `AccountId` and runs the deploy logic as native Rust instead
+/// of interpreting a guest ELF: computing a program's image id inside the zkVM costs roughly
+/// 1,400-1,500 cycles per byte of deployed bytecode (measured against every real program in
+/// this repo), pushing a real deployment to 500M-900M cycles against the 32M public-execution
+/// cap, whereas the equivalent native computation costs low tens of milliseconds. A caller
+/// targets this address directly as a `Message`/`ChainedCall`'s `AccountId`, same as any other
+/// program.
+pub const RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new(hex!(
     "599e2c6c2b89ff39bc3094b3276f1fcaa7173800a71d9896a1ba9bd1458a91c9"
 ));
 
@@ -31,12 +43,51 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 pub type ProgramId = [u32; 8];
 
-/// Derives the `AccountId` under which a program's data is stored, directly from its
-/// `ProgramId`, by reinterpreting the 8 little-endian `u32` words as 32 raw bytes.
+/// The account-data layout of a program's header account, deployed via the `Deploy` native
+/// dispatch shortcut (see [`RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`]).
 ///
-/// A 1:1, information-preserving mapping (both types are exactly 32 bytes) rather than a
-/// hash — `ProgramId` is already content-derived (RISC0's `image_id`), so no extra domain
-/// separation is needed just to use it as a `HashMap<AccountId, Account>` key.
+/// Deliberately holds only small, fixed-size fields — never the program's bytecode, which lives
+/// in a separate account (see `program_loader_core::deploy_segment_account_id`). Keeping the two
+/// apart means anything that needs to authenticate a program's *identity* (e.g. the
+/// privacy-preserving circuit confirming which `image_id` an `AccountId` currently maps to) only
+/// ever has to read this handful of bytes, not the full program — the only account-authentication
+/// primitive available today is whole-account equality, so what's bundled into one account sets
+/// the floor for how cheap that authentication can be.
+///
+/// `image_id` is read fresh from this account on every dispatch/verification rather than
+/// re-derived from the account's address, specifically so that upgrading a program (writing a
+/// new `image_id` into the same, stable `AccountId`) is the entire upgrade mechanism — no
+/// separate "which version" bookkeeping needed.
+///
+/// Lives here rather than in `program_loader_core` so that `V03State::get_program` — a generic,
+/// program-agnostic lookup — can decode it without depending on a specific program's crate.
+/// `program_loader_core` re-exports this type.
+#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ProgramData {
+    pub image_id: ProgramId,
+    pub segment_number: u32,
+    pub update_auth: AccountId,
+}
+
+impl TryFrom<&crate::account::Data> for ProgramData {
+    type Error = std::io::Error;
+
+    fn try_from(data: &crate::account::Data) -> Result<Self, Self::Error> {
+        BorshDeserialize::try_from_slice(data.as_ref())
+    }
+}
+
+impl From<&ProgramData> for crate::account::Data {
+    fn from(program_data: &ProgramData) -> Self {
+        let mut data = Vec::with_capacity(std::mem::size_of_val(program_data));
+        BorshSerialize::serialize(program_data, &mut data)
+            .expect("borsh serialization should not fail");
+        Self::try_from(data).expect("elf must fit under DATA_MAX_LENGTH")
+    }
+}
+
+/// TODO: This is a temporary conversion; will be removed once `Program` to `Account`
+/// migration is complete.
 impl From<ProgramId> for AccountId {
     fn from(program_id: ProgramId) -> Self {
         let bytes: Vec<u8> = program_id
@@ -246,12 +297,6 @@ impl AccountId {
             } => Self::for_private_pda(program_id, seed, npk, vpk, *identifier),
         }
     }
-}
-
-#[derive(Debug)]
-pub struct CallerData {
-    pub account_id: Option<AccountId>,
-    pub authorized_accounts: HashSet<AccountId>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -685,17 +730,12 @@ pub enum ExecutionValidationError {
 /// `pre_state`.
 #[must_use]
 pub fn compute_public_authorized_pdas(
-    caller_account_id: Option<AccountId>,
+    caller_image_id: Option<ProgramId>,
     pda_seeds: &[PdaSeed],
 ) -> HashSet<AccountId> {
-    let Some(caller) = caller_account_id else {
+    let Some(caller) = caller_image_id else {
         return HashSet::new();
     };
-    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
-    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact.
-    // `for_public_pda`'s derivation formula is pinned to the caller's actual image id, not its
-    // dispatch-facing `AccountId`.
-    let caller = ProgramId::from(caller);
     pda_seeds
         .iter()
         .map(|seed| AccountId::for_public_pda(&caller, seed))

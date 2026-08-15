@@ -132,6 +132,6 @@ impl Vault<'_> {
 fn vault_with_auth_dependency() -> ProgramWithDependencies {
     let auth_transfer = programs::authenticated_transfer();
     let mut deps = HashMap::new();
-    deps.insert(auth_transfer.id(), auth_transfer);
+    deps.insert(auth_transfer.id().into(), auth_transfer);
     ProgramWithDependencies::new(programs::vault(), deps)
 }

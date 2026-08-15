@@ -73,6 +73,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         private_actions,
         block_validity_window,
         timestamp_validity_window,
+        program_image_claims,
     } = message;
     let private_action_count = private_actions.len();
     let public_account_ids: Vec<_> = public_actions
@@ -80,6 +81,9 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         .map(|action| action.account_id)
         .collect();
     let public_account_count = public_account_ids.len();
+    // Every program invoked in a private transaction's call graph is publicly visible via this
+    // claim list — see `ProgramImageClaim`.
+    let programs_invoked_count = program_image_claims.len();
     let WitnessSet {
         signatures_and_public_keys: _,
         proof,
@@ -111,6 +115,10 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
                 <div class="info-row">
                     <span class="info-label">"Timestamp Validity Window:"</span>
                     <span class="info-value">{timestamp_validity_window.to_string()}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Programs Invoked:"</span>
+                    <span class="info-value">{programs_invoked_count.to_string()}</span>
                 </div>
             </div>
 

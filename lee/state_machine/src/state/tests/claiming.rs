@@ -419,7 +419,7 @@ fn private_chained_call(number_of_calls: u32) {
 
     let mut dependencies = HashMap::new();
 
-    dependencies.insert(simple_transfers.id(), simple_transfers);
+    dependencies.insert(simple_transfers.id().into(), simple_transfers);
     let program_with_deps = ProgramWithDependencies::new(chain_caller, dependencies);
 
     let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk());

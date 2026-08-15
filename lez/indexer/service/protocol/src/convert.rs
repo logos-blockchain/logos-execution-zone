@@ -7,7 +7,8 @@ use crate::{
     Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData, EphemeralPublicKey,
     HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID,
+    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, ProgramImageClaim, Proof,
+    PublicActionWithID,
     PublicKey, PublicMessage, PublicTransaction, Signature, StallReason, Transaction,
     ValidityWindow, WitnessSet,
 };
@@ -25,6 +26,24 @@ impl From<[u32; 8]> for ProgramId {
 impl From<ProgramId> for [u32; 8] {
     fn from(value: ProgramId) -> Self {
         value.0
+    }
+}
+
+impl From<lee_core::ProgramImageClaim> for ProgramImageClaim {
+    fn from(value: lee_core::ProgramImageClaim) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            image_id: value.image_id.into(),
+        }
+    }
+}
+
+impl From<ProgramImageClaim> for lee_core::ProgramImageClaim {
+    fn from(value: ProgramImageClaim) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            image_id: value.image_id.into(),
+        }
     }
 }
 
@@ -308,6 +327,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            program_image_claims,
         } = value;
         Self {
             public_actions: public_actions.into_iter().map(Into::into).collect(),
@@ -315,6 +335,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             private_actions: private_actions.into_iter().map(Into::into).collect(),
             block_validity_window: block_validity_window.into(),
             timestamp_validity_window: timestamp_validity_window.into(),
+            program_image_claims: program_image_claims.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -356,6 +377,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            program_image_claims,
         } = value;
 
         let public_actions = public_actions
@@ -377,6 +399,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             timestamp_validity_window: timestamp_validity_window
                 .try_into()
                 .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+            program_image_claims: program_image_claims.into_iter().map(Into::into).collect(),
         })
     }
 }
