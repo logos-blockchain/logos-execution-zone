@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 lee.workspace = true
 lee_core.workspace = true
+loader_core.workspace = true
 programs.workspace = true
 cross_zone_inbox_core.workspace = true
 bridge_lock_core.workspace = true

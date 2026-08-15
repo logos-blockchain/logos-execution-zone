@@ -11,7 +11,7 @@ use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
-use lee::{GENESIS_BLOCK_ID, ProgramId, PublicKey};
+use lee::{GENESIS_BLOCK_ID, PublicKey};
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -390,16 +390,18 @@ impl CrossZoneVerifier {
         let LeeTransaction::Public(public_tx) = tx else {
             return None;
         };
-        if public_tx.message().program_account_id != programs::cross_zone_inbox().id().into() {
+        if public_tx.message().program_account_id
+            != loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id())
+        {
             return None;
         }
         match risc0_zkvm::serde::from_slice::<InboxInstruction, _>(
             &public_tx.message().instruction_data,
         ) {
-            Ok(InboxInstruction::Dispatch(msg)) => Some(msg),
+            Ok(InboxInstruction::Dispatch { message, .. }) => Some(message),
             // Only a dispatch carries a cross-zone message to re-derive; a genesis
             // `InitConfig` is not verifier-relevant.
-            Ok(InboxInstruction::InitConfig(_)) | Err(_) => None,
+            Ok(InboxInstruction::InitConfig { .. }) | Err(_) => None,
         }
     }
 
@@ -444,9 +446,8 @@ impl CrossZoneVerifier {
             )));
         };
         let message = emission_tx.message();
-        let message_program_id = ProgramId::from(message.program_account_id);
-        let emission =
-            extract_emission(message_program_id, &message.instruction_data).ok_or_else(|| {
+        let emission = extract_emission(message.program_account_id, &message.instruction_data)
+            .ok_or_else(|| {
                 CrossZoneVerifyError::Forged(anyhow!(
                     "peer transaction at src_tx_index is not a recognized emitter"
                 ))
@@ -466,7 +467,7 @@ impl CrossZoneVerifier {
                 src_block_id: msg.src_block_id,
                 src_block_hash: peer_block.recompute_hash().0,
                 src_tx_index: msg.src_tx_index,
-                src_program_id: message_program_id,
+                src_account_id: message.program_account_id,
             },
             emission.target_program_id,
             &emission.target_accounts,
@@ -747,6 +748,7 @@ mod tests {
     fn emission(payload: &[u8]) -> LeeTransaction {
         let receiver_id = programs::ping_receiver().id();
         let send = SenderInstruction::Send {
+            self_program_id: programs::ping_sender().id(),
             target_zone: SELF_ZONE,
             target_program_id: receiver_id,
             target_accounts: vec![
@@ -756,8 +758,13 @@ mod tests {
             payload: payload.to_vec(),
             ordinal: 0,
         };
-        let message = Message::try_new(programs::ping_sender().id().into(), vec![], vec![], send)
-            .expect("emission serializes");
+        let message = Message::try_new(
+            loader_core::immutable_deploy_account_id(programs::ping_sender().id()),
+            vec![],
+            vec![],
+            send,
+        )
+        .expect("emission serializes");
         LeeTransaction::Public(PublicTransaction::new(
             message,
             WitnessSet::from_raw_parts(vec![]),
@@ -846,7 +853,9 @@ mod tests {
                 src_block_id: PEER_BLOCK_ID,
                 src_block_hash,
                 src_tx_index: 0,
-                src_program_id: programs::ping_sender().id(),
+                src_account_id: loader_core::immutable_deploy_account_id(
+                    programs::ping_sender().id(),
+                ),
             },
             receiver_id,
             &[

@@ -1,6 +1,8 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, Claim, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountPostState, ChainedCall, Claim, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+    },
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -9,7 +11,8 @@ use risc0_zkvm::serde::to_vec;
 /// delegated_seed` this exercises the happy caller-seeds authorization path for mask-3 private
 /// PDAs in `validate_and_sync_states`; when they differ, the callee's mask-3 `pre_state` has
 /// no matching authorization source and the circuit must reject.
-type Instruction = (PdaSeed, PdaSeed, ProgramId);
+/// `callee_program_id` must be the callee's dispatch address.
+type Instruction = (PdaSeed, PdaSeed, AccountId);
 
 fn main() {
     let (
@@ -33,7 +36,7 @@ fn main() {
     pre_for_callee.account.program_owner = self_account_id;
 
     let chained_call = ChainedCall {
-        program_account_id: callee_program_id.into(),
+        program_account_id: callee_program_id,
         instruction_data: to_vec(&()).unwrap(),
         pre_states: vec![pre_for_callee],
         pda_seeds: vec![delegated_seed],

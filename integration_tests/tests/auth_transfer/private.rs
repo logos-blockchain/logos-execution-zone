@@ -387,7 +387,7 @@ async fn initialize_private_account() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
     assert_eq!(account.balance, 0);
     assert!(account.data.is_empty());
@@ -466,7 +466,7 @@ async fn initialize_private_account_using_label() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
 
     log::info!("Successfully initialized private account using label");
@@ -637,10 +637,16 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let program_with_deps = ProgramWithDependencies::new(
         faucet_chain_caller,
         [
-            (faucet_program_id.into(), programs::faucet()),
-            (vault_program_id.into(), programs::vault()),
             (
-                auth_transfer_program_id.into(),
+                loader_core::immutable_deploy_account_id(faucet_program_id),
+                programs::faucet(),
+            ),
+            (
+                loader_core::immutable_deploy_account_id(vault_program_id),
+                programs::vault(),
+            ),
+            (
+                loader_core::immutable_deploy_account_id(auth_transfer_program_id),
                 programs::authenticated_transfer(),
             ),
         ]
@@ -648,8 +654,13 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     )
     .with_program_account_id(faucet_chain_caller_header);
 
-    let instruction =
-        Program::serialize_instruction((faucet_program_id, vault_program_id, attacker_id, amount))?;
+    let instruction = Program::serialize_instruction((
+        faucet_program_id,
+        loader_core::immutable_deploy_account_id(faucet_program_id),
+        loader_core::immutable_deploy_account_id(vault_program_id),
+        attacker_id,
+        amount,
+    ))?;
 
     let res = execute_and_prove(
         vec![faucet_pre, vault_pda_pre],
@@ -694,6 +705,7 @@ async fn prove_init_with_commitment_root(
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
     let recipient = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
 
+    let program_id = program.id();
     let (output, _) = execute_and_prove(
         vec![sender_pre, recipient],
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
@@ -712,7 +724,8 @@ async fn prove_init_with_commitment_root(
                 },
             }),
         ],
-        &program.into(),
+        &ProgramWithDependencies::new(program, [].into())
+            .with_program_account_id(loader_core::immutable_deploy_account_id(program_id)),
     )?;
 
     Ok(output)

@@ -223,6 +223,8 @@ impl Ata<'_> {
 fn ata_with_token_dependency() -> ProgramWithDependencies {
     let token = programs::token();
     let mut deps = HashMap::new();
-    deps.insert(token.id().into(), token);
-    ProgramWithDependencies::new(programs::ata(), deps)
+    deps.insert(loader_core::immutable_deploy_account_id(token.id()), token);
+    ProgramWithDependencies::new(programs::ata(), deps).with_program_account_id(
+        loader_core::immutable_deploy_account_id(programs::ata().id()),
+    )
 }

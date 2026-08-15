@@ -218,7 +218,7 @@ async fn initialize_public_account() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
     assert_eq!(account.balance, 0);
     assert_eq!(account.nonce.0, 1);
@@ -316,7 +316,7 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        programs::authenticated_transfer().id().into(),
+        loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id()),
         vec![faucet_account_id, recipient],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
@@ -358,11 +358,12 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        programs::faucet().id().into(),
+        loader_core::immutable_deploy_account_id(programs::faucet().id()),
         vec![faucet_account_id, recipient_vault_id],
         vec![],
         faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
+            self_program_id: programs::faucet().id(),
+            vault_account_id: loader_core::immutable_deploy_account_id(vault_program_id),
             recipient_id: recipient,
             amount,
         },
@@ -431,7 +432,13 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
         faucet_chain_caller_header,
         vec![faucet_account_id, attacker_vault_id],
         vec![],
-        (faucet_program_id, vault_program_id, attacker, amount),
+        (
+            faucet_program_id,
+            loader_core::immutable_deploy_account_id(faucet_program_id),
+            loader_core::immutable_deploy_account_id(vault_program_id),
+            attacker,
+            amount,
+        ),
     )?;
     let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         message,

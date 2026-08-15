@@ -18,14 +18,14 @@ fn claiming_mechanism() {
     assert_eq!(state.get_account_by_id(to), Account::default());
 
     let expected_recipient_post = Account {
-        program_owner: program.id().into(),
+        program_owner: program.deployed_account_id(),
         balance: amount,
         nonce: Nonce(1),
         ..Account::default()
     };
 
     let message = public_transaction::Message::try_new(
-        program.id().into(),
+        program.deployed_account_id(),
         vec![from, to],
         vec![Nonce(0), Nonce(0)],
         amount,
@@ -50,9 +50,13 @@ fn unauthorized_public_account_claiming_fails() {
 
     assert_eq!(state.get_account_by_id(account_id), Account::default());
 
-    let message =
-        public_transaction::Message::try_new(program.id().into(), vec![account_id], vec![], 0_u128)
-            .unwrap();
+    let message = public_transaction::Message::try_new(
+        program.deployed_account_id(),
+        vec![account_id],
+        vec![],
+        0_u128,
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -72,7 +76,7 @@ fn authorized_public_account_claiming_succeeds() {
     assert_eq!(state.get_account_by_id(account_id), Account::default());
 
     let message = public_transaction::Message::try_new(
-        program.id().into(),
+        program.deployed_account_id(),
         vec![account_id],
         vec![Nonce(0)],
         0_u128,
@@ -86,7 +90,7 @@ fn authorized_public_account_claiming_succeeds() {
     assert_eq!(
         state.get_account_by_id(account_id),
         Account {
-            program_owner: program.id().into(),
+            program_owner: program.deployed_account_id(),
             nonce: Nonce(1),
             ..Account::default()
         }
@@ -106,21 +110,21 @@ fn public_chained_call() {
         .with_test_programs();
     let from_key = key;
     let amount: u128 = 37;
-    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
+    let instruction: (u128, AccountId, u32, Option<PdaSeed>) = (
         amount,
-        crate::test_methods::simple_balance_transfer().id(),
+        crate::test_methods::simple_balance_transfer().deployed_account_id(),
         2,
         None,
     );
 
     let expected_to_post = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+        program_owner: crate::test_methods::simple_balance_transfer().deployed_account_id(),
         balance: amount * 2, // The `chain_caller` chains the program twice
         ..Account::default()
     };
 
     let message = public_transaction::Message::try_new(
-        program.id().into(),
+        program.deployed_account_id(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![Nonce(0)],
@@ -152,15 +156,15 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
         .with_test_programs();
     let from_key = key;
     let amount: u128 = 0;
-    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
+    let instruction: (u128, AccountId, u32, Option<PdaSeed>) = (
         amount,
-        crate::test_methods::simple_balance_transfer().id(),
+        crate::test_methods::simple_balance_transfer().deployed_account_id(),
         u32::try_from(MAX_NUMBER_CHAINED_CALLS).expect("MAX_NUMBER_CHAINED_CALLS fits in u32") + 1,
         None,
     );
 
     let message = public_transaction::Message::try_new(
-        program.id().into(),
+        program.deployed_account_id(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![Nonce(0)],
@@ -189,20 +193,20 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
         .with_public_accounts(public_state_from_balances(&initial_data))
         .with_test_programs();
     let amount: u128 = 58;
-    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
+    let instruction: (u128, AccountId, u32, Option<PdaSeed>) = (
         amount,
-        crate::test_methods::simple_balance_transfer().id(),
+        crate::test_methods::simple_balance_transfer().deployed_account_id(),
         1,
         Some(pda_seed),
     );
 
     let expected_to_post = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+        program_owner: crate::test_methods::simple_balance_transfer().deployed_account_id(),
         balance: amount, // The `chain_caller` chains the program twice
         ..Account::default()
     };
     let message = public_transaction::Message::try_new(
-        chain_caller.id().into(),
+        chain_caller.deployed_account_id(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![],
@@ -244,7 +248,7 @@ fn claiming_mechanism_within_chain_call() {
 
     let expected_to_post = Account {
         // The expected program owner is the authenticated transfer program
-        program_owner: simple_transfer.id().into(),
+        program_owner: simple_transfer.deployed_account_id(),
         balance: amount,
         nonce: Nonce(1),
         ..Account::default()
@@ -252,14 +256,14 @@ fn claiming_mechanism_within_chain_call() {
 
     // The transaction executes the chain_caller program, which internally calls the
     // authenticated_transfer program
-    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
+    let instruction: (u128, AccountId, u32, Option<PdaSeed>) = (
         amount,
-        crate::test_methods::simple_balance_transfer().id(),
+        crate::test_methods::simple_balance_transfer().deployed_account_id(),
         1,
         None,
     );
     let message = public_transaction::Message::try_new(
-        chain_caller.id().into(),
+        chain_caller.deployed_account_id(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![Nonce(0), Nonce(0)],
@@ -378,9 +382,10 @@ fn private_chained_call(number_of_calls: u32) {
     let from_keys = test_private_account_keys_1();
     let to_keys = test_private_account_keys_2();
     let initial_balance = 100;
+    let simple_transfers_account_id = simple_transfers.deployed_account_id();
     let from_account = AccountWithMetadata::new(
         Account {
-            program_owner: simple_transfers.id().into(),
+            program_owner: simple_transfers_account_id,
             balance: initial_balance,
             ..Account::default()
         },
@@ -389,7 +394,7 @@ fn private_chained_call(number_of_calls: u32) {
     );
     let to_account = AccountWithMetadata::new(
         Account {
-            program_owner: simple_transfers.id().into(),
+            program_owner: simple_transfers_account_id,
             ..Account::default()
         },
         true,
@@ -410,16 +415,12 @@ fn private_chained_call(number_of_calls: u32) {
         ])
         .with_test_programs();
     let amount: u128 = 37;
-    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
-        amount,
-        crate::test_methods::simple_balance_transfer().id(),
-        number_of_calls,
-        None,
-    );
+    let instruction: (u128, AccountId, u32, Option<PdaSeed>) =
+        (amount, simple_transfers_account_id, number_of_calls, None);
 
     let mut dependencies = HashMap::new();
 
-    dependencies.insert(simple_transfers.id().into(), simple_transfers);
+    dependencies.insert(simple_transfers_account_id, simple_transfers);
     let program_with_deps = ProgramWithDependencies::new(chain_caller, dependencies);
 
     let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk());
@@ -515,9 +516,13 @@ fn claiming_mechanism_cannot_claim_initialied_accounts() {
         },
     );
 
-    let message =
-        public_transaction::Message::try_new(claimer.id().into(), vec![account_id], vec![], ())
-            .unwrap();
+    let message = public_transaction::Message::try_new(
+        claimer.deployed_account_id(),
+        vec![account_id],
+        vec![],
+        (),
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -543,14 +548,15 @@ fn malicious_program_cannot_break_balance_validation_if_not_in_genesis() {
     let recipient_id = AccountId::from(&PublicKey::new_from_private_key(&recipient_key));
     let recipient_init_balance: u128 = 10;
 
-    let modified_transfer_id = crate::test_methods::modified_transfer_program().id();
+    let modified_transfer_account_id =
+        crate::test_methods::modified_transfer_program().deployed_account_id();
 
     let mut state = V03State::new()
         .with_public_accounts([
             (
                 sender_id,
                 Account {
-                    program_owner: modified_transfer_id.into(),
+                    program_owner: modified_transfer_account_id,
                     balance: sender_init_balance,
                     ..Account::default()
                 },
@@ -558,7 +564,7 @@ fn malicious_program_cannot_break_balance_validation_if_not_in_genesis() {
             (
                 recipient_id,
                 Account {
-                    program_owner: modified_transfer_id.into(),
+                    program_owner: modified_transfer_account_id,
                     balance: recipient_init_balance,
                     ..Account::default()
                 },
@@ -576,7 +582,7 @@ fn malicious_program_cannot_break_balance_validation_if_not_in_genesis() {
         AccountWithMetadata::new(state.get_account_by_id(recipient_id), false, sender_id);
 
     let message = public_transaction::Message::try_new(
-        modified_transfer_id.into(),
+        modified_transfer_account_id,
         vec![sender_id, recipient_id],
         vec![sender_nonce],
         balance_to_move,

@@ -203,19 +203,18 @@ impl V03State {
         self
     }
 
-    /// Seeds a program directly into state in the same two-account shape a `Deploy` dispatch
-    /// produces (see [`Self::get_program`]), skipping the dispatch/proving machinery genesis has
-    /// no signer to drive. The header account is placed at `AccountId::from(image_id)` rather
-    /// than the loader-PDA address a live `Deploy` would use for it — deliberately, so a
-    /// genesis-seeded program keeps its well-known dispatch address — while the segment account
-    /// still lives at the exact PDA [`Self::get_program`] derives from the header's content,
-    /// since that address is never a caller-facing well-known address to begin with.
+    /// Seeds a program directly into state in the exact two-account shape a live `Deploy`
+    /// dispatch (with a default `update_auth`, i.e. no upgrade authority) would produce for the
+    /// same `image_id` (see [`Self::get_program`] and [`loader_core::immutable_deploy_account_id`]),
+    /// skipping only the dispatch/proving machinery genesis has no signer to drive.
     pub(crate) fn insert_program(&mut self, program: &Program) {
         let image_id = program.id();
         let segment_number = 0;
         let update_auth = AccountId::default();
+        let loader_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
 
-        let header_account_id = AccountId::from(image_id);
+        let header_account_id =
+            loader_core::deploy_header_account_id(loader_id, image_id, segment_number, update_auth);
         let header_account = Account {
             program_owner: RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
             data: Data::from(&ProgramData {
@@ -226,7 +225,6 @@ impl V03State {
             ..Account::default()
         };
 
-        let loader_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
         let segment_account_id = loader_core::deploy_segment_account_id(
             loader_id,
             image_id,

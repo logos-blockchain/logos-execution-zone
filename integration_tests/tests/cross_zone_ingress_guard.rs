@@ -45,22 +45,27 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
 
     // A user hand-builds a top-level inbox Dispatch and submits it via RPC.
     let inbox_id = programs::cross_zone_inbox().id();
+    let ping_receiver_id = programs::ping_receiver().id();
     let msg = CrossZoneMessage {
         src_zone: [2; 32],
         src_block_id: 1,
         src_block_hash: [7; 32],
         src_tx_index: 0,
-        src_program_id: [9; 8],
-        target_program_id: programs::ping_receiver().id(),
+        src_account_id: lee::AccountId::new([9; 32]),
+        target_program_id: ping_receiver_id,
+        target_account_id: loader_core::immutable_deploy_account_id(ping_receiver_id),
         payload: vec![],
         l1_inclusion_witness: None,
     };
     let seen_id = inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id);
     let message = Message::try_new(
-        inbox_id.into(),
+        loader_core::immutable_deploy_account_id(inbox_id),
         vec![inbox_config_account_id(inbox_id), seen_id],
         vec![],
-        Instruction::Dispatch(msg),
+        Instruction::Dispatch {
+            message: msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     let tx = LeeTransaction::Public(PublicTransaction::new(

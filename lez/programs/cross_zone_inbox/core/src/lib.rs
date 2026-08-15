@@ -34,8 +34,10 @@ pub type MessageKey = [u8; 32];
 /// entries composing into a route nobody wrote down.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct CrossZoneRoute {
-    /// The program on the peer zone that emitted the message.
-    pub src_program_id: ProgramId,
+    /// The dispatch address of the program on the peer zone that emitted the message (matched
+    /// against its `OutboxRecord.emitter`, itself the peer's state-machine-verified caller
+    /// address — not derivable from any `ProgramId`).
+    pub src_account_id: AccountId,
     /// The program on this zone it may be delivered to.
     pub target_program_id: ProgramId,
 }
@@ -78,8 +80,13 @@ pub struct CrossZoneMessage {
     /// without either trusting what the peer wrote.
     pub src_block_hash: [u8; 32],
     pub src_tx_index: u32,
-    pub src_program_id: ProgramId,
+    /// The emitting program's dispatch address on the peer zone (its `OutboxRecord.emitter`).
+    pub src_account_id: AccountId,
     pub target_program_id: ProgramId,
+    /// The target program's real dispatch address, used as the `ChainedCall` target. Kept
+    /// alongside `target_program_id` (its image id, still needed for identity/allowlist
+    /// bookkeeping) since the two no longer coincide under PDA-based deployment.
+    pub target_account_id: AccountId,
     pub payload: Vec<u8>,
     /// Reserved for a future source-state proof; MUST be `None` in v1.
     pub l1_inclusion_witness: Option<Vec<u8>>,
@@ -186,11 +193,23 @@ impl SeenShard {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
     /// Delivers a finalized peer message to its target program.
-    Dispatch(CrossZoneMessage),
+    Dispatch {
+        message: CrossZoneMessage,
+        /// This inbox's own image id. The guest cannot learn this at runtime, so the trusted
+        /// caller (the watcher/verifier) supplies it to recompute the inbox's own PDAs; a wrong
+        /// value only fails the guest's own self-consistency assertions, since real
+        /// authorization is independently enforced by the state layer against the account's
+        /// `program_owner`.
+        self_program_id: ProgramId,
+    },
     /// Initializes the inbox config account at genesis. Written once, into a
     /// default (unclaimed) config PDA; the guest refuses a non-default pre-state,
     /// so it cannot be re-run to overwrite the allowlists.
-    InitConfig(InboxConfig),
+    InitConfig {
+        config: InboxConfig,
+        /// See [`Dispatch::self_program_id`](Instruction::Dispatch).
+        self_program_id: ProgramId,
+    },
 }
 
 /// Content-addressed replay key for a delivered message.
@@ -262,41 +281,35 @@ pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
 ///
 /// Nothing writes or claims it, so the state machine's uninitialized-account rule
 /// skips it for being unchanged rather than for being default: anyone may send it
-/// balance, and the inbox and the targets all round-trip it untouched.
+/// balance, and the inbox and the targets all round-trip it untouched. Unlike the
+/// claimed PDAs elsewhere in this crate, this address is never verified against a
+/// real image id by the state machine (it is not a `Claim::Pda`), so it is a
+/// plain hash of the inbox's and source's real dispatch addresses rather than a
+/// `for_public_pda` derivation — both the inbox and every target already know
+/// these addresses without needing to recover any `ProgramId`.
 ///
 /// The address is derivable by anyone, so it is not a secret and not a
 /// capability. What makes it mean something is that a target checks it only after
 /// pinning its caller to the inbox, and only the inbox can be that caller.
 #[must_use]
 pub fn inbox_source_marker_account_id(
-    inbox_id: ProgramId,
+    inbox_account_id: AccountId,
     src_zone: &ZoneId,
-    src_program_id: ProgramId,
+    src_account_id: AccountId,
 ) -> AccountId {
-    AccountId::for_public_pda(
-        &inbox_id,
-        &inbox_source_marker_seed(src_zone, src_program_id),
-    )
-}
-
-/// Seed of the source marker, exposed so a target can re-derive the address of
-/// the one source it accepts and compare.
-#[must_use]
-pub fn inbox_source_marker_seed(src_zone: &ZoneId, src_program_id: ProgramId) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
-    let mut bytes = [0_u8; 96];
+    let mut bytes = [0_u8; 128];
     bytes[..32].copy_from_slice(&SOURCE_MARKER_SEED_DOMAIN);
-    bytes[32..64].copy_from_slice(src_zone);
-    for (word, chunk) in src_program_id.iter().zip(bytes[64..].chunks_exact_mut(4)) {
-        chunk.copy_from_slice(&word.to_le_bytes());
-    }
+    bytes[32..64].copy_from_slice(inbox_account_id.value());
+    bytes[64..96].copy_from_slice(src_zone);
+    bytes[96..].copy_from_slice(src_account_id.value());
 
-    let seed: [u8; 32] = Impl::hash_bytes(&bytes)
+    let hash: [u8; 32] = Impl::hash_bytes(&bytes)
         .as_bytes()
         .try_into()
         .unwrap_or_else(|_| unreachable!());
-    PdaSeed::new(seed)
+    AccountId::new(hash)
 }
 #[cfg(test)]
 mod tests {

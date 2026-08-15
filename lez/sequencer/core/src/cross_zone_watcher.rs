@@ -566,8 +566,9 @@ fn record_block_deliveries(
             continue;
         };
         let message = public_tx.message();
-        let message_program_id = lee_core::program::ProgramId::from(message.program_account_id);
-        let Some(emission) = extract_emission(message_program_id, &message.instruction_data) else {
+        let Some(emission) =
+            extract_emission(message.program_account_id, &message.instruction_data)
+        else {
             continue;
         };
 
@@ -580,7 +581,9 @@ fn record_block_deliveries(
         // lettered. Kept host-side only, never in `extract_emission` or the
         // verifier's re-derivation, where a check that depends on this build would
         // make the two disagree and halt ingestion.
-        if is_sequencer_only_program(emission.target_program_id) {
+        if is_sequencer_only_program(loader_core::immutable_deploy_account_id(
+            emission.target_program_id,
+        )) {
             warn!(
                 "Watcher dropping message from peer {}: a peer may not dispatch into a sequencer-only program",
                 hex::encode(peer_zone)
@@ -595,7 +598,7 @@ fn record_block_deliveries(
                 src_block_id: block.header.block_id,
                 src_block_hash: block_hash.0,
                 src_tx_index,
-                src_program_id: message_program_id,
+                src_account_id: message.program_account_id,
             },
             emission.target_program_id,
             &emission.target_accounts,
@@ -702,6 +705,7 @@ mod tests {
     fn emission_to(target_program_id: lee_core::program::ProgramId) -> LeeTransaction {
         let receiver_id = programs::ping_receiver().id();
         let send = SenderInstruction::Send {
+            self_program_id: programs::ping_sender().id(),
             target_zone: SELF_ZONE,
             target_program_id,
             target_accounts: vec![
@@ -711,8 +715,13 @@ mod tests {
             payload: b"hi".to_vec(),
             ordinal: 0,
         };
-        let message = Message::try_new(programs::ping_sender().id().into(), vec![], vec![], send)
-            .expect("emission serializes");
+        let message = Message::try_new(
+            loader_core::immutable_deploy_account_id(programs::ping_sender().id()),
+            vec![],
+            vec![],
+            send,
+        )
+        .expect("emission serializes");
         LeeTransaction::Public(PublicTransaction::new(
             message,
             WitnessSet::from_raw_parts(vec![]),
@@ -1202,7 +1211,7 @@ mod tests {
         let LeeTransaction::Public(public_tx) = tx else {
             panic!("a dispatch is a public transaction");
         };
-        let Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) =
+        let Ok(cross_zone_inbox_core::Instruction::Dispatch { message: msg, .. }) =
             risc0_zkvm::serde::from_slice(&public_tx.message().instruction_data)
         else {
             panic!("the recorded transaction is an inbox dispatch");

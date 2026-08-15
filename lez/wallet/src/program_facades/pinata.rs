@@ -1,5 +1,7 @@
 use common::HashType;
-use lee::{AccountId, program::Program};
+use lee::{
+    AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+};
 use lee_core::{MembershipProof, SharedSecretKey};
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
@@ -60,7 +62,7 @@ impl Pinata<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 lee::program::Program::serialize_instruction(solution).unwrap(),
-                &programs::pinata().into(),
+                &pinata_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -71,4 +73,10 @@ impl Pinata<'_> {
                 (resp, first)
             })
     }
+}
+
+fn pinata_program_with_deps() -> ProgramWithDependencies {
+    ProgramWithDependencies::from(programs::pinata()).with_program_account_id(
+        loader_core::immutable_deploy_account_id(programs::pinata().id()),
+    )
 }

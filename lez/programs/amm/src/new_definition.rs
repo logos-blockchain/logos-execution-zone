@@ -111,8 +111,7 @@ pub fn new_definition(
     let pool_pda_seed = compute_pool_pda_seed(definition_token_a_id, definition_token_b_id);
     let pool_post = AccountPostState::new_claimed_if_default(pool_post, Claim::Pda(pool_pda_seed));
 
-    let token_program_id: lee_core::program::ProgramId =
-        user_holding_a.account.program_owner.into();
+    let token_program_id = user_holding_a.account.program_owner;
 
     // Chain call for Token A (user_holding_a -> Vault_A)
     let vault_a_seed = compute_vault_pda_seed(pool.account_id, definition_token_a_id);
@@ -121,7 +120,7 @@ pub fn new_definition(
         ..vault_a.clone()
     };
     let call_token_a = ChainedCall::new(
-        token_program_id.into(),
+        token_program_id,
         vec![user_holding_a.clone(), vault_a_authorized],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_a_amount.into(),
@@ -136,7 +135,7 @@ pub fn new_definition(
         ..vault_b.clone()
     };
     let call_token_b = ChainedCall::new(
-        token_program_id.into(),
+        token_program_id,
         vec![user_holding_b.clone(), vault_b_authorized],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_b_amount.into(),
@@ -150,7 +149,7 @@ pub fn new_definition(
         ..pool_definition_lp.clone()
     };
     let call_token_lp = ChainedCall::new(
-        token_program_id.into(),
+        token_program_id,
         vec![pool_lp_authorized, user_holding_lp.clone()],
         &instruction,
     )

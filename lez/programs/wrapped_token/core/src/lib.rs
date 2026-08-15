@@ -33,13 +33,25 @@ pub enum Instruction {
     ///
     /// Required accounts (3): the source marker, the wrapped-token config PDA,
     /// then the recipient's holding PDA.
-    Mint { recipient: [u8; 32], amount: u128 },
+    Mint {
+        /// This program's own image id. The guest cannot learn this at runtime, so the trusted
+        /// caller supplies it to recompute the config and holding PDAs; a wrong value only fails
+        /// the guest's own self-consistency assertions, since real authorization is
+        /// independently enforced by the state layer against the account's `program_owner`.
+        self_program_id: ProgramId,
+        recipient: [u8; 32],
+        amount: u128,
+    },
     /// Pins the minter and the peer sources it may mint for, written once into a
     /// default config PDA at genesis. A re-run holding anything different is
     /// refused; an identical one is a no-op, which is what genesis replay does.
     ///
     /// Required accounts (1): the wrapped-token config PDA.
-    InitConfig(WrappedTokenConfig),
+    InitConfig {
+        /// See [`Mint::self_program_id`](Instruction::Mint).
+        self_program_id: ProgramId,
+        config: WrappedTokenConfig,
+    },
 }
 
 /// Who may mint, and which peer sources they may mint for.
@@ -49,11 +61,11 @@ pub enum Instruction {
 /// list is variable length.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct WrappedTokenConfig {
-    /// The program allowed to call `Mint`: the cross-zone inbox.
-    pub minter: ProgramId,
-    /// The `(src_zone, src_program_id)` pairs a mint may originate from. Empty on
+    /// The dispatch address of the program allowed to call `Mint`: the cross-zone inbox.
+    pub minter: AccountId,
+    /// The `(src_zone, src_account_id)` pairs a mint may originate from. Empty on
     /// a zone with no peers, which authorizes nothing.
-    pub sources: Vec<(ZoneId, ProgramId)>,
+    pub sources: Vec<(ZoneId, AccountId)>,
 }
 
 impl WrappedTokenConfig {
@@ -121,8 +133,11 @@ mod tests {
     #[test]
     fn config_round_trips() {
         let config = WrappedTokenConfig {
-            minter: [1, 2, 3, 4, 5, 6, 7, 8],
-            sources: vec![([7; 32], [9; 8]), ([8; 32], [4; 8])],
+            minter: AccountId::new([1; 32]),
+            sources: vec![
+                ([7; 32], AccountId::new([9; 32])),
+                ([8; 32], AccountId::new([4; 32])),
+            ],
         };
         assert_eq!(
             WrappedTokenConfig::from_bytes(&config.to_bytes()),
@@ -142,6 +157,7 @@ mod tests {
     #[test]
     fn mint_is_the_first_variant() {
         let mint = Instruction::Mint {
+            self_program_id: [2; 8],
             recipient: [3; 32],
             amount: 1,
         };

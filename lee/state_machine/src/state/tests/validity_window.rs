@@ -25,18 +25,14 @@ fn validity_window_works_in_public_transactions(
     let tx = {
         let account_ids = vec![pre.account_id];
         let nonces = vec![];
-        let program_id = validity_window_program.id();
+        let program_id = validity_window_program.deployed_account_id();
         let instruction = (
             block_validity_window,
             TimestampValidityWindow::new_unbounded(),
         );
-        let message = public_transaction::Message::try_new(
-            program_id.into(),
-            account_ids,
-            nonces,
-            instruction,
-        )
-        .unwrap();
+        let message =
+            public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
+                .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         PublicTransaction::new(message, witness_set)
     };
@@ -80,18 +76,14 @@ fn timestamp_validity_window_works_in_public_transactions(
     let tx = {
         let account_ids = vec![pre.account_id];
         let nonces = vec![];
-        let program_id = validity_window_program.id();
+        let program_id = validity_window_program.deployed_account_id();
         let instruction = (
             BlockValidityWindow::new_unbounded(),
             timestamp_validity_window,
         );
-        let message = public_transaction::Message::try_new(
-            program_id.into(),
-            account_ids,
-            nonces,
-            instruction,
-        )
-        .unwrap();
+        let message =
+            public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
+                .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         PublicTransaction::new(message, witness_set)
     };

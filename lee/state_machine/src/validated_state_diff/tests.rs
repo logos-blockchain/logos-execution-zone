@@ -18,7 +18,8 @@ fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<Acc
             (
                 account_id,
                 Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+                    program_owner: crate::test_methods::simple_balance_transfer()
+                        .deployed_account_id(),
                     balance,
                     ..Account::default()
                 },
@@ -42,14 +43,9 @@ fn public_diff_reflects_a_successful_transfer() {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id = crate::test_methods::simple_balance_transfer().id();
-    let message = Message::try_new(
-        program_id.into(),
-        vec![from, to],
-        vec![Nonce(0), Nonce(0)],
-        5_u128,
-    )
-    .unwrap();
+    let program_id = crate::test_methods::simple_balance_transfer().deployed_account_id();
+    let message =
+        Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
     let tx = crate::PublicTransaction::new(message, witness_set);
 
@@ -98,12 +94,12 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
     };
 
     type InjectorInstruction = (
-        lee_core::program::ProgramId, // p2_id
-        lee_core::program::ProgramId, // simple_balance_transfer_id
+        lee_core::account::AccountId, // p2_id
+        lee_core::account::AccountId, // simple_balance_transfer_id
         [u8; 32],                     // victim_id_raw
         u128,                         // victim_balance
         u128,                         // victim_nonce
-        lee_core::program::ProgramId, // victim_program_owner
+        lee_core::account::AccountId, // victim_program_owner
         [u8; 32],                     // recipient_id_raw
         u128,                         // amount
     );
@@ -131,7 +127,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 
     // Build attacker's private account and its local commitment tree.
     let attacker_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+        program_owner: crate::test_methods::simple_balance_transfer().deployed_account_id(),
         balance: 100,
         ..Account::default()
     };
@@ -146,12 +142,12 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 
     let victim_account = state.get_account_by_id(victim_id);
     let instruction: InjectorInstruction = (
-        crate::test_methods::malicious_launderer().id(),
-        crate::test_methods::simple_balance_transfer().id(),
+        crate::test_methods::malicious_launderer().deployed_account_id(),
+        crate::test_methods::simple_balance_transfer().deployed_account_id(),
         *victim_id.value(),
         victim_account.balance,
         victim_account.nonce.0,
-        victim_account.program_owner.into(),
+        victim_account.program_owner,
         *recipient_id.value(),
         victim_balance,
     );
@@ -161,7 +157,11 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
     let at = crate::test_methods::simple_balance_transfer();
     let program_with_deps = ProgramWithDependencies::new(
         crate::test_methods::malicious_injector(),
-        [(p2.id().into(), p2), (at.id().into(), at)].into(),
+        [
+            (p2.deployed_account_id(), p2),
+            (at.deployed_account_id(), at),
+        ]
+        .into(),
     );
 
     // account_identities order must match self.pre_states as built by the circuit:
@@ -255,12 +255,12 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
     };
 
     type InjectorInstruction = (
-        lee_core::program::ProgramId, // p2_id
-        lee_core::program::ProgramId, // simple_balance_transfer_id
+        lee_core::account::AccountId, // p2_id
+        lee_core::account::AccountId, // simple_balance_transfer_id
         [u8; 32],                     // victim_id_raw
         u128,                         // victim_balance
         u128,                         // victim_nonce
-        lee_core::program::ProgramId, // victim_program_owner
+        lee_core::account::AccountId, // victim_program_owner
         [u8; 32],                     // recipient_id_raw
         u128,                         // amount
     );
@@ -289,7 +289,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
 
     // Build attacker's private account and its local commitment tree.
     let attacker_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+        program_owner: crate::test_methods::simple_balance_transfer().deployed_account_id(),
         balance: 100,
         ..Account::default()
     };
@@ -307,12 +307,12 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
     // to succeed inside the circuit, which has no access to chain state and cannot detect
     // that these values are fabricated.
     let instruction: InjectorInstruction = (
-        crate::test_methods::malicious_launderer().id(),
-        crate::test_methods::simple_balance_transfer().id(),
+        crate::test_methods::malicious_launderer().deployed_account_id(),
+        crate::test_methods::simple_balance_transfer().deployed_account_id(),
         *victim_id.value(),
         victim_balance,
-        0_u128,                                              // nonce
-        crate::test_methods::simple_balance_transfer().id(), // program_owner
+        0_u128,                                                               // nonce
+        crate::test_methods::simple_balance_transfer().deployed_account_id(), // program_owner
         *recipient_id.value(),
         victim_balance,
     );
@@ -322,7 +322,11 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
     let at = crate::test_methods::simple_balance_transfer();
     let program_with_deps = ProgramWithDependencies::new(
         crate::test_methods::malicious_injector(),
-        [(p2.id().into(), p2), (at.id().into(), at)].into(),
+        [
+            (p2.deployed_account_id(), p2),
+            (at.deployed_account_id(), at),
+        ]
+        .into(),
     );
 
     // account_identities order must match self.pre_states as built by the circuit:
@@ -404,12 +408,12 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
     // Primitives only — AccountId/Account cannot round-trip through instruction_data
     // via risc0_zkvm::serde (SerializeDisplay issue).
     type InjectorInstruction = (
-        lee_core::program::ProgramId, // p2_id
-        lee_core::program::ProgramId, // simple_balance_transfer_id
+        lee_core::account::AccountId, // p2_id
+        lee_core::account::AccountId, // simple_balance_transfer_id
         [u8; 32],                     // victim_id_raw
         u128,                         // victim_balance
         u128,                         // victim_nonce
-        lee_core::program::ProgramId, // victim_program_owner
+        lee_core::account::AccountId, // victim_program_owner
         [u8; 32],                     // recipient_id_raw
         u128,                         // amount
     );
@@ -439,18 +443,18 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
     let victim_account = state.get_account_by_id(victim_id);
 
     let instruction: InjectorInstruction = (
-        crate::test_methods::malicious_launderer().id(),
-        crate::test_methods::simple_balance_transfer().id(),
+        crate::test_methods::malicious_launderer().deployed_account_id(),
+        crate::test_methods::simple_balance_transfer().deployed_account_id(),
         *victim_id.value(),
         victim_account.balance,
         victim_account.nonce.0,
-        victim_account.program_owner.into(),
+        victim_account.program_owner,
         *recipient_id.value(),
         victim_balance,
     );
 
     let message = Message::try_new(
-        crate::test_methods::malicious_injector().id().into(),
+        crate::test_methods::malicious_injector().deployed_account_id(),
         vec![attacker_id],
         vec![Nonce(0)],
         instruction,

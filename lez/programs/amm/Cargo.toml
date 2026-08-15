@@ -15,3 +15,4 @@ amm_core.workspace = true
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }
 programs = { workspace = true }
+loader_core.workspace = true

@@ -526,13 +526,13 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
         AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), u128::MAX);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let callee_id = callee.id();
+    let callee_account_id = callee.deployed_account_id();
     let program_with_deps =
-        ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
+        ProgramWithDependencies::new(delegator, [(callee_account_id, callee)].into());
 
     let result = execute_and_prove(
         vec![pre_state],
-        Program::serialize_instruction((seed, seed, callee_id)).unwrap(),
+        Program::serialize_instruction((seed, seed, callee_account_id)).unwrap(),
         vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
@@ -568,13 +568,14 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
         AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk, &keys.vpk(), u128::MAX);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let callee_id = callee.id();
+    let callee_account_id = callee.deployed_account_id();
     let program_with_deps =
-        ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
+        ProgramWithDependencies::new(delegator, [(callee_account_id, callee)].into());
 
     let result = execute_and_prove(
         vec![pre_state],
-        Program::serialize_instruction((claim_seed, wrong_delegated_seed, callee_id)).unwrap(),
+        Program::serialize_instruction((claim_seed, wrong_delegated_seed, callee_account_id))
+            .unwrap(),
         vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
@@ -1008,13 +1009,13 @@ fn two_private_pda_family_members_receive_and_spend() {
     let proxy = crate::test_methods::pda_spend_proxy();
     let simple_transfer = crate::test_methods::simple_balance_transfer();
     let proxy_id = proxy.id();
-    let simple_transfer_id = simple_transfer.id();
+    let simple_transfer_account_id = simple_transfer.deployed_account_id();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
     let spend_with_deps = ProgramWithDependencies::new(
         proxy,
-        [(simple_transfer_id.into(), simple_transfer.clone())].into(),
+        [(simple_transfer_account_id, simple_transfer.clone())].into(),
     );
 
     let funder_id = funder_keys.account_id();
@@ -1025,17 +1026,18 @@ fn two_private_pda_family_members_receive_and_spend() {
     let recipient_id = test_public_account_keys_2().account_id();
     let recipient_signing_key = test_public_account_keys_2().signing_key;
 
-    let mut state =
-        V03State::new().with_public_accounts(public_state_from_balances(&[(funder_id, 500)]));
+    let mut state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(funder_id, 500)]))
+        .with_test_programs();
 
     let alice_pda_0_account = Account {
-        program_owner: simple_transfer_id.into(),
+        program_owner: simple_transfer_account_id,
         balance: amount,
         nonce: Nonce::private_account_nonce_init(&alice_pda_0_id),
         ..Account::default()
     };
     let alice_pda_1_account = Account {
-        program_owner: simple_transfer_id.into(),
+        program_owner: simple_transfer_account_id,
         balance: amount,
         nonce: Nonce::private_account_nonce_init(&alice_pda_1_id),
         ..Account::default()
@@ -1066,7 +1068,8 @@ fn two_private_pda_family_members_receive_and_spend() {
                     },
                 }),
             ],
-            &simple_transfer.clone().into(),
+            &ProgramWithDependencies::from(simple_transfer.clone())
+                .with_program_account_id(simple_transfer_account_id),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![funder_nonce], output);
@@ -1105,7 +1108,8 @@ fn two_private_pda_family_members_receive_and_spend() {
                     },
                 }),
             ],
-            &simple_transfer.into(),
+            &ProgramWithDependencies::from(simple_transfer)
+                .with_program_account_id(simple_transfer_account_id),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![funder_nonce], output);
@@ -1133,7 +1137,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 AccountWithMetadata::new(alice_pda_0_account, true, alice_pda_0_id),
                 AccountWithMetadata::new(recipient_account, true, recipient_id),
             ],
-            Program::serialize_instruction((seed, amount, simple_transfer_id)).unwrap(),
+            Program::serialize_instruction((seed, amount, simple_transfer_account_id)).unwrap(),
             vec![
                 InputAccountIdentity::Private(PrivateWitness {
                     vpk: alice_keys.vpk(),
@@ -1172,7 +1176,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 AccountWithMetadata::new(alice_pda_1_account.clone(), true, alice_pda_1_id),
                 AccountWithMetadata::new(recipient_account, false, recipient_id),
             ],
-            Program::serialize_instruction((seed, amount, simple_transfer_id)).unwrap(),
+            Program::serialize_instruction((seed, amount, simple_transfer_account_id)).unwrap(),
             vec![
                 InputAccountIdentity::Private(PrivateWitness {
                     vpk: alice_keys.vpk(),
@@ -1208,7 +1212,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     // Re-fund alice_pda_1 top-level via simple_transfer using a private-PDA update with an
     // external seed.
     let alice_pda_1_account_after_spend = Account {
-        program_owner: simple_transfer_id.into(),
+        program_owner: simple_transfer_account_id,
         balance: 0,
         nonce: alice_pda_1_account
             .nonce
@@ -1244,7 +1248,8 @@ fn two_private_pda_family_members_receive_and_spend() {
                     },
                 }),
             ],
-            &crate::test_methods::simple_balance_transfer().into(),
+            &ProgramWithDependencies::from(crate::test_methods::simple_balance_transfer())
+                .with_program_account_id(simple_transfer_account_id),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![recipient_nonce], output);

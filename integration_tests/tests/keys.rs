@@ -139,11 +139,11 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     assert_eq!(
         acc1.account.program_owner,
-        programs::authenticated_transfer().id().into()
+        loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
     assert_eq!(
         acc2.account.program_owner,
-        programs::authenticated_transfer().id().into()
+        loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
 
     assert_eq!(acc1.account.balance, 100);

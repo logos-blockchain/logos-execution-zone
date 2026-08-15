@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountPostState, BlockValidityWindow, ChainedCall, ProgramId, ProgramInput, ProgramOutput,
-    TimestampValidityWindow, read_lee_inputs,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountPostState, BlockValidityWindow, ChainedCall, ProgramInput, ProgramOutput,
+        TimestampValidityWindow, read_lee_inputs,
+    },
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -8,10 +11,11 @@ use risc0_zkvm::serde::to_vec;
 /// potentially different block validity window.
 ///
 /// Instruction: (`window`, `chained_program_id`, `chained_window`)
-/// The initial output uses `window` and chains to `chained_program_id` with `chained_window`.
-/// The chained program (`validity_window`) expects `(BlockValidityWindow, TimestampValidityWindow)`
-/// so an unbounded timestamp window is appended automatically.
-type Instruction = (BlockValidityWindow, ProgramId, BlockValidityWindow);
+/// The initial output uses `window` and chains to `chained_program_id`'s dispatch address with
+/// `chained_window`. The chained program (`validity_window`) expects
+/// `(BlockValidityWindow, TimestampValidityWindow)` so an unbounded timestamp window is appended
+/// automatically.
+type Instruction = (BlockValidityWindow, AccountId, BlockValidityWindow);
 
 fn main() {
     let (
@@ -33,7 +37,7 @@ fn main() {
     ))
     .unwrap();
     let chained_call = ChainedCall {
-        program_account_id: chained_program_id.into(),
+        program_account_id: chained_program_id,
         instruction_data: chained_instruction,
         pre_states,
         pda_seeds: vec![],

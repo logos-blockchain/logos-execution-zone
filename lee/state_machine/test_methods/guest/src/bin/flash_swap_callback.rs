@@ -24,8 +24,11 @@
 //! called by any program. In production, a callback would typically verify the caller
 //! if it needs to trust the context it is called from.
 
-use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountPostState, ChainedCall, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +37,8 @@ pub struct CallbackInstruction {
     /// If true, return the borrowed funds to the vault (happy path).
     /// If false, keep the funds (simulates a malicious callback, triggers rollback).
     pub return_funds: bool,
-    pub token_program_id: ProgramId,
+    /// The dispatch address of the token program.
+    pub token_program_id: AccountId,
     pub amount: u128,
 }
 
@@ -66,7 +70,7 @@ fn main() {
             .expect("transfer instruction serialization");
 
         chained_calls.push(ChainedCall {
-            program_account_id: instruction.token_program_id.into(),
+            program_account_id: instruction.token_program_id,
             pre_states: vec![receiver_authorized, vault_pre.clone()],
             instruction_data: transfer_instruction,
             pda_seeds: vec![PdaSeed::new([1_u8; 32])],

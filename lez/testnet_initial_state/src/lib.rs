@@ -154,7 +154,8 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
 
             let mut acc = init_comm_data.account.clone();
 
-            acc.program_owner = programs::authenticated_transfer().id().into();
+            acc.program_owner =
+                loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id());
 
             (
                 lee_core::Commitment::new(&account_id, &acc),
@@ -190,7 +191,9 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             (
                 acc_data.account_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
+                    program_owner: loader_core::immutable_deploy_account_id(
+                        programs::authenticated_transfer().id(),
+                    ),
                     balance: acc_data.balance,
                     ..Default::default()
                 },

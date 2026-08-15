@@ -30,12 +30,14 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let receipt_id = bridge_core::deposit_receipt_account_id(programs::bridge().id(), [0_u8; 32]);
 
     let message = public_transaction::Message::try_new(
-        programs::bridge().id().into(),
+        loader_core::immutable_deploy_account_id(programs::bridge().id()),
         vec![bridge_account_id, recipient_vault_id, receipt_id],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
+            self_program_id: programs::bridge().id(),
             vault_program_id,
+            vault_account_id: loader_core::immutable_deploy_account_id(vault_program_id),
             recipient_id,
             amount: 1,
         },
@@ -79,12 +81,14 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
     let receipt_id = bridge_core::deposit_receipt_account_id(programs::bridge().id(), [0_u8; 32]);
 
     let message = public_transaction::Message::try_new(
-        programs::bridge().id().into(),
+        loader_core::immutable_deploy_account_id(programs::bridge().id()),
         vec![bridge_account_id, recipient_vault_id, receipt_id],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
+            self_program_id: programs::bridge().id(),
             vault_program_id,
+            vault_account_id: loader_core::immutable_deploy_account_id(vault_program_id),
             recipient_id,
             amount: 0,
         },
@@ -159,19 +163,29 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
             programs::bridge(),
             [
-                (vault_program_id.into(), programs::vault()),
                 (
-                    programs::authenticated_transfer().id().into(),
+                    loader_core::immutable_deploy_account_id(vault_program_id),
+                    programs::vault(),
+                ),
+                (
+                    loader_core::immutable_deploy_account_id(
+                        programs::authenticated_transfer().id(),
+                    ),
                     programs::authenticated_transfer(),
                 ),
             ]
             .into(),
-        );
+        )
+        .with_program_account_id(loader_core::immutable_deploy_account_id(
+            programs::bridge().id(),
+        ));
 
     // Serialize the bridge deposit instruction
     let instruction = Program::serialize_instruction(bridge_core::Instruction::Deposit {
         l1_deposit_op_id: [0_u8; 32],
+        self_program_id: programs::bridge().id(),
         vault_program_id,
+        vault_account_id: loader_core::immutable_deploy_account_id(vault_program_id),
         recipient_id,
         amount: 1,
     })

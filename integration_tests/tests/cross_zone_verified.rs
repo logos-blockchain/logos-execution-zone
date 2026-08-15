@@ -47,7 +47,9 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
             allowed_routes: vec![CrossZoneRoute {
-                src_program_id: programs::ping_sender().id(),
+                src_account_id: loader_core::immutable_deploy_account_id(
+                    programs::ping_sender().id(),
+                ),
                 target_program_id: receiver_id,
             }],
             expected_block_signing_pubkey: None,
@@ -109,12 +111,15 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
     let ordinal = 0;
 
     let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        self_program_id: receiver_id,
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping instruction");
     let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
+    let sender_id = programs::ping_sender().id();
     let send = SenderInstruction::Send {
+        self_program_id: sender_id,
         target_zone,
         target_program_id: receiver_id,
         target_accounts: vec![
@@ -125,10 +130,14 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
         ordinal,
     };
 
-    let sender_id = programs::ping_sender().id();
-    let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
+    let outbox_account = outbox_pda(
+        outbox_id,
+        loader_core::immutable_deploy_account_id(sender_id),
+        &target_zone,
+        ordinal,
+    );
     let message = Message::try_new(
-        sender_id.into(),
+        loader_core::immutable_deploy_account_id(sender_id),
         vec![sender_config_account_id(sender_id), outbox_account],
         vec![],
         send,

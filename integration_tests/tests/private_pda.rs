@@ -116,7 +116,7 @@ async fn spend_private_pda(
     seed: PdaSeed,
     amount: u128,
     spend_program: &ProgramWithDependencies,
-    auth_transfer_id: ProgramId,
+    auth_transfer_account_id: AccountId,
 ) -> Result<()> {
     wallet
         .send_privacy_preserving_tx(
@@ -128,7 +128,7 @@ async fn spend_private_pda(
                     identifier: 0,
                 },
             ],
-            Program::serialize_instruction((seed, amount, auth_transfer_id))
+            Program::serialize_instruction((seed, amount, auth_transfer_account_id))
                 .context("failed to serialize pda_spend_proxy instruction")?,
             spend_program,
         )
@@ -166,9 +166,11 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
-    let auth_transfer_program = ProgramWithDependencies::new(auth_transfer.clone(), [].into());
+    let auth_transfer_account_id = loader_core::immutable_deploy_account_id(auth_transfer_id);
+    let auth_transfer_program = ProgramWithDependencies::new(auth_transfer.clone(), [].into())
+        .with_program_account_id(auth_transfer_account_id);
     let spend_program =
-        ProgramWithDependencies::new(proxy, [(auth_transfer_id.into(), auth_transfer)].into());
+        ProgramWithDependencies::new(proxy, [(auth_transfer_account_id, auth_transfer)].into());
 
     let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 0);
     let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 1);
@@ -271,7 +273,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         amount_spend_0,
         &spend_program,
-        auth_transfer_id,
+        auth_transfer_account_id,
     )
     .await?;
 
@@ -284,7 +286,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         amount_spend_1,
         &spend_program,
-        auth_transfer_id,
+        auth_transfer_account_id,
     )
     .await?;
 

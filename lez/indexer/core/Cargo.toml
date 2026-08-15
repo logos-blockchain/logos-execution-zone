@@ -22,6 +22,7 @@ cross_zone_inbox_core.workspace = true
 programs.workspace = true
 storage.workspace = true
 testnet_initial_state.workspace = true
+loader_core.workspace = true
 
 anyhow.workspace = true
 arc-swap.workspace = true

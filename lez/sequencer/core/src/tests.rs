@@ -100,13 +100,21 @@ fn setup_sequencer_config() -> SequencerConfig {
 
 #[test]
 fn only_the_cross_zone_inbox_is_sequencer_only() {
-    assert!(is_sequencer_only_program(programs::cross_zone_inbox().id()));
-    assert!(!is_sequencer_only_program(
-        programs::cross_zone_outbox().id()
+    assert!(is_sequencer_only_program(
+        loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id())
     ));
-    assert!(!is_sequencer_only_program(programs::wrapped_token().id()));
-    assert!(!is_sequencer_only_program(programs::ping_sender().id()));
-    assert!(!is_sequencer_only_program(programs::clock().id()));
+    assert!(!is_sequencer_only_program(
+        loader_core::immutable_deploy_account_id(programs::cross_zone_outbox().id())
+    ));
+    assert!(!is_sequencer_only_program(
+        loader_core::immutable_deploy_account_id(programs::wrapped_token().id())
+    ));
+    assert!(!is_sequencer_only_program(
+        loader_core::immutable_deploy_account_id(programs::ping_sender().id())
+    ));
+    assert!(!is_sequencer_only_program(
+        loader_core::immutable_deploy_account_id(programs::clock().id())
+    ));
 }
 
 fn create_signing_key_for_account1() -> lee::PrivateKey {
@@ -154,7 +162,9 @@ fn tx_is_bridge_deposit(
         return false;
     };
 
-    if public_tx.message.program_account_id != programs::bridge().id().into() {
+    if public_tx.message.program_account_id
+        != loader_core::immutable_deploy_account_id(programs::bridge().id())
+    {
         return false;
     }
 
@@ -183,7 +193,9 @@ fn cross_zone_test_config() -> SequencerConfig {
             peers: vec![CrossZonePeer {
                 channel_id: PEER_ZONE,
                 allowed_routes: vec![CrossZoneRoute {
-                    src_program_id: programs::ping_sender().id(),
+                    src_account_id: loader_core::immutable_deploy_account_id(
+                        programs::ping_sender().id(),
+                    ),
                     target_program_id: programs::ping_receiver().id(),
                 }],
                 expected_block_signing_pubkey: None,
@@ -197,6 +209,7 @@ fn cross_zone_test_config() -> SequencerConfig {
 /// form an emitter on the peer zone puts in the message payload.
 fn ping_payload(payload: &[u8]) -> Vec<u8> {
     risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        self_program_id: programs::ping_receiver().id(),
         payload: payload.to_vec(),
     })
     .expect("ping instruction serializes")
@@ -216,7 +229,7 @@ fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
             src_block_id,
             src_block_hash: peer_block_hash(src_block_id),
             src_tx_index: 0,
-            src_program_id: programs::ping_sender().id(),
+            src_account_id: loader_core::immutable_deploy_account_id(programs::ping_sender().id()),
         },
         receiver_id,
         &[
@@ -1400,7 +1413,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
     // be dropped because their diffs touch the clock accounts.
     let crafted_clock_tx = {
         let message = lee::public_transaction::Message::try_new(
-            programs::clock().id().into(),
+            loader_core::immutable_deploy_account_id(programs::clock().id()),
             system_accounts::clock_account_ids().to_vec(),
             vec![],
             42_u64,
@@ -1536,7 +1549,7 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 //         0,
 //     );
 //     let sender_private_account = Account {
-//         program_owner: programs::authenticated_transfer().id().into(),
+//         program_owner: programs::authenticated_transfer().deployed_account_id(),
 //         balance: 100,
 //         nonce: Nonce(0xdead_beef),
 //         data: Data::default(),
@@ -1639,9 +1652,9 @@ fn time_locked_transfer_transaction(
     amount: u128,
     deadline: u64,
 ) -> PublicTransaction {
-    let program_id = test_programs::time_locked_transfer().id();
+    let program_id = test_programs::time_locked_transfer().deployed_account_id();
     let message = lee::public_transaction::Message::try_new(
-        program_id.into(),
+        program_id,
         vec![from, to, clock_account_id],
         vec![Nonce(from_nonce)],
         (amount, deadline),
@@ -1663,7 +1676,7 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
     state.force_insert_account(
         recipient_id,
         Account {
-            program_owner: programs::authenticated_transfer().id().into(),
+            program_owner: programs::authenticated_transfer().deployed_account_id(),
             ..Account::default()
         },
     );
@@ -1673,7 +1686,7 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
     state.force_insert_account(
         sender_id,
         Account {
-            program_owner: test_programs::time_locked_transfer().id().into(),
+            program_owner: test_programs::time_locked_transfer().deployed_account_id(),
             balance: 100,
             ..Account::default()
         },
@@ -1712,7 +1725,7 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     state.force_insert_account(
         recipient_id,
         Account {
-            program_owner: programs::authenticated_transfer().id().into(),
+            program_owner: programs::authenticated_transfer().deployed_account_id(),
             ..Account::default()
         },
     );
@@ -1722,7 +1735,7 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     state.force_insert_account(
         sender_id,
         Account {
-            program_owner: test_programs::time_locked_transfer().id().into(),
+            program_owner: test_programs::time_locked_transfer().deployed_account_id(),
             balance: 100,
             ..Account::default()
         },
@@ -1766,9 +1779,9 @@ fn pinata_cooldown_transaction(
     winner_id: AccountId,
     clock_account_id: AccountId,
 ) -> PublicTransaction {
-    let program_id = test_programs::pinata_cooldown().id();
+    let program_id = test_programs::pinata_cooldown().deployed_account_id();
     let message = lee::public_transaction::Message::try_new(
-        program_id.into(),
+        program_id,
         vec![pinata_id, winner_id, clock_account_id],
         vec![],
         (),
@@ -1797,14 +1810,14 @@ fn pinata_cooldown_claim_succeeds_after_cooldown() {
     state.force_insert_account(
         winner_id,
         Account {
-            program_owner: programs::authenticated_transfer().id().into(),
+            program_owner: programs::authenticated_transfer().deployed_account_id(),
             ..Account::default()
         },
     );
     state.force_insert_account(
         pinata_id,
         Account {
-            program_owner: test_programs::pinata_cooldown().id().into(),
+            program_owner: test_programs::pinata_cooldown().deployed_account_id(),
             balance: 1000,
             data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
                 .try_into()
@@ -1844,14 +1857,14 @@ fn pinata_cooldown_claim_fails_during_cooldown() {
     state.force_insert_account(
         winner_id,
         Account {
-            program_owner: programs::authenticated_transfer().id().into(),
+            program_owner: programs::authenticated_transfer().deployed_account_id(),
             ..Account::default()
         },
     );
     state.force_insert_account(
         pinata_id,
         Account {
-            program_owner: test_programs::pinata_cooldown().id().into(),
+            program_owner: test_programs::pinata_cooldown().deployed_account_id(),
             balance: 1000,
             data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
                 .try_into()
@@ -1890,7 +1903,7 @@ fn pda_mechanism_with_pinata_token_program() {
         balance: 150,
     };
     let expected_winner_token_holding_post = Account {
-        program_owner: token.id().into(),
+        program_owner: token.deployed_account_id(),
         data: Data::from(&expected_winner_account_holding),
         ..Account::default()
     };
@@ -1901,7 +1914,7 @@ fn pda_mechanism_with_pinata_token_program() {
     state.force_insert_account(
         pinata_definition_id,
         Account {
-            program_owner: pinata_token.id().into(),
+            program_owner: pinata_token.deployed_account_id(),
             // Difficulty: 3
             data: vec![3; 33].try_into().unwrap(),
             ..Account::default()
@@ -1928,7 +1941,7 @@ fn pda_mechanism_with_pinata_token_program() {
     state.force_insert_account(
         pinata_token_definition_id,
         Account {
-            program_owner: token.id().into(),
+            program_owner: token.deployed_account_id(),
             data: Data::from(&token_definition),
             ..Account::default()
         },
@@ -1936,7 +1949,7 @@ fn pda_mechanism_with_pinata_token_program() {
     state.force_insert_account(
         pinata_token_holding_id,
         Account {
-            program_owner: token.id().into(),
+            program_owner: token.deployed_account_id(),
             data: Data::from(&token_holding),
             ..Account::default()
         },
@@ -1944,7 +1957,7 @@ fn pda_mechanism_with_pinata_token_program() {
     state.force_insert_account(
         winner_token_holding_id,
         Account {
-            program_owner: token.id().into(),
+            program_owner: token.deployed_account_id(),
             data: Data::from(&winner_holding),
             ..Account::default()
         },
@@ -1953,7 +1966,7 @@ fn pda_mechanism_with_pinata_token_program() {
     // Submit a solution to the pinata program to claim the prize
     let solution: u128 = 989_106;
     let message = lee::public_transaction::Message::try_new(
-        pinata_token.id().into(),
+        pinata_token.deployed_account_id(),
         vec![
             pinata_definition_id,
             pinata_token_holding_id,
@@ -1989,7 +2002,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     .unwrap();
     let withdraw_tx = {
         let message = lee::public_transaction::Message::try_new(
-            programs::bridge().id().into(),
+            loader_core::immutable_deploy_account_id(programs::bridge().id()),
             vec![system_accounts::bridge_account_id()],
             vec![],
             bridge_core::Instruction::Withdraw {
@@ -3059,7 +3072,7 @@ fn loader_deploys_program_via_chained_call() {
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        forwarder.id().into(),
+        forwarder.deployed_account_id(),
         vec![header, segment],
         vec![],
         (loader_id, inner_instruction_data),

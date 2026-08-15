@@ -8,6 +8,7 @@ license.workspace = true
 key_protocol.workspace = true
 lee.workspace = true
 lee_core.workspace = true
+loader_core.workspace = true
 system_accounts.workspace = true
 programs.workspace = true
 
