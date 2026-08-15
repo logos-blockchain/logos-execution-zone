@@ -268,13 +268,14 @@ impl From<lee::public_transaction::Message> for PublicMessage {
             account_ids,
             nonces,
             instruction_data,
-            raw_payload: _,
+            raw_payload,
         } = value;
         Self {
             program_account_id: program_account_id.into(),
             account_ids: account_ids.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
+            raw_payload: raw_payload.unwrap_or_default(),
         }
     }
 }
@@ -286,16 +287,18 @@ impl From<PublicMessage> for lee::public_transaction::Message {
             account_ids,
             nonces,
             instruction_data,
+            raw_payload,
         } = value;
-        Self::new_preserialized(
-            program_account_id.into(),
-            account_ids.into_iter().map(Into::into).collect(),
-            nonces
+        Self {
+            program_account_id: program_account_id.into(),
+            account_ids: account_ids.into_iter().map(Into::into).collect(),
+            nonces: nonces
                 .iter()
                 .map(|x| lee_core::account::Nonce(*x))
                 .collect(),
             instruction_data,
-        )
+            raw_payload: (!raw_payload.is_empty()).then_some(raw_payload),
+        }
     }
 }
 

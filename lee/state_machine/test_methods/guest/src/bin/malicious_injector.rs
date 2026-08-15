@@ -97,6 +97,7 @@ fn main() {
         pre_states: vec![victim, recipient],
         instruction_data: p2_instruction,
         pda_seeds: vec![],
+        raw_payload: None,
     }])
     .write();
 }

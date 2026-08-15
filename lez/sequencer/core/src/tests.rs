@@ -1691,7 +1691,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let deploy_tx = LeeTransaction::Public(deploy_transaction(
         clock_chain_caller_header,
         clock_chain_caller_segment,
-        bytecode,
+        &bytecode,
     ));
     mempool_handle
         .push((TransactionOrigin::User, deploy_tx))
@@ -3705,18 +3705,23 @@ fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
     (header, segment)
 }
 
-fn deploy_transaction(
-    header: AccountId,
-    segment: AccountId,
-    bytecode: Vec<u8>,
-) -> PublicTransaction {
+fn deploy_transaction(header: AccountId, segment: AccountId, bytecode: &[u8]) -> PublicTransaction {
+    // Falls back to sending `bytecode` through unmodified when it isn't a well-formed two-ELF
+    // `ProgramBinary` (e.g. deliberately-garbage test input) — extraction is best-effort here so
+    // malformed input still reaches `execute_deploy`'s own rejection path, rather than the test
+    // helper itself panicking before the real system ever sees it.
+    let user_elf =
+        program_loader_core::extract_user_elf(bytecode).unwrap_or_else(|_| bytecode.to_vec());
     let message = lee::public_transaction::Message::try_new(
         PROGRAM_LOADER_ACCOUNT_ID,
         vec![header, segment],
         vec![],
-        program_loader_core::Instruction::Deploy { bytecode },
+        program_loader_core::Instruction::Deploy {
+            update_auth: AccountId::default(),
+        },
     )
-    .unwrap();
+    .unwrap()
+    .with_raw_payload(user_elf);
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
     PublicTransaction::new(message, witness_set)
 }
@@ -3732,7 +3737,7 @@ fn loader_deploys_program() {
     assert_eq!(state.get_account_by_id(header), Account::default());
     assert_eq!(state.get_account_by_id(segment), Account::default());
 
-    let tx = deploy_transaction(header, segment, bytecode.clone());
+    let tx = deploy_transaction(header, segment, &bytecode);
     state
         .transition_from_public_transaction(&tx, 1, 0)
         .expect("Deploy should succeed against unclaimed targets");
@@ -3747,7 +3752,11 @@ fn loader_deploys_program() {
 
     let deployed_segment = state.get_account_by_id(segment);
     assert_eq!(deployed_segment.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
-    assert_eq!(deployed_segment.data.to_vec(), bytecode);
+    assert_eq!(
+        deployed_segment.data.to_vec(),
+        program_loader_core::extract_user_elf(&bytecode).unwrap(),
+        "segment stores only user_elf, not the full two-ELF binary"
+    );
 }
 
 /// A `Deploy`-created program must be a fully ordinary dispatch target afterward: `get_program`
@@ -3760,7 +3769,7 @@ fn loader_deployed_program_is_invocable_via_dispatch() {
     let bytecode = test_programs::claimer().elf().to_vec();
     let (header, segment) = deploy_targets(&bytecode);
 
-    let tx = deploy_transaction(header, segment, bytecode);
+    let tx = deploy_transaction(header, segment, &bytecode);
     state
         .transition_from_public_transaction(&tx, 1, 0)
         .expect("Deploy should succeed against unclaimed targets");
@@ -3791,12 +3800,12 @@ fn loader_rejects_redeploying_an_already_deployed_program() {
     let bytecode = test_programs::claimer().elf().to_vec();
     let (header, segment) = deploy_targets(&bytecode);
 
-    let tx = deploy_transaction(header, segment, bytecode.clone());
+    let tx = deploy_transaction(header, segment, &bytecode);
     state
         .transition_from_public_transaction(&tx, 1, 0)
         .expect("First deploy should succeed");
 
-    let tx = deploy_transaction(header, segment, bytecode);
+    let tx = deploy_transaction(header, segment, &bytecode);
     let result = state.transition_from_public_transaction(&tx, 2, 0);
 
     assert!(
@@ -3815,7 +3824,7 @@ fn loader_rejects_invalid_bytecode() {
     let header = AccountId::new([7; 32]);
     let segment = AccountId::new([8; 32]);
 
-    let tx = deploy_transaction(header, segment, bytecode);
+    let tx = deploy_transaction(header, segment, &bytecode);
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
     assert!(
@@ -3833,7 +3842,7 @@ fn loader_rejects_wrong_target_account() {
     // Deliberately not the PDA this bytecode's image_id would derive to.
     let wrong_header = AccountId::new([7; 32]);
 
-    let tx = deploy_transaction(wrong_header, segment, bytecode);
+    let tx = deploy_transaction(wrong_header, segment, &bytecode);
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
     assert!(
@@ -3855,9 +3864,12 @@ fn loader_rejects_wrong_number_of_accounts() {
         loader_id.into(),
         vec![header, segment, extra],
         vec![],
-        program_loader_core::Instruction::Deploy { bytecode },
+        program_loader_core::Instruction::Deploy {
+            update_auth: AccountId::default(),
+        },
     )
-    .unwrap();
+    .unwrap()
+    .with_raw_payload(bytecode);
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -3896,7 +3908,7 @@ fn loader_deploys_program_via_chained_call() {
 
     let inner_instruction_data =
         lee::program::Program::serialize_instruction(program_loader_core::Instruction::Deploy {
-            bytecode: bytecode.clone(),
+            update_auth: AccountId::default(),
         })
         .unwrap();
 
@@ -3922,5 +3934,8 @@ fn loader_deploys_program_via_chained_call() {
     assert_eq!(program_data.image_id, image_id);
 
     let deployed_segment = state.get_account_by_id(segment);
-    assert_eq!(deployed_segment.data.to_vec(), bytecode);
+    assert_eq!(
+        deployed_segment.data.to_vec(),
+        program_loader_core::extract_user_elf(&bytecode).unwrap()
+    );
 }

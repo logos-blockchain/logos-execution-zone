@@ -160,11 +160,17 @@ typedef struct FfiVec_u8 {
 
 typedef struct FfiVec_u8 FfiInstructionDataList;
 
+typedef struct FfiVec_u8 FfiVecU8;
+
 typedef struct FfiPublicMessage {
   FfiAccountId program_account_id;
   FfiAccountIdList account_ids;
   FfiNonceList nonces;
   FfiInstructionDataList instruction_data;
+  /**
+   * Empty when absent — see `PublicMessage::raw_payload`'s doc comment.
+   */
+  FfiVecU8 raw_payload;
 } FfiPublicMessage;
 
 typedef struct FfiBytes32 FfiPublicKey;
@@ -230,8 +236,6 @@ typedef struct FfiVec_FfiPublicAction {
 } FfiVec_FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
-
-typedef struct FfiVec_u8 FfiVecU8;
 
 typedef struct FfiEncryptedAccountData {
   FfiVecU8 ciphertext;

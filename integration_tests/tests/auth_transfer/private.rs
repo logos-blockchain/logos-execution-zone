@@ -590,9 +590,11 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let deploy_tx = LeeTransaction::Public(deploy_transaction(
         faucet_chain_caller_header,
         faucet_chain_caller_segment,
-        bytecode,
+        &bytecode,
     ));
 
+    // Measure the real wire size rather than assuming it fits the default 1 MiB block size — a
+    // real guest binary is comfortably larger than typical transactions.
     let tx_size = encoded_tx_size(&deploy_tx);
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
