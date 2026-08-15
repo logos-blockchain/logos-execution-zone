@@ -27,7 +27,12 @@ fn program_execution() {
         ..Account::default()
     };
     let program_output = program
-        .execute(None, &[sender, recipient], &instruction_data)
+        .execute(
+            AccountId::from(program.id()),
+            None,
+            &[sender, recipient],
+            &instruction_data,
+        )
         .unwrap();
 
     let [sender_post, recipient_post] = program_output.post_states.try_into().unwrap();
@@ -81,7 +86,9 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
 #[test]
 fn malformed_journal_frame_is_an_error_not_a_panic() {
     let program = crate::test_methods::malformed_journal();
-    let err = program.execute(None, &[], &Vec::new()).unwrap_err();
+    let err = program
+        .execute(AccountId::from(program.id()), None, &[], &Vec::new())
+        .unwrap_err();
     assert!(
         matches!(
             &err,

@@ -159,9 +159,9 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
             programs::bridge(),
             [
-                (vault_program_id, programs::vault()),
+                (vault_program_id.into(), programs::vault()),
                 (
-                    programs::authenticated_transfer().id(),
+                    programs::authenticated_transfer().id().into(),
                     programs::authenticated_transfer(),
                 ),
             ]

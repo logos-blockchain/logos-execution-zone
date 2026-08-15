@@ -302,7 +302,7 @@ fn separate_initialize_and_fund_chain_calls_allow_unauthorized_private_recipient
 
     let program_with_deps = ProgramWithDependencies::new(
         initializer,
-        [(claimer_id, claimer), (simple_transfer_id, simple_transfer)].into(),
+        [(claimer_id.into(), claimer), (simple_transfer_id.into(), simple_transfer)].into(),
     );
 
     let instruction: (u128, ProgramId, ProgramId) = (amount, claimer_id, simple_transfer_id);
@@ -429,7 +429,7 @@ fn separate_initialize_and_fund_chain_calls_for_public_recipient_privately() {
 
     let program_with_deps = ProgramWithDependencies::new(
         initializer,
-        [(claimer_id, claimer), (simple_transfer_id, simple_transfer)].into(),
+        [(claimer_id.into(), claimer), (simple_transfer_id.into(), simple_transfer)].into(),
     );
 
     let instruction: (u128, ProgramId, ProgramId) = (amount, claimer_id, simple_transfer_id);
@@ -627,7 +627,7 @@ fn private_chained_call(number_of_calls: u32) {
 
     let mut dependencies = HashMap::new();
 
-    dependencies.insert(simple_transfers.id(), simple_transfers);
+    dependencies.insert(simple_transfers.id().into(), simple_transfers);
     let program_with_deps = ProgramWithDependencies::new(chain_caller, dependencies);
 
     let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk());

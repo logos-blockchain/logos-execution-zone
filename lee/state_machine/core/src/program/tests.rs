@@ -326,7 +326,7 @@ fn for_private_account_dispatches_correctly() {
 fn compute_public_authorized_pdas_with_seeds() {
     let caller: ProgramId = [1; 8];
     let seed = PdaSeed::new([2; 32]);
-    let result = compute_public_authorized_pdas(Some(caller.into()), &[seed]);
+    let result = compute_public_authorized_pdas(Some(caller), &[seed]);
     let expected = AccountId::for_public_pda(&caller, &seed);
     assert!(result.contains(&expected));
     assert_eq!(result.len(), 1);

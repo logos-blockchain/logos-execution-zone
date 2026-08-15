@@ -117,7 +117,7 @@ impl LeeTransaction {
                 tx, state, block_id, timestamp,
             ),
             Self::ProgramDeployment(tx) => {
-                ValidatedStateDiff::from_program_deployment_transaction(tx, state)
+                ValidatedStateDiff::from_program_deployment_transaction(tx)
             }
         }
     }

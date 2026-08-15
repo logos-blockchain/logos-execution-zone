@@ -381,7 +381,7 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
 
     let program_with_deps = ProgramWithDependencies::new(
         validity_window_chain_caller,
-        [(validity_window.id(), validity_window)].into(),
+        [(validity_window.id().into(), validity_window)].into(),
     );
 
     let result = execute_and_prove(
@@ -465,7 +465,7 @@ fn private_pda_init() {
 
     let auth_id = simple_transfer.id();
     let program_with_deps =
-        ProgramWithDependencies::new(program, [(auth_id, simple_transfer)].into());
+        ProgramWithDependencies::new(program, [(auth_id.into(), simple_transfer)].into());
 
     // is_withdraw=false triggers init path (1 pre-state)
     let instruction = Program::serialize_instruction((seed, auth_id, 0_u128, false)).unwrap();
@@ -509,7 +509,7 @@ fn private_pda_withdraw() {
 
     let auth_id = simple_transfer.id();
     let program_with_deps =
-        ProgramWithDependencies::new(program, [(auth_id, simple_transfer)].into());
+        ProgramWithDependencies::new(program, [(auth_id.into(), simple_transfer)].into());
 
     // is_withdraw=true, amount=0 (PDA has no balance yet)
     let instruction = Program::serialize_instruction((seed, auth_id, 0_u128, true)).unwrap();
@@ -960,8 +960,10 @@ fn pda_update_attempt(
     let pda_pre = AccountWithMetadata::new(pda_account, declare_authorized, pda_id);
     let recipient_pre = AccountWithMetadata::new(Account::default(), true, AccountId::new([0; 32]));
 
-    let program_with_deps =
-        ProgramWithDependencies::new(program, [(simple_transfer_id, simple_transfer)].into());
+    let program_with_deps = ProgramWithDependencies::new(
+        program,
+        [(simple_transfer_id.into(), simple_transfer)].into(),
+    );
 
     execute_and_prove(
         vec![pda_pre, recipient_pre],

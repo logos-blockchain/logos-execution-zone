@@ -498,7 +498,8 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
+    let program_with_deps =
+        ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -530,7 +531,8 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
+    let program_with_deps =
+        ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -557,7 +559,7 @@ fn caller_seeds_bind_a_private_pda_first_seen_in_the_callee() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     execute_and_prove(
         vec![pre_state],
@@ -590,7 +592,7 @@ fn delegated_private_pda_first_seen_in_callee_is_authorized() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     execute_and_prove(
         vec![pre_state],
@@ -619,7 +621,7 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     let (output, _proof) = execute_and_prove(
         vec![pre_state],
@@ -656,7 +658,7 @@ fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
     let pre_state = AccountWithMetadata::new(Account::default(), true, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     let (output, _proof) = execute_and_prove(
         vec![pre_state],
@@ -693,7 +695,7 @@ fn delegated_pda_is_not_authorized_in_sibling_call() {
     let sibling_id = sibling.id();
     let program_with_deps = ProgramWithDependencies::new(
         delegator,
-        [(callee_id, callee), (sibling_id, sibling)].into(),
+        [(callee_id.into(), callee), (sibling_id.into(), sibling)].into(),
     );
 
     // `callee` gets the PDA's account_id *and* the matching `pda_seeds` — real delegation.
@@ -734,7 +736,7 @@ fn public_pda_first_sight_grant_does_not_extend_to_sibling_calls() {
     let sibling_id = sibling.id();
     let program_with_deps = ProgramWithDependencies::new(
         delegator,
-        [(callee_id, callee), (sibling_id, sibling)].into(),
+        [(callee_id.into(), callee), (sibling_id.into(), sibling)].into(),
     );
 
     let result = execute_and_prove(
@@ -776,7 +778,7 @@ fn sibling_call_may_declare_delegated_pda_unauthorized() {
     let sibling_id = sibling.id();
     let program_with_deps = ProgramWithDependencies::new(
         delegator,
-        [(callee_id, callee), (sibling_id, sibling)].into(),
+        [(callee_id.into(), callee), (sibling_id.into(), sibling)].into(),
     );
 
     execute_and_prove(
@@ -811,7 +813,7 @@ fn delegated_pda_stays_authorized_in_delegated_subtree() {
     let callee_id = callee.id();
     let program_with_deps = ProgramWithDependencies::new(
         delegator,
-        [(forwarder_id, forwarder), (callee_id, callee)].into(),
+        [(forwarder_id.into(), forwarder), (callee_id.into(), callee)].into(),
     );
     let no_sibling: Option<(ProgramId, bool)> = None;
 
@@ -857,7 +859,7 @@ fn holder_authorization_survives_across_sibling_calls() {
     let sibling_id = sibling.id();
     let program_with_deps = ProgramWithDependencies::new(
         delegator,
-        [(callee_id, callee), (sibling_id, sibling)].into(),
+        [(callee_id.into(), callee), (sibling_id.into(), sibling)].into(),
     );
 
     execute_and_prove(
@@ -906,7 +908,7 @@ fn inherited_scope_passes_through_nested_intermediate_calls() {
     let callee_id = callee.id();
     let program_with_deps = ProgramWithDependencies::new(
         delegator,
-        [(forwarder_id, forwarder), (callee_id, callee)].into(),
+        [(forwarder_id.into(), forwarder), (callee_id.into(), callee)].into(),
     );
     let no_sibling: Option<(ProgramId, bool)> = None;
     let forward_through_nested_call = Program::serialize_instruction((
@@ -954,7 +956,7 @@ fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
     let pre_state =
         AccountWithMetadata::new(Account::default(), true, (&keys.npk(), &keys.vpk(), 0));
 
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     let (output, proof) = execute_and_prove(
         vec![pre_state],
@@ -1010,7 +1012,7 @@ fn top_level_reordering_through_a_passthrough_is_still_provable() {
     let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     // Delegate seed_b to the callee — the callee should be authorized for `account_b` alone,
     // and only asserts on `account_b`, ignoring `account_a` (which is genuinely unauthorized).
@@ -1429,7 +1431,7 @@ fn two_private_pda_family_members_receive_and_spend() {
 
     let spend_with_deps = ProgramWithDependencies::new(
         proxy,
-        [(simple_transfer_id, simple_transfer.clone())].into(),
+        [(simple_transfer_id.into(), simple_transfer.clone())].into(),
     );
 
     let funder_id = funder_keys.account_id();
