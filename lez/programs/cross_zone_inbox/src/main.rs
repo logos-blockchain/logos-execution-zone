@@ -32,19 +32,27 @@ fn main() {
     );
 
     match instruction {
-        Instruction::Dispatch(msg) => dispatch(
+        Instruction::Dispatch {
+            message,
+            self_program_id,
+        } => dispatch(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_data,
-            &msg,
+            &message,
+            self_program_id,
         ),
-        Instruction::InitConfig(config) => init_config(
+        Instruction::InitConfig {
+            config,
+            self_program_id,
+        } => init_config(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_data,
             &config,
+            self_program_id,
         ),
     }
 }
@@ -70,16 +78,12 @@ fn dispatch(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     msg: &CrossZoneMessage,
+    self_program_id: ProgramId,
 ) {
     assert!(
         msg.l1_inclusion_witness.is_none(),
         "l1_inclusion_witness must be None in v1"
     );
-
-    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
-    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
-    // for the PDA-derivation helpers below, which are pinned to the actual image id.
-    let self_program_id = ProgramId::from(self_account_id);
 
     // pre_states layout: [config, seen_shard, source marker, then the target accounts].
     let mut accounts = pre_states.into_iter();
@@ -103,7 +107,7 @@ fn dispatch(
     // here is what makes a target's own check meaningful.
     assert_eq!(
         marker.account_id,
-        inbox_source_marker_account_id(self_program_id, &msg.src_zone, msg.src_program_id),
+        inbox_source_marker_account_id(self_account_id, &msg.src_zone, msg.src_account_id),
         "Third account must be the source marker PDA for this message"
     );
 
@@ -152,7 +156,7 @@ fn dispatch(
         let mut call_pre_states = vec![marker.clone()];
         call_pre_states.extend(target_accounts.clone());
         let call = ChainedCall {
-            program_account_id: msg.target_program_id.into(),
+            program_account_id: msg.target_account_id,
             pre_states: call_pre_states,
             instruction_data: call_instruction_data,
             pda_seeds: vec![],
@@ -184,13 +188,14 @@ fn init_config(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     config: &InboxConfig,
+    self_program_id: ProgramId,
 ) {
     // pre_states: [config PDA].
     let [config_meta] = <[AccountWithMetadata; 1]>::try_from(pre_states)
         .expect("InitConfig requires the config account");
     assert_eq!(
         config_meta.account_id,
-        inbox_config_account_id(self_account_id.into()),
+        inbox_config_account_id(self_program_id),
         "account must be the inbox config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first

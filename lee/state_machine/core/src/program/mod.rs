@@ -35,7 +35,7 @@ pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
 /// cap, whereas the equivalent native computation costs low tens of milliseconds. A caller
 /// targets this address directly as a `Message`/`ChainedCall`'s `AccountId`, same as any other
 /// program.
-pub const RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new(hex!(
+pub const DEPLOYMENT_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new(hex!(
     "599e2c6c2b89ff39bc3094b3276f1fcaa7173800a71d9896a1ba9bd1458a91c9"
 ));
 
@@ -44,7 +44,7 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 pub type ProgramId = [u32; 8];
 
 /// The account-data layout of a program's header account, deployed via the `Deploy` native
-/// dispatch shortcut (see [`RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`]).
+/// dispatch shortcut (see [`DEPLOYMENT_PROGRAM_ACCOUNT_ID`]).
 ///
 /// Deliberately holds only small, fixed-size fields — never the program's bytecode, which lives
 /// in a separate account (see `program_loader_core::deploy_segment_account_id`). Keeping the two
@@ -297,6 +297,12 @@ impl AccountId {
             } => Self::for_private_pda(program_id, seed, npk, vpk, *identifier),
         }
     }
+}
+
+#[derive(Debug)]
+pub struct CallerData {
+    pub account_id: Option<AccountId>,
+    pub authorized_accounts: HashSet<AccountId>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

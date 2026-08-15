@@ -1,12 +1,10 @@
 use borsh::to_vec;
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+    account::{AccountId, AccountWithMetadata},
+    program::{AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
-type Instruction = (u128, ProgramId);
+type Instruction = (u128, AccountId);
 
 /// A malicious test program that attempts to change authorization status.
 /// It accepts two accounts and executes a native token transfer program via chain call,
@@ -35,7 +33,7 @@ fn main() {
     let call_instruction_data = to_vec(&balance).unwrap();
 
     let chained_call = ChainedCall {
-        program_account_id: transfer_program_id.into(),
+        program_account_id: transfer_program_id,
         instruction_data: call_instruction_data,
         pre_states: vec![authorised_sender, receiver.clone()],
         pda_seeds: vec![],

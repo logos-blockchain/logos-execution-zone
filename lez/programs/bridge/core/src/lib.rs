@@ -20,7 +20,15 @@ pub enum Instruction {
         /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
         /// Deposit Event on L1.
         l1_deposit_op_id: [u8; 32],
+        /// This program's own image id. The guest cannot learn this at runtime, so the trusted
+        /// caller supplies it to recompute the bridge and receipt PDAs; a wrong value only fails
+        /// the guest's own self-consistency assertions, since real authorization is
+        /// independently enforced by the state layer against the account's `program_owner`.
+        self_program_id: ProgramId,
+        /// The vault program's own image id, used to derive the expected recipient vault PDA.
         vault_program_id: ProgramId,
+        /// The vault program's real dispatch address, used as the chained-call target.
+        vault_account_id: AccountId,
         recipient_id: AccountId,
         amount: u64,
     },

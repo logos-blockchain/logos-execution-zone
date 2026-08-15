@@ -502,7 +502,7 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
 
     let sender_account = AccountWithMetadata::new(
         Account {
-            program_owner: simple_transfers.id().into(),
+            program_owner: simple_transfers.deployed_account_id(),
             balance: 100,
             ..Default::default()
         },
@@ -528,10 +528,11 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
         .with_test_programs();
 
     let balance_to_transfer = 10_u128;
-    let instruction = (balance_to_transfer, simple_transfers.id());
+    let simple_transfers_account_id = simple_transfers.deployed_account_id();
+    let instruction = (balance_to_transfer, simple_transfers_account_id);
 
     let mut dependencies = HashMap::new();
-    dependencies.insert(simple_transfers.id().into(), simple_transfers);
+    dependencies.insert(simple_transfers_account_id, simple_transfers);
     let program_with_deps = ProgramWithDependencies::new(malicious_program, dependencies);
 
     // Act - execute the malicious program - this should fail during proving

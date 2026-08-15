@@ -114,9 +114,20 @@ pub fn deploy_segment_account_id(
     )
 }
 
+/// The dispatch address a program with `image_id` lives at once deployed via `Deploy` with no
+/// upgrade authority.
+///
+/// `segment_number` 0, `update_auth` `AccountId::default()`. What every genesis-seeded builtin,
+/// and any `Deploy` submitted with a default `update_auth`, dispatches at.
+#[must_use]
+pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
+    let loader_id = ProgramId::from(lee_core::program::DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+    deploy_header_account_id(loader_id, image_id, 0, AccountId::default())
+}
+
 /// Executes the `Deploy` instruction: verifies `bytecode` decodes as a valid RISC0 program
 /// binary, derives its header and segment PDAs, and claims both. Called natively from
-/// dispatch's `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut (see that constant's doc
+/// dispatch's `DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut (see that constant's doc
 /// comment in `lee_core::program`).
 #[must_use]
 pub fn execute_deploy(

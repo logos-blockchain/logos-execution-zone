@@ -28,6 +28,7 @@ fn main() {
 
     match instruction {
         SenderInstruction::Send {
+            self_program_id,
             target_zone,
             target_program_id,
             target_accounts,
@@ -38,17 +39,24 @@ fn main() {
             caller_account_id,
             pre_states,
             instruction_data,
+            self_program_id,
             target_zone,
             target_program_id,
             target_accounts,
             payload,
             ordinal,
         ),
-        SenderInstruction::InitConfig { outbox_program_id } => init_config(
+        SenderInstruction::InitConfig {
+            self_program_id,
+            outbox_account_id,
+            outbox_program_id,
+        } => init_config(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_data,
+            self_program_id,
+            outbox_account_id,
             outbox_program_id,
         ),
     }
@@ -63,6 +71,7 @@ fn send(
     caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
+    self_program_id: ProgramId,
     target_zone: [u8; 32],
     target_program_id: ProgramId,
     target_accounts: Vec<[u8; 32]>,
@@ -78,16 +87,17 @@ fn send(
     // skip the real outbox and leave no record of itself.
     assert_eq!(
         config.account_id,
-        sender_config_account_id(self_account_id.into()),
+        sender_config_account_id(self_program_id),
         "first account must be the ping-sender config PDA"
     );
-    let outbox_program_id =
-        read_outbox(&config.account.data).expect("config account holds an outbox program id");
+    let (outbox_account_id, outbox_program_id) = read_outbox(&config.account.data)
+        .expect("config account holds an outbox dispatch address and image id");
 
     let call = ChainedCall::new(
-        outbox_program_id.into(),
+        outbox_account_id,
         vec![outbox.clone()],
         &OutboxInstruction::Emit {
+            self_program_id: outbox_program_id,
             target_zone,
             target_program_id,
             target_accounts,
@@ -115,6 +125,8 @@ fn init_config(
     caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
+    self_program_id: ProgramId,
+    outbox_account_id: AccountId,
     outbox_program_id: ProgramId,
 ) {
     // pre_states: [config PDA].
@@ -122,7 +134,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        sender_config_account_id(self_account_id.into()),
+        sender_config_account_id(self_program_id),
         "account must be the ping-sender config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
@@ -135,14 +147,14 @@ fn init_config(
             "ping-sender config PDA is owned by another program"
         );
         assert_eq!(
-            *config.account.data,
-            outbox_bytes(outbox_program_id),
+            config.account.data.clone().into_inner(),
+            outbox_bytes(outbox_account_id, outbox_program_id).to_vec(),
             "ping-sender config already pins a different outbox"
         );
     }
 
     let mut config_account = config.account.clone();
-    config_account.data = outbox_bytes(outbox_program_id)
+    config_account.data = outbox_bytes(outbox_account_id, outbox_program_id)
         .to_vec()
         .try_into()
         .expect("outbox id fits in account data");

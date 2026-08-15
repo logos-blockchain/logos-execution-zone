@@ -1,7 +1,10 @@
-use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::AccountId,
+    program::{ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs},
+};
 
-/// Instruction: (`auth_transfer_id`, `amount`) — both primitive, borsh-encoded.
-type Instruction = (ProgramId, u128);
+/// Instruction: (`auth_transfer_id`, `amount`) — `auth_transfer_id` is a dispatch address.
+type Instruction = (AccountId, u128);
 
 fn main() {
     let (
@@ -32,7 +35,7 @@ fn main() {
         vec![],
     )
     .with_chained_calls(vec![ChainedCall {
-        program_account_id: simple_transfer_id.into(),
+        program_account_id: simple_transfer_id,
         pre_states,
         instruction_data: auth_transfer_instruction,
         pda_seeds: vec![],

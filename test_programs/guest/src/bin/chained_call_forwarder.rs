@@ -1,16 +1,20 @@
-//! Forwards a single chained call to `target_program_id` with `instruction_data`, passing
-//! through whatever `pre_states` this program itself was invoked with unchanged.
+//! Forwards a single chained call to `target_program_id`'s dispatch address with
+//! `instruction_data`, passing through whatever `pre_states` this program itself was invoked
+//! with unchanged.
 //!
 //! Exists purely as test infrastructure: lets a test exercise "program X invokes program Y via
 //! a chained call" for an arbitrary Y and instruction, without needing a purpose-built guest for
 //! every target program under test.
 
-use lee_core::program::{
-    AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountPostState, ChainedCall, InstructionData, ProgramInput, ProgramOutput,
+        read_lee_inputs,
+    },
 };
 
-type Instruction = (ProgramId, InstructionData);
+type Instruction = (AccountId, InstructionData);
 
 fn main() {
     let (
@@ -29,7 +33,7 @@ fn main() {
         .collect();
 
     let chained_call = ChainedCall {
-        program_account_id: target_program_id.into(),
+        program_account_id: target_program_id,
         instruction_data: target_instruction_data,
         pre_states: pre_states.clone(),
         pda_seeds: vec![],

@@ -6,8 +6,8 @@ use lee_core::{
     },
 };
 
-type Instruction = (ProgramId, ProgramId, AccountId, u128);
-// (faucet_program_id, vault_program_id, recipient_id, amount)
+type Instruction = (ProgramId, AccountId, AccountId, AccountId, u128);
+// (faucet_program_id, faucet_account_id, vault_account_id, recipient_id, amount)
 
 fn main() {
     let (
@@ -15,7 +15,8 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (faucet_program_id, vault_program_id, recipient_id, amount),
+            instruction:
+                (faucet_program_id, faucet_account_id, vault_account_id, recipient_id, amount),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -29,9 +30,10 @@ fn main() {
     let [faucet_pre, vault_pda_pre] = [pre_states[0].clone(), pre_states[1].clone()];
 
     let chained_calls = vec![ChainedCall {
-        program_account_id: faucet_program_id.into(),
+        program_account_id: faucet_account_id,
         instruction_data: to_vec(&faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
+            self_program_id: faucet_program_id,
+            vault_account_id,
             recipient_id,
             amount,
         })

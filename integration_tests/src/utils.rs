@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use lee_core::{account::AccountId, program::RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID};
+use lee_core::{account::AccountId, program::DEPLOYMENT_PROGRAM_ACCOUNT_ID};
 use log::info;
 use sequencer_core::{
     block_publisher::{Ed25519PublicKey, read_channel_state},
@@ -326,7 +326,7 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
 /// `sequencer_core`'s private test helper of the same name.
 #[must_use]
 pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
-    let loader_id: lee_core::program::ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let loader_id: lee_core::program::ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let image_id: lee_core::program::ProgramId =
         risc0_binfmt::compute_image_id(bytecode).unwrap().into();
     let header =
@@ -347,7 +347,7 @@ pub fn deploy_transaction(
     segment: AccountId,
     bytecode: Vec<u8>,
 ) -> lee::PublicTransaction {
-    let loader_id: lee_core::program::ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let loader_id: lee_core::program::ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let message = lee::public_transaction::Message::try_new(
         loader_id.into(),
         vec![header, segment],

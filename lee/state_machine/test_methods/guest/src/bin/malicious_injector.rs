@@ -1,15 +1,14 @@
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data, Nonce},
-    program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+    program::{AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
-/// Instruction is a flat tuple of primitives, borsh-encoded.
+/// Instruction is a flat tuple of primitives, borsh-encoded. `AccountId`s here are dispatch
+/// addresses, not `ProgramId`s.
 ///
 /// Fields:
-///   `p2_id`:                  program ID of the launderer (P2)
-///   `auth_transfer_id`:       program ID of `authenticated_transfer`, forwarded to P2
+///   `p2_id`:                  dispatch address of the launderer (P2)
+///   `auth_transfer_id`:       dispatch address of `authenticated_transfer`, forwarded to P2
 ///   `victim_id_raw`:          raw `[u8; 32]` of the victim `AccountId`
 ///   `victim_balance`:         victim's current balance
 ///   `victim_nonce`:           victim's current nonce (inner `u128`)
@@ -17,12 +16,12 @@ use lee_core::{
 ///   `recipient_id_raw`:       raw `[u8; 32]` of the recipient `AccountId`
 ///   `amount`:                 balance to transfer out of the victim.
 type Instruction = (
-    ProgramId,
-    ProgramId,
+    AccountId,
+    AccountId,
     [u8; 32],
     u128,
     u128,
-    ProgramId,
+    AccountId,
     [u8; 32],
     u128,
 );
@@ -58,7 +57,7 @@ fn main() {
     // Victim has not signed anything — this flag is forged entirely by P1's logic.
     let victim = AccountWithMetadata {
         account: Account {
-            program_owner: victim_program_owner.into(),
+            program_owner: victim_program_owner,
             balance: victim_balance,
             data: Data::default(),
             nonce: Nonce(victim_nonce),
@@ -73,7 +72,7 @@ fn main() {
     // on the recipient — a check that would block the transfer.
     let recipient = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id.into(),
+            program_owner: auth_transfer_id,
             balance: 0,
             data: Data::default(),
             nonce: Nonce(0),
@@ -94,7 +93,7 @@ fn main() {
         post_states,
     )
     .with_chained_calls(vec![ChainedCall {
-        program_account_id: p2_id.into(),
+        program_account_id: p2_id,
         pre_states: vec![victim, recipient],
         instruction_data: p2_instruction,
         pda_seeds: vec![],

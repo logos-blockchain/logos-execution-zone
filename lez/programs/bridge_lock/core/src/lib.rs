@@ -28,6 +28,11 @@ pub enum Instruction {
     /// Required accounts (4): config PDA, holder holding (authorized), escrow
     /// PDA, outbox PDA.
     Lock {
+        /// This program's own image id. The guest cannot learn this at runtime, so the trusted
+        /// caller supplies it to recompute the config and escrow PDAs; a wrong value only fails
+        /// the guest's own self-consistency assertions, since real authorization is
+        /// independently enforced by the state layer against the account's `program_owner`.
+        self_program_id: ProgramId,
         amount: u128,
         target_zone: [u8; 32],
         target_program_id: ProgramId,
@@ -41,6 +46,12 @@ pub enum Instruction {
     ///
     /// Required accounts (1): the config PDA.
     InitConfig {
+        /// See [`Lock::self_program_id`](Instruction::Lock).
+        self_program_id: ProgramId,
+        /// The outbox program's real dispatch address.
+        outbox_account_id: AccountId,
+        /// The outbox program's own image id, supplied back to it as its `self_program_id` when
+        /// dispatching `cross_zone_outbox_core::Instruction::Emit`.
         outbox_program_id: ProgramId,
         target_program_id: ProgramId,
     },
@@ -57,8 +68,8 @@ pub const fn escrow_seed() -> PdaSeed {
     PdaSeed::new(ESCROW_SEED_DOMAIN)
 }
 
-/// PDA holding the outbox program id and the mint target, seeded at genesis so
-/// the guest can pin both without importing their image ids.
+/// PDA holding the outbox's dispatch address and the mint target, seeded at
+/// genesis so the guest can pin both without importing their image ids.
 #[must_use]
 pub fn config_account_id(bridge_lock_id: ProgramId) -> AccountId {
     AccountId::for_public_pda(&bridge_lock_id, &config_seed())
@@ -69,34 +80,49 @@ pub const fn config_seed() -> PdaSeed {
     PdaSeed::new(CONFIG_SEED_DOMAIN)
 }
 
-/// Encodes the pinned outbox and mint target for the config account's data.
+/// Encodes the pinned outbox dispatch address, outbox image id, and mint target
+/// for the config account's data.
 #[must_use]
-pub fn config_bytes(outbox_program_id: ProgramId, target_program_id: ProgramId) -> [u8; 64] {
-    let mut bytes = [0_u8; 64];
+pub fn config_bytes(
+    outbox_account_id: AccountId,
+    outbox_program_id: ProgramId,
+    target_program_id: ProgramId,
+) -> [u8; 96] {
+    let mut bytes = [0_u8; 96];
+    bytes[..32].copy_from_slice(outbox_account_id.value());
     for (word, chunk) in outbox_program_id
         .iter()
         .chain(target_program_id.iter())
-        .zip(bytes.chunks_exact_mut(4))
+        .zip(bytes[32..].chunks_exact_mut(4))
     {
         chunk.copy_from_slice(&word.to_le_bytes());
     }
     bytes
 }
 
-/// Decodes the pinned outbox and mint target from the config account's data.
+/// Decodes the pinned outbox dispatch address, outbox image id, and mint target
+/// from the config account's data.
 #[must_use]
-pub fn read_config(data: &[u8]) -> Option<(ProgramId, ProgramId)> {
-    if data.len() < 64 {
+pub fn read_config(data: &[u8]) -> Option<(AccountId, ProgramId, ProgramId)> {
+    if data.len() < 96 {
         return None;
     }
+    assert!(data.len() >= 96);
+    let outbox_account_id =
+        AccountId::new(data[..32].try_into().unwrap_or_else(|_| unreachable!()));
     let mut ids = [0_u32; 16];
-    for (word, chunk) in ids.iter_mut().zip(data[..64].chunks_exact(4)) {
+    for (word, chunk) in ids.iter_mut().zip(data[32..96].chunks_exact(4)) {
         *word = u32::from_le_bytes(chunk.try_into().unwrap_or_else(|_| unreachable!()));
     }
-    let (outbox, target) = ids.split_at(8);
+    let (outbox_program_id, target_program_id) = ids.split_at(8);
     Some((
-        outbox.try_into().unwrap_or_else(|_| unreachable!()),
-        target.try_into().unwrap_or_else(|_| unreachable!()),
+        outbox_account_id,
+        outbox_program_id
+            .try_into()
+            .unwrap_or_else(|_| unreachable!()),
+        target_program_id
+            .try_into()
+            .unwrap_or_else(|_| unreachable!()),
     ))
 }
 
@@ -112,11 +138,12 @@ mod tests {
 
     #[test]
     fn config_ids_round_trip() {
-        let outbox: ProgramId = [3; 8];
+        let outbox_account_id = AccountId::new([3; 32]);
+        let outbox_program_id: ProgramId = [4; 8];
         let target: ProgramId = [5; 8];
         assert_eq!(
-            read_config(&config_bytes(outbox, target)),
-            Some((outbox, target))
+            read_config(&config_bytes(outbox_account_id, outbox_program_id, target)),
+            Some((outbox_account_id, outbox_program_id, target))
         );
     }
 
@@ -126,6 +153,7 @@ mod tests {
     #[test]
     fn lock_is_the_first_variant() {
         let lock = Instruction::Lock {
+            self_program_id: [2; 8],
             amount: 1,
             target_zone: [7; 32],
             target_program_id: [1; 8],

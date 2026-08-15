@@ -6,7 +6,7 @@ use lee_core::{
     Timestamp,
     account::{Account, AccountId, Data},
     program::{
-        PROGRAM_STORAGE_OWNER, ProgramData, ProgramId, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        PROGRAM_STORAGE_OWNER, ProgramData, ProgramId, DEPLOYMENT_PROGRAM_ACCOUNT_ID,
     },
 };
 
@@ -119,7 +119,7 @@ pub struct V03State {
     /// `AccountId::from(program_id)` (see that impl's doc comment) with the raw elf in
     /// `Account.data` and `program_owner` set to [`PROGRAM_STORAGE_OWNER`]; and `Deploy`-created
     /// programs (including every genesis-seeded builtin, via [`Self::insert_program`]), which
-    /// live across two accounts owned by [`RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`] — a header
+    /// live across two accounts owned by [`DEPLOYMENT_PROGRAM_ACCOUNT_ID`] — a header
     /// account whose `Account.data` is a borsh-encoded [`ProgramData`] (the current `image_id`,
     /// small and fixed-size), and a separate segment PDA holding the raw elf.
     public_state: HashMap<AccountId, Account>,
@@ -203,21 +203,20 @@ impl V03State {
         self
     }
 
-    /// Seeds a program directly into state in the same two-account shape a `Deploy` dispatch
-    /// produces (see [`Self::get_program`]), skipping the dispatch/proving machinery genesis has
-    /// no signer to drive. The header account is placed at `AccountId::from(image_id)` rather
-    /// than the loader-PDA address a live `Deploy` would use for it — deliberately, so a
-    /// genesis-seeded program keeps its well-known dispatch address — while the segment account
-    /// still lives at the exact PDA [`Self::get_program`] derives from the header's content,
-    /// since that address is never a caller-facing well-known address to begin with.
+    /// Seeds a program directly into state in the exact two-account shape a live `Deploy`
+    /// dispatch (with a default `update_auth`, i.e. no upgrade authority) would produce for the
+    /// same `image_id` (see [`Self::get_program`] and [`program_loader_core::immutable_deploy_account_id`]),
+    /// skipping only the dispatch/proving machinery genesis has no signer to drive.
     pub(crate) fn insert_program(&mut self, program: &Program) {
         let image_id = program.id();
         let segment_number = 0;
         let update_auth = AccountId::default();
+        let loader_id = ProgramId::from(DEPLOYMENT_PROGRAM_ACCOUNT_ID);
 
-        let header_account_id = AccountId::from(image_id);
+        let header_account_id =
+            program_loader_core::deploy_header_account_id(loader_id, image_id, segment_number, update_auth);
         let header_account = Account {
-            program_owner: RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+            program_owner: DEPLOYMENT_PROGRAM_ACCOUNT_ID,
             data: Data::from(&ProgramData {
                 image_id,
                 segment_number,
@@ -226,15 +225,14 @@ impl V03State {
             ..Account::default()
         };
 
-        let loader_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
-        let segment_account_id = loader_core::deploy_segment_account_id(
+        let segment_account_id = program_loader_core::deploy_segment_account_id(
             loader_id,
             image_id,
             segment_number,
             update_auth,
         );
         let segment_account = Account {
-            program_owner: RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+            program_owner: DEPLOYMENT_PROGRAM_ACCOUNT_ID,
             data: Data::try_from(program.elf().to_vec())
                 .expect("elf must fit under DATA_MAX_LENGTH"),
             ..Account::default()
@@ -328,10 +326,10 @@ impl V03State {
     /// - Owned by [`PROGRAM_STORAGE_OWNER`]: the legacy `ProgramDeploymentTransaction` path, where
     ///   `account.data` is the raw ELF directly and `AccountId::from(image_id)` is the account's
     ///   address by construction.
-    /// - Owned by [`RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`]: deployed via the native `Deploy`
+    /// - Owned by [`DEPLOYMENT_PROGRAM_ACCOUNT_ID`]: deployed via the native `Deploy`
     ///   dispatch shortcut. `account.data` decodes as a [`ProgramData`] header holding the real
     ///   `image_id`; the bytecode itself lives in a second, separately-addressed segment account
-    ///   derived from that header (see `loader_core::deploy_segment_account_id`).
+    ///   derived from that header (see `program_loader_core::deploy_segment_account_id`).
     ///
     /// Returning the real `image_id` — rather than callers deriving one from the address, which
     /// is only valid for the legacy path — is what makes upgrading a `Deploy`-created program
@@ -347,17 +345,17 @@ impl V03State {
         if account.program_owner == PROGRAM_STORAGE_OWNER {
             return Some((ProgramId::from(program_account_id), account.data.to_vec()));
         }
-        if account.program_owner == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID {
+        if account.program_owner == DEPLOYMENT_PROGRAM_ACCOUNT_ID {
             let header = ProgramData::try_from(&account.data).ok()?;
-            let loader_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
-            let segment_account_id = loader_core::deploy_segment_account_id(
+            let loader_id = ProgramId::from(DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+            let segment_account_id = program_loader_core::deploy_segment_account_id(
                 loader_id,
                 header.image_id,
                 header.segment_number,
                 header.update_auth,
             );
             let segment = self.get_account_by_id_ref(segment_account_id)?;
-            return (segment.program_owner == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID)
+            return (segment.program_owner == DEPLOYMENT_PROGRAM_ACCOUNT_ID)
                 .then(|| (header.image_id, segment.data.to_vec()));
         }
         None

@@ -58,7 +58,7 @@ fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         inbox_config_account_id(inbox_id),
         Account {
-            program_owner: inbox_id.into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(inbox_id),
             balance: 0,
             data: config
                 .to_bytes()
@@ -74,7 +74,7 @@ fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
 fn seed_wrapped_config(
     state: &mut V03State,
     authority: Option<AccountId>,
-    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+    sources: Vec<([u8; 32], AccountId)>,
 ) {
     seed_wrapped_config_with_governance(state, None, authority, sources);
 }
@@ -84,11 +84,11 @@ fn seed_wrapped_config_with_governance(
     state: &mut V03State,
     governance: Option<lee_core::program::ProgramId>,
     authority: Option<AccountId>,
-    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+    sources: Vec<([u8; 32], AccountId)>,
 ) {
     let wrapped_token_id = programs::wrapped_token().id();
     let config = wrapped_token_core::WrappedTokenConfig {
-        minter: programs::cross_zone_inbox().id(),
+        minter: program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id()),
         governance,
         authority,
         sources,
@@ -96,7 +96,7 @@ fn seed_wrapped_config_with_governance(
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         wrapped_token_core::config_account_id(wrapped_token_id),
         Account {
-            program_owner: wrapped_token_id.into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(wrapped_token_id),
             data: config
                 .to_bytes()
                 .try_into()
@@ -111,7 +111,7 @@ fn seed_wrapped_config_with_governance(
 fn seed_receiver_config(
     state: &mut V03State,
     authority: Option<AccountId>,
-    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+    sources: Vec<([u8; 32], AccountId)>,
 ) {
     seed_receiver_config_with_governance(state, None, authority, sources);
 }
@@ -121,11 +121,11 @@ fn seed_receiver_config_with_governance(
     state: &mut V03State,
     governance: Option<lee_core::program::ProgramId>,
     authority: Option<AccountId>,
-    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+    sources: Vec<([u8; 32], AccountId)>,
 ) {
     let receiver_id = programs::ping_receiver().id();
     let config = ping_core::ReceiverConfig {
-        deliverer: programs::cross_zone_inbox().id(),
+        deliverer: program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id()),
         governance,
         authority,
         sources,
@@ -133,7 +133,7 @@ fn seed_receiver_config_with_governance(
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         receiver_config_account_id(receiver_id),
         Account {
-            program_owner: receiver_id.into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(receiver_id),
             data: config
                 .to_bytes()
                 .try_into()
@@ -147,14 +147,18 @@ fn seed_receiver_config_with_governance(
 /// genesis seeds for a real zone.
 fn seed_ping_sender_config(state: &mut V03State) {
     let sender_id = programs::ping_sender().id();
+    let outbox_id = programs::cross_zone_outbox().id();
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         sender_config_account_id(sender_id),
         Account {
-            program_owner: sender_id.into(),
-            data: outbox_bytes(programs::cross_zone_outbox().id())
-                .to_vec()
-                .try_into()
-                .expect("outbox id fits in account data"),
+            program_owner: program_loader_core::immutable_deploy_account_id(sender_id),
+            data: outbox_bytes(
+                program_loader_core::immutable_deploy_account_id(outbox_id),
+                outbox_id,
+            )
+            .to_vec()
+            .try_into()
+            .expect("outbox id fits in account data"),
             ..Default::default()
         },
     )]);
@@ -167,8 +171,9 @@ fn seed_bridge_lock_config(state: &mut V03State) {
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         bridge_lock_core::config_account_id(bridge_lock_id),
         Account {
-            program_owner: bridge_lock_id.into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
             data: bridge_lock_core::config_bytes(
+                program_loader_core::immutable_deploy_account_id(programs::cross_zone_outbox().id()),
                 programs::cross_zone_outbox().id(),
                 programs::wrapped_token().id(),
             )
@@ -190,7 +195,11 @@ fn dispatch_accounts(
     let mut ids = vec![
         inbox_config_account_id(inbox_id),
         inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
-        inbox_source_marker_account_id(inbox_id, &msg.src_zone, msg.src_program_id),
+        inbox_source_marker_account_id(
+            program_loader_core::immutable_deploy_account_id(inbox_id),
+            &msg.src_zone,
+            msg.src_account_id,
+        ),
     ];
     ids.extend(targets);
     ids
@@ -281,10 +290,13 @@ fn chained_via_inbox(
 fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
     let receiver_id = programs::ping_receiver().id();
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
+        self_program_id: receiver_id,
         payload: b"ping".to_vec(),
     })
     .expect("serialize ping instruction");
+    let sender_id = programs::ping_sender().id();
     let send = ping_core::SenderInstruction::Send {
+        self_program_id: sender_id,
         target_zone,
         target_program_id: receiver_id,
         target_accounts: vec![
@@ -294,8 +306,13 @@ fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> Pub
         payload,
         ordinal,
     };
-    let message = Message::try_new(programs::ping_sender().id().into(), accounts, vec![], send)
-        .expect("build ping_sender message");
+    let message = Message::try_new(
+        program_loader_core::immutable_deploy_account_id(sender_id),
+        accounts,
+        vec![],
+        send,
+    )
+    .expect("build ping_sender message");
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
 }
 
@@ -307,6 +324,7 @@ fn mint_payload() -> Vec<u8> {
 
 fn mint_payload_of(amount: u128) -> Vec<u8> {
     let mint = wrapped_token_core::Instruction::Mint {
+        self_program_id: programs::wrapped_token().id(),
         recipient: RECIPIENT,
         amount,
     };
@@ -323,21 +341,22 @@ fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeErro
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
+    seed_wrapped_config(&mut state, None, vec![(src_zone, AccountId::new([9; 32]))]);
 
     let msg = CrossZoneMessage {
         src_zone,
         src_block_id,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_program_id: [9_u32; 8],
+        src_account_id: AccountId::new([9; 32]),
         target_program_id: wrapped_token_id,
+        target_account_id: program_loader_core::immutable_deploy_account_id(wrapped_token_id),
         payload: mint_payload_of(amount),
         l1_inclusion_witness: None,
     };
 
     let message = Message::try_new(
-        inbox_id.into(),
+        program_loader_core::immutable_deploy_account_id(inbox_id),
         dispatch_accounts(
             inbox_id,
             &msg,
@@ -347,7 +366,10 @@ fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeErro
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -391,11 +413,12 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_receiver_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
+    seed_receiver_config(&mut state, None, vec![(src_zone, AccountId::new([9; 32]))]);
 
     // The payload is the ping_receiver instruction, borsh-serialized into instruction_data bytes.
     let inner = b"hello-cross-zone".to_vec();
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
+        self_program_id: receiver_id,
         payload: inner.clone(),
     })
     .expect("serialize ping instruction");
@@ -405,8 +428,9 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
         src_block_id,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_program_id: [9_u32; 8],
+        src_account_id: AccountId::new([9; 32]),
         target_program_id: receiver_id,
+        target_account_id: program_loader_core::immutable_deploy_account_id(receiver_id),
         payload,
         l1_inclusion_witness: None,
     };
@@ -414,14 +438,17 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
     let record_id = ping_record_pda(receiver_id);
 
     let message = Message::try_new(
-        inbox_id.into(),
+        program_loader_core::immutable_deploy_account_id(inbox_id),
         dispatch_accounts(
             inbox_id,
             &msg,
             vec![receiver_config_account_id(receiver_id), record_id],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -457,7 +484,7 @@ fn lock_escrows_balance_and_emits_to_outbox() {
     state = state.with_public_accounts([(
         holder_id,
         Account {
-            program_owner: bridge_lock_id.into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -466,7 +493,12 @@ fn lock_escrows_balance_and_emits_to_outbox() {
 
     let payload = mint_payload();
     let escrow_id = bridge_lock_core::escrow_account_id(bridge_lock_id);
-    let outbox_record_id = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
+    let outbox_record_id = outbox_pda(
+        outbox_id,
+        program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+        &zone_b,
+        ordinal,
+    );
     let tx = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
 
     let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
@@ -487,7 +519,8 @@ fn lock_escrows_balance_and_emits_to_outbox() {
         OutboxRecord::from_bytes(&public_diff[&outbox_record_id].data.clone().into_inner())
             .expect("outbox PDA holds an OutboxRecord");
     assert_eq!(
-        record.emitter, bridge_lock_id,
+        record.emitter,
+        program_loader_core::immutable_deploy_account_id(bridge_lock_id),
         "the record names the program that emitted it"
     );
     assert_eq!(record.target_zone, zone_b);
@@ -543,6 +576,7 @@ fn lock_tx_to(
     let outbox_id = programs::cross_zone_outbox().id();
 
     let lock = bridge_lock_core::Instruction::Lock {
+        self_program_id: bridge_lock_id,
         amount: LOCK_AMOUNT,
         target_zone: zone_b,
         target_program_id,
@@ -551,12 +585,17 @@ fn lock_tx_to(
         ordinal,
     };
     let message = Message::try_new(
-        bridge_lock_id.into(),
+        program_loader_core::immutable_deploy_account_id(bridge_lock_id),
         vec![
             bridge_lock_core::config_account_id(bridge_lock_id),
             holder_id,
             bridge_lock_core::escrow_account_id(bridge_lock_id),
-            outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
+            outbox_pda(
+                outbox_id,
+                program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+                &zone_b,
+                ordinal,
+            ),
         ],
         vec![nonce.into()],
         lock,
@@ -580,7 +619,7 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
     let mut state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: programs::bridge_lock().id().into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -628,7 +667,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     let mut state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: bridge_lock_id.into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -636,8 +675,18 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     seed_ping_sender_config(&mut state);
     seed_bridge_lock_config(&mut state);
 
-    let lock_slot = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
-    let send_slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
+    let lock_slot = outbox_pda(
+        outbox_id,
+        program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+        &zone_b,
+        ordinal,
+    );
+    let send_slot = outbox_pda(
+        outbox_id,
+        program_loader_core::immutable_deploy_account_id(sender_id),
+        &zone_b,
+        ordinal,
+    );
     assert_ne!(
         lock_slot, send_slot,
         "the same zone and ordinal under two emitters are two slots"
@@ -663,14 +712,20 @@ fn two_emitters_share_an_ordinal_without_colliding() {
             .into_inner(),
     )
     .expect("outbox PDA holds an OutboxRecord");
-    assert_eq!(record.emitter, sender_id);
+    assert_eq!(
+        record.emitter,
+        program_loader_core::immutable_deploy_account_id(sender_id)
+    );
     assert_eq!(record.target_program_id, receiver_id);
 
     // And the lock's own slot is untouched by it.
     let lock_record =
         OutboxRecord::from_bytes(&state.get_account_by_id(lock_slot).data.into_inner())
             .expect("the lock's record survives");
-    assert_eq!(lock_record.emitter, bridge_lock_id);
+    assert_eq!(
+        lock_record.emitter,
+        program_loader_core::immutable_deploy_account_id(bridge_lock_id)
+    );
 }
 
 /// A caller can no longer aim an emission at a program of their own and still
@@ -687,7 +742,12 @@ fn a_send_into_a_foreign_outbox_slot_is_rejected() {
 
     // A slot under some other program, which is what the caller would have to
     // pass to reach it.
-    let foreign_slot = outbox_pda([3; 8], sender_id, &zone_b, ordinal);
+    let foreign_slot = outbox_pda(
+        [3; 8],
+        program_loader_core::immutable_deploy_account_id(sender_id),
+        &zone_b,
+        ordinal,
+    );
     let send = send_tx(
         vec![sender_config_account_id(sender_id), foreign_slot],
         zone_b,
@@ -718,7 +778,7 @@ fn a_lock_naming_another_target_program_is_rejected() {
     let mut state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: bridge_lock_id.into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -764,7 +824,7 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
     let mut state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: bridge_lock_id.into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -823,7 +883,7 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
         (
             holder_id,
             Account {
-                program_owner: bridge_lock_id.into(),
+                program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
                 balance: INITIAL_BALANCE,
                 ..Default::default()
             },
@@ -831,8 +891,8 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
         (
             decoy_id,
             Account {
-                program_owner: bridge_lock_id.into(),
-                data: bridge_lock_core::config_bytes([3; 8], [4; 8])
+                program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+                data: bridge_lock_core::config_bytes(AccountId::new([3; 32]), [3; 8], [4; 8])
                     .to_vec()
                     .try_into()
                     .expect("pinned ids fit in account data"),
@@ -843,6 +903,7 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
     seed_bridge_lock_config(&mut state);
 
     let lock = bridge_lock_core::Instruction::Lock {
+        self_program_id: bridge_lock_id,
         amount: LOCK_AMOUNT,
         target_zone: zone_b,
         target_program_id: wrapped_token_id,
@@ -851,12 +912,17 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
         ordinal,
     };
     let message = Message::try_new(
-        bridge_lock_id.into(),
+        program_loader_core::immutable_deploy_account_id(bridge_lock_id),
         vec![
             decoy_id,
             holder_id,
             bridge_lock_core::escrow_account_id(bridge_lock_id),
-            outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
+            outbox_pda(
+                outbox_id,
+                program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+                &zone_b,
+                ordinal,
+            ),
         ],
         vec![0_u128.into()],
         lock,
@@ -888,7 +954,7 @@ fn a_lock_before_the_pins_are_set_is_rejected() {
     let state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: bridge_lock_id.into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -915,10 +981,12 @@ fn the_bridge_pins_are_written_once_and_replayable() {
 
     let init = |outbox: lee_core::program::ProgramId, target: lee_core::program::ProgramId| {
         let message = Message::try_new(
-            bridge_lock_id.into(),
+            program_loader_core::immutable_deploy_account_id(bridge_lock_id),
             vec![config_id],
             vec![],
             bridge_lock_core::Instruction::InitConfig {
+                self_program_id: bridge_lock_id,
+                outbox_account_id: program_loader_core::immutable_deploy_account_id(outbox),
                 outbox_program_id: outbox,
                 target_program_id: target,
             },
@@ -939,7 +1007,11 @@ fn the_bridge_pins_are_written_once_and_replayable() {
     state.apply_state_diff(diff);
     assert_eq!(
         bridge_lock_core::read_config(&state.get_account_by_id(config_id).data.into_inner()),
-        Some((outbox_id, wrapped_token_id)),
+        Some((
+            program_loader_core::immutable_deploy_account_id(outbox_id),
+            outbox_id,
+            wrapped_token_id
+        )),
         "the config pins both programs after genesis"
     );
 
@@ -974,7 +1046,12 @@ fn a_send_before_the_pin_is_set_is_rejected() {
     let ordinal = 0;
 
     let state = base_state();
-    let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
+    let slot = outbox_pda(
+        outbox_id,
+        program_loader_core::immutable_deploy_account_id(sender_id),
+        &zone_b,
+        ordinal,
+    );
     let send = send_tx(
         vec![sender_config_account_id(sender_id), slot],
         zone_b,
@@ -985,7 +1062,7 @@ fn a_send_before_the_pin_is_set_is_rejected() {
         panic!("a send with no outbox pinned must not execute");
     };
     assert!(
-        format!("{err:?}").contains("config account holds an outbox program id"),
+        format!("{err:?}").contains("config account holds an outbox dispatch address and image id"),
         "rejected for the wrong reason: {err:?}"
     );
 }
@@ -1002,7 +1079,12 @@ fn a_send_with_a_substituted_config_account_is_rejected() {
     let mut state = base_state();
     seed_ping_sender_config(&mut state);
 
-    let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
+    let slot = outbox_pda(
+        outbox_id,
+        program_loader_core::immutable_deploy_account_id(sender_id),
+        &zone_b,
+        ordinal,
+    );
     let send = send_tx(vec![ping_record_pda(sender_id), slot], zone_b, ordinal);
 
     let Err(err) = ValidatedStateDiff::from_public_transaction(&send, &state, 1, 0) else {
@@ -1025,10 +1107,12 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     // Unsigned and nonce-free, as genesis builds it: the config PDA has no signer.
     let init = |outbox: lee_core::program::ProgramId| {
         let message = Message::try_new(
-            sender_id.into(),
+            program_loader_core::immutable_deploy_account_id(sender_id),
             vec![config_id],
             vec![],
             ping_core::SenderInstruction::InitConfig {
+                self_program_id: sender_id,
+                outbox_account_id: program_loader_core::immutable_deploy_account_id(outbox),
                 outbox_program_id: outbox,
             },
         )
@@ -1045,7 +1129,10 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     state.apply_state_diff(diff);
     assert_eq!(
         read_outbox(&state.get_account_by_id(config_id).data.into_inner()),
-        Some(outbox_id),
+        Some((
+            program_loader_core::immutable_deploy_account_id(outbox_id),
+            outbox_id
+        )),
         "the config pins the outbox after genesis"
     );
 
@@ -1998,13 +2085,14 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_program_id: programs::bridge_lock().id(),
+        src_account_id: program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
         target_program_id: wrapped_token_id,
+        target_account_id: program_loader_core::immutable_deploy_account_id(wrapped_token_id),
         payload: mint_payload(),
         l1_inclusion_witness: None,
     };
     let message = Message::try_new(
-        inbox_id.into(),
+        program_loader_core::immutable_deploy_account_id(inbox_id),
         dispatch_accounts(
             inbox_id,
             &msg,
@@ -2014,7 +2102,10 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -2036,14 +2127,18 @@ fn a_top_level_mint_is_refused() {
     let inbox_id = programs::cross_zone_inbox().id();
     let wrapped_token_id = programs::wrapped_token().id();
     let src_zone = [2_u8; 32];
-    let src_program_id = programs::bridge_lock().id();
+    let src_account_id = program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id());
 
     let mut state = base_state();
-    seed_wrapped_config(&mut state, None, vec![(src_zone, src_program_id)]);
+    seed_wrapped_config(&mut state, None, vec![(src_zone, src_account_id)]);
 
-    let marker_id = inbox_source_marker_account_id(inbox_id, &src_zone, src_program_id);
+    let marker_id = inbox_source_marker_account_id(
+        program_loader_core::immutable_deploy_account_id(inbox_id),
+        &src_zone,
+        src_account_id,
+    );
     let message = Message::try_new(
-        wrapped_token_id.into(),
+        program_loader_core::immutable_deploy_account_id(wrapped_token_id),
         vec![
             marker_id,
             wrapped_token_core::config_account_id(wrapped_token_id),
@@ -2051,6 +2146,7 @@ fn a_top_level_mint_is_refused() {
         ],
         vec![],
         wrapped_token_core::Instruction::Mint {
+            self_program_id: wrapped_token_id,
             recipient: RECIPIENT,
             amount: LOCK_AMOUNT,
         },
@@ -2103,7 +2199,10 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     seed_wrapped_config(
         &mut state,
         None,
-        vec![(src_zone, programs::bridge_lock().id())],
+        vec![(
+            src_zone,
+            program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
+        )],
     );
 
     let msg = CrossZoneMessage {
@@ -2112,8 +2211,9 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
         // The emitter a user can drive directly, aimed at the bridge's target.
-        src_program_id: programs::ping_sender().id(),
+        src_account_id: program_loader_core::immutable_deploy_account_id(programs::ping_sender().id()),
         target_program_id: wrapped_token_id,
+        target_account_id: program_loader_core::immutable_deploy_account_id(wrapped_token_id),
         payload: mint_payload(),
         l1_inclusion_witness: None,
     };
@@ -2122,10 +2222,13 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
 
     let message = Message::try_new(
-        inbox_id.into(),
+        program_loader_core::immutable_deploy_account_id(inbox_id),
         dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -2157,7 +2260,10 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     seed_wrapped_config(
         &mut state,
         None,
-        vec![(src_zone, programs::bridge_lock().id())],
+        vec![(
+            src_zone,
+            program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
+        )],
     );
 
     let msg = CrossZoneMessage {
@@ -2165,8 +2271,9 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
         src_block_id,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_program_id: bridge_lock_id,
+        src_account_id: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
         target_program_id: wrapped_token_id,
+        target_account_id: program_loader_core::immutable_deploy_account_id(wrapped_token_id),
         payload: mint_payload(),
         l1_inclusion_witness: None,
     };
@@ -2175,10 +2282,13 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
 
     let message = Message::try_new(
-        inbox_id.into(),
+        program_loader_core::immutable_deploy_account_id(inbox_id),
         dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -2206,7 +2316,7 @@ fn mint_replay_rejected() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
+    seed_wrapped_config(&mut state, None, vec![(src_zone, AccountId::new([9; 32]))]);
 
     // Seed the seen-shard as already holding this delivery, so the inbox takes
     // the replay no-op branch. The shard is inbox-owned (claimed on a prior
@@ -2218,7 +2328,7 @@ fn mint_replay_rejected() {
     state = state.with_public_accounts([(
         seen_id,
         Account {
-            program_owner: inbox_id.into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(inbox_id),
             balance: 0,
             data: shard
                 .to_bytes()
@@ -2233,8 +2343,9 @@ fn mint_replay_rejected() {
         src_block_id,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index,
-        src_program_id: [9_u32; 8],
+        src_account_id: AccountId::new([9; 32]),
         target_program_id: wrapped_token_id,
+        target_account_id: program_loader_core::immutable_deploy_account_id(wrapped_token_id),
         payload: mint_payload(),
         l1_inclusion_witness: None,
     };
@@ -2243,10 +2354,13 @@ fn mint_replay_rejected() {
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
 
     let message = Message::try_new(
-        inbox_id.into(),
+        program_loader_core::immutable_deploy_account_id(inbox_id),
         dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -2286,7 +2400,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_receiver_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
+    seed_receiver_config(&mut state, None, vec![(src_zone, AccountId::new([9; 32]))]);
 
     // The shard as the first delivery left it: bound, holding transaction 0.
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
@@ -2295,7 +2409,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     state = state.with_public_accounts([(
         seen_id,
         Account {
-            program_owner: inbox_id.into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(inbox_id),
             balance: 0,
             data: shard
                 .to_bytes()
@@ -2306,6 +2420,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     )]);
 
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
+        self_program_id: receiver_id,
         payload: b"from-the-other-block".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -2317,22 +2432,26 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         src_block_id,
         src_block_hash: other_block_hash,
         src_tx_index: 1,
-        src_program_id: [9_u32; 8],
+        src_account_id: AccountId::new([9; 32]),
         target_program_id: receiver_id,
+        target_account_id: program_loader_core::immutable_deploy_account_id(receiver_id),
         payload,
         l1_inclusion_witness: None,
     };
 
     let record_id = ping_record_pda(receiver_id);
     let message = Message::try_new(
-        inbox_id.into(),
+        program_loader_core::immutable_deploy_account_id(inbox_id),
         dispatch_accounts(
             inbox_id,
             &msg,
             vec![receiver_config_account_id(receiver_id), record_id],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -2345,6 +2464,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     // Control: the same delivery naming the bound block executes, so the refusal
     // above is the binding and not the transaction's shape.
     let control_payload = borsh::to_vec(&ReceiverInstruction::Record {
+        self_program_id: receiver_id,
         payload: b"from-the-bound-block".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -2353,20 +2473,24 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         src_block_id,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 1,
-        src_program_id: [9_u32; 8],
+        src_account_id: AccountId::new([9; 32]),
         target_program_id: receiver_id,
+        target_account_id: program_loader_core::immutable_deploy_account_id(receiver_id),
         payload: control_payload,
         l1_inclusion_witness: None,
     };
     let control_message = Message::try_new(
-        inbox_id.into(),
+        program_loader_core::immutable_deploy_account_id(inbox_id),
         dispatch_accounts(
             inbox_id,
             &control_msg,
             vec![receiver_config_account_id(receiver_id), record_id],
         ),
         vec![],
-        InboxInstruction::Dispatch(control_msg),
+        InboxInstruction::Dispatch {
+            message: control_msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     let control_tx = PublicTransaction::new(control_message, WitnessSet::from_raw_parts(vec![]));

@@ -318,7 +318,7 @@ fn token_holding(
 ) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::token().id().into(),
+            program_owner: programs::token().deployed_account_id(),
             balance: 0,
             data: Data::from(&TokenHolding::Fungible {
                 definition_id,
@@ -338,7 +338,7 @@ fn token_definition(
 ) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::token().id().into(),
+            program_owner: programs::token().deployed_account_id(),
             balance: 0,
             data: Data::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
@@ -376,7 +376,7 @@ fn token_burn_pre_states() -> Vec<AccountWithMetadata> {
 fn clock_account(account_id: AccountId, block_id: u64) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::clock().id().into(),
+            program_owner: programs::clock().deployed_account_id(),
             balance: 0,
             data: ClockAccountData {
                 block_id,
@@ -430,7 +430,7 @@ fn amm_pool_account() -> AccountWithMetadata {
     let lp_supply = (reserve_a * reserve_b).isqrt();
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::amm().id().into(),
+            program_owner: programs::amm().deployed_account_id(),
             balance: 0,
             data: Data::from(&PoolDefinition {
                 definition_token_a_id: amm_token_a_def_id(),
