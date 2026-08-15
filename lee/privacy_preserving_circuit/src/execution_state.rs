@@ -4,7 +4,8 @@ use std::{
 };
 
 use lee_core::{
-    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
+    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, ProgramImageClaim,
+    WitnessKind,
     account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::{
@@ -60,6 +61,7 @@ impl ExecutionState {
         account_identities: &[InputAccountIdentity],
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
+        program_image_claims: &[ProgramImageClaim],
     ) -> Self {
         // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
         // in `account_identities`. The vec is documented as 1:1 with the program's pre_state
@@ -125,12 +127,14 @@ impl ExecutionState {
             pre_states: first_output.pre_states.clone(),
             pda_seeds: Vec::new(),
         };
-        let mut chained_calls = VecDeque::from_iter([(initial_call, None)]);
+        let mut chained_calls = VecDeque::from_iter([(initial_call, None, None)]);
 
         let mut program_outputs_iter = program_outputs.into_iter();
         let mut chain_calls_counter = 0;
 
-        while let Some((chained_call, caller_account_id)) = chained_calls.pop_front() {
+        while let Some((chained_call, caller_account_id, caller_image_id)) =
+            chained_calls.pop_front()
+        {
             assert!(
                 chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
                 "Max chained calls depth is exceeded"
@@ -140,12 +144,18 @@ impl ExecutionState {
                 panic!("Insufficient program outputs for chained calls");
             };
 
-            // Recover the real `ProgramId` (RISC0 image id) from the account's address: on this
-            // branch every program account lives at the direct `AccountId::from(program_id)`
-            // bijection, so this round-trip is exact. Needed wherever proof verification/PDA
-            // derivation requires the underlying image id rather than the dispatch-facing
-            // `AccountId`.
-            let current_program_id = ProgramId::from(chained_call.program_account_id);
+            // The real `image_id` for this dispatch address. A `Deploy`-created program's
+            // address doesn't encode its image id (unlike a legacy program's, where the
+            // `AccountId::from(program_id)` bijection is exact by construction), so its real
+            // image id has to come from a claim instead — see `ProgramImageClaim`'s doc comment
+            // for how that claim gets anchored to real chain state (by the sequencer, not here).
+            let current_program_id = program_image_claims
+                .iter()
+                .find(|claim| claim.account_id == chained_call.program_account_id)
+                .map_or_else(
+                    || ProgramId::from(chained_call.program_account_id),
+                    |claim| claim.image_id,
+                );
 
             // Check that instruction data in chained call is the instruction data in program output
             assert_eq!(
@@ -189,14 +199,17 @@ impl ExecutionState {
             }
 
             for next_call in program_output.chained_calls.iter().rev() {
-                chained_calls
-                    .push_front((next_call.clone(), Some(chained_call.program_account_id)));
+                chained_calls.push_front((
+                    next_call.clone(),
+                    Some(chained_call.program_account_id),
+                    Some(current_program_id),
+                ));
             }
 
             execution_state.validate_and_sync_states(
                 account_identities,
                 current_program_id,
-                caller_account_id,
+                caller_image_id,
                 &chained_call.pda_seeds,
                 program_output.pre_states,
                 program_output.post_states,
@@ -255,7 +268,7 @@ impl ExecutionState {
         &mut self,
         account_identities: &[InputAccountIdentity],
         program_id: ProgramId,
-        caller_account_id: Option<AccountId>,
+        caller_image_id: Option<ProgramId>,
         caller_pda_seeds: &[PdaSeed],
         output_pre_states: Vec<AccountWithMetadata>,
         output_post_states: Vec<AccountPostState>,
@@ -302,7 +315,7 @@ impl ExecutionState {
                         &mut self.authorized_accounts,
                         pre_account_id,
                         pre_state_position,
-                        caller_account_id,
+                        caller_image_id,
                         caller_pda_seeds,
                         previous_is_authorized,
                     );
@@ -537,7 +550,7 @@ fn bind_private_pda_position(
 /// previously-seen authorization or a matching caller seed (under the public or private
 /// derivation). When a caller seed matches, also records the `(caller, seed) → account_id`
 /// family binding and, for the private form, marks the position in
-/// `private_pda_bound_positions`. Only reachable when `caller_account_id.is_some()`,
+/// `private_pda_bound_positions`. Only reachable when `caller_image_id.is_some()`,
 /// top-level flows have no caller-emitted seeds, so binding at top level must come from the
 /// claim path. Free function so callers can pass individual `&mut self.*` field borrows
 /// without holding a borrow on the surrounding struct's other fields.
@@ -552,16 +565,16 @@ fn resolve_authorization_and_record_bindings(
     authorized_accounts: &mut HashSet<AccountId>,
     pre_account_id: AccountId,
     pre_state_position: usize,
-    caller_account_id: Option<AccountId>,
+    caller_image_id: Option<ProgramId>,
     caller_pda_seeds: &[PdaSeed],
     previous_is_authorized: bool,
 ) -> bool {
-    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
-    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact.
-    // `for_public_pda`/`for_private_pda`'s derivation formula is pinned to the caller's actual
-    // image id, not its dispatch-facing `AccountId`.
+    // `for_public_pda`/`for_private_pda`'s derivation formula is pinned to the caller's real
+    // image id, not its dispatch-facing `AccountId` — a `Deploy`-created caller's address doesn't
+    // encode it, so `caller_image_id` must be the recovered real image id (see
+    // `derive_from_outputs`'s `current_program_id`), not a bijection round-trip.
     let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> =
-        caller_account_id.map(ProgramId::from).and_then(|caller| {
+        caller_image_id.and_then(|caller| {
             caller_pda_seeds.iter().find_map(|seed| {
                 if AccountId::for_public_pda(&caller, seed) == pre_account_id {
                     return Some((*seed, false, caller));

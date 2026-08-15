@@ -22,6 +22,8 @@ pub fn compute_circuit_output(
         private_actions: Vec::new(),
         block_validity_window,
         timestamp_validity_window,
+        // Set by the caller (`main.rs`) — this function has no need to know about it.
+        program_image_claims: Vec::new(),
     };
 
     assert_eq!(

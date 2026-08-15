@@ -161,7 +161,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
     let at = crate::test_methods::simple_balance_transfer();
     let program_with_deps = ProgramWithDependencies::new(
         crate::test_methods::malicious_injector(),
-        [(p2.id(), p2), (at.id(), at)].into(),
+        [(p2.id().into(), p2), (at.id().into(), at)].into(),
     );
 
     // account_identities order must match self.pre_states as built by the circuit:
@@ -322,7 +322,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
     let at = crate::test_methods::simple_balance_transfer();
     let program_with_deps = ProgramWithDependencies::new(
         crate::test_methods::malicious_injector(),
-        [(p2.id(), p2), (at.id(), at)].into(),
+        [(p2.id().into(), p2), (at.id().into(), at)].into(),
     );
 
     // account_identities order must match self.pre_states as built by the circuit:
@@ -529,6 +529,7 @@ fn privacy_garbage_proof_is_rejected() {
         }],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        program_image_claims: vec![],
     };
 
     // Garbage proof bytes: not a valid borsh-encoded `InnerReceipt`.

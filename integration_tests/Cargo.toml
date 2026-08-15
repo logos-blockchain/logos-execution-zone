@@ -35,6 +35,9 @@ system_accounts.workspace = true
 programs.workspace = true
 test_programs.workspace = true
 testnet_initial_state.workspace = true
+loader_core.workspace = true
+risc0-binfmt.workspace = true
+borsh.workspace = true
 
 anyhow.workspace = true
 log.workspace = true

@@ -5,7 +5,8 @@ use std::{
 };
 
 use lee_core::{
-    BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
+    BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim,
+    PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
         ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramOutput,
@@ -99,6 +100,7 @@ impl ValidatedStateDiff {
 
         let initial_caller_data = CallerData {
             caller_account_id: None,
+            caller_image_id: None,
             authorized_accounts: signer_account_ids.iter().copied().collect(),
         };
 
@@ -112,12 +114,6 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
-            // Recover the real `ProgramId` (RISC0 image id) from the account's address: on this
-            // branch every program account lives at the direct `AccountId::from(program_id)`
-            // bijection, so this round-trip is exact. Needed wherever execution/PDA derivation
-            // requires the underlying image id rather than the dispatch-facing `AccountId`.
-            let program_id = ProgramId::from(chained_call.program_account_id);
-
             debug!(
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_account_id,
@@ -125,12 +121,15 @@ impl ValidatedStateDiff {
                 chained_call.instruction_data
             );
 
-            let mut program_output = if chained_call.program_account_id
+            let (program_id, mut program_output) = if chained_call.program_account_id
                 == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
             {
                 // Runs `Deploy` as native Rust instead of interpreting a guest ELF — see
-                // `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc comment for why.
-                //
+                // `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc comment for why. The
+                // loader's own identity is this fixed reserved `AccountId`, unlike an
+                // ordinary program's, so recovering it via the bijection is exact — there's
+                // no separate "real image id" to look up, Deploy isn't itself upgradeable.
+                let program_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
                 // `execute_deploy` validates its input via `assert!`/`.expect(...)`, exactly
                 // like every guest program in this codebase, relying here on `catch_unwind` to
                 // play the same role the zkVM executor plays for a real guest: converting a
@@ -146,25 +145,35 @@ impl ValidatedStateDiff {
                 .map_err(|_panic_payload| {
                     LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
                 })?;
-                ProgramOutput::new(
-                    chained_call.program_account_id,
-                    caller_data.caller_account_id,
-                    chained_call.instruction_data.clone(),
-                    chained_call.pre_states.clone(),
-                    post_states,
+                (
+                    program_id,
+                    ProgramOutput::new(
+                        chained_call.program_account_id,
+                        caller_data.caller_account_id,
+                        chained_call.instruction_data.clone(),
+                        chained_call.pre_states.clone(),
+                        post_states,
+                    ),
                 )
             } else {
-                let Some(program_account) = state.get_program(chained_call.program_account_id)
+                // The real `image_id`, sourced from the program's own account rather than
+                // guessed from its address — see `V03State::get_program`'s doc comment for
+                // why that distinction matters once a program's address can outlive its
+                // current bytecode (upgrades).
+                let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)
                 else {
                     return Err(LeeError::InvalidInput("Unknown program".into()));
                 };
-                let program =
-                    Program::new_unchecked(program_id, Cow::Owned(program_account.data.to_vec()));
-                program.execute(
-                    caller_data.caller_account_id,
-                    &chained_call.pre_states,
-                    &chained_call.instruction_data,
-                )?
+                let program = Program::new_unchecked(program_id, Cow::Owned(elf));
+                (
+                    program_id,
+                    program.execute(
+                        chained_call.program_account_id,
+                        caller_data.caller_account_id,
+                        &chained_call.pre_states,
+                        &chained_call.instruction_data,
+                    )?,
+                )
             };
             debug!(
                 "Program {:?} output: {:?}",
@@ -172,7 +181,7 @@ impl ValidatedStateDiff {
             );
 
             let authorized_pdas = compute_public_authorized_pdas(
-                caller_data.caller_account_id,
+                caller_data.caller_image_id,
                 &chained_call.pda_seeds,
             );
 
@@ -323,6 +332,7 @@ impl ValidatedStateDiff {
                     new_call,
                     CallerData {
                         caller_account_id: Some(chained_call.program_account_id),
+                        caller_image_id: Some(program_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
@@ -454,6 +464,7 @@ impl ValidatedStateDiff {
 
         // 4. Proof verification
         check_privacy_preserving_circuit_proof_is_valid(
+            state,
             &witness_set.proof,
             &public_pre_states,
             message,
@@ -483,13 +494,9 @@ impl ValidatedStateDiff {
 
     pub fn from_program_deployment_transaction(
         tx: &ProgramDeploymentTransaction,
-        state: &V03State,
     ) -> Result<Self, LeeError> {
         // TODO: remove clone
         let program = Program::new(tx.message.bytecode.clone().into())?;
-        if state.get_program(AccountId::from(program.id())).is_some() {
-            return Err(LeeError::ProgramAlreadyExists);
-        }
         Ok(Self(StateDiff {
             signer_account_ids: vec![],
             public_diff: HashMap::new(),
@@ -516,6 +523,11 @@ impl ValidatedStateDiff {
 #[derive(Debug)]
 struct CallerData {
     caller_account_id: Option<AccountId>,
+    /// The caller's real `image_id`, recovered when the caller itself was dispatched (see
+    /// `V03State::get_program`) rather than guessed from `caller_account_id` via the bijection —
+    /// needed wherever PDA derivation requires the caller's actual identity, since a
+    /// `Deploy`-created caller's address doesn't encode it.
+    caller_image_id: Option<ProgramId>,
     authorized_accounts: HashSet<AccountId>,
 }
 
@@ -551,10 +563,30 @@ fn authenticate_public_transaction_signers(
 }
 
 fn check_privacy_preserving_circuit_proof_is_valid(
+    state: &V03State,
     proof: &Proof,
     public_pre_states: &[AccountWithMetadata],
     message: &Message,
 ) -> Result<(), LeeError> {
+    // Anchor each claimed image_id to real chain state: reconstruct the claims using the
+    // program's *actual* current image_id (via `get_program`), not the message's own claim. If
+    // the claim was wrong, the reconstructed journal won't match what the receipt actually
+    // committed to, and `proof.is_valid_for` below fails — the same mechanism `public_actions`
+    // already relies on for authenticating account content against real state.
+    let program_image_claims = message
+        .program_image_claims
+        .iter()
+        .map(|claim| {
+            let (image_id, _elf) = state.get_program(claim.account_id).ok_or_else(|| {
+                LeeError::InvalidInput(format!("Unknown program {}", claim.account_id))
+            })?;
+            Ok(ProgramImageClaim {
+                account_id: claim.account_id,
+                image_id,
+            })
+        })
+        .collect::<Result<Vec<_>, LeeError>>()?;
+
     let output = PrivacyPreservingCircuitOutput {
         public_actions: public_pre_states
             .iter()
@@ -568,6 +600,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
+        program_image_claims,
     };
     proof
         .is_valid_for(&output)

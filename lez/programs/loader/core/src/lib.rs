@@ -1,56 +1,69 @@
-pub use lee_core::program::PdaSeed;
+pub use lee_core::program::{PdaSeed, ProgramData};
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
     program::{AccountPostState, Claim, ProgramId},
 };
 use serde::{Deserialize, Serialize};
 
-const DEPLOY_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/LoaderDeploySeed/00000";
+const DEPLOY_HEADER_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/LoaderDeployHeaderSeed";
+const DEPLOY_SEGMENT_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/LoaderDeploySegmentSee";
 
 #[derive(Serialize, Deserialize)]
 pub enum Instruction {
-    /// Deploys a new program, claiming its `ProgramData` account as a PDA of the loader.
+    /// Deploys a new program: writes its `ProgramData` header and one bytecode segment, each
+    /// claimed as a PDA of the loader.
     ///
-    /// Required accounts (1):
-    /// - The target `ProgramData` PDA account (must be `Account::default()`)
+    /// Required accounts (2), in order:
+    /// - The target `ProgramData` header PDA account (must be `Account::default()`)
+    /// - The target segment PDA account holding the raw bytecode (must be `Account::default()`)
     Deploy { bytecode: Vec<u8> },
 }
 
-#[derive(Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
-pub struct ProgramData {
-    pub image_id: ProgramId,
-    pub segment_number: u32,
-    pub update_auth: AccountId,
-    pub elf_segment: Vec<u8>,
-}
-
-impl TryFrom<&Data> for ProgramData {
-    type Error = std::io::Error;
-
-    fn try_from(data: &Data) -> Result<Self, Self::Error> {
-        borsh::BorshDeserialize::try_from_slice(data.as_ref())
-    }
-}
-
-impl From<&ProgramData> for Data {
-    fn from(program_data: &ProgramData) -> Self {
-        let mut data = Vec::with_capacity(std::mem::size_of_val(program_data));
-        borsh::BorshSerialize::serialize(program_data, &mut data)
-            .expect("borsh serialization should not fail");
-        Self::try_from(data).expect("elf must fit under DATA_MAX_LENGTH")
-    }
-}
-
-/// Derives the PDA seed for a deployed program's `ProgramData` account.
+/// Derives the PDA seed for a deployed program's `ProgramData` header account.
 ///
 /// Combines the program's content-derived identity (`image_id`), its position in a (currently
 /// always single-segment) split (`segment_number`), and who may redeploy it (`update_auth`).
 ///
-/// Domain-separated from other PDA-seed derivations in the codebase so that a `deploy_pda_seed`
-/// output can never collide with a seed meant for a different purpose, even if the input triple
-/// happened to coincide.
+/// Domain-separated from other PDA-seed derivations in the codebase, including
+/// [`deploy_segment_pda_seed`], so a header seed can never collide with a segment seed (or
+/// anything else) even when the input triple coincides.
 #[must_use]
-pub fn deploy_pda_seed(
+pub fn deploy_header_pda_seed(
+    image_id: ProgramId,
+    segment_number: u32,
+    update_auth: AccountId,
+) -> PdaSeed {
+    deploy_seed(
+        &DEPLOY_HEADER_SEED_DOMAIN_SEPARATOR,
+        image_id,
+        segment_number,
+        update_auth,
+    )
+}
+
+/// Derives the PDA seed for a deployed program's bytecode segment account.
+///
+/// Same inputs as [`deploy_header_pda_seed`], domain-separated so the two never collide. Kept as
+/// a distinct account from the header specifically so that authenticating a program's identity
+/// (e.g. for privacy-preserving proof verification) never has to touch its bytecode: the only
+/// account-authentication primitive available is whole-account equality, so what's bundled into
+/// one account sets the floor for how cheap that authentication can be.
+#[must_use]
+pub fn deploy_segment_pda_seed(
+    image_id: ProgramId,
+    segment_number: u32,
+    update_auth: AccountId,
+) -> PdaSeed {
+    deploy_seed(
+        &DEPLOY_SEGMENT_SEED_DOMAIN_SEPARATOR,
+        image_id,
+        segment_number,
+        update_auth,
+    )
+}
+
+fn deploy_seed(
+    domain_separator: &[u8; 32],
     image_id: ProgramId,
     segment_number: u32,
     update_auth: AccountId,
@@ -58,7 +71,7 @@ pub fn deploy_pda_seed(
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 32 + 32 + 4 + 32];
-    bytes[0..32].copy_from_slice(&DEPLOY_SEED_DOMAIN_SEPARATOR);
+    bytes[0..32].copy_from_slice(domain_separator);
     let image_id_bytes: &[u8] =
         bytemuck::try_cast_slice(&image_id).expect("ProgramId should be castable to &[u8]");
     bytes[32..64].copy_from_slice(image_id_bytes);
@@ -74,7 +87,7 @@ pub fn deploy_pda_seed(
 }
 
 #[must_use]
-pub fn deploy_account_id(
+pub fn deploy_header_account_id(
     loader_program_id: ProgramId,
     image_id: ProgramId,
     segment_number: u32,
@@ -82,12 +95,25 @@ pub fn deploy_account_id(
 ) -> AccountId {
     AccountId::for_public_pda(
         &loader_program_id,
-        &deploy_pda_seed(image_id, segment_number, update_auth),
+        &deploy_header_pda_seed(image_id, segment_number, update_auth),
+    )
+}
+
+#[must_use]
+pub fn deploy_segment_account_id(
+    loader_program_id: ProgramId,
+    image_id: ProgramId,
+    segment_number: u32,
+    update_auth: AccountId,
+) -> AccountId {
+    AccountId::for_public_pda(
+        &loader_program_id,
+        &deploy_segment_pda_seed(image_id, segment_number, update_auth),
     )
 }
 
 /// Executes the `Deploy` instruction: verifies `bytecode` decodes as a valid RISC0 program
-/// binary, derives its `ProgramData` PDA, and claims it.
+/// binary, derives its header and segment PDAs, and claims both.
 ///
 /// Shared, target-independent logic: called both from the guest binary (`loader_program`) and,
 /// natively, from dispatch's `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut (see that
@@ -104,32 +130,54 @@ pub fn execute_deploy(
         .into();
     let segment_number = 0_u32;
     let update_auth = AccountId::default();
-    let seed = deploy_pda_seed(image_id, segment_number, update_auth);
-    let pda = AccountId::for_public_pda(&self_program_id, &seed);
+    let header_seed = deploy_header_pda_seed(image_id, segment_number, update_auth);
+    let segment_seed = deploy_segment_pda_seed(image_id, segment_number, update_auth);
+    let header_pda = AccountId::for_public_pda(&self_program_id, &header_seed);
+    let segment_pda = AccountId::for_public_pda(&self_program_id, &segment_seed);
 
-    let [target] = pre_states
+    let [header_target, segment_target] = pre_states
         .try_into()
-        .expect("Deploy requires exactly 1 account");
+        .expect("Deploy requires exactly 2 accounts");
 
-    assert_eq!(target.account_id, pda, "wrong deployment target account");
     assert_eq!(
-        target.account,
+        header_target.account_id, header_pda,
+        "wrong deployment header target account"
+    );
+    assert_eq!(
+        header_target.account,
         Account::default(),
-        "program already deployed"
+        "program header already deployed"
+    );
+    assert_eq!(
+        segment_target.account_id, segment_pda,
+        "wrong deployment segment target account"
+    );
+    assert_eq!(
+        segment_target.account,
+        Account::default(),
+        "program segment already deployed"
     );
 
     let program_data = ProgramData {
         image_id,
         segment_number,
         update_auth,
-        elf_segment: bytecode,
     };
 
-    vec![AccountPostState::new_claimed(
-        Account {
-            data: Data::from(&program_data),
-            ..Account::default()
-        },
-        Claim::Pda(seed),
-    )]
+    vec![
+        AccountPostState::new_claimed(
+            Account {
+                data: Data::from(&program_data),
+                ..Account::default()
+            },
+            Claim::Pda(header_seed),
+        ),
+        AccountPostState::new_claimed(
+            Account {
+                data: Data::try_from(bytecode).expect("elf must fit under DATA_MAX_LENGTH"),
+                ..Account::default()
+            },
+            Claim::Pda(segment_seed),
+        ),
+    ]
 }

@@ -1,6 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction,
+    ProgramImageClaim,
     account::{Account, Nonce},
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
@@ -24,6 +25,10 @@ pub struct Message {
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
+    /// Real `image_id`s claimed for every `Deploy`-created program invoked in this transaction's
+    /// call graph — see [`ProgramImageClaim`]. The sequencer checks each against real chain
+    /// state before accepting the transaction.
+    pub program_image_claims: Vec<ProgramImageClaim>,
 }
 
 impl std::fmt::Debug for Message {
@@ -52,6 +57,7 @@ impl std::fmt::Debug for Message {
             .field("private_actions", &private_actions)
             .field("block_validity_window", &self.block_validity_window)
             .field("timestamp_validity_window", &self.timestamp_validity_window)
+            .field("program_image_claims", &self.program_image_claims)
             .finish()
     }
 }
@@ -73,6 +79,7 @@ impl Message {
             private_actions: output.private_actions,
             block_validity_window: output.block_validity_window,
             timestamp_validity_window: output.timestamp_validity_window,
+            program_image_claims: output.program_image_claims,
         }
     }
 
@@ -168,6 +175,7 @@ pub mod tests {
             }],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: vec![],
         }
     }
 
@@ -179,6 +187,7 @@ pub mod tests {
             private_actions: vec![],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: vec![],
         };
 
         // empty vec fields: u32 len=0
@@ -187,6 +196,7 @@ pub mod tests {
         let private_actions_bytes: &[u8] = &[0, 0, 0, 0];
         // validity windows: unbounded = {from: None (0_u8), to: None (0_u8)}
         let unbounded_window_bytes: &[u8] = &[0, 0];
+        let program_image_claims_bytes: &[u8] = &[0, 0, 0, 0];
 
         let expected_borsh_vec: Vec<u8> = [
             public_actions_bytes,
@@ -194,6 +204,7 @@ pub mod tests {
             private_actions_bytes,
             unbounded_window_bytes, // block_validity_window
             unbounded_window_bytes, // timestamp_validity_window
+            program_image_claims_bytes,
         ]
         .concat();
         let expected_borsh: &[u8] = &expected_borsh_vec;

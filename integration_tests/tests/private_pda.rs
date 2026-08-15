@@ -168,7 +168,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let auth_transfer_program = ProgramWithDependencies::new(auth_transfer.clone(), [].into());
     let spend_program =
-        ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer)].into());
+        ProgramWithDependencies::new(proxy, [(auth_transfer_id.into(), auth_transfer)].into());
 
     let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 0);
     let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 1);

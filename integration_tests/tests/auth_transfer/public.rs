@@ -1,13 +1,18 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, get_account, new_account,
-    public_mention, send, send_claiming_new_account,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, config::SequencerPartialConfig,
+    deploy_targets, deploy_transaction, encoded_tx_size, get_account, new_account, public_mention,
+    send, send_claiming_new_account,
 };
 use lee::{PublicKey, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 use wallet::{
     account::Label,
@@ -387,12 +392,29 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 
 #[test]
 async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
-    let ctx = TestContext::new().await?;
-
     let faucet_chain_caller = test_programs::faucet_chain_caller();
-    let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-        lee::program_deployment_transaction::Message::new(faucet_chain_caller.elf().to_owned()),
+    let bytecode = faucet_chain_caller.elf().to_vec();
+    let (faucet_chain_caller_header, faucet_chain_caller_segment) = deploy_targets(&bytecode);
+    let deploy_tx = LeeTransaction::Public(deploy_transaction(
+        faucet_chain_caller_header,
+        faucet_chain_caller_segment,
+        bytecode,
     ));
+
+    // `Deploy`'s bytecode payload runs ~4x its raw size on the wire (see `encoded_tx_size`'s
+    // docs), so the default 1 MiB block size isn't enough headroom for a real guest binary.
+    let tx_size = encoded_tx_size(&deploy_tx);
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(SequencerPartialConfig {
+                    max_block_size: ByteSize::b(tx_size + 10 * 1024),
+                    ..SequencerPartialConfig::default()
+                }),
+        )
+        .build()
+        .await?;
+
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 
     log::info!("Waiting for deploy block creation");
@@ -406,7 +428,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let amount: u128 = 1;
 
     let message = public_transaction::Message::try_new(
-        faucet_chain_caller.id().into(),
+        faucet_chain_caller_header,
         vec![faucet_account_id, attacker_vault_id],
         vec![],
         (faucet_program_id, vault_program_id, attacker, amount),

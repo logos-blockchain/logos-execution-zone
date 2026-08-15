@@ -4,10 +4,27 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
+
+/// A claim that `account_id`'s program account currently has `image_id`.
+///
+/// Supplied by the prover as circuit input (untrusted), used inside the circuit for
+/// `env::verify` in place of a `Deploy`-created program's address (which, unlike a legacy
+/// program's, doesn't encode its image id), and echoed unchanged into the circuit's output.
+/// Anchoring `image_id` to `account_id` is **not** enforced inside the circuit — it's enforced
+/// by the sequencer, which independently checks every claim against real chain state
+/// (`V03State::get_program`) before accepting the proof. A side effect of this, for now: every
+/// program invoked anywhere in a private transaction's call graph is publicly visible via this
+/// claim list.
+#[derive(Serialize, Deserialize, Clone, Copy, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct ProgramImageClaim {
+    pub account_id: AccountId,
+    pub image_id: ProgramId,
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct PrivacyPreservingCircuitInput {
@@ -21,6 +38,9 @@ pub struct PrivacyPreservingCircuitInput {
     /// Program ID.
     pub program_id: ProgramId,
     pub dummy_inputs: Vec<DummyInput>,
+    /// Real `image_id`s for every `Deploy`-created program invoked in the call graph, keyed by
+    /// account id. See [`ProgramImageClaim`].
+    pub program_image_claims: Vec<ProgramImageClaim>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -172,6 +192,9 @@ pub struct PrivacyPreservingCircuitOutput {
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
+    /// Unchanged echo of [`PrivacyPreservingCircuitInput::program_image_claims`] — what the
+    /// receipt actually commits to, so the sequencer can check it against real chain state.
+    pub program_image_claims: Vec<ProgramImageClaim>,
 }
 
 #[cfg(any(feature = "host", test))]
@@ -270,6 +293,10 @@ mod tests {
             }],
             block_validity_window: (1..).into(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: vec![ProgramImageClaim {
+                account_id: AccountId::new([3; 32]),
+                image_id: [4; 8],
+            }],
         };
         let bytes = output.to_bytes();
         let output_from_slice: PrivacyPreservingCircuitOutput = from_slice(&bytes).unwrap();

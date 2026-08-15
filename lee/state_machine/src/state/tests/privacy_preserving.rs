@@ -512,7 +512,7 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
     let instruction = (balance_to_transfer, simple_transfers.id());
 
     let mut dependencies = HashMap::new();
-    dependencies.insert(simple_transfers.id(), simple_transfers);
+    dependencies.insert(simple_transfers.id().into(), simple_transfers);
     let program_with_deps = ProgramWithDependencies::new(malicious_program, dependencies);
 
     // Act - execute the malicious program - this should fail during proving

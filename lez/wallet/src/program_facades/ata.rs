@@ -223,6 +223,6 @@ impl Ata<'_> {
 fn ata_with_token_dependency() -> ProgramWithDependencies {
     let token = programs::token();
     let mut deps = HashMap::new();
-    deps.insert(token.id(), token);
+    deps.insert(token.id().into(), token);
     ProgramWithDependencies::new(programs::ata(), deps)
 }
