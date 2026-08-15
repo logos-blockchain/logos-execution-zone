@@ -3,9 +3,9 @@ use std::collections::{HashMap, VecDeque};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput,
+    PrivacyPreservingCircuitOutput, ProgramImageClaim,
     account::{AccountId, AccountWithMetadata},
-    program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
+    program::{ChainedCall, InstructionData, ProgramOutput},
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
 
@@ -43,17 +43,31 @@ impl Proof {
 #[derive(Clone)]
 pub struct ProgramWithDependencies {
     pub program: Program,
+    /// Where `program` is dispatched at. Defaults to `AccountId::from(program.id())` (correct
+    /// for a legacy, bijection-addressed program); override via
+    /// [`Self::with_program_account_id`] for a program deployed to a PDA (e.g. via `Deploy`).
+    pub program_account_id: AccountId,
     // TODO: avoid having a copy of the bytecode of each dependency.
-    pub dependencies: HashMap<ProgramId, Program>,
+    pub dependencies: HashMap<AccountId, Program>,
 }
 
 impl ProgramWithDependencies {
     #[must_use]
-    pub const fn new(program: Program, dependencies: HashMap<ProgramId, Program>) -> Self {
+    pub fn new(program: Program, dependencies: HashMap<AccountId, Program>) -> Self {
+        let program_account_id = AccountId::from(program.id());
         Self {
             program,
+            program_account_id,
             dependencies,
         }
+    }
+
+    /// Overrides the address `program` is dispatched at, for a program whose address isn't
+    /// derived from its own image id (e.g. deployed via `Deploy` to a PDA).
+    #[must_use]
+    pub const fn with_program_account_id(mut self, program_account_id: AccountId) -> Self {
+        self.program_account_id = program_account_id;
+        self
     }
 }
 
@@ -89,13 +103,33 @@ pub fn execute_and_prove_with_padded_inputs(
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProgramWithDependencies {
         program: initial_program,
+        program_account_id: initial_program_account_id,
         dependencies,
     } = program_with_dependencies;
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
 
+    // Real `image_id`s for every program in this call graph whose address doesn't already
+    // determine it — i.e. every `Deploy`-created program, PDA-addressed rather than
+    // bijection-addressed. A legacy program needs no claim at all: `ProgramId::from(account_id)`
+    // is already exact for it, by construction, with nothing to authenticate. See
+    // `ProgramImageClaim` and `execution_state.rs`'s matching bijection fallback.
+    let program_image_claims: Vec<ProgramImageClaim> =
+        std::iter::once((*initial_program_account_id, initial_program.id()))
+            .chain(
+                dependencies
+                    .iter()
+                    .map(|(account_id, program)| (*account_id, program.id())),
+            )
+            .filter(|(account_id, image_id)| *account_id != AccountId::from(*image_id))
+            .map(|(account_id, image_id)| ProgramImageClaim {
+                account_id,
+                image_id,
+            })
+            .collect();
+
     let initial_call = ChainedCall {
-        program_account_id: AccountId::from(initial_program.id()),
+        program_account_id: *initial_program_account_id,
         instruction_data,
         pre_states,
         pda_seeds: vec![],
@@ -110,6 +144,7 @@ pub fn execute_and_prove_with_padded_inputs(
 
         let inner_receipt = execute_and_prove_program(
             program,
+            chained_call.program_account_id,
             caller_account_id,
             &chained_call.pre_states,
             &chained_call.instruction_data,
@@ -127,10 +162,9 @@ pub fn execute_and_prove_with_padded_inputs(
         env_builder.add_assumption(inner_receipt);
 
         for new_call in program_output.chained_calls.into_iter().rev() {
-            let new_call_program_id = ProgramId::from(new_call.program_account_id);
-            let next_program = dependencies.get(&new_call_program_id).ok_or(
+            let next_program = dependencies.get(&new_call.program_account_id).ok_or(
                 InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                    program_id: new_call_program_id,
+                    account_id: new_call.program_account_id,
                 },
             )?;
             chained_calls.push_front((
@@ -150,6 +184,7 @@ pub fn execute_and_prove_with_padded_inputs(
         account_identities,
         program_id: program_with_dependencies.program.id(),
         dummy_inputs,
+        program_image_claims,
     };
 
     env_builder.write(&circuit_input).unwrap();
@@ -173,6 +208,7 @@ pub fn execute_and_prove_with_padded_inputs(
 
 fn execute_and_prove_program(
     program: &Program,
+    self_account_id: AccountId,
     caller_account_id: Option<AccountId>,
     pre_states: &[AccountWithMetadata],
     instruction_data: &InstructionData,
@@ -180,7 +216,7 @@ fn execute_and_prove_program(
     // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
     Program::write_inputs(
-        AccountId::from(program.id()),
+        self_account_id,
         caller_account_id,
         pre_states,
         instruction_data,

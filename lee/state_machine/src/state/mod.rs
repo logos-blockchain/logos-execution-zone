@@ -5,7 +5,9 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
     account::{Account, AccountId, Data},
-    program::PROGRAM_STORAGE_OWNER,
+    program::{
+        PROGRAM_STORAGE_OWNER, ProgramData, ProgramId, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+    },
 };
 
 use crate::{
@@ -112,6 +114,14 @@ impl BorshDeserialize for NullifierSet {
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
 pub struct V03State {
+    /// Deployed programs live here too, as `Account`s findable via [`Self::get_program`], which
+    /// recognizes two shapes: legacy `ProgramDeploymentTransaction`-deployed programs, keyed by
+    /// `AccountId::from(program_id)` (see that impl's doc comment) with the raw elf in
+    /// `Account.data` and `program_owner` set to [`PROGRAM_STORAGE_OWNER`]; and `Deploy`-created
+    /// programs (including every genesis-seeded builtin, via [`Self::insert_program`]), which
+    /// live across two accounts owned by [`RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`] — a header
+    /// account whose `Account.data` is a borsh-encoded [`ProgramData`] (the current `image_id`,
+    /// small and fixed-size), and a separate segment PDA holding the raw elf.
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
 }
@@ -193,15 +203,46 @@ impl V03State {
         self
     }
 
+    /// Seeds a program directly into state in the same two-account shape a `Deploy` dispatch
+    /// produces (see [`Self::get_program`]), skipping the dispatch/proving machinery genesis has
+    /// no signer to drive. The header account is placed at `AccountId::from(image_id)` rather
+    /// than the loader-PDA address a live `Deploy` would use for it — deliberately, so a
+    /// genesis-seeded program keeps its well-known dispatch address — while the segment account
+    /// still lives at the exact PDA [`Self::get_program`] derives from the header's content,
+    /// since that address is never a caller-facing well-known address to begin with.
     pub(crate) fn insert_program(&mut self, program: &Program) {
-        let account_id = AccountId::from(program.id());
-        let account = Account {
-            program_owner: PROGRAM_STORAGE_OWNER,
+        let image_id = program.id();
+        let segment_number = 0;
+        let update_auth = AccountId::default();
+
+        let header_account_id = AccountId::from(image_id);
+        let header_account = Account {
+            program_owner: RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+            data: Data::from(&ProgramData {
+                image_id,
+                segment_number,
+                update_auth,
+            }),
+            ..Account::default()
+        };
+
+        let loader_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+        let segment_account_id = loader_core::deploy_segment_account_id(
+            loader_id,
+            image_id,
+            segment_number,
+            update_auth,
+        );
+        let segment_account = Account {
+            program_owner: RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
             data: Data::try_from(program.elf().to_vec())
                 .expect("elf must fit under DATA_MAX_LENGTH"),
             ..Account::default()
         };
-        self.public_state.insert(account_id, account);
+
+        self.public_state.insert(header_account_id, header_account);
+        self.public_state
+            .insert(segment_account_id, segment_account);
     }
 
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
@@ -258,7 +299,7 @@ impl V03State {
         &mut self,
         tx: &ProgramDeploymentTransaction,
     ) -> Result<(), LeeError> {
-        let diff = ValidatedStateDiff::from_program_deployment_transaction(tx, self)?;
+        let diff = ValidatedStateDiff::from_program_deployment_transaction(tx)?;
         self.apply_state_diff(diff);
         Ok(())
     }
@@ -281,16 +322,45 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
-    /// Looks up a deployed program's storage account by its `AccountId`, verifying it is
-    /// actually owned by [`PROGRAM_STORAGE_OWNER`].
+    /// Looks up a deployed program's real `image_id` and bytecode by its `AccountId`,
+    /// recognizing both ways a program can come to exist:
     ///
-    /// An account that lacks this ownership isn't a deployed program, whatever its contents —
+    /// - Owned by [`PROGRAM_STORAGE_OWNER`]: the legacy `ProgramDeploymentTransaction` path, where
+    ///   `account.data` is the raw ELF directly and `AccountId::from(image_id)` is the account's
+    ///   address by construction.
+    /// - Owned by [`RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`]: deployed via the native `Deploy`
+    ///   dispatch shortcut. `account.data` decodes as a [`ProgramData`] header holding the real
+    ///   `image_id`; the bytecode itself lives in a second, separately-addressed segment account
+    ///   derived from that header (see `loader_core::deploy_segment_account_id`).
+    ///
+    /// Returning the real `image_id` — rather than callers deriving one from the address, which
+    /// is only valid for the legacy path — is what makes upgrading a `Deploy`-created program
+    /// possible: the address never changes, only the `image_id` written into its header account
+    /// does.
+    ///
+    /// An account that matches neither owner isn't a deployed program, whatever its contents —
     /// this is the single place that distinction is enforced, so callers never have to remember
     /// to re-check it themselves.
     #[must_use]
-    pub fn get_program(&self, program_account_id: AccountId) -> Option<&Account> {
+    pub fn get_program(&self, program_account_id: AccountId) -> Option<(ProgramId, Vec<u8>)> {
         let account = self.get_account_by_id_ref(program_account_id)?;
-        (account.program_owner == PROGRAM_STORAGE_OWNER).then_some(account)
+        if account.program_owner == PROGRAM_STORAGE_OWNER {
+            return Some((ProgramId::from(program_account_id), account.data.to_vec()));
+        }
+        if account.program_owner == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID {
+            let header = ProgramData::try_from(&account.data).ok()?;
+            let loader_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+            let segment_account_id = loader_core::deploy_segment_account_id(
+                loader_id,
+                header.image_id,
+                header.segment_number,
+                header.update_auth,
+            );
+            let segment = self.get_account_by_id_ref(segment_account_id)?;
+            return (segment.program_owner == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID)
+                .then(|| (header.image_id, segment.data.to_vec()));
+        }
+        None
     }
 
     #[must_use]

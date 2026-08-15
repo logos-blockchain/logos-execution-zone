@@ -54,6 +54,7 @@ impl Program {
 
     pub(crate) fn execute(
         &self,
+        self_account_id: AccountId,
         caller_account_id: Option<AccountId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &InstructionData,
@@ -62,7 +63,7 @@ impl Program {
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
         Self::write_inputs(
-            AccountId::from(self.id),
+            self_account_id,
             caller_account_id,
             pre_states,
             instruction_data,

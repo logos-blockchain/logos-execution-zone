@@ -2,17 +2,18 @@ use indexer_service_protocol::{
     AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
     EphemeralPublicKey, HashType, Nullifier, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
-    ProgramDeploymentTransaction, Proof, PublicActionWithID, PublicKey, PublicMessage,
-    PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    ProgramDeploymentTransaction, ProgramImageClaim, Proof, PublicActionWithID, PublicKey,
+    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
-    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiVec,
+    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature,
+    FfiVec,
     account::FfiAccount,
     vectors::{
         FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList,
-        FfiProgramDeploymentMessage, FfiProof, FfiPublicActionList, FfiSignaturePubKeyList,
-        FfiVecU8,
+        FfiProgramDeploymentMessage, FfiProgramImageClaimList, FfiProof, FfiPublicActionList,
+        FfiSignaturePubKeyList, FfiVecU8,
     },
 };
 
@@ -193,6 +194,18 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         })
                         .collect()
                 },
+                program_image_claims: {
+                    let std_vec: Vec<_> = value.message.program_image_claims.into();
+                    std_vec
+                        .into_iter()
+                        .map(|ffi_val| ProgramImageClaim {
+                            account_id: AccountId {
+                                value: ffi_val.account_id.data,
+                            },
+                            image_id: ffi_val.image_id.data.into(),
+                        })
+                        .collect()
+                },
                 block_validity_window: cast_ffi_validity_window(
                     value.message.block_validity_window,
                 ),
@@ -239,6 +252,21 @@ impl From<PublicActionWithID> for FfiPublicAction {
 }
 
 #[repr(C)]
+pub struct FfiProgramImageClaim {
+    pub account_id: FfiAccountId,
+    pub image_id: FfiProgramId,
+}
+
+impl From<ProgramImageClaim> for FfiProgramImageClaim {
+    fn from(value: ProgramImageClaim) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            image_id: value.image_id.into(),
+        }
+    }
+}
+
+#[repr(C)]
 pub struct FfiPrivateAction {
     pub nullifier: FfiBytes32,
     pub root: FfiBytes32,
@@ -268,6 +296,7 @@ pub struct FfiPrivacyPreservingMessage {
     pub private_actions: FfiPrivateActionList,
     pub block_validity_window: [u64; 2],
     pub timestamp_validity_window: [u64; 2],
+    pub program_image_claims: FfiProgramImageClaimList,
 }
 
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
@@ -278,6 +307,7 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            program_image_claims,
         } = value;
 
         Self {
@@ -298,6 +328,11 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
                 .into(),
             block_validity_window: cast_validity_window(block_validity_window),
             timestamp_validity_window: cast_validity_window(timestamp_validity_window),
+            program_image_claims: program_image_claims
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 }

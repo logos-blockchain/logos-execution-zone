@@ -260,12 +260,33 @@ typedef struct FfiVec_FfiPrivateAction {
 
 typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
 
+/**
+ * Program ID - 8 u32 values (32 bytes total).
+ */
+typedef struct FfiProgramId {
+  uint32_t data[8];
+} FfiProgramId;
+
+typedef struct FfiProgramImageClaim {
+  FfiAccountId account_id;
+  struct FfiProgramId image_id;
+} FfiProgramImageClaim;
+
+typedef struct FfiVec_FfiProgramImageClaim {
+  struct FfiProgramImageClaim *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiProgramImageClaim;
+
+typedef struct FfiVec_FfiProgramImageClaim FfiProgramImageClaimList;
+
 typedef struct FfiPrivacyPreservingMessage {
   FfiPublicActionList public_actions;
   FfiNonceList nonces;
   FfiPrivateActionList private_actions;
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
+  FfiProgramImageClaimList program_image_claims;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;

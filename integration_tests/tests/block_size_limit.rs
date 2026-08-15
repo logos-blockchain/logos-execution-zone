@@ -1,5 +1,4 @@
 #![expect(
-    clippy::as_conversions,
     clippy::tests_outside_test_module,
     reason = "We don't care about these in tests"
 )]
@@ -9,8 +8,12 @@ use std::time::Duration;
 use anyhow::Result;
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::SequencerPartialConfig};
+use integration_tests::{
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::SequencerPartialConfig, deploy_targets,
+    deploy_transaction, encoded_tx_size,
+};
 use lee::program::Program;
+use lee_core::program::RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
@@ -19,12 +22,20 @@ use tokio::test;
 
 #[test]
 async fn reject_oversized_transaction() -> Result<()> {
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let (header, segment) = deploy_targets(&bytecode);
+    let tx = LeeTransaction::Public(deploy_transaction(header, segment, bytecode));
+    let tx_size = encoded_tx_size(&tx);
+
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
                 .with_sequencer_partial_config(SequencerPartialConfig {
                     max_num_tx_in_block: 100,
-                    max_block_size: ByteSize::mib(1),
+                    // Below the transaction's actual size, so it's rejected outright (the
+                    // sequencer additionally reserves ~200 bytes of block-header overhead off of
+                    // this limit, so being equal to `tx_size` is already enough of a margin).
+                    max_block_size: ByteSize::b(tx_size),
                     mempool_max_size: 1000,
                     block_create_timeout: Duration::from_secs(10),
                     priority_fee: sequencer_core::config::default_priority_fee(),
@@ -33,19 +44,8 @@ async fn reject_oversized_transaction() -> Result<()> {
         .build()
         .await?;
 
-    // Create a transaction that's definitely too large
-    // Block size is 1 MiB (1,048,576 bytes), minus ~200 bytes for header = ~1,048,376 bytes max tx
-    // Create a 1.1 MiB binary to ensure it exceeds the limit
-    let oversized_binary = vec![0_u8; 1100 * 1024]; // 1.1 MiB binary
-
-    let message = lee::program_deployment_transaction::Message::new(oversized_binary);
-    let tx = lee::ProgramDeploymentTransaction::new(message);
-
     // Try to submit the transaction and expect an error
-    let result = ctx
-        .sequencer_client()
-        .send_transaction(LeeTransaction::ProgramDeployment(tx))
-        .await;
+    let result = ctx.sequencer_client().send_transaction(tx).await;
 
     assert!(
         result.is_err(),
@@ -66,12 +66,18 @@ async fn reject_oversized_transaction() -> Result<()> {
 
 #[test]
 async fn accept_transaction_within_limit() -> Result<()> {
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let (header, segment) = deploy_targets(&bytecode);
+    let tx = LeeTransaction::Public(deploy_transaction(header, segment, bytecode));
+    let tx_size = encoded_tx_size(&tx);
+
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
                 .with_sequencer_partial_config(SequencerPartialConfig {
                     max_num_tx_in_block: 100,
-                    max_block_size: ByteSize::mib(1),
+                    // Comfortably above the transaction's actual size.
+                    max_block_size: ByteSize::b(tx_size + 10 * 1024),
                     mempool_max_size: 1000,
                     block_create_timeout: Duration::from_secs(10),
                     priority_fee: sequencer_core::config::default_priority_fee(),
@@ -80,17 +86,8 @@ async fn accept_transaction_within_limit() -> Result<()> {
         .build()
         .await?;
 
-    // Create a small program deployment that should fit
-    let small_binary = vec![0_u8; 1024]; // 1 KiB binary
-
-    let message = lee::program_deployment_transaction::Message::new(small_binary);
-    let tx = lee::ProgramDeploymentTransaction::new(message);
-
     // This should succeed
-    let result = ctx
-        .sequencer_client()
-        .send_transaction(LeeTransaction::ProgramDeployment(tx))
-        .await;
+    let result = ctx.sequencer_client().send_transaction(tx).await;
 
     assert!(
         result.is_ok(),
@@ -106,10 +103,24 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     let claimer = test_programs::claimer();
     let chain_caller = test_programs::chain_caller();
 
-    // Calculate block size to fit only one of the two transactions, leaving some room for headers
+    let (claimer_header, claimer_segment) = deploy_targets(claimer.elf());
+    let claimer_tx = LeeTransaction::Public(deploy_transaction(
+        claimer_header,
+        claimer_segment,
+        claimer.elf().to_vec(),
+    ));
+
+    let (chain_caller_header, chain_caller_segment) = deploy_targets(chain_caller.elf());
+    let chain_caller_tx = LeeTransaction::Public(deploy_transaction(
+        chain_caller_header,
+        chain_caller_segment,
+        chain_caller.elf().to_vec(),
+    ));
+
+    // Block size to fit only one of the two transactions, leaving some room for headers
     // (e.g., 10 KiB)
-    let max_program_size = claimer.elf().len().max(chain_caller.elf().len());
-    let block_size = ByteSize::b((max_program_size + 10 * 1024) as u64);
+    let max_tx_size = encoded_tx_size(&claimer_tx).max(encoded_tx_size(&chain_caller_tx));
+    let block_size = ByteSize::b(max_tx_size + 10 * 1024);
 
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
@@ -128,20 +139,9 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     let initial_block_height = ctx.sequencer_client().get_last_block_id().await?;
 
     // Submit both program deployments
+    ctx.sequencer_client().send_transaction(claimer_tx).await?;
     ctx.sequencer_client()
-        .send_transaction(LeeTransaction::ProgramDeployment(
-            lee::ProgramDeploymentTransaction::new(
-                lee::program_deployment_transaction::Message::new(claimer.elf().to_owned()),
-            ),
-        ))
-        .await?;
-
-    ctx.sequencer_client()
-        .send_transaction(LeeTransaction::ProgramDeployment(
-            lee::ProgramDeploymentTransaction::new(
-                lee::program_deployment_transaction::Message::new(chain_caller.elf().to_owned()),
-            ),
-        ))
+        .send_transaction(chain_caller_tx)
         .await?;
 
     // Wait for first block
@@ -153,19 +153,26 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         .await?
         .unwrap();
 
-    // Check which program is in block 1
+    // Check which program is deployed in a block, by picking out its `Deploy` transactions and
+    // decoding the real `image_id` of each one's bytecode.
     let get_program_ids = |block: &common::block::Block| -> Vec<lee::ProgramId> {
         block
             .body
             .transactions
             .iter()
             .filter_map(|tx| {
-                if let LeeTransaction::ProgramDeployment(deployment) = tx {
-                    let bytecode = deployment.message.clone().into_bytecode();
-                    Program::new(bytecode.into()).ok().map(|p| p.id())
-                } else {
-                    None
+                let LeeTransaction::Public(public_tx) = tx else {
+                    return None;
+                };
+                if public_tx.message.program_account_id != RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID {
+                    return None;
                 }
+                let loader_core::Instruction::Deploy { bytecode } =
+                    risc0_zkvm::serde::from_slice::<loader_core::Instruction, u32>(
+                        &public_tx.message.instruction_data,
+                    )
+                    .ok()?;
+                Program::new(bytecode.into()).ok().map(|p| p.id())
             })
             .collect()
     };

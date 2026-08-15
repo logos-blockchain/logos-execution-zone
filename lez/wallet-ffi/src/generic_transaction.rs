@@ -88,13 +88,10 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
                 .ok_or(WalletFfiError::NullPointer)?
                 .try_into()?;
 
-            program_map.insert(program_dep.id(), program_dep);
+            program_map.insert(program_dep.id().into(), program_dep);
         }
 
-        Ok(Self {
-            program: orig_program,
-            dependencies: program_map,
-        })
+        Ok(Self::new(orig_program, program_map))
     }
 }
 

@@ -1,13 +1,14 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
     public_mention,
     utils::{
-        account_balance, assert_private_commitment_in_state, get_account, new_account, send,
-        sync_private,
+        account_balance, assert_private_commitment_in_state, deploy_targets, deploy_transaction,
+        encoded_tx_size, get_account, new_account, send, sync_private,
     },
     verify_commitment_is_in_state,
 };
@@ -22,6 +23,10 @@ use lee_core::{
     encryption::ViewingPublicKey,
 };
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{MultiNodeTestContextConfig, SequencerPartialConfig},
+};
 use tokio::test;
 use wallet::{
     account::Label,
@@ -579,12 +584,29 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
 
 #[test]
 async fn ppt_cant_chain_call_faucet() -> Result<()> {
-    let ctx = TestContext::new().await?;
-
     let faucet_chain_caller = test_programs::faucet_chain_caller();
-    let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-        lee::program_deployment_transaction::Message::new(faucet_chain_caller.elf().to_owned()),
+    let bytecode = faucet_chain_caller.elf().to_vec();
+    let (faucet_chain_caller_header, faucet_chain_caller_segment) = deploy_targets(&bytecode);
+    let deploy_tx = LeeTransaction::Public(deploy_transaction(
+        faucet_chain_caller_header,
+        faucet_chain_caller_segment,
+        bytecode,
     ));
+
+    // `Deploy`'s bytecode payload runs ~4x its raw size on the wire (see `encoded_tx_size`'s
+    // docs), so the default 1 MiB block size isn't enough headroom for a real guest binary.
+    let tx_size = encoded_tx_size(&deploy_tx);
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(SequencerPartialConfig {
+                    max_block_size: ByteSize::b(tx_size + 10 * 1024),
+                    ..SequencerPartialConfig::default()
+                }),
+        )
+        .build()
+        .await?;
+
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 
     log::info!("Waiting for deploy block creation");
@@ -619,12 +641,16 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let program_with_deps = ProgramWithDependencies::new(
         faucet_chain_caller,
         [
-            (faucet_program_id, programs::faucet()),
-            (vault_program_id, programs::vault()),
-            (auth_transfer_program_id, programs::authenticated_transfer()),
+            (faucet_program_id.into(), programs::faucet()),
+            (vault_program_id.into(), programs::vault()),
+            (
+                auth_transfer_program_id.into(),
+                programs::authenticated_transfer(),
+            ),
         ]
         .into(),
-    );
+    )
+    .with_program_account_id(faucet_chain_caller_header);
 
     let instruction =
         Program::serialize_instruction((faucet_program_id, vault_program_id, attacker_id, amount))?;

@@ -409,6 +409,7 @@ fn mock_privacy_preserving_tx(
             }],
             block_validity_window: ValidityWindow((None, None)),
             timestamp_validity_window: ValidityWindow((None, None)),
+            program_image_claims: vec![],
         },
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],

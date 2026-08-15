@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use lee_core::account::AccountId;
+use lee_core::{account::AccountId, program::RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID};
 use log::info;
 use sequencer_core::{
     block_publisher::{Ed25519PublicKey, read_channel_state},
@@ -320,4 +320,59 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
                 "Indexer failed to catch up within {L2_TO_L1_TIMEOUT:?}. Last indexer block id observed: {last_ind}, but needed to catch up to at least {block_id_to_catch_up}"
             )
         })?
+}
+
+/// Derives the `(header, segment)` account pair `bytecode` would deploy to via `Deploy`, mirroring
+/// `sequencer_core`'s private test helper of the same name.
+#[must_use]
+pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
+    let loader_id: lee_core::program::ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let image_id: lee_core::program::ProgramId =
+        risc0_binfmt::compute_image_id(bytecode).unwrap().into();
+    let header =
+        program_loader_core::deploy_header_account_id(loader_id, image_id, 0, AccountId::default());
+    let segment =
+        program_loader_core::deploy_segment_account_id(loader_id, image_id, 0, AccountId::default());
+    (header, segment)
+}
+
+/// Builds the `PublicTransaction` that deploys `bytecode` to `(header, segment)`.
+///
+/// `(header, segment)` are the targets [`deploy_targets`] derives for it. Tests should invoke
+/// programs at the returned `header` address afterward, not the program's own bijection
+/// `AccountId::from(image_id)`.
+#[must_use]
+pub fn deploy_transaction(
+    header: AccountId,
+    segment: AccountId,
+    bytecode: Vec<u8>,
+) -> lee::PublicTransaction {
+    let loader_id: lee_core::program::ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let message = lee::public_transaction::Message::try_new(
+        loader_id.into(),
+        vec![header, segment],
+        vec![],
+        program_loader_core::Instruction::Deploy { bytecode },
+    )
+    .expect("deploy instruction data should always be serializable");
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+    lee::PublicTransaction::new(message, witness_set)
+}
+
+/// The exact wire size the sequencer measures a transaction by (see
+/// `sequencer_rpc_server_actor::actor::service`'s `send_transaction`).
+///
+/// A `Deploy`'s bytecode is transported through `instruction_data` (`Vec<u32>`), and RISC0's
+/// word-oriented serde doesn't pack `Vec<u8>` efficiently: each byte becomes its own 4-byte word,
+/// so a `Deploy` transaction's wire size runs ~4x its raw bytecode length. Measuring the real
+/// encoded size here (rather than guessing from bytecode length) keeps size-sensitive tests
+/// correct regardless of that encoding overhead.
+#[must_use]
+pub fn encoded_tx_size(tx: &common::transaction::LeeTransaction) -> u64 {
+    u64::try_from(
+        borsh::to_vec(tx)
+            .expect("transaction should serialize")
+            .len(),
+    )
+    .expect("transaction size should fit in u64")
 }

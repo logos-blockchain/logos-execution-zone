@@ -109,7 +109,7 @@ fn prove_chain_caller(
     let auth_transfer = programs::authenticated_transfer();
     let auth_transfer_id = auth_transfer.id();
     let mut deps = HashMap::new();
-    deps.insert(auth_transfer.id(), auth_transfer);
+    deps.insert(auth_transfer.id().into(), auth_transfer);
     let pwd = ProgramWithDependencies::new(chain_caller, deps);
 
     // Both accounts pre-claimed by auth_transfer. chain_caller doesn't
