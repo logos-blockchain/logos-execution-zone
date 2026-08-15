@@ -1,5 +1,7 @@
 use common::HashType;
-use lee::{AccountId, program::Program};
+use lee::{
+    AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+};
 use lee_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 use token_core::Instruction;
 
@@ -48,7 +50,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -80,7 +82,7 @@ impl Token<'_> {
                     AccountIdentity::Public(supply_account_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -114,7 +116,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -169,7 +171,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -207,7 +209,7 @@ impl Token<'_> {
                     },
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -239,7 +241,7 @@ impl Token<'_> {
                     AccountIdentity::Public(recipient_account_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -271,7 +273,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -307,7 +309,7 @@ impl Token<'_> {
                     },
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -363,7 +365,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -395,7 +397,7 @@ impl Token<'_> {
                     AccountIdentity::Public(holder_account_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -428,7 +430,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -484,7 +486,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -522,7 +524,7 @@ impl Token<'_> {
                     },
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -554,7 +556,7 @@ impl Token<'_> {
                     AccountIdentity::Public(holder_account_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -587,7 +589,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -624,7 +626,7 @@ impl Token<'_> {
                     },
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &token_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -635,4 +637,10 @@ impl Token<'_> {
                 (resp, first)
             })
     }
+}
+
+fn token_program_with_deps() -> ProgramWithDependencies {
+    ProgramWithDependencies::from(programs::token()).with_program_account_id(
+        program_loader_core::immutable_deploy_account_id(programs::token().id()),
+    )
 }

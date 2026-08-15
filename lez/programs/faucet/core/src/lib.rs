@@ -14,7 +14,14 @@ pub enum Instruction {
     /// - Faucet PDA account
     /// - Recipient vault PDA account
     GenesisTransferVault {
-        vault_program_id: ProgramId,
+        /// This program's own image id. The guest cannot learn this at runtime (a RISC0 guest
+        /// has no way to read its own image id), so the trusted genesis caller supplies it to
+        /// recompute the faucet PDA; a wrong value only fails the guest's own self-consistency
+        /// assertion, since real authorization is independently enforced by the state layer
+        /// against the account's `program_owner`.
+        self_program_id: ProgramId,
+        /// The vault program's real dispatch address.
+        vault_account_id: AccountId,
         recipient_id: AccountId,
         amount: u128,
     },
@@ -26,7 +33,11 @@ pub enum Instruction {
     /// Required accounts (2):
     /// - Faucet PDA account
     /// - Recipient account
-    GenesisTransferDirect { amount: u128 },
+    GenesisTransferDirect {
+        /// See `GenesisTransferVault::self_program_id`.
+        self_program_id: ProgramId,
+        amount: u128,
+    },
 }
 
 #[must_use]

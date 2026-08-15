@@ -39,7 +39,7 @@ async fn deploy_and_execute_program() -> Result<()> {
         .get_account_public_signing_key(account_id)
         .unwrap();
     let message = lee::public_transaction::Message::try_new(
-        claimer.id().into(),
+        program_loader_core::immutable_deploy_account_id(claimer.id()),
         vec![account_id],
         nonces,
         (),
@@ -59,7 +59,10 @@ async fn deploy_and_execute_program() -> Result<()> {
     let post_state_account = get_account(&ctx, account_id).await?;
 
     let expected_data: &[u8] = &[];
-    assert_eq!(post_state_account.program_owner, claimer.id().into());
+    assert_eq!(
+        post_state_account.program_owner,
+        program_loader_core::immutable_deploy_account_id(claimer.id())
+    );
     assert_eq!(post_state_account.balance, 0);
     assert_eq!(post_state_account.data.as_ref(), expected_data);
     assert_eq!(post_state_account.nonce.0, 1);

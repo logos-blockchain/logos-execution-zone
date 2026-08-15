@@ -142,8 +142,6 @@ impl LeeTransaction {
     ///
     /// The indexer replays blocks the sequencer already validated and inscribed on Bedrock,
     /// so it trusts those inscriptions and re-derives state without re-validating them.
-    ///
-    /// Returns the events the transaction emitted.
     pub fn execute_on_state(
         &self,
         state: &mut V03State,
@@ -245,7 +243,7 @@ pub struct TxEvents {
 #[must_use]
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
-        programs::clock().id().into(),
+        program_loader_core::immutable_deploy_account_id(programs::clock().id()),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
         vec![],
         timestamp,

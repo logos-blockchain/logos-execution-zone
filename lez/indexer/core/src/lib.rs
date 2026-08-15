@@ -763,7 +763,7 @@ mod tests {
                 src_block_id: 5,
                 src_block_hash: [3; 32],
                 src_tx_index: 0,
-                src_program_id: programs::ping_sender().id(),
+                src_account_id: programs::ping_sender().deployed_account_id(),
             },
             receiver_id,
             &[

@@ -299,6 +299,12 @@ impl AccountId {
     }
 }
 
+#[derive(Debug)]
+pub struct CallerData {
+    pub account_id: Option<AccountId>,
+    pub authorized_accounts: HashSet<AccountId>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ChainedCall {
     /// The `AccountId` of the program to execute.

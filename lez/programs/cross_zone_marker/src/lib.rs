@@ -4,17 +4,10 @@
 //! target that authenticates a source need the derivation, and nothing else. A
 //! target linking the inbox's core for this would tie its image id, and every PDA
 //! under it, to changes in the inbox's config types.
-//!
-//! It is the coupling this buys back, not size: the derivation needs risc0's
-//! sha, which is the bulk of what linking cost in the first place, so splitting
-//! it out barely moves the guest.
 
-use lee_core::{
-    account::AccountId,
-    program::{PdaSeed, ProgramId},
-};
+use lee_core::account::AccountId;
 
-const SOURCE_MARKER_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneSource/00000/";
+const SOURCE_MARKER_SEED_DOMAIN: AccountId = AccountId::new(*b"/LEZ/v0.3/CrossZoneSource/00000/");
 
 /// Raw 32-byte zone (channel) id.
 pub type ZoneId = [u8; 32];
@@ -30,35 +23,31 @@ pub type ZoneId = [u8; 32];
 /// The address is derivable by anyone, so it is not a secret and not a
 /// capability. What makes it mean something is that a target checks it only after
 /// pinning its caller to the inbox, and only the inbox can be that caller.
+///
+/// Unlike claimed PDAs elsewhere in this crate, this address is never verified against a
+/// real image id by the state machine (it is not a `Claim::Pda`), so it is a plain hash of
+/// the inbox's and source's real dispatch addresses rather than a `for_public_pda`
+/// derivation — both the inbox and every target already know these addresses without
+/// needing to recover any `ProgramId`.
 #[must_use]
 pub fn inbox_source_marker_account_id(
-    inbox_id: ProgramId,
+    inbox_account_id: AccountId,
     src_zone: &ZoneId,
-    src_program_id: ProgramId,
+    src_account_id: AccountId,
 ) -> AccountId {
-    AccountId::for_public_pda(
-        &inbox_id,
-        &inbox_source_marker_seed(src_zone, src_program_id),
-    )
-}
-
-/// Seed of the source marker. Private: nothing claims this account, so no caller
-/// needs the seed, only the address.
-fn inbox_source_marker_seed(src_zone: &ZoneId, src_program_id: ProgramId) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
-    let mut bytes = [0_u8; 96];
-    bytes[..32].copy_from_slice(&SOURCE_MARKER_SEED_DOMAIN);
-    bytes[32..64].copy_from_slice(src_zone);
-    for (word, chunk) in src_program_id.iter().zip(bytes[64..].chunks_exact_mut(4)) {
-        chunk.copy_from_slice(&word.to_le_bytes());
-    }
+    let mut bytes = [0_u8; 128];
+    bytes[..32].copy_from_slice(SOURCE_MARKER_SEED_DOMAIN.as_ref());
+    bytes[32..64].copy_from_slice(inbox_account_id.value());
+    bytes[64..96].copy_from_slice(src_zone);
+    bytes[96..].copy_from_slice(src_account_id.value());
 
-    let seed: [u8; 32] = Impl::hash_bytes(&bytes)
+    let hash: [u8; 32] = Impl::hash_bytes(&bytes)
         .as_bytes()
         .try_into()
         .unwrap_or_else(|_| unreachable!());
-    PdaSeed::new(seed)
+    AccountId::new(hash)
 }
 
 #[cfg(test)]
@@ -69,23 +58,23 @@ mod tests {
     /// must not land on the same account.
     #[test]
     fn the_marker_separates_every_source() {
-        let inbox: ProgramId = [1; 8];
-        let base = inbox_source_marker_account_id(inbox, &[7; 32], [9; 8]);
+        let inbox = AccountId::new([1; 32]);
+        let base = inbox_source_marker_account_id(inbox, &[7; 32], AccountId::new([9; 32]));
         assert_eq!(
             base,
-            inbox_source_marker_account_id(inbox, &[7; 32], [9; 8])
+            inbox_source_marker_account_id(inbox, &[7; 32], AccountId::new([9; 32]))
         );
         assert_ne!(
             base,
-            inbox_source_marker_account_id(inbox, &[8; 32], [9; 8])
+            inbox_source_marker_account_id(inbox, &[8; 32], AccountId::new([9; 32]))
         );
         assert_ne!(
             base,
-            inbox_source_marker_account_id(inbox, &[7; 32], [4; 8])
+            inbox_source_marker_account_id(inbox, &[7; 32], AccountId::new([4; 32]))
         );
         assert_ne!(
             base,
-            inbox_source_marker_account_id([2; 8], &[7; 32], [9; 8])
+            inbox_source_marker_account_id(AccountId::new([2; 32]), &[7; 32], AccountId::new([9; 32]))
         );
     }
 }

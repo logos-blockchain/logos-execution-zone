@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, Balance, data::DATA_MAX_LENGTH},
+    account::{AccountId, data::DATA_MAX_LENGTH},
     program::{PdaSeed, ProgramId},
 };
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,7 @@ const INBOX_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxCfg/000/";
 /// indistinguishable under one domain. Belt and braces, since the image id
 /// already relocates every PDA in this crate whenever the crate changes.
 const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/01/";
+const SOURCE_MARKER_SEED_DOMAIN: AccountId = AccountId::new(*b"/LEZ/v0.3/CrossZoneSource/00000/");
 
 /// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
 pub type ZoneId = [u8; 32];
@@ -28,20 +29,19 @@ pub type MessageKey = [u8; 32];
 /// caller choose the target, so a zone-wide allowance would let it mint with no
 /// lock behind it. That rule now lives in each target, seeded from these pairs at
 /// genesis, rather than in the inbox.
-/// Unknown fields are refused so a misspelled `mint_cap` fails startup instead
-/// of silently seeding the source uncapped.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CrossZoneRoute {
-    /// The program on the peer zone that emitted the message.
-    pub src_program_id: ProgramId,
+    /// The dispatch address of the program on the peer zone that emitted the message (matched
+    /// against its `OutboxRecord.emitter`, itself the peer's state-machine-verified caller
+    /// address — not derivable from any `ProgramId`).
+    pub src_account_id: AccountId,
     /// The program on this zone it may be delivered to.
     pub target_program_id: ProgramId,
-    /// Lifetime mint allowance for this source at the target; `None` is
-    /// uncapped. Only meaningful on a route whose target mints against the
-    /// message (`wrapped_token`); genesis refuses it on any other target.
+    /// This source's lifetime mint allowance on the target, if the target mints; refused on a
+    /// target that does not. `None` is uncapped.
     #[serde(default)]
-    pub mint_cap: Option<Balance>,
+    pub mint_cap: Option<lee_core::account::Balance>,
 }
 
 /// A peer zone whose outbox a zone watches for inbound cross-zone messages.
@@ -86,8 +86,6 @@ pub struct CrossZonePeer {
 pub struct CrossZoneConfig {
     /// Read once at startup by the watchers and the verifier, so adding a peer
     /// zone needs a config change and a restart on both sequencer and indexer.
-    /// Defaulted so a source-only zone declares `"cross_zone": {}`.
-    #[serde(default)]
     pub peers: Vec<CrossZonePeer>,
     /// Account allowed to change which peer sources each target program accepts,
     /// seeded into every target's own config at genesis.
@@ -125,8 +123,13 @@ pub struct CrossZoneMessage {
     /// without either trusting what the peer wrote.
     pub src_block_hash: [u8; 32],
     pub src_tx_index: u32,
-    pub src_program_id: ProgramId,
+    /// The emitting program's dispatch address on the peer zone (its `OutboxRecord.emitter`).
+    pub src_account_id: AccountId,
     pub target_program_id: ProgramId,
+    /// The target program's real dispatch address, used as the `ChainedCall` target. Kept
+    /// alongside `target_program_id` (its image id, still needed for identity/allowlist
+    /// bookkeeping) since the two no longer coincide under PDA-based deployment.
+    pub target_account_id: AccountId,
     pub payload: Vec<u8>,
     /// Reserved for a future source-state proof; MUST be `None` in v1.
     pub l1_inclusion_witness: Option<Vec<u8>>,
@@ -245,11 +248,23 @@ impl SeenShard {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Delivers a finalized peer message to its target program.
-    Dispatch(CrossZoneMessage),
+    Dispatch {
+        message: CrossZoneMessage,
+        /// This inbox's own image id. The guest cannot learn this at runtime, so the trusted
+        /// caller (the watcher/verifier) supplies it to recompute the inbox's own PDAs; a wrong
+        /// value only fails the guest's own self-consistency assertions, since real
+        /// authorization is independently enforced by the state layer against the account's
+        /// `program_owner`.
+        self_program_id: ProgramId,
+    },
     /// Initializes the inbox config account at genesis. Written once, into a
     /// default (unclaimed) config PDA; the guest refuses a non-default pre-state,
     /// so it cannot be re-run to overwrite the allowlists.
-    InitConfig(InboxConfig),
+    InitConfig {
+        config: InboxConfig,
+        /// See [`Dispatch::self_program_id`](Instruction::Dispatch).
+        self_program_id: ProgramId,
+    },
 }
 
 /// Content-addressed replay key for a delivered message.
@@ -316,6 +331,41 @@ pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
     PdaSeed::new(seed)
 }
 
+/// The account naming who sent a delivery, which the inbox passes at position 0
+/// of the chained call so the target can authenticate its own sources.
+///
+/// Nothing writes or claims it, so the state machine's uninitialized-account rule
+/// skips it for being unchanged rather than for being default: anyone may send it
+/// balance, and the inbox and the targets all round-trip it untouched. Unlike the
+/// claimed PDAs elsewhere in this crate, this address is never verified against a
+/// real image id by the state machine (it is not a `Claim::Pda`), so it is a
+/// plain hash of the inbox's and source's real dispatch addresses rather than a
+/// `for_public_pda` derivation — both the inbox and every target already know
+/// these addresses without needing to recover any `ProgramId`.
+///
+/// The address is derivable by anyone, so it is not a secret and not a
+/// capability. What makes it mean something is that a target checks it only after
+/// pinning its caller to the inbox, and only the inbox can be that caller.
+#[must_use]
+pub fn inbox_source_marker_account_id(
+    inbox_account_id: AccountId,
+    src_zone: &ZoneId,
+    src_account_id: AccountId,
+) -> AccountId {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+
+    let mut bytes = [0_u8; 128];
+    bytes[..32].copy_from_slice(SOURCE_MARKER_SEED_DOMAIN.as_ref());
+    bytes[32..64].copy_from_slice(inbox_account_id.value());
+    bytes[64..96].copy_from_slice(src_zone);
+    bytes[96..].copy_from_slice(src_account_id.value());
+
+    let hash: [u8; 32] = Impl::hash_bytes(&bytes)
+        .as_bytes()
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+    AccountId::new(hash)
+}
 #[cfg(test)]
 mod tests {
     use lee_core::account::data::DATA_MAX_LENGTH_BYTES;

@@ -7,8 +7,8 @@ use lee_core::{
     },
 };
 use wrapped_token_core::{
-    Instruction, MAX_MINT_AMOUNT, SourceEntry, SourcePolicy, WrappedTokenConfig, balance_bytes,
-    config_account_id, config_seed, holding_account_id, holding_seed, read_balance,
+    Instruction, MAX_MINT_AMOUNT, WrappedTokenConfig, balance_bytes, config_account_id,
+    config_seed, holding_account_id, holding_seed, read_balance,
 };
 
 fn main() {
@@ -23,19 +23,28 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     match instruction {
-        Instruction::Mint { recipient, amount } => mint(
+        Instruction::Mint {
+            self_program_id,
+            recipient,
+            amount,
+        } => mint(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_data,
+            self_program_id,
             recipient,
             amount,
         ),
-        Instruction::InitConfig(config) => init_config(
+        Instruction::InitConfig {
+            self_program_id,
+            config,
+        } => init_config(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_data,
+            self_program_id,
             &config,
         ),
         Instruction::RenounceAuthority => renounce_authority(
@@ -49,7 +58,7 @@ fn main() {
             caller_account_id,
             pre_states,
             instruction_data,
-            sources,
+            &sources,
         ),
     }
 }
@@ -59,14 +68,10 @@ fn mint(
     caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
+    self_program_id: lee_core::program::ProgramId,
     recipient: [u8; 32],
     amount: u128,
 ) {
-    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
-    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
-    // for the PDA-derivation helpers below, which are pinned to the actual image id.
-    let self_program_id = lee_core::program::ProgramId::from(self_account_id);
-
     // pre_states: [source marker, config PDA, recipient holding PDA].
     let [marker, config, holding] = <[AccountWithMetadata; 3]>::try_from(pre_states)
         .expect("Mint requires the source marker, config, and recipient holding accounts");
@@ -82,7 +87,7 @@ fn mint(
         .expect("config account holds a wrapped-token config");
     assert_eq!(
         caller_account_id,
-        Some(cfg.minter.into()),
+        Some(cfg.minter),
         "Mint is only callable by the authorized minter (the cross-zone inbox)"
     );
     // The inbox vouches only that the message arrived; which peer sent it is this
@@ -98,7 +103,7 @@ fn mint(
                 == inbox_source_marker_account_id(
                     minter,
                     &entry.policy.src_zone,
-                    entry.policy.src_program_id,
+                    entry.policy.src_account_id,
                 )
         })
         .expect("Mint is only callable for a peer source this token authorizes");
@@ -240,7 +245,7 @@ fn update_sources(
     caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
-    sources: Vec<SourcePolicy>,
+    sources: &[wrapped_token_core::SourcePolicy],
 ) {
     // See `mint`'s doc comment: exact round-trip to the actual image id, needed by the
     // PDA-derivation helpers below.
@@ -287,31 +292,24 @@ fn update_sources(
         "the configured authority must authorize a source change"
     );
 
-    // Mint advances the first matching entry, so a duplicated pair would split
-    // one source's policy across entries an auditor reads as two.
-    for (index, policy) in sources.iter().enumerate() {
-        assert!(
-            !sources[..index].iter().any(|other| {
-                other.src_zone == policy.src_zone && other.src_program_id == policy.src_program_id
-            }),
-            "UpdateSources lists the same source twice"
-        );
-    }
-    // The counter is the guest's, never the caller's: a kept source carries its
-    // spent allowance over, so an update cannot reset it, and a source removed
+    // Carry the mint counter over for a source that stays on the list, keyed by
+    // identity: an update must not reset spent allowance, and a source removed
     // and later re-added starts at zero.
-    let previous = core::mem::take(&mut cfg.sources);
     cfg.sources = sources
-        .into_iter()
-        .map(|policy| SourceEntry {
-            minted: previous
+        .iter()
+        .map(|policy| {
+            let minted = cfg
+                .sources
                 .iter()
                 .find(|entry| {
                     entry.policy.src_zone == policy.src_zone
-                        && entry.policy.src_program_id == policy.src_program_id
+                        && entry.policy.src_account_id == policy.src_account_id
                 })
-                .map_or(0, |entry| entry.minted),
-            policy,
+                .map_or(0, |entry| entry.minted);
+            wrapped_token_core::SourceEntry {
+                policy: policy.clone(),
+                minted,
+            }
         })
         .collect();
     let mut config_account = config.account.clone();
@@ -342,6 +340,7 @@ fn init_config(
     caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
+    self_program_id: lee_core::program::ProgramId,
     config_value: &WrappedTokenConfig,
 ) {
     assert!(
@@ -354,7 +353,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        config_account_id(self_account_id.into()),
+        config_account_id(self_program_id),
         "account must be the wrapped-token config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first

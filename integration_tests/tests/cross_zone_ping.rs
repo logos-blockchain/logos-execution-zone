@@ -26,8 +26,7 @@ use ping_core::{
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
-    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
-    config::{MultiNodeTestContextConfig, source_only_cross_zone},
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
 };
 use tokio::test;
 
@@ -49,7 +48,9 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
             allowed_routes: vec![CrossZoneRoute {
-                src_program_id: programs::ping_sender().id(),
+                src_account_id: program_loader_core::immutable_deploy_account_id(
+                    programs::ping_sender().id(),
+                ),
                 target_program_id: receiver_id,
                 mint_cap: None,
             }],
@@ -69,8 +70,7 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
             .disable_wallet()
             .disable_indexer()
             .with_sequencer_partial_config(partial)
-            .with_genesis(vec![])
-            .with_cross_zone(Some(source_only_cross_zone())),
+            .with_genesis(vec![]),
         )
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
@@ -121,11 +121,14 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
 
     // The payload is the ping_receiver instruction, borsh-serialized into instruction_data bytes.
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
+        self_program_id: receiver_id,
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping instruction");
 
+    let sender_id = programs::ping_sender().id();
     let send = SenderInstruction::Send {
+        self_program_id: sender_id,
         target_zone,
         target_program_id: receiver_id,
         target_accounts: vec![
@@ -136,10 +139,14 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
         ordinal,
     };
 
-    let sender_id = programs::ping_sender().id();
-    let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
+    let outbox_account = outbox_pda(
+        outbox_id,
+        program_loader_core::immutable_deploy_account_id(sender_id),
+        &target_zone,
+        ordinal,
+    );
     let message = Message::try_new(
-        sender_id.into(),
+        program_loader_core::immutable_deploy_account_id(sender_id),
         vec![sender_config_account_id(sender_id), outbox_account],
         vec![],
         send,

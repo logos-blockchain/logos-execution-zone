@@ -17,7 +17,8 @@ fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<Acc
             (
                 account_id,
                 Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+                    program_owner: crate::test_methods::simple_balance_transfer()
+                        .deployed_account_id(),
                     balance,
                     ..Account::default()
                 },
@@ -41,14 +42,9 @@ fn public_diff_reflects_a_successful_transfer() {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id = crate::test_methods::simple_balance_transfer().id();
-    let message = Message::try_new(
-        program_id.into(),
-        vec![from, to],
-        vec![Nonce(0), Nonce(0)],
-        5_u128,
-    )
-    .unwrap();
+    let program_id = crate::test_methods::simple_balance_transfer().deployed_account_id();
+    let message =
+        Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
     let tx = crate::PublicTransaction::new(message, witness_set);
 

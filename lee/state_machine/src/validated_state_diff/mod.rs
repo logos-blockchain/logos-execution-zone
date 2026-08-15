@@ -92,7 +92,6 @@ impl ValidatedStateDiff {
 
         let initial_caller_data = CallerData {
             account_id: None,
-            caller_image_id: None,
             authorized_accounts: signer_account_ids.iter().copied().collect(),
         };
 
@@ -106,10 +105,15 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
-            let authorized_pdas = compute_public_authorized_pdas(
-                caller_data.caller_image_id,
-                &chained_call.pda_seeds,
-            );
+            // The caller's real `image_id`, re-derived from its dispatch address — needed because
+            // a `Deploy`-created caller's address doesn't encode its image id, unlike the legacy
+            // bijection this used to (incorrectly) assume.
+            let caller_image_id = caller_data
+                .account_id
+                .map(|caller_account_id| real_image_id(state, caller_account_id))
+                .transpose()?;
+            let authorized_pdas =
+                compute_public_authorized_pdas(caller_image_id, &chained_call.pda_seeds);
 
             // Account is authorized if it is either in the caller's authorized accounts or in the
             // list of PDAs the caller has authorized.
@@ -330,7 +334,6 @@ impl ValidatedStateDiff {
                     new_call,
                     CallerData {
                         account_id: Some(chained_call.program_account_id),
-                        caller_image_id: Some(program_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
@@ -524,12 +527,21 @@ impl ValidatedStateDiff {
 #[derive(Debug)]
 struct CallerData {
     account_id: Option<AccountId>,
-    /// The caller's real `image_id`, recovered when the caller itself was dispatched (see
-    /// `V03State::get_program`) rather than guessed from `account_id` via the bijection — needed
-    /// wherever PDA derivation requires the caller's actual identity, since a `Deploy`-created
-    /// caller's address doesn't encode it.
-    caller_image_id: Option<ProgramId>,
     authorized_accounts: HashSet<AccountId>,
+}
+
+/// The real `image_id` a dispatch address currently resolves to, sourced from the program's own
+/// account rather than guessed from its address — a `Deploy`-created program's address doesn't
+/// encode its image id, unlike the legacy bijection this used to (incorrectly) assume, and its
+/// address can outlive its current bytecode (upgrades).
+fn real_image_id(state: &V03State, account_id: AccountId) -> Result<ProgramId, LeeError> {
+    if account_id == DEPLOYMENT_PROGRAM_ACCOUNT_ID {
+        return Ok(ProgramId::from(DEPLOYMENT_PROGRAM_ACCOUNT_ID));
+    }
+    state
+        .get_program(account_id)
+        .map(|(image_id, _elf)| image_id)
+        .ok_or_else(|| LeeError::InvalidInput("Unknown program".into()))
 }
 
 /// Executes a chained call, dispatching to the native `Deploy` fast path when the call targets

@@ -141,7 +141,7 @@ mod inner {
 
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
             let message = public_transaction::Message::try_new(
-                bridge().id().into(),
+                bridge().deployed_account_id(),
                 vec![
                     bridge_core::compute_bridge_account_id(bridge().id()),
                     vault_core::compute_vault_account_id(vault().id(), recipient_id),
@@ -150,7 +150,9 @@ mod inner {
                 vec![],
                 bridge_core::Instruction::Deposit {
                     l1_deposit_op_id: op_id,
+                    self_program_id: bridge().id(),
                     vault_program_id: vault().id(),
+                    vault_account_id: vault().deployed_account_id(),
                     recipient_id,
                     amount,
                 },
@@ -169,7 +171,7 @@ mod inner {
             let op_id = [9; 32];
             let amount = 1_000;
             let auth_transfer_owned = Account {
-                program_owner: authenticated_transfer().id().into(),
+                program_owner: authenticated_transfer().deployed_account_id(),
                 ..Account::default()
             };
 

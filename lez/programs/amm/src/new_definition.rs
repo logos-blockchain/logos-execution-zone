@@ -111,14 +111,17 @@ pub fn new_definition(
     let pool_pda_seed = compute_pool_pda_seed(definition_token_a_id, definition_token_b_id);
     let pool_post = AccountPostState::new_claimed_if_default(pool_post, Claim::Pda(pool_pda_seed));
 
-    let token_program_id: lee_core::program::ProgramId =
-        user_holding_a.account.program_owner.into();
+    let token_program_id = user_holding_a.account.program_owner;
 
     // Chain call for Token A (user_holding_a -> Vault_A)
     let vault_a_seed = compute_vault_pda_seed(pool.account_id, definition_token_a_id);
+    let vault_a_authorized = AccountWithMetadata {
+        is_authorized: true,
+        ..vault_a.clone()
+    };
     let call_token_a = ChainedCall::new(
-        token_program_id.into(),
-        vec![user_holding_a.account_id, vault_a.account_id],
+        token_program_id,
+        vec![user_holding_a.account_id, vault_a_authorized.account_id],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_a_amount.into(),
         },
@@ -127,9 +130,13 @@ pub fn new_definition(
 
     // Chain call for Token B (user_holding_b -> Vault_B)
     let vault_b_seed = compute_vault_pda_seed(pool.account_id, definition_token_b_id);
+    let vault_b_authorized = AccountWithMetadata {
+        is_authorized: true,
+        ..vault_b.clone()
+    };
     let call_token_b = ChainedCall::new(
-        token_program_id.into(),
-        vec![user_holding_b.account_id, vault_b.account_id],
+        token_program_id,
+        vec![user_holding_b.account_id, vault_b_authorized.account_id],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_b_amount.into(),
         },
@@ -137,9 +144,13 @@ pub fn new_definition(
     .with_pda_seeds(vec![vault_b_seed]);
 
     let pool_lp_pda_seed = compute_liquidity_token_pda_seed(pool.account_id);
+    let pool_lp_authorized = AccountWithMetadata {
+        is_authorized: true,
+        ..pool_definition_lp.clone()
+    };
     let call_token_lp = ChainedCall::new(
-        token_program_id.into(),
-        vec![pool_definition_lp.account_id, user_holding_lp.account_id],
+        token_program_id,
+        vec![pool_lp_authorized.account_id, user_holding_lp.account_id],
         &instruction,
     )
     .with_pda_seeds(vec![pool_lp_pda_seed]);

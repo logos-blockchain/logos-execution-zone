@@ -2173,13 +2173,16 @@ fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTrans
         .expect("genesis stake total overflow");
 
     let fund_message = Message::try_new(
-        programs::faucet().id().into(),
+        program_loader_core::immutable_deploy_account_id(programs::faucet().id()),
         vec![
             system_accounts::faucet_account_id(),
             genesis_stake_funding_account(),
         ],
         vec![lee_core::account::Nonce(0)],
-        faucet_core::Instruction::GenesisTransferDirect { amount: total },
+        faucet_core::Instruction::GenesisTransferDirect {
+            self_program_id: programs::faucet().id(),
+            amount: total,
+        },
     )
     .expect("Failed to build genesis funding message");
     // The funding account signs even though it is only receiving. It is a brand
@@ -2232,8 +2235,8 @@ fn bridge_lock_holdings(
 /// must be rejected at ingress, since `TransactionOrigin` is not carried in the
 /// block.
 #[must_use]
-pub fn is_sequencer_only_program(program_id: lee::ProgramId) -> bool {
-    cross_zone::is_sequencer_only_program(program_id)
+pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
+    cross_zone::is_sequencer_only_program(account_id)
 }
 
 fn build_supply_account_genesis_transaction(
@@ -2245,11 +2248,12 @@ fn build_supply_account_genesis_transaction(
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, *account_id);
 
     let message = Message::try_new(
-        faucet_program_id.into(),
+        program_loader_core::immutable_deploy_account_id(faucet_program_id),
         vec![system_accounts::faucet_account_id(), recipient_vault_id],
         Vec::new(),
         faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
+            self_program_id: faucet_program_id,
+            vault_account_id: program_loader_core::immutable_deploy_account_id(vault_program_id),
             recipient_id: *account_id,
             amount: balance,
         },
@@ -2273,10 +2277,13 @@ fn build_supply_holding_genesis_transaction(
     let faucet_program_id = programs::faucet().id();
 
     let message = Message::try_new(
-        faucet_program_id.into(),
+        program_loader_core::immutable_deploy_account_id(faucet_program_id),
         vec![system_accounts::faucet_account_id(), recipient],
         Vec::new(),
-        faucet_core::Instruction::GenesisTransferDirect { amount: balance },
+        faucet_core::Instruction::GenesisTransferDirect {
+            self_program_id: faucet_program_id,
+            amount: balance,
+        },
     )
     .expect("Failed to serialize faucet genesis transfer instruction");
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
@@ -2307,7 +2314,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         bridge_core::deposit_receipt_account_id(bridge_program_id, event.deposit_op_id.0);
 
     let message = Message::try_new(
-        bridge_program_id.into(),
+        program_loader_core::immutable_deploy_account_id(bridge_program_id),
         vec![
             system_accounts::bridge_account_id(),
             recipient_vault_id,
@@ -2316,7 +2323,9 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         Vec::new(),
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
+            self_program_id: bridge_program_id,
             vault_program_id,
+            vault_account_id: program_loader_core::immutable_deploy_account_id(vault_program_id),
             recipient_id: metadata.recipient_id,
             amount: event.amount,
         },
@@ -2419,7 +2428,7 @@ fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
 #[must_use]
 fn is_sequencer_only_tx(tx: &LeeTransaction) -> bool {
     matches!(tx, LeeTransaction::Public(tx)
-        if is_sequencer_only_program(lee::ProgramId::from(tx.message().program_account_id)))
+        if is_sequencer_only_program(tx.message().program_account_id))
 }
 
 /// The cross-zone message an inbox dispatch delivers, or `None` if `tx` is not
@@ -2431,13 +2440,15 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
     };
 
     let message = tx.message();
-    if message.program_account_id != programs::cross_zone_inbox().id().into() {
+    if message.program_account_id
+        != program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id())
+    {
         return None;
     }
 
     match borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data) {
-        Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) => Some(msg),
-        Ok(cross_zone_inbox_core::Instruction::InitConfig(_)) | Err(_) => None,
+        Ok(cross_zone_inbox_core::Instruction::Dispatch { message, .. }) => Some(message),
+        Ok(cross_zone_inbox_core::Instruction::InitConfig { .. }) | Err(_) => None,
     }
 }
 
@@ -2537,7 +2548,9 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     };
 
     let message = tx.message();
-    if message.program_account_id != programs::bridge().id().into() {
+    if message.program_account_id
+        != program_loader_core::immutable_deploy_account_id(programs::bridge().id())
+    {
         return None;
     }
 
@@ -2559,7 +2572,9 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     };
 
     let message = tx.message();
-    if message.program_account_id != programs::bridge().id().into() {
+    if message.program_account_id
+        != program_loader_core::immutable_deploy_account_id(programs::bridge().id())
+    {
         return None;
     }
 

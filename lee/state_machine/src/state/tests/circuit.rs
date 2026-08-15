@@ -498,8 +498,7 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps =
-        ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
+    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -531,8 +530,7 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps =
-        ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
+    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
 
     let result = execute_and_prove(
         vec![pre_state],

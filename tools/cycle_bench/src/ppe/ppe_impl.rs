@@ -43,15 +43,16 @@ pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
 
 pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
     let auth_transfer = programs::authenticated_transfer();
-    let auth_transfer_id = auth_transfer.id();
-    let pwd = ProgramWithDependencies::from(auth_transfer);
+    let auth_transfer_account_id = auth_transfer.deployed_account_id();
+    let pwd = ProgramWithDependencies::from(auth_transfer)
+        .with_program_account_id(auth_transfer_account_id);
 
     // For PPE to allow the sender's balance to be decremented by this
     // program, the sender must already be claimed by auth_transfer.
     // Recipient stays default-owned so the first call can claim it.
     let sender = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id.into(),
+            program_owner: auth_transfer_account_id,
             balance: 1_000_000,
             ..Account::default()
         },
@@ -107,9 +108,9 @@ fn prove_chain_caller(
 ) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
     let chain_caller = test_programs::chain_caller();
     let auth_transfer = programs::authenticated_transfer();
-    let auth_transfer_id = auth_transfer.id();
+    let auth_transfer_account_id = auth_transfer.deployed_account_id();
     let mut deps = HashMap::new();
-    deps.insert(auth_transfer.id().into(), auth_transfer);
+    deps.insert(auth_transfer_account_id, auth_transfer);
     let pwd = ProgramWithDependencies::new(chain_caller, deps);
 
     // Both accounts pre-claimed by auth_transfer. chain_caller doesn't
@@ -117,7 +118,7 @@ fn prove_chain_caller(
     // would cause a state mismatch on subsequent chained calls.
     let recipient_pre = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id.into(),
+            program_owner: auth_transfer_account_id,
             ..Account::default()
         },
         is_authorized: true,
@@ -125,7 +126,7 @@ fn prove_chain_caller(
     };
     let sender_pre = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id.into(),
+            program_owner: auth_transfer_account_id,
             balance: 1_000_000,
             ..Account::default()
         },
@@ -137,7 +138,7 @@ fn prove_chain_caller(
 
     let balance: u128 = 1;
     let pda_seed: Option<lee_core::program::PdaSeed> = None;
-    let instruction = (balance, auth_transfer_id, num_chain_calls, pda_seed);
+    let instruction = (balance, auth_transfer_account_id, num_chain_calls, pda_seed);
     let instruction_data = to_vec(&instruction)?;
 
     let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];

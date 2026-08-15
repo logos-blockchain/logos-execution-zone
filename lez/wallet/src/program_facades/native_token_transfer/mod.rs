@@ -1,4 +1,6 @@
-use lee::{Account, program::Program};
+use lee::{
+    Account, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+};
 use lee_core::program::InstructionData;
 
 use crate::{ExecutionFailureKind, WalletCore};
@@ -13,6 +15,12 @@ pub mod shielded;
     reason = "impl blocks split across multiple files for organization"
 )]
 pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
+
+pub(super) fn auth_transfer_program_with_deps() -> ProgramWithDependencies {
+    ProgramWithDependencies::from(programs::authenticated_transfer()).with_program_account_id(
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id()),
+    )
+}
 
 fn auth_transfer_preparation(
     balance_to_move: u128,

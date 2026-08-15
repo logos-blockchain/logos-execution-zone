@@ -156,8 +156,8 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     })
     .unwrap();
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id(),
-        callback_program_id: emitter.id(),
+        token_program_id: token.deployed_account_id(),
+        callback_program_id: emitter.deployed_account_id(),
         amount_out: 0,
         callback_instruction_data,
     };

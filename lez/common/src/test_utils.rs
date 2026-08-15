@@ -79,11 +79,12 @@ pub fn produce_dummy_block(
 
 #[must_use]
 pub fn produce_dummy_empty_transaction() -> LeeTransaction {
-    let program_id = programs::authenticated_transfer().id();
+    let program_id =
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id());
     let account_ids = vec![];
     let nonces = vec![];
     let message = lee::public_transaction::Message::try_new(
-        program_id.into(),
+        program_id,
         account_ids,
         nonces,
         authenticated_transfer_core::Instruction::Initialize,
@@ -107,9 +108,10 @@ pub fn create_transaction_native_token_transfer(
 ) -> LeeTransaction {
     let account_ids = vec![from, to];
     let nonces = vec![nonce.into()];
-    let program_id = programs::authenticated_transfer().id();
+    let program_id =
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id());
     let message = lee::public_transaction::Message::try_new(
-        program_id.into(),
+        program_id,
         account_ids,
         nonces,
         authenticated_transfer_core::Instruction::Transfer {
