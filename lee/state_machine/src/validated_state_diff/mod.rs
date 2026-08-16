@@ -128,13 +128,7 @@ impl ValidatedStateDiff {
             let mut program_output = if chained_call.program_account_id
                 == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
             {
-                // Runs `Deploy` as native Rust instead of interpreting a guest ELF — see
-                // `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc comment for why.
-                //
-                // `execute_deploy` validates its input via `assert!`/`.expect(...)`, exactly
-                // like every guest program in this codebase, relying here on `catch_unwind` to
-                // play the same role the zkVM executor plays for a real guest: converting a
-                // rejected input into a graceful `Err` instead of unwinding past this call.
+                // Runs `Deploy` as native Rust instead of interpreting a guest ELF.
                 let loader_core::Instruction::Deploy { bytecode } =
                     risc0_zkvm::serde::from_slice(&chained_call.instruction_data).map_err(|e| {
                         LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))

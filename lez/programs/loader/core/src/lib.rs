@@ -88,11 +88,6 @@ pub fn deploy_account_id(
 
 /// Executes the `Deploy` instruction: verifies `bytecode` decodes as a valid RISC0 program
 /// binary, derives its `ProgramData` PDA, and claims it.
-///
-/// Shared, target-independent logic: called both from the guest binary (`loader_program`) and,
-/// natively, from dispatch's `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut (see that
-/// constant's doc comment in `lee_core::program`) — the two must stay identical, so this is the
-/// single implementation both wrap around.
 #[must_use]
 pub fn execute_deploy(
     self_program_id: ProgramId,
