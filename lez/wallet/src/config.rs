@@ -58,6 +58,9 @@ impl Default for MultiSequencerClientConfig {
 #[optfield::optfield(pub WalletConfigOverrides, rewrap, attrs = (derive(Debug, Default, Clone)))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
+    /// Legacy top-level sequencer address for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequencer_addr: Option<Url>,
     /// Connection data of all known sequencers.
     pub sequencers: Vec<SequencerConnectionData>,
     /// Sequencer polling duration for new blocks.
@@ -76,6 +79,7 @@ pub struct WalletConfig {
 impl Default for WalletConfig {
     fn default() -> Self {
         Self {
+            sequencer_addr: None,
             sequencers: vec![SequencerConnectionData {
                 sequencer_addr: "https://testnet.lez.logos.co".parse().unwrap(),
                 basic_auth: None,
@@ -94,7 +98,16 @@ impl WalletConfig {
         match std::fs::File::open(config_path) {
             Ok(file) => {
                 let reader = std::io::BufReader::new(file);
-                Ok(serde_json::from_reader(reader)?)
+                let mut config: WalletConfig = serde_json::from_reader(reader)?;
+                if config.sequencers.is_empty() {
+                    if let Some(ref addr) = config.sequencer_addr {
+                        config.sequencers.push(SequencerConnectionData {
+                            sequencer_addr: addr.clone(),
+                            basic_auth: None,
+                        });
+                    }
+                }
+                Ok(config)
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 println!("Config not found, setting up default config");
