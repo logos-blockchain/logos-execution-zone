@@ -140,12 +140,11 @@ impl ValidatedStateDiff {
                 let bytecode = message.raw_payload.clone().ok_or_else(|| {
                     LeeError::InvalidInput("Deploy requires a raw_payload".into())
                 })?;
-                let deploy_pre_states = chained_call.pre_states.clone();
                 let post_states = std::panic::catch_unwind(|| {
                     program_loader_core::execute_deploy(
                         chained_call.program_account_id,
-                        deploy_pre_states,
-                        bytecode,
+                        &chained_call.pre_states,
+                        &bytecode,
                         update_auth,
                     )
                 })
@@ -164,7 +163,7 @@ impl ValidatedStateDiff {
                 // guessed from its address — see `V03State::get_program`'s doc comment for
                 // why that distinction matters once a program's address can outlive its
                 // current bytecode (upgrades).
-                let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)
+                let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)?
                 else {
                     return Err(LeeError::InvalidInput("Unknown program".into()));
                 };
@@ -562,7 +561,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         .program_image_claims
         .iter()
         .map(|claim| {
-            let (image_id, _elf) = state.get_program(claim.account_id).ok_or_else(|| {
+            let (image_id, _elf) = state.get_program(claim.account_id)?.ok_or_else(|| {
                 LeeError::InvalidInput(format!("Unknown program {}", claim.account_id))
             })?;
             Ok(ProgramImageClaim {

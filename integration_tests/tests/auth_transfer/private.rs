@@ -586,10 +586,10 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
 async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let faucet_chain_caller = test_programs::faucet_chain_caller();
     let bytecode = faucet_chain_caller.elf().to_vec();
-    let (faucet_chain_caller_header, faucet_chain_caller_segment) = deploy_targets(&bytecode);
+    let (faucet_chain_caller_header, faucet_chain_caller_segments) = deploy_targets(&bytecode);
     let deploy_tx = LeeTransaction::Public(deploy_transaction(
         faucet_chain_caller_header,
-        faucet_chain_caller_segment,
+        &faucet_chain_caller_segments,
         &bytecode,
     ));
 
