@@ -12,6 +12,7 @@ workspace = true
 test-utils = []
 
 [dependencies]
+bincode.workspace = true
 lee.workspace = true
 lee_core.workspace = true
 programs.workspace = true
@@ -26,6 +27,7 @@ serde.workspace = true
 risc0-zkvm.workspace = true
 hex.workspace = true
 logos-blockchain-core.workspace = true
+logos-blockchain-codec.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 sha2.workspace = true
 thiserror.workspace = true

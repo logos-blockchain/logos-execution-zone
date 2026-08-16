@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use bincode::Options as _;
+use cacp_bond_core::ACCEPT_CANDIDATE_DOMAIN;
 use logos_blockchain_core::mantle::{
     SignedMantleTx,
     ops::{
@@ -13,6 +15,7 @@ use logos_blockchain_core::mantle::{
     transactions::{MantleTx, MantleTxBuilder, OpsProofs, TxHash, states::Unverified},
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
@@ -206,6 +209,79 @@ pub struct Accept {
     pub funding_proof: Option<OpProof>,
 }
 
+impl Accept {
+    pub fn candidate(&self) -> Result<AcceptCandidate, CacpError> {
+        AcceptCandidate::new(self.tx.clone(), self.funding_proof.clone())
+    }
+}
+
+/// The exact funded transaction and fee proof that A must be able to recover
+/// before it can safely produce FINALIZE. B's signature is committed
+/// separately by the bond state.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AcceptCandidate {
+    pub tx: MantleTx,
+    pub funding_proof: Option<OpProof>,
+}
+
+impl AcceptCandidate {
+    pub fn new(tx: MantleTx, funding_proof: Option<OpProof>) -> Result<Self, CacpError> {
+        let candidate = Self { tx, funding_proof };
+        candidate.validate_shape()?;
+        Ok(candidate)
+    }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>, CacpError> {
+        self.validate_shape()?;
+        let mut bytes = ACCEPT_CANDIDATE_DOMAIN.to_vec();
+        bytes.extend_from_slice(self.tx.hash().as_ref());
+        let body = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .serialize(self)
+            .map_err(|_error| CacpError::InvalidAcceptCandidate)?;
+        bytes.extend(body);
+        Ok(bytes)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, CacpError> {
+        let body = bytes
+            .strip_prefix(ACCEPT_CANDIDATE_DOMAIN)
+            .ok_or(CacpError::InvalidAcceptCandidate)?;
+        let (encoded_hash, body) = body
+            .split_at_checked(32)
+            .ok_or(CacpError::InvalidAcceptCandidate)?;
+        let candidate: Self = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .reject_trailing_bytes()
+            .deserialize(body)
+            .map_err(|_error| CacpError::InvalidAcceptCandidate)?;
+        candidate.validate_shape()?;
+        if candidate.tx.hash().as_ref() != encoded_hash {
+            return Err(CacpError::InvalidAcceptCandidate);
+        }
+        Ok(candidate)
+    }
+
+    fn validate_shape(&self) -> Result<(), CacpError> {
+        let ops = self.tx.ops();
+        let inscriptions_are_first = ops
+            .get(..PARTICIPANT_COUNT)
+            .is_some_and(|ops| ops.iter().all(|op| matches!(op, Op::ChannelInscribe(_))));
+        let valid = match (ops.len(), &self.funding_proof) {
+            (PARTICIPANT_COUNT, None) => inscriptions_are_first,
+            (len, Some(OpProof::ZkSig(_))) if len == PARTICIPANT_COUNT + 1 => {
+                inscriptions_are_first && matches!(ops.last(), Some(Op::Transfer(_)))
+            }
+            _ => false,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(CacpError::InvalidAcceptCandidate)
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Finalize {
     pub signed_tx: SignedMantleTx<Unverified>,
@@ -273,6 +349,7 @@ impl InitiatorSession {
         }
         require_key(signing_key, &self.topology.initiator)?;
         validate_joint_tx(&accept.tx, &self.intent, &self.topology, &self.parents)?;
+        accept.candidate()?;
 
         let tx_hash = accept.tx.hash();
         self.topology
@@ -335,6 +412,8 @@ pub struct CounterpartySession {
     parents: [ChannelParent; PARTICIPANT_COUNT],
     phase: Phase,
     accepted_tx: Option<MantleTx>,
+    accepted_counterparty_proof: Option<Ed25519Signature>,
+    accepted_funding_proof: Option<OpProof>,
     signed_tx: Option<SignedMantleTx<Unverified>>,
 }
 
@@ -351,6 +430,8 @@ impl CounterpartySession {
             parents,
             phase: Phase::WaitingForAccept,
             accepted_tx: None,
+            accepted_counterparty_proof: None,
+            accepted_funding_proof: None,
             signed_tx: None,
         })
     }
@@ -371,6 +452,8 @@ impl CounterpartySession {
         let proof = signing_key.sign_payload(tx.hash().as_signing_bytes().as_ref());
         self.phase = Phase::WaitingForFinalize;
         self.accepted_tx = Some(tx.clone());
+        self.accepted_counterparty_proof = Some(proof);
+        self.accepted_funding_proof = None;
         Ok(Accept {
             tx,
             counterparty_proof: proof,
@@ -407,9 +490,12 @@ impl CounterpartySession {
         {
             return Err(CacpError::InvalidJointTransaction);
         }
+        AcceptCandidate::new(funded_tx.clone(), Some(funding_proof.clone()))?;
         let proof = signing_key.sign_payload(funded_tx.hash().as_signing_bytes().as_ref());
         self.phase = Phase::WaitingForFinalize;
         self.accepted_tx = Some(funded_tx.clone());
+        self.accepted_counterparty_proof = Some(proof);
+        self.accepted_funding_proof = Some(funding_proof.clone());
         Ok(Accept {
             tx: funded_tx,
             counterparty_proof: proof,
@@ -428,6 +514,7 @@ impl CounterpartySession {
         if finalize.signed_tx.mantle_tx() != accepted_tx {
             return Err(CacpError::TransactionMismatch);
         }
+        self.validate_finalize_proofs(&finalize.signed_tx)?;
         finalize
             .signed_tx
             .clone()
@@ -435,6 +522,43 @@ impl CounterpartySession {
             .map_err(|_error| CacpError::InvalidSignedTransaction)?;
         self.phase = Phase::SignaturesExchanged;
         self.signed_tx = Some(finalize.signed_tx);
+        Ok(())
+    }
+
+    fn validate_finalize_proofs(
+        &self,
+        signed_tx: &SignedMantleTx<Unverified>,
+    ) -> Result<(), CacpError> {
+        if signed_tx.ops_proofs().len() != signed_tx.mantle_tx().ops().len() {
+            return Err(CacpError::ProofMismatch);
+        }
+        let counterparty_proof = self
+            .accepted_counterparty_proof
+            .ok_or(CacpError::UnexpectedPhase)?;
+        for (operation, proof) in signed_tx.ops_with_proof() {
+            match operation {
+                Op::ChannelInscribe(inscription)
+                    if inscription.channel_id == self.topology.initiator.channel_id =>
+                {
+                    if !matches!(proof, OpProof::Ed25519Sig(_)) {
+                        return Err(CacpError::ProofMismatch);
+                    }
+                }
+                Op::ChannelInscribe(inscription)
+                    if inscription.channel_id == self.topology.counterparty.channel_id =>
+                {
+                    require_committed_proof(&OpProof::Ed25519Sig(counterparty_proof), proof)?;
+                }
+                Op::Transfer(_) => {
+                    let expected = self
+                        .accepted_funding_proof
+                        .as_ref()
+                        .ok_or(CacpError::ProofMismatch)?;
+                    require_committed_proof(expected, proof)?;
+                }
+                _ => return Err(CacpError::ProofMismatch),
+            }
+        }
         Ok(())
     }
 
@@ -598,6 +722,10 @@ pub enum CacpError {
     InvalidJointTransaction,
     #[error("the fully signed transaction is invalid")]
     InvalidSignedTransaction,
+    #[error("the final proofs differ from the proofs accepted during negotiation")]
+    ProofMismatch,
+    #[error("the ACCEPT candidate encoding or operation/proof shape is invalid")]
+    InvalidAcceptCandidate,
 }
 
 #[derive(Debug, Error, Eq, PartialEq)]
@@ -703,6 +831,14 @@ fn proofs_in_operation_order(
     OpsProofs::try_from(proofs).map_err(|_error| CacpError::InvalidJointTransaction)
 }
 
+fn require_committed_proof(expected: &OpProof, actual: &OpProof) -> Result<(), CacpError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(CacpError::ProofMismatch)
+    }
+}
+
 fn validate_parents(
     intent: &CrossZoneIntent,
     parents: &[ChannelParent; PARTICIPANT_COUNT],
@@ -731,6 +867,13 @@ fn require_key(key: &Ed25519Key, sequencer: &ZoneSequencer) -> Result<(), CacpEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use logos_blockchain_codec::BinaryDecodeExt as _;
+    use logos_blockchain_core::mantle::{
+        NoteId,
+        ledger::{Inputs, Outputs},
+        ops::transfer::TransferOp,
+    };
+    use logos_blockchain_key_management_system_service::keys::ZkSignature;
 
     const KEY_A: [u8; 32] = [0xA1; 32];
     const KEY_B: [u8; 32] = [0xB2; 32];
@@ -975,5 +1118,82 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fixture.intent.proposal_id(), reversed.proposal_id());
+    }
+
+    #[test]
+    fn substituted_transfer_fee_proof_is_rejected_by_receive_finalize() {
+        let fixture = fixture();
+        let mut initiator = InitiatorSession::new(
+            fixture.topology.clone(),
+            fixture.intent.clone(),
+            fixture.parents,
+        )
+        .unwrap();
+        let mut counterparty = CounterpartySession::new(
+            fixture.topology.clone(),
+            fixture.intent.clone(),
+            fixture.parents,
+        )
+        .unwrap();
+        let raw = build_joint_tx(&fixture.intent, &fixture.topology, &fixture.parents).unwrap();
+        let mut note_bytes = [0_u8; 32];
+        note_bytes[0] = 1;
+        let (remaining, note_id) = NoteId::decode(&note_bytes).unwrap();
+        assert!(remaining.is_empty());
+        let funded_tx = MantleTxBuilder::new()
+            .extend_ops(raw.ops().iter().cloned())
+            .unwrap()
+            .push_op(Op::Transfer(TransferOp::new(
+                Inputs::new([note_id]),
+                Outputs::empty(),
+            )))
+            .unwrap()
+            .build()
+            .unwrap();
+        let accepted_funding_proof = zk_proof(1);
+        let accept = counterparty
+            .receive_funded_propose(
+                &initiator.propose(),
+                funded_tx,
+                accepted_funding_proof.clone(),
+                &fixture.key_b,
+            )
+            .unwrap();
+        let candidate = accept.candidate().unwrap();
+        assert_eq!(
+            AcceptCandidate::from_bytes(&candidate.to_bytes().unwrap()).unwrap(),
+            candidate
+        );
+        let finalize = initiator.receive_accept(accept, &fixture.key_a).unwrap();
+        let mut substituted_proofs = finalize
+            .signed_tx
+            .ops_proofs()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        substituted_proofs[PARTICIPANT_COUNT] = zk_proof(2);
+        let substituted = Finalize {
+            signed_tx: SignedMantleTx::new(
+                finalize.signed_tx.mantle_tx().clone(),
+                OpsProofs::try_from(substituted_proofs).unwrap(),
+            ),
+        };
+
+        assert_eq!(
+            counterparty.receive_finalize(substituted),
+            Err(CacpError::ProofMismatch)
+        );
+        assert_eq!(counterparty.receive_finalize(finalize), Ok(()));
+        assert_eq!(
+            require_committed_proof(&accepted_funding_proof, &accepted_funding_proof),
+            Ok(())
+        );
+    }
+
+    fn zk_proof(byte: u8) -> OpProof {
+        let bytes = [byte; 128];
+        let (remaining, signature) = ZkSignature::decode(&bytes).unwrap();
+        assert!(remaining.is_empty());
+        OpProof::ZkSig(signature)
     }
 }

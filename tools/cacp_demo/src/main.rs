@@ -4,16 +4,17 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use cacp_bond_core::{
-    BondState, Instruction as BondInstruction, MantleSignature, Settlement, escrow_account_id,
-    proof_commitment, state_account_id,
+    BondState, Instruction as BondInstruction, MantleSignature, Settlement,
+    accept_candidate_commitment, escrow_account_id, proof_commitment, state_account_id,
 };
 use clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID;
 use common::transaction::LeeTransaction;
 use cross_zone::cacp::{
-    ChannelParent, CostlyAbortBondTerms, CounterpartySession, CrossZoneIntent, InitiatorSession,
-    InscribeIntent, Phase, TimeoutOutcome, TwoZoneTopology, ZoneSequencer,
+    CacpError, ChannelParent, CostlyAbortBondTerms, CounterpartySession, CrossZoneIntent, Finalize,
+    InitiatorSession, InscribeIntent, Phase, TimeoutOutcome, TwoZoneTopology, ZoneSequencer,
 };
 use lee::{AccountId, PrivateKey, PublicKey, PublicTransaction, public_transaction};
+use logos_blockchain_codec::{BinaryDecodeExt as _, BinaryEncode as _};
 use logos_blockchain_core::mantle::{
     SignedMantleTx,
     gas::GasCost,
@@ -28,7 +29,7 @@ use logos_blockchain_core::mantle::{
     transactions::{MantleTx, MantleTxBuilder, OpsProofs, states::Unverified},
 };
 use logos_blockchain_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkSignature};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
@@ -233,10 +234,39 @@ async fn funded_phase_three(
         &network.key_b,
     )?;
     let finalize = initiator.receive_accept(accept, &network.key_a)?;
+    let substituted = substitute_transfer_fee_proof(&finalize)?;
+    ensure!(
+        counterparty.receive_finalize(substituted) == Err(CacpError::ProofMismatch),
+        "B accepted a FINALIZE whose Transfer proof differs from the funded candidate"
+    );
     counterparty.receive_finalize(finalize)?;
     ensure!(initiator.phase() == Phase::SignaturesExchanged);
     ensure!(counterparty.phase() == Phase::SignaturesExchanged);
     Ok((initiator, counterparty))
+}
+
+fn substitute_transfer_fee_proof(finalize: &Finalize) -> Result<Finalize> {
+    let mut proofs = finalize
+        .signed_tx
+        .ops_proofs()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let Some(OpProof::ZkSig(original)) = proofs.get(2) else {
+        anyhow::bail!("funded CACP transaction has no Transfer ZkSig proof");
+    };
+    let mut bytes = original.encode_to_vec();
+    let first = bytes.first_mut().context("Transfer proof is empty")?;
+    *first ^= 1;
+    let (remaining, substituted) = ZkSignature::decode(&bytes)?;
+    ensure!(remaining.is_empty());
+    proofs[2] = OpProof::ZkSig(substituted);
+    Ok(Finalize {
+        signed_tx: SignedMantleTx::new(
+            finalize.signed_tx.mantle_tx().clone(),
+            OpsProofs::try_from(proofs)?,
+        ),
+    })
 }
 
 async fn happy_path(network: &LiveNetwork, nonce: u64) -> Result<()> {
@@ -323,7 +353,9 @@ async fn automatic_forfeiture(network: &LiveNetwork, nonce: u64) -> Result<()> {
 }
 
 async fn run_counterparty_forfeit(network: &LiveNetwork, nonce: u64) -> Result<()> {
-    let evidence = bond_evidence(network, nonce).await?;
+    // B creates and commits ACCEPT but deliberately does not deliver it to A.
+    let evidence = bond_evidence(network, nonce, false).await?;
+    let balances_before = participant_balances(network).await?;
     submit_bond(
         network,
         evidence.proposal,
@@ -331,8 +363,11 @@ async fn run_counterparty_forfeit(network: &LiveNetwork, nonce: u64) -> Result<(
         BondInstruction::Open {
             proposal_id: evidence.proposal,
             counterparty: network.account_b,
+            expected_tx_hash: evidence.tx_hash,
+            expected_accept_candidate_commitment: accept_candidate_commitment(
+                &evidence.accept_candidate,
+            ),
             initiator_mantle_key: network.key_a.public_key().to_bytes(),
-            counterparty_mantle_key: network.key_b.public_key().to_bytes(),
             stake_amount: STAKE,
             challenge_bond: CHALLENGE_BOND,
             response_window_blocks: WINDOW,
@@ -346,11 +381,12 @@ async fn run_counterparty_forfeit(network: &LiveNetwork, nonce: u64) -> Result<(
         BondInstruction::Join {
             proposal_id: evidence.proposal,
             tx_hash: evidence.tx_hash,
+            accept_candidate_commitment: accept_candidate_commitment(&evidence.accept_candidate),
+            counterparty_mantle_key: network.key_b.public_key().to_bytes(),
             accept_commitment: proof_commitment(&evidence.b_proof),
         },
     )
     .await?;
-    wait_bond_deadline(network, evidence.proposal).await?;
     submit_bond(
         network,
         evidence.proposal,
@@ -374,11 +410,17 @@ async fn run_counterparty_forfeit(network: &LiveNetwork, nonce: u64) -> Result<(
         bond_state(network, evidence.proposal).await?.settlement
             == Some(Settlement::CounterpartyForfeited)
     );
+    let balances_after = participant_balances(network).await?;
+    ensure!(balances_after.0 == balances_before.0.checked_add(STAKE).context("A overflow")?);
+    ensure!(balances_after.1.checked_add(STAKE) == Some(balances_before.1));
+    ensure!(bond_escrow_balance(network, evidence.proposal).await? == 0);
     Ok(())
 }
 
 async fn run_initiator_forfeit(network: &LiveNetwork, nonce: u64) -> Result<()> {
-    let evidence = bond_evidence(network, nonce).await?;
+    // A receives B's ACCEPT and creates FINALIZE but deliberately withholds it.
+    let evidence = bond_evidence(network, nonce, true).await?;
+    let balances_before = participant_balances(network).await?;
     submit_bond(
         network,
         evidence.proposal,
@@ -386,8 +428,11 @@ async fn run_initiator_forfeit(network: &LiveNetwork, nonce: u64) -> Result<()> 
         BondInstruction::Open {
             proposal_id: evidence.proposal,
             counterparty: network.account_b,
+            expected_tx_hash: evidence.tx_hash,
+            expected_accept_candidate_commitment: accept_candidate_commitment(
+                &evidence.accept_candidate,
+            ),
             initiator_mantle_key: network.key_a.public_key().to_bytes(),
-            counterparty_mantle_key: network.key_b.public_key().to_bytes(),
             stake_amount: STAKE,
             challenge_bond: CHALLENGE_BOND,
             response_window_blocks: WINDOW,
@@ -401,6 +446,8 @@ async fn run_initiator_forfeit(network: &LiveNetwork, nonce: u64) -> Result<()> 
         BondInstruction::Join {
             proposal_id: evidence.proposal,
             tx_hash: evidence.tx_hash,
+            accept_candidate_commitment: accept_candidate_commitment(&evidence.accept_candidate),
+            counterparty_mantle_key: network.key_b.public_key().to_bytes(),
             accept_commitment: proof_commitment(&evidence.b_proof),
         },
     )
@@ -409,19 +456,10 @@ async fn run_initiator_forfeit(network: &LiveNetwork, nonce: u64) -> Result<()> 
         network,
         evidence.proposal,
         &network.lee_key_b,
-        BondInstruction::DiscloseAccept {
-            proposal_id: evidence.proposal,
-            proof: evidence.b_proof,
-        },
-    )
-    .await?;
-    wait_bond_deadline(network, evidence.proposal).await?;
-    submit_bond(
-        network,
-        evidence.proposal,
-        &network.lee_key_b,
         BondInstruction::ChallengeFinalize {
             proposal_id: evidence.proposal,
+            accept_candidate: evidence.accept_candidate,
+            accept_proof: evidence.b_proof,
         },
     )
     .await?;
@@ -439,33 +477,50 @@ async fn run_initiator_forfeit(network: &LiveNetwork, nonce: u64) -> Result<()> 
         bond_state(network, evidence.proposal).await?.settlement
             == Some(Settlement::InitiatorForfeited)
     );
+    let balances_after = participant_balances(network).await?;
+    ensure!(balances_after.0.checked_add(STAKE) == Some(balances_before.0));
+    ensure!(balances_after.1 == balances_before.1.checked_add(STAKE).context("B overflow")?);
+    ensure!(bond_escrow_balance(network, evidence.proposal).await? == 0);
     Ok(())
 }
 
 struct BondEvidence {
     proposal: [u8; 32],
     tx_hash: [u8; 32],
+    accept_candidate: Vec<u8>,
     b_proof: MantleSignature,
 }
 
-async fn bond_evidence(network: &LiveNetwork, nonce: u64) -> Result<BondEvidence> {
+async fn bond_evidence(
+    network: &LiveNetwork,
+    nonce: u64,
+    deliver_accept_to_initiator: bool,
+) -> Result<BondEvidence> {
     let intent = network.intent(nonce)?;
-    let tx = cross_zone::cacp::build_joint_tx(
-        &intent,
-        &network.topology(&intent)?,
-        &network.parents().await?,
+    let topology = network.topology(&intent)?;
+    let parents = network.parents().await?;
+    let mut initiator = InitiatorSession::new(topology.clone(), intent.clone(), parents)?;
+    let mut counterparty = CounterpartySession::new(topology.clone(), intent.clone(), parents)?;
+    let raw = cross_zone::cacp::build_joint_tx(&initiator.propose().intent, &topology, &parents)?;
+    let (funded_tx, funding_proof) = fund_ops(&network.node, raw).await?;
+    let accept = counterparty.receive_funded_propose(
+        &initiator.propose(),
+        funded_tx,
+        funding_proof.context("bonded proposal requires its fee proof")?,
+        &network.key_b,
     )?;
-    let hash = tx.hash();
+    let hash = accept.tx.hash();
+    let accept_candidate = accept.candidate()?.to_bytes()?;
+    if deliver_accept_to_initiator {
+        let _withheld_finalize = initiator.receive_accept(accept.clone(), &network.key_a)?;
+        ensure!(initiator.phase() == Phase::SignaturesExchanged);
+    }
     let tx_hash = *hash.as_ref();
     Ok(BondEvidence {
         proposal: intent.proposal_id().0,
         tx_hash,
-        b_proof: MantleSignature::new(
-            network
-                .key_b
-                .sign_payload(hash.as_signing_bytes().as_ref())
-                .to_bytes(),
-        ),
+        accept_candidate,
+        b_proof: MantleSignature::new(accept.counterparty_proof.to_bytes()),
     })
 }
 
@@ -515,6 +570,27 @@ async fn bond_state(network: &LiveNetwork, proposal: [u8; 32]) -> Result<BondSta
         .get_account(state_account_id(programs::cacp_bond().id(), &proposal))
         .await?;
     BondState::from_bytes(&account.data).context("decoding on-chain bond state")
+}
+
+async fn participant_balances(network: &LiveNetwork) -> Result<(u128, u128)> {
+    Ok((
+        network
+            .bond_client
+            .get_account_balance(network.account_a)
+            .await?,
+        network
+            .bond_client
+            .get_account_balance(network.account_b)
+            .await?,
+    ))
+}
+
+async fn bond_escrow_balance(network: &LiveNetwork, proposal: [u8; 32]) -> Result<u128> {
+    network
+        .bond_client
+        .get_account_balance(escrow_account_id(programs::cacp_bond().id(), &proposal))
+        .await
+        .map_err(Into::into)
 }
 
 async fn wait_bond_deadline(network: &LiveNetwork, proposal: [u8; 32]) -> Result<()> {

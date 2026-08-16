@@ -26,15 +26,17 @@ pub fn bond_accounts(program_id: ProgramId, proposal_id: ProposalId) -> BondAcco
 pub fn open_instruction(
     proposal_id: ProposalId,
     counterparty: AccountId,
+    expected_tx_hash: [u8; 32],
+    expected_accept_candidate_commitment: [u8; 32],
     initiator_mantle_key: [u8; 32],
-    counterparty_mantle_key: [u8; 32],
     terms: CostlyAbortBondTerms,
 ) -> Instruction {
     Instruction::Open {
         proposal_id: proposal_id.0,
         counterparty,
+        expected_tx_hash,
+        expected_accept_candidate_commitment,
         initiator_mantle_key,
-        counterparty_mantle_key,
         stake_amount: terms.stake_amount,
         challenge_bond: terms.challenge_bond,
         response_window_blocks: terms.response_window_blocks,
@@ -64,18 +66,26 @@ mod tests {
         let instruction = open_instruction(
             ProposalId([3; 32]),
             AccountId::new([2; 32]),
+            [4; 32],
+            [5; 32],
             [0xA1; 32],
-            [0xB2; 32],
             terms,
         );
-        assert!(matches!(
-            instruction,
-            Instruction::Open {
-                stake_amount: 1_000,
-                challenge_bond: 100,
-                response_window_blocks: 4,
-                ..
-            }
-        ));
+        let Instruction::Open {
+            expected_tx_hash,
+            expected_accept_candidate_commitment,
+            stake_amount,
+            challenge_bond,
+            response_window_blocks,
+            ..
+        } = instruction
+        else {
+            panic!("expected Open instruction");
+        };
+        assert_eq!(expected_tx_hash, [4; 32]);
+        assert_eq!(expected_accept_candidate_commitment, [5; 32]);
+        assert_eq!(stake_amount, 1_000);
+        assert_eq!(challenge_bond, 100);
+        assert_eq!(response_window_blocks, 4);
     }
 }

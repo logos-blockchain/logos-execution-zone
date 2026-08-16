@@ -6,6 +6,7 @@ license = { workspace = true }
 
 [dependencies]
 borsh.workspace = true
+ed25519-dalek.workspace = true
 lee_core.workspace = true
 risc0-zkvm.workspace = true
 serde.workspace = true
