@@ -46,7 +46,6 @@ logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-testing-framework.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 anyhow.workspace = true
-chrono.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 hex.workspace = true
@@ -56,7 +55,6 @@ num-bigint.workspace = true
 
 testing-framework-app.workspace = true
 testing-framework-core.workspace = true
-testing-framework-runner-local.workspace = true
 derivative = "2.2.0"
 thiserror = "2.0.18"
 tracing = "0.1.44"
