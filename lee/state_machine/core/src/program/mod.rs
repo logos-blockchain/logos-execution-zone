@@ -66,7 +66,10 @@ pub type ProgramId = [u32; 8];
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramData {
     pub image_id: ProgramId,
-    pub segment_number: u32,
+    /// How many bytecode segment accounts follow, so a reader knows exactly how many
+    /// `loader_core::deploy_segment_account_id(image_id, 0..segment_count, update_auth)`
+    /// accounts to fetch without probing.
+    pub segment_count: u32,
     pub update_auth: AccountId,
 }
 

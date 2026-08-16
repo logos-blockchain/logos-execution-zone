@@ -1459,10 +1459,10 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let clock_chain_caller = test_programs::clock_chain_caller();
     // Deploy the clock_chain_caller test program.
     let bytecode = clock_chain_caller.elf().to_vec();
-    let (clock_chain_caller_header, clock_chain_caller_segment) = deploy_targets(&bytecode);
+    let (clock_chain_caller_header, clock_chain_caller_segments) = deploy_targets(&bytecode);
     let deploy_tx = LeeTransaction::Public(deploy_transaction(
         clock_chain_caller_header,
-        clock_chain_caller_segment,
+        &clock_chain_caller_segments,
         &bytecode,
     ));
     mempool_handle
@@ -2858,27 +2858,34 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
     assert_eq!(stored_balance, 20010);
 }
 
-/// Derives the `(header, segment)` account pair `bytecode` would deploy to.
-fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
+/// Derives the `(header, segments)` accounts `bytecode` would deploy to.
+fn deploy_targets(bytecode: &[u8]) -> (AccountId, Vec<AccountId>) {
     let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
-    let image_id: ProgramId = risc0_binfmt::compute_image_id(bytecode).unwrap().into();
-    let header =
-        loader_core::deploy_header_account_id(loader_id, image_id, 0, AccountId::default());
-    let segment =
-        loader_core::deploy_segment_account_id(loader_id, image_id, 0, AccountId::default());
-    (header, segment)
+    let user_elf = loader_core::extract_user_elf(bytecode).unwrap();
+    let image_id = loader_core::compute_image_id(&user_elf).unwrap();
+    let plan = loader_core::plan_deploy(loader_id, image_id, AccountId::default(), &user_elf);
+    (
+        plan.header.account_id,
+        plan.segments.into_iter().map(|s| s.account_id).collect(),
+    )
 }
 
-fn deploy_transaction(header: AccountId, segment: AccountId, bytecode: &[u8]) -> PublicTransaction {
+fn deploy_transaction(
+    header: AccountId,
+    segments: &[AccountId],
+    bytecode: &[u8],
+) -> PublicTransaction {
     let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     // Falls back to sending `bytecode` through unmodified when it isn't a well-formed two-ELF
     // `ProgramBinary` (e.g. deliberately-garbage test input) — extraction is best-effort here so
     // malformed input still reaches `execute_deploy`'s own rejection path, rather than the test
     // helper itself panicking before the real system ever sees it.
     let user_elf = loader_core::extract_user_elf(bytecode).unwrap_or_else(|_| bytecode.to_vec());
+    let mut account_ids = vec![header];
+    account_ids.extend_from_slice(segments);
     let message = lee::public_transaction::Message::try_new(
         loader_id.into(),
-        vec![header, segment],
+        account_ids,
         vec![],
         loader_core::Instruction::Deploy {
             update_auth: AccountId::default(),
@@ -2895,13 +2902,16 @@ fn loader_deploys_program() {
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
-    let (header, segment) = deploy_targets(&bytecode);
+    let user_elf = loader_core::extract_user_elf(&bytecode).unwrap();
+    let image_id = loader_core::compute_image_id(&user_elf).unwrap();
+    let (header, segments) = deploy_targets(&bytecode);
 
     assert_eq!(state.get_account_by_id(header), Account::default());
-    assert_eq!(state.get_account_by_id(segment), Account::default());
+    for &segment in &segments {
+        assert_eq!(state.get_account_by_id(segment), Account::default());
+    }
 
-    let tx = deploy_transaction(header, segment, &bytecode);
+    let tx = deploy_transaction(header, &segments, &bytecode);
     state
         .transition_from_public_transaction(&tx, 1, 0)
         .expect("Deploy should succeed against unclaimed targets");
@@ -2914,18 +2924,28 @@ fn loader_deploys_program() {
     let program_data = loader_core::ProgramData::try_from(&deployed_header.data)
         .expect("deployed header account data should decode as ProgramData");
     assert_eq!(program_data.image_id, image_id);
-    assert_eq!(program_data.segment_number, 0);
+    assert_eq!(
+        program_data.segment_count,
+        u32::try_from(segments.len()).unwrap()
+    );
+    assert!(
+        segments.len() > 1,
+        "claimer's real elf should span multiple segments"
+    );
     assert_eq!(program_data.update_auth, AccountId::default());
 
-    let deployed_segment = state.get_account_by_id(segment);
+    let mut reconstructed = Vec::new();
+    for &segment in &segments {
+        let deployed_segment = state.get_account_by_id(segment);
+        assert_eq!(
+            deployed_segment.program_owner,
+            RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
+        );
+        reconstructed.extend_from_slice(&deployed_segment.data);
+    }
     assert_eq!(
-        deployed_segment.program_owner,
-        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
-    );
-    assert_eq!(
-        deployed_segment.data.to_vec(),
-        loader_core::extract_user_elf(&bytecode).unwrap(),
-        "segment stores only user_elf, not the full two-ELF binary"
+        reconstructed, user_elf,
+        "segments concatenate back to user_elf, not the full two-ELF binary"
     );
 }
 
@@ -2937,9 +2957,9 @@ fn loader_deployed_program_is_invocable_via_dispatch() {
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let (header, segment) = deploy_targets(&bytecode);
+    let (header, segments) = deploy_targets(&bytecode);
 
-    let tx = deploy_transaction(header, segment, &bytecode);
+    let tx = deploy_transaction(header, &segments, &bytecode);
     state
         .transition_from_public_transaction(&tx, 1, 0)
         .expect("Deploy should succeed against unclaimed targets");
@@ -2968,14 +2988,14 @@ fn loader_rejects_redeploying_an_already_deployed_program() {
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let (header, segment) = deploy_targets(&bytecode);
+    let (header, segments) = deploy_targets(&bytecode);
 
-    let tx = deploy_transaction(header, segment, &bytecode);
+    let tx = deploy_transaction(header, &segments, &bytecode);
     state
         .transition_from_public_transaction(&tx, 1, 0)
         .expect("First deploy should succeed");
 
-    let tx = deploy_transaction(header, segment, &bytecode);
+    let tx = deploy_transaction(header, &segments, &bytecode);
     let result = state.transition_from_public_transaction(&tx, 2, 0);
 
     assert!(
@@ -2992,9 +3012,9 @@ fn loader_rejects_invalid_bytecode() {
     // any accounts work here.
     let bytecode = b"this is not a valid RISC0 program binary".to_vec();
     let header = AccountId::new([7; 32]);
-    let segment = AccountId::new([8; 32]);
+    let segments = vec![AccountId::new([8; 32])];
 
-    let tx = deploy_transaction(header, segment, &bytecode);
+    let tx = deploy_transaction(header, &segments, &bytecode);
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
     assert!(
@@ -3008,11 +3028,11 @@ fn loader_rejects_wrong_target_account() {
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let (_correct_header, segment) = deploy_targets(&bytecode);
+    let (_correct_header, segments) = deploy_targets(&bytecode);
     // Deliberately not the PDA this bytecode's image_id would derive to.
     let wrong_header = AccountId::new([7; 32]);
 
-    let tx = deploy_transaction(wrong_header, segment, &bytecode);
+    let tx = deploy_transaction(wrong_header, &segments, &bytecode);
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
     assert!(
@@ -3027,12 +3047,16 @@ fn loader_rejects_wrong_number_of_accounts() {
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let (header, segment) = deploy_targets(&bytecode);
+    let (header, segments) = deploy_targets(&bytecode);
     let extra = AccountId::new([9; 32]);
+
+    let mut account_ids = vec![header];
+    account_ids.extend_from_slice(&segments);
+    account_ids.push(extra);
 
     let message = lee::public_transaction::Message::try_new(
         loader_id.into(),
-        vec![header, segment, extra],
+        account_ids,
         vec![],
         loader_core::Instruction::Deploy {
             update_auth: AccountId::default(),
@@ -3073,8 +3097,9 @@ fn loader_deploys_program_via_chained_call() {
     let mut state = V03State::new().with_programs([forwarder.clone()]);
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
-    let (header, segment) = deploy_targets(&bytecode);
+    let user_elf = loader_core::extract_user_elf(&bytecode).unwrap();
+    let image_id = loader_core::compute_image_id(&user_elf).unwrap();
+    let (header, segments) = deploy_targets(&bytecode);
 
     let inner_instruction_data =
         lee::program::Program::serialize_instruction(loader_core::Instruction::Deploy {
@@ -3082,9 +3107,12 @@ fn loader_deploys_program_via_chained_call() {
         })
         .unwrap();
 
+    let mut account_ids = vec![header];
+    account_ids.extend_from_slice(&segments);
+
     let message = lee::public_transaction::Message::try_new(
         forwarder.deployed_account_id(),
-        vec![header, segment],
+        account_ids,
         vec![],
         (loader_id, inner_instruction_data),
     )
@@ -3106,9 +3134,9 @@ fn loader_deploys_program_via_chained_call() {
         .expect("deployed header account data should decode as ProgramData");
     assert_eq!(program_data.image_id, image_id);
 
-    let deployed_segment = state.get_account_by_id(segment);
-    assert_eq!(
-        deployed_segment.data.to_vec(),
-        loader_core::extract_user_elf(&bytecode).unwrap()
-    );
+    let mut reconstructed = Vec::new();
+    for &segment in &segments {
+        reconstructed.extend_from_slice(&state.get_account_by_id(segment).data);
+    }
+    assert_eq!(reconstructed, user_elf);
 }

@@ -140,13 +140,13 @@ impl SeenShard {
     /// Deliveries one shard can hold before it exceeds `DATA_MAX_LENGTH`.
     ///
     /// Borsh is 32 bytes of hash, a 4-byte count, then 4 bytes per index, so
-    /// this is exactly the 700 KiB an account may carry.
+    /// this is exactly the 100 KiB an account may carry.
     ///
     /// Out of reach only because of the L1 inscription cap: a block inscribes as
     /// one op near 1.75 MiB and a minimal emitting transaction is about 257
     /// bytes, capping a peer block near 7,100 deliveries. Raising that L1 cap
-    /// past roughly 6.3 MiB puts this back in reach.
-    pub const MAX_DELIVERIES: usize = 179_191;
+    /// past roughly 900 KiB puts this back in reach.
+    pub const MAX_DELIVERIES: usize = 25_591;
 
     /// Decodes a shard from account data; empty data is an unclaimed shard.
     pub fn from_bytes(bytes: &[u8]) -> borsh::io::Result<Self> {

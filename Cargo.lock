@@ -5805,6 +5805,7 @@ dependencies = [
  "risc0-binfmt",
  "risc0-zkvm",
  "serde",
+ "test_programs",
 ]
 
 [[package]]

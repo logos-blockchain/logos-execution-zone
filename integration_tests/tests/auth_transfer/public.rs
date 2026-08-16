@@ -395,10 +395,10 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let faucet_chain_caller = test_programs::faucet_chain_caller();
     let bytecode = faucet_chain_caller.elf().to_vec();
-    let (faucet_chain_caller_header, faucet_chain_caller_segment) = deploy_targets(&bytecode);
+    let (faucet_chain_caller_header, faucet_chain_caller_segments) = deploy_targets(&bytecode);
     let deploy_tx = LeeTransaction::Public(deploy_transaction(
         faucet_chain_caller_header,
-        faucet_chain_caller_segment,
+        &faucet_chain_caller_segments,
         &bytecode,
     ));
 

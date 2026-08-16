@@ -118,10 +118,11 @@ pub struct V03State {
     /// recognizes two shapes: legacy `ProgramDeploymentTransaction`-deployed programs, keyed by
     /// `AccountId::from(program_id)` (see that impl's doc comment) with the raw elf in
     /// `Account.data` and `program_owner` set to [`PROGRAM_STORAGE_OWNER`]; and `Deploy`-created
-    /// programs (including every genesis-seeded builtin, via [`Self::insert_program`]), which
-    /// live across two accounts owned by [`RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`] — a header
-    /// account whose `Account.data` is a borsh-encoded [`ProgramData`] (the current `image_id`,
-    /// small and fixed-size), and a separate segment PDA holding the raw elf.
+    /// programs (including every genesis-seeded builtin, via [`Self::insert_program`]), which live
+    /// across `1 + segment_count` accounts owned by [`RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`] — a
+    /// header account whose `Account.data` is a borsh-encoded [`ProgramData`] (the current
+    /// `image_id` and `segment_count`, small and fixed-size), and that many separate segment PDAs
+    /// together holding the raw elf (see `loader_core::plan_deploy`).
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
 }
@@ -203,45 +204,34 @@ impl V03State {
         self
     }
 
-    /// Seeds a program directly into state in the exact two-account shape a live `Deploy`
-    /// dispatch (with a default `update_auth`, i.e. no upgrade authority) would produce for the
-    /// same `image_id` (see [`Self::get_program`] and [`loader_core::immutable_deploy_account_id`]),
-    /// skipping only the dispatch/proving machinery genesis has no signer to drive.
+    /// Seeds a program directly into state in the exact `1 + segment_count`-account shape a live
+    /// `Deploy` dispatch (with a default `update_auth`, i.e. no upgrade authority) would produce
+    /// for the same `image_id` (see [`Self::get_program`] and
+    /// [`loader_core::immutable_deploy_account_id`]), skipping only the dispatch/proving machinery
+    /// genesis has no signer to drive.
     pub(crate) fn insert_program(&mut self, program: &Program) {
-        let image_id = program.id();
-        let segment_number = 0;
         let update_auth = AccountId::default();
         let loader_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
-
-        let header_account_id =
-            loader_core::deploy_header_account_id(loader_id, image_id, segment_number, update_auth);
-        let header_account = Account {
-            program_owner: RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
-            data: Data::from(&ProgramData {
-                image_id,
-                segment_number,
-                update_auth,
-            }),
-            ..Account::default()
-        };
-
-        let segment_account_id = loader_core::deploy_segment_account_id(
-            loader_id,
-            image_id,
-            segment_number,
-            update_auth,
-        );
         let user_elf = loader_core::extract_user_elf(program.elf())
             .expect("program.elf() must already be a valid two-ELF ProgramBinary");
-        let segment_account = Account {
-            program_owner: RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
-            data: Data::try_from(user_elf).expect("elf must fit under DATA_MAX_LENGTH"),
-            ..Account::default()
+        let plan = loader_core::plan_deploy(loader_id, program.id(), update_auth, &user_elf);
+
+        let to_account = |planned: loader_core::PlannedAccount| {
+            (
+                planned.account_id,
+                Account {
+                    program_owner: RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+                    data: Data::try_from(planned.data).expect("elf must fit under DATA_MAX_LENGTH"),
+                    ..Account::default()
+                },
+            )
         };
 
-        self.public_state.insert(header_account_id, header_account);
-        self.public_state
-            .insert(segment_account_id, segment_account);
+        self.public_state.extend(
+            std::iter::once(plan.header)
+                .chain(plan.segments)
+                .map(to_account),
+        );
     }
 
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
@@ -329,10 +319,10 @@ impl V03State {
     ///   address by construction.
     /// - Owned by [`RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`]: deployed via the native `Deploy`
     ///   dispatch shortcut. `account.data` decodes as a [`ProgramData`] header holding the real
-    ///   `image_id`; the program-specific `user_elf` lives in a second, separately-addressed
-    ///   segment account derived from that header (see `loader_core::deploy_segment_account_id`),
-    ///   which this reconstructs into the full two-ELF binary (see
-    ///   `loader_core::reconstruct_program_binary`) before returning it.
+    ///   `image_id` and `segment_count`; the program-specific `user_elf` is split across that many
+    ///   separately-addressed segment accounts (see `loader_core::deploy_segment_account_id`),
+    ///   which this fetches in order, concatenates, and reconstructs into the full two-ELF binary
+    ///   (see `loader_core::reconstruct_program_binary`) before returning it.
     ///
     /// Returning the real `image_id` — rather than callers deriving one from the address, which
     /// is only valid for the legacy path — is what makes upgrading a `Deploy`-created program
@@ -341,31 +331,62 @@ impl V03State {
     ///
     /// An account that matches neither owner isn't a deployed program, whatever its contents —
     /// this is the single place that distinction is enforced, so callers never have to remember
-    /// to re-check it themselves.
-    #[must_use]
-    pub fn get_program(&self, program_account_id: AccountId) -> Option<(ProgramId, Vec<u8>)> {
-        let account = self.get_account_by_id_ref(program_account_id)?;
+    /// to re-check it themselves. `Ok(None)` means no such program exists (missing account or
+    /// segment); `Err(LeeError::InvalidProgramBytecode(_))` means one exists but its segments
+    /// don't reconstruct to the `image_id` its own header declares — a defense-in-depth check
+    /// against a corrupted or malformed segment set, distinguishable from plain absence.
+    pub fn get_program(
+        &self,
+        program_account_id: AccountId,
+    ) -> Result<Option<(ProgramId, Vec<u8>)>, LeeError> {
+        let Some(account) = self.get_account_by_id_ref(program_account_id) else {
+            return Ok(None);
+        };
         if account.program_owner == PROGRAM_STORAGE_OWNER {
-            return Some((ProgramId::from(program_account_id), account.data.to_vec()));
+            return Ok(Some((
+                ProgramId::from(program_account_id),
+                account.data.to_vec(),
+            )));
         }
-        if account.program_owner == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID {
-            let header = ProgramData::try_from(&account.data).ok()?;
-            let loader_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+        if account.program_owner != RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID {
+            return Ok(None);
+        }
+        let Ok(header) = ProgramData::try_from(&account.data) else {
+            return Ok(None);
+        };
+        let loader_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+
+        let mut user_elf = Vec::new();
+        for segment_number in 0..header.segment_count {
             let segment_account_id = loader_core::deploy_segment_account_id(
                 loader_id,
                 header.image_id,
-                header.segment_number,
+                segment_number,
                 header.update_auth,
             );
-            let segment = self.get_account_by_id_ref(segment_account_id)?;
-            return (segment.program_owner == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID).then(|| {
-                (
-                    header.image_id,
-                    loader_core::reconstruct_program_binary(&segment.data),
-                )
-            });
+            let Some(segment) = self.get_account_by_id_ref(segment_account_id) else {
+                return Ok(None);
+            };
+            if segment.program_owner != RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID {
+                return Ok(None);
+            }
+            user_elf.extend_from_slice(&segment.data);
         }
-        None
+
+        let real_image_id =
+            loader_core::compute_image_id(&user_elf).map_err(LeeError::InvalidProgramBytecode)?;
+        if real_image_id != header.image_id {
+            return Err(LeeError::InvalidProgramBytecode(anyhow::anyhow!(
+                "reconstructed elf for {program_account_id} has image_id {real_image_id:?}, \
+                 header declares {:?}",
+                header.image_id
+            )));
+        }
+
+        Ok(Some((
+            header.image_id,
+            loader_core::reconstruct_program_binary(&user_elf),
+        )))
     }
 
     #[must_use]

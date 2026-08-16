@@ -23,8 +23,8 @@ use tokio::test;
 #[test]
 async fn reject_oversized_transaction() -> Result<()> {
     let bytecode = test_programs::claimer().elf().to_vec();
-    let (header, segment) = deploy_targets(&bytecode);
-    let tx = LeeTransaction::Public(deploy_transaction(header, segment, &bytecode));
+    let (header, segments) = deploy_targets(&bytecode);
+    let tx = LeeTransaction::Public(deploy_transaction(header, &segments, &bytecode));
     let tx_size = encoded_tx_size(&tx);
 
     let ctx = MultiZoneTestContextBuilder::default()
@@ -66,8 +66,8 @@ async fn reject_oversized_transaction() -> Result<()> {
 #[test]
 async fn accept_transaction_within_limit() -> Result<()> {
     let bytecode = test_programs::claimer().elf().to_vec();
-    let (header, segment) = deploy_targets(&bytecode);
-    let tx = LeeTransaction::Public(deploy_transaction(header, segment, &bytecode));
+    let (header, segments) = deploy_targets(&bytecode);
+    let tx = LeeTransaction::Public(deploy_transaction(header, &segments, &bytecode));
     let tx_size = encoded_tx_size(&tx);
 
     let ctx = MultiZoneTestContextBuilder::default()
@@ -101,17 +101,17 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     let claimer = test_programs::claimer();
     let chain_caller = test_programs::chain_caller();
 
-    let (claimer_header, claimer_segment) = deploy_targets(claimer.elf());
+    let (claimer_header, claimer_segments) = deploy_targets(claimer.elf());
     let claimer_tx = LeeTransaction::Public(deploy_transaction(
         claimer_header,
-        claimer_segment,
+        &claimer_segments,
         claimer.elf(),
     ));
 
-    let (chain_caller_header, chain_caller_segment) = deploy_targets(chain_caller.elf());
+    let (chain_caller_header, chain_caller_segments) = deploy_targets(chain_caller.elf());
     let chain_caller_tx = LeeTransaction::Public(deploy_transaction(
         chain_caller_header,
-        chain_caller_segment,
+        &chain_caller_segments,
         chain_caller.elf(),
     ));
 

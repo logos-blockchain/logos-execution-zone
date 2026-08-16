@@ -31,29 +31,30 @@ use wallet::{
 /// Maximum time to wait for the indexer to catch up to the sequencer.
 pub const L2_TO_L1_TIMEOUT: Duration = Duration::from_mins(6);
 
-/// Derives the `(header, segment)` account pair `bytecode` would deploy to via `Deploy`, mirroring
+/// Derives the `(header, segments)` accounts `bytecode` would deploy to via `Deploy`, mirroring
 /// `sequencer_core`'s private test helper of the same name.
 #[must_use]
-pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
+pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, Vec<AccountId>) {
     let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
-    let image_id: ProgramId = risc0_binfmt::compute_image_id(bytecode).unwrap().into();
-    let header =
-        loader_core::deploy_header_account_id(loader_id, image_id, 0, AccountId::default());
-    let segment =
-        loader_core::deploy_segment_account_id(loader_id, image_id, 0, AccountId::default());
-    (header, segment)
+    let user_elf = loader_core::extract_user_elf(bytecode).unwrap();
+    let image_id = loader_core::compute_image_id(&user_elf).unwrap();
+    let plan = loader_core::plan_deploy(loader_id, image_id, AccountId::default(), &user_elf);
+    (
+        plan.header.account_id,
+        plan.segments.into_iter().map(|s| s.account_id).collect(),
+    )
 }
 
-/// Builds the `PublicTransaction` that deploys `bytecode` to `(header, segment)`.
+/// Builds the `PublicTransaction` that deploys `bytecode` to `(header, segments)`.
 ///
-/// `(header, segment)` are the targets [`deploy_targets`] derives for it. `bytecode` is the full
+/// `(header, segments)` are the targets [`deploy_targets`] derives for it. `bytecode` is the full
 /// two-ELF `Program::elf()` blob; this extracts just the `user_elf` for the wire payload, mirroring
 /// what `execute_deploy` expects. Tests should invoke programs at the returned `header` address
 /// afterward, not the program's own bijection `AccountId::from(image_id)`.
 #[must_use]
 pub fn deploy_transaction(
     header: AccountId,
-    segment: AccountId,
+    segments: &[AccountId],
     bytecode: &[u8],
 ) -> lee::PublicTransaction {
     let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
@@ -62,9 +63,11 @@ pub fn deploy_transaction(
     // malformed input still reaches `execute_deploy`'s own rejection path, rather than this
     // helper itself panicking before the real system ever sees it.
     let user_elf = loader_core::extract_user_elf(bytecode).unwrap_or_else(|_| bytecode.to_vec());
+    let mut account_ids = vec![header];
+    account_ids.extend_from_slice(segments);
     let message = Message::try_new(
         loader_id.into(),
-        vec![header, segment],
+        account_ids,
         vec![],
         loader_core::Instruction::Deploy {
             update_auth: AccountId::default(),
