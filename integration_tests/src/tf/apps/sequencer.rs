@@ -77,7 +77,7 @@ impl LezSequencerClient {
             .take();
 
         if let Some(service) = service {
-            service.shutdown().await?;
+            service.shutdown().await;
         }
 
         Ok(())

@@ -54,7 +54,7 @@ impl SequencerHandle {
 
     /// Stops the sequencer and waits for every part of it to be gone.
     /// executor itself.
-    pub async fn shutdown(self) -> Result<()> {
+    pub async fn shutdown(self) {
         let Self {
             scheduler,
             rpc_server,
@@ -67,8 +67,6 @@ impl SequencerHandle {
         scheduler.shutdown().await;
         rpc_server.shutdown().await;
         executor.shutdown().await;
-
-        Ok(())
     }
 
     /// Wait for any of the sequencer tasks to fail and return the error.
