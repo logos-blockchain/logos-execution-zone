@@ -656,6 +656,7 @@ mod tests {
             allow_chain_reset: false,
             cross_zone: None,
             cross_zone_accept_unverified,
+            peer_block_cache_window: None,
             bridge_lock_holdings: Vec::new(),
         };
         IndexerCore::open(config, dir).expect("open core")

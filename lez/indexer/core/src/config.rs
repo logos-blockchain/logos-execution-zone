@@ -35,6 +35,13 @@ pub struct IndexerConfig {
     /// same dispatch after a restart halts again.
     #[serde(default)]
     pub cross_zone_accept_unverified: Vec<HashType>,
+    /// Peer-block bodies the cross-zone verifier keeps behind each peer's
+    /// verified tip. `None` takes the built-in default of 1024. `u32::MAX` is
+    /// effectively unbounded: the escape hatch for a deployment whose
+    /// dispatches routinely reach further back than any fixed window, paid
+    /// for in unbounded memory. `0` is rejected at startup.
+    #[serde(default)]
+    pub peer_block_cache_window: Option<u32>,
     /// Bridge-lock holdings to seed into genesis, mirroring the sequencer's
     /// `SupplyBridgeLockHolding` actions. They are not produced by any
     /// transaction, so the indexer must seed them to match the sequencer's state.

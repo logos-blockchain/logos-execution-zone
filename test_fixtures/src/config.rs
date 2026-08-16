@@ -258,6 +258,7 @@ pub fn indexer_config(
         },
         channel_id,
         cross_zone,
+        peer_block_cache_window: None,
         bridge_lock_holdings: Vec::new(),
         allow_chain_reset: false,
     })
