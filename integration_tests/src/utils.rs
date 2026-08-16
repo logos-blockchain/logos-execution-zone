@@ -322,37 +322,34 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
         })?
 }
 
-/// Derives the `(header, segment)` account pair `bytecode` would deploy to via `Deploy`, mirroring
+/// Derives the `(header, segments)` accounts `bytecode` would deploy to via `Deploy`, mirroring
 /// `sequencer_core`'s private test helper of the same name.
 #[must_use]
-pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
-    let image_id: lee_core::program::ProgramId =
-        risc0_binfmt::compute_image_id(bytecode).unwrap().into();
-    let header = program_loader_core::deploy_header_account_id(
+pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, Vec<AccountId>) {
+    let user_elf = program_loader_core::extract_user_elf(bytecode).unwrap();
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
+    let plan = program_loader_core::plan_deploy(
         RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
         image_id,
-        0,
         AccountId::default(),
+        &user_elf,
     );
-    let segment = program_loader_core::deploy_segment_account_id(
-        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
-        image_id,
-        0,
-        AccountId::default(),
-    );
-    (header, segment)
+    (
+        plan.header.account_id,
+        plan.segments.into_iter().map(|s| s.account_id).collect(),
+    )
 }
 
-/// Builds the `PublicTransaction` that deploys `bytecode` to `(header, segment)`.
+/// Builds the `PublicTransaction` that deploys `bytecode` to `(header, segments)`.
 ///
-/// `(header, segment)` are the targets [`deploy_targets`] derives for it. `bytecode` is the full
+/// `(header, segments)` are the targets [`deploy_targets`] derives for it. `bytecode` is the full
 /// two-ELF `Program::elf()` blob; this extracts just the `user_elf` for the wire payload, mirroring
 /// what `execute_deploy` expects. Tests should invoke programs at the returned `header` address
 /// afterward, not the program's own bijection `AccountId::from(image_id)`.
 #[must_use]
 pub fn deploy_transaction(
     header: AccountId,
-    segment: AccountId,
+    segments: &[AccountId],
     bytecode: &[u8],
 ) -> lee::PublicTransaction {
     // Falls back to sending `bytecode` through unmodified when it isn't a well-formed two-ELF
@@ -361,9 +358,11 @@ pub fn deploy_transaction(
     // helper itself panicking before the real system ever sees it.
     let user_elf =
         program_loader_core::extract_user_elf(bytecode).unwrap_or_else(|_| bytecode.to_vec());
+    let mut account_ids = vec![header];
+    account_ids.extend_from_slice(segments);
     let message = lee::public_transaction::Message::try_new(
         RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
-        vec![header, segment],
+        account_ids,
         vec![],
         program_loader_core::Instruction::Deploy {
             update_auth: AccountId::default(),
