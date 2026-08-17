@@ -11,7 +11,7 @@ use lee::{Account, PrivateKey, PublicKey, V03State, ValidatedStateDiff};
 use crate::{
     HashType,
     block::{Block, HashableBlockData},
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 
 // Helpers
@@ -63,6 +63,9 @@ pub fn produce_dummy_block(
     prev_hash: Option<HashType>,
     mut transactions: Vec<LeeTransaction>,
 ) -> Block {
+    transactions.push(LeeTransaction::Public(fee_invocation(
+        fee_core::Instruction::default(),
+    )));
     transactions.push(LeeTransaction::Public(clock_invocation(
         id.saturating_mul(100),
     )));

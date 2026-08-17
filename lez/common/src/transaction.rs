@@ -91,7 +91,8 @@ impl LeeTransaction {
 
         let restricted_modification_accounts = system_accounts::clock_account_ids()
             .into_iter()
-            .chain(std::iter::once(system_accounts::faucet_account_id()));
+            .chain(std::iter::once(system_accounts::faucet_account_id()))
+            .chain(system_accounts::fee_account_ids());
         for account_id in restricted_modification_accounts {
             validate_doesnt_modify_account(state, &diff, account_id)?;
         }
@@ -244,6 +245,25 @@ pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransa
     )
 }
 
+/// Returns the canonical Fee Program invocation transaction for the given block fee summary.
+///
+/// Every valid block must contain exactly one occurrence of this transaction as its
+/// second-to-last transaction, immediately before the clock invocation.
+#[must_use]
+pub fn fee_invocation(summary: fee_core::Instruction) -> lee::PublicTransaction {
+    let message = lee::public_transaction::Message::try_new(
+        programs::fee().id(),
+        system_accounts::fee_account_ids().to_vec(),
+        vec![],
+        summary,
+    )
+    .expect("Fee invocation message should always be constructable");
+    lee::PublicTransaction::new(
+        message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    )
+}
+
 fn validate_doesnt_modify_account(
     state: &V03State,
     diff: &ValidatedStateDiff,
@@ -378,6 +398,24 @@ mod tests {
         assert_ne!(faucet, AccountId::default());
         assert_ne!(bridge, AccountId::default());
         assert_ne!(faucet, bridge);
+    }
+
+    #[test]
+    fn validate_on_state_rejects_modifying_a_fee_account() {
+        // Fee accounts are restricted the same way clock accounts are: a native
+        // transfer crediting any of them must be rejected.
+        let sender_key = PrivateKey::try_new([5_u8; 32]).expect("valid key");
+        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+        let state = V03State::new().with_public_account_balances([(sender_id, 10_000)]);
+
+        for fee_id in system_accounts::fee_account_ids() {
+            let tx =
+                create_transaction_native_token_transfer(sender_id, 0, fee_id, 100, &sender_key);
+            assert!(
+                tx.validate_on_state(&state, 1, 0).is_err(),
+                "validate_on_state must reject a transfer that credits fee account {fee_id}",
+            );
+        }
     }
 
     #[test]

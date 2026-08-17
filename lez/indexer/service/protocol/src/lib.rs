@@ -413,6 +413,7 @@ pub enum BlockIngestError {
     },
     EmptyBlock,
     InvalidClockTransaction,
+    InvalidFeeTransaction,
     NonPublicGenesisTransaction,
     StateTransition {
         /// Index of the failing transaction within the block body.

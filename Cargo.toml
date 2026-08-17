@@ -44,6 +44,7 @@ members = [
   "lez/programs/bridge",
   "lez/programs/clock",
   "lez/programs/faucet",
+  "lez/programs/fee",
   "lez/programs/pinata",
   "lez/programs/pinata_token",
   "lez/programs/token",
@@ -103,6 +104,7 @@ programs = { path = "lez/programs", default-features = false, features = [
 ] }
 system_accounts = { path = "lez/system_accounts" }
 clock_core = { path = "lez/programs/clock/core" }
+fee_core = { path = "lez/programs/fee/core" }
 token_core = { path = "lez/programs/token/core" }
 token_program = { path = "lez/programs/token" }
 amm_core = { path = "lez/programs/amm/core" }

@@ -212,6 +212,11 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
                 .into_iter()
                 .map(|clock_id| (clock_id, system_accounts::clock_account())),
         )
+        .chain(
+            system_accounts::fee_account_ids()
+                .into_iter()
+                .map(|fee_id| (fee_id, system_accounts::fee_account())),
+        )
         .collect()
 }
 
@@ -221,6 +226,7 @@ fn initial_programs() -> Vec<Program> {
         programs::token(),
         programs::amm(),
         programs::clock(),
+        programs::fee(),
         programs::ata(),
         programs::vault(),
         programs::faucet(),
@@ -405,6 +411,24 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn genesis_fee_accounts_are_registered_and_owned() {
+        let state = initial_state();
+        let fee_program_id = programs::fee().id();
+
+        let ids = system_accounts::fee_account_ids();
+        // state, escrow, inbox — all distinct, all non-default.
+        for (i, id) in ids.iter().enumerate() {
+            assert_ne!(*id, AccountId::default());
+            for other in &ids[i + 1..] {
+                assert_ne!(id, other);
+            }
+            let account = state.get_account_by_id(*id);
+            assert_eq!(account.program_owner, fee_program_id);
+            assert_eq!(account.balance, 0);
+        }
     }
 
     #[test]

@@ -35,6 +35,11 @@ path = "faucet/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
+name = "fee"
+path = "fee/src/main.rs"
+required-features = ["programs"]
+
+[[bin]]
 name = "pinata"
 path = "pinata/src/main.rs"
 required-features = ["programs"]
@@ -106,6 +111,7 @@ programs = [
   "dep:bridge_core",
   "dep:clock_core",
   "dep:faucet_core",
+  "dep:fee_core",
   "dep:token_core",
   "dep:vault_core",
   "dep:cross_zone_inbox_core",
@@ -125,6 +131,7 @@ authenticated_transfer_core = { workspace = true, optional = true }
 bridge_core = { workspace = true, optional = true }
 clock_core = { workspace = true, optional = true }
 faucet_core = { workspace = true, optional = true }
+fee_core = { workspace = true, optional = true }
 token_core = { workspace = true, optional = true }
 vault_core = { workspace = true, optional = true }
 cross_zone_inbox_core = { workspace = true, optional = true }
