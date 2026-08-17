@@ -489,7 +489,8 @@ pub struct ProgramOutput {
     pub block_validity_window: BlockValidityWindow,
     /// The timestamp window where the program output is valid.
     pub timestamp_validity_window: TimestampValidityWindow,
-    /// A vector of event data.
+    /// A vector of event data. Dropped for private transaction for function
+    /// privacy.
     pub events: Vec<Vec<u8>>,
 }
 
