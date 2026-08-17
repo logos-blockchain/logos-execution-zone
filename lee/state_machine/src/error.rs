@@ -20,6 +20,9 @@ pub enum LeeError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("Execution exceeded its cycle budget of {budget}")]
+    OutOfGas { budget: u64 },
+
     #[error("Program violated execution rules")]
     InvalidProgramBehavior(#[from] InvalidProgramBehaviorError),
 

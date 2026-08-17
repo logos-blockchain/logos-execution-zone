@@ -54,13 +54,47 @@ impl ValidatedStateDiff {
     }
 }
 
+/// The metered result of a public execution: the cycle count accumulated
+/// across every call in the chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutionOutcome {
+    pub cycles: u64,
+}
+
+impl ExecutionOutcome {
+    /// The outcome of transaction kinds that meter nothing.
+    pub const FREE: Self = Self { cycles: 0 };
+}
+
 impl ValidatedStateDiff {
+    /// [`Self::from_public_transaction_with_budget`] at the default budget,
+    /// discarding the metered outcome.
     pub fn from_public_transaction(
         tx: &PublicTransaction,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
+        Self::from_public_transaction_with_budget(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .map(|(diff, _)| diff)
+    }
+
+    /// Validates and executes `tx` under `cycle_budget`, shared by every call
+    /// in the chain: each nested session is limited to the remaining budget, so
+    /// the chain cannot exceed the budget in aggregate.
+    pub fn from_public_transaction_with_budget(
+        tx: &PublicTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: u64,
+    ) -> Result<(Self, ExecutionOutcome), LeeError> {
         let signer_account_ids = authenticate_public_transaction_signers(tx, state)?;
         let message = tx.message();
 
@@ -105,6 +139,7 @@ impl ValidatedStateDiff {
         let mut chained_calls =
             VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
         let mut chain_calls_counter = 0;
+        let mut cycles_used: u64 = 0;
 
         while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
             ensure!(
@@ -124,11 +159,15 @@ impl ValidatedStateDiff {
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
             );
-            let mut program_output = program.execute(
+            let (mut program_output, call_cycles) = program.execute(
                 caller_data.program_id,
                 &chained_call.pre_states,
                 &chained_call.instruction_data,
+                cycle_budget.saturating_sub(cycles_used),
             )?;
+            cycles_used = cycles_used
+                .checked_add(call_cycles)
+                .expect("cycle sums fit u64: each call is bounded by the budget");
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_id, program_output
@@ -319,13 +358,18 @@ impl ValidatedStateDiff {
             );
         }
 
-        Ok(Self(StateDiff {
-            signer_account_ids,
-            public_diff: state_diff,
-            new_commitments: vec![],
-            new_nullifiers: vec![],
-            program: None,
-        }))
+        Ok((
+            Self(StateDiff {
+                signer_account_ids,
+                public_diff: state_diff,
+                new_commitments: vec![],
+                new_nullifiers: vec![],
+                program: None,
+            }),
+            ExecutionOutcome {
+                cycles: cycles_used,
+            },
+        ))
     }
 
     pub fn from_privacy_preserving_transaction(
