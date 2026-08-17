@@ -69,7 +69,7 @@ fn record(
         receiver_config_account_id(self_program_id),
         "second account must be the receiver config PDA"
     );
-    let cfg = ReceiverConfig::from_bytes(&config.account.data.clone().into_inner())
+    let cfg = ReceiverConfig::from_bytes(&config.account.data)
         .expect("config account holds a receiver config");
     assert_eq!(
         caller_program_id,
@@ -128,7 +128,7 @@ fn renounce_authority(
         receiver_config_account_id(self_program_id),
         "first account must be the receiver config PDA"
     );
-    let mut cfg = ReceiverConfig::from_bytes(&config_meta.account.data.clone().into_inner())
+    let mut cfg = ReceiverConfig::from_bytes(&config_meta.account.data)
         .expect("config account holds a receiver config");
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
@@ -200,7 +200,7 @@ fn update_sources(
         receiver_config_account_id(self_program_id),
         "first account must be the receiver config PDA"
     );
-    let mut cfg = ReceiverConfig::from_bytes(&config_meta.account.data.clone().into_inner())
+    let mut cfg = ReceiverConfig::from_bytes(&config_meta.account.data)
         .expect("config account holds a receiver config");
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
@@ -285,7 +285,7 @@ fn init_config(
             "receiver config PDA is owned by another program"
         );
         assert_eq!(
-            config.account.data.clone().into_inner(),
+            *config.account.data,
             config_value.to_bytes(),
             "receiver config already initialized differently"
         );

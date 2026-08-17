@@ -67,7 +67,7 @@ fn main() {
         panic!("Clock accounts must be owned by the clock program");
     }
 
-    let prev_data = ClockAccountData::from_bytes(&pre_01.account.data.clone().into_inner());
+    let prev_data = ClockAccountData::from_bytes(&pre_01.account.data);
     let current_block_id = prev_data
         .block_id
         .checked_add(1)

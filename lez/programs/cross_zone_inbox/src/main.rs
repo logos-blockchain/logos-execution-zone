@@ -102,15 +102,13 @@ fn dispatch(
         "Third account must be the source marker PDA for this message"
     );
 
-    let cfg = InboxConfig::from_bytes(&config.account.data.clone().into_inner())
-        .expect("inbox config decodes");
+    let cfg = InboxConfig::from_bytes(&config.account.data).expect("inbox config decodes");
 
     assert!(
         msg.src_zone != cfg.self_zone,
         "Source zone must not be this zone"
     );
-    let mut shard =
-        SeenShard::from_bytes(&seen.account.data.clone().into_inner()).expect("seen shard decodes");
+    let mut shard = SeenShard::from_bytes(&seen.account.data).expect("seen shard decodes");
 
     // One block id, one delivering block. The address binds the zone and block
     // id but not which block claimed them, so an equivocating peer's two blocks
@@ -209,7 +207,7 @@ fn init_config(
             "inbox config PDA is owned by another program"
         );
         assert_eq!(
-            config_meta.account.data.clone().into_inner(),
+            *config_meta.account.data,
             config.to_bytes(),
             "inbox config already initialized differently"
         );

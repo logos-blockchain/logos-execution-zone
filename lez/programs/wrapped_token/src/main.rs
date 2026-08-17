@@ -72,7 +72,7 @@ fn mint(
         config_account_id(self_program_id),
         "second account must be the wrapped-token config PDA"
     );
-    let cfg = WrappedTokenConfig::from_bytes(&config.account.data.clone().into_inner())
+    let cfg = WrappedTokenConfig::from_bytes(&config.account.data)
         .expect("config account holds a wrapped-token config");
     assert_eq!(
         caller_program_id,
@@ -102,7 +102,7 @@ fn mint(
         "mint amount exceeds the per-mint cap"
     );
     // The backstop against accumulation, which the per-mint cap does not bound.
-    let new_balance = read_balance(&holding.account.data.clone().into_inner())
+    let new_balance = read_balance(&holding.account.data)
         .checked_add(amount)
         .expect("wrapped-token balance overflow");
     let mut holding_account = holding.account.clone();
@@ -147,7 +147,7 @@ fn renounce_authority(
         config_account_id(self_program_id),
         "first account must be the wrapped-token config PDA"
     );
-    let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data.clone().into_inner())
+    let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data)
         .expect("config account holds a wrapped-token config");
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
@@ -219,7 +219,7 @@ fn update_sources(
         config_account_id(self_program_id),
         "first account must be the wrapped-token config PDA"
     );
-    let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data.clone().into_inner())
+    let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data)
         .expect("config account holds a wrapped-token config");
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
@@ -306,7 +306,7 @@ fn init_config(
             "wrapped-token config PDA is owned by another program"
         );
         assert_eq!(
-            config.account.data.clone().into_inner(),
+            *config.account.data,
             config_value.to_bytes(),
             "wrapped-token config already initialized differently"
         );
