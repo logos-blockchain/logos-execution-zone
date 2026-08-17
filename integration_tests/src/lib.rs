@@ -63,6 +63,9 @@ pub fn deploy_transaction(
     // malformed input still reaches `execute_deploy`'s own rejection path, rather than this
     // helper itself panicking before the real system ever sees it.
     let user_elf = loader_core::extract_user_elf(bytecode).unwrap_or_else(|_| bytecode.to_vec());
+    // Falls back to a dummy image_id for deliberately-garbage bytecode too — execute_deploy's
+    // own rejection path is what such tests exercise, not this helper.
+    let image_id = loader_core::compute_image_id(&user_elf).unwrap_or([0; 8]);
     let mut account_ids = vec![header];
     account_ids.extend_from_slice(segments);
     let message = Message::try_new(
@@ -70,6 +73,9 @@ pub fn deploy_transaction(
         account_ids,
         vec![],
         loader_core::Instruction::Deploy {
+            image_id,
+            segment_count: u32::try_from(segments.len()).expect("segment count fits in u32"),
+            first_segment: 0,
             update_auth: AccountId::default(),
         },
     )
