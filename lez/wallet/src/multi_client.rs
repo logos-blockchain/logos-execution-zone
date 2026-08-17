@@ -10,7 +10,7 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
-use common::{HashType, transaction::LeeTransaction};
+use common::{HashType, config::BasicAuth, transaction::LeeTransaction};
 use itertools::Itertools as _;
 use lee_core::BlockId;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -115,23 +115,7 @@ impl MultiSequencerClient {
             basic_auth,
         } in conn_data
         {
-            let sequencer_client = {
-                let mut builder = SequencerClientBuilder::default();
-                if let Some(basic_auth) = &basic_auth {
-                    builder = builder.set_headers(
-                        std::iter::once((
-                            "Authorization".parse().expect("Header name is valid"),
-                            format!("Basic {basic_auth}")
-                                .parse()
-                                .context("Invalid basic auth format")?,
-                        ))
-                        .collect(),
-                    );
-                }
-                builder
-                    .build(sequencer_addr)
-                    .context("Failed to create sequencer client")?
-            };
+            let sequencer_client = make_subclient(sequencer_addr, basic_auth)?;
 
             if statistics.contains_key(sequencer_addr) {
                 actualization_list.push((sequencer_addr.clone(), sequencer_client.clone()));
@@ -472,9 +456,33 @@ async fn measure_request_duration(client: &SequencerClient) -> (u128, Option<Blo
     )
 }
 
+pub fn make_subclient(
+    sequencer_addr: &Url,
+    basic_auth: &Option<BasicAuth>,
+) -> Result<SequencerClient> {
+    let mut builder = SequencerClientBuilder::default();
+    if let Some(basic_auth) = &basic_auth {
+        builder = builder.set_headers(
+            std::iter::once((
+                "Authorization".parse().expect("Header name is valid"),
+                format!("Basic {basic_auth}")
+                    .parse()
+                    .context("Invalid basic auth format")?,
+            ))
+            .collect(),
+        );
+    }
+    builder
+        .build(sequencer_addr)
+        .context("Failed to create sequencer client")
+}
+
 /// Calibrate statistics for one client. Takes `client` by value deliberately, cloning
 /// `SequencerClient` is cheap.
-async fn calibrate_client(client: SequencerClient, calibration_limit: usize) -> Option<Statistics> {
+pub async fn calibrate_client(
+    client: SequencerClient,
+    calibration_limit: usize,
+) -> Option<Statistics> {
     let mut latencies = vec![];
     let mut latest_block_id = 0;
     let mut errors: u64 = 0;
