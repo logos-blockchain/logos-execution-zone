@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Display, Formatter},
+    num::{NonZeroU32, NonZeroU64},
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicU64, Ordering},
@@ -51,10 +52,6 @@ const PEER_BLOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
 /// advanced by, so `waited` counts sleeps rather than wall time and, since a
 /// sleep can overshoot, understates it.
 const PEER_BLOCK_POLL_INTERVAL: Duration = Duration::from_secs(1);
-
-/// Peer-block bodies kept behind each verified run tip when
-/// [`IndexerConfig::peer_block_cache_window`] is not configured.
-const DEFAULT_BODY_WINDOW: u64 = 1024;
 
 /// Why a cross-zone dispatch could not be verified.
 ///
@@ -246,17 +243,17 @@ struct PeerBlocks {
 
 impl Default for PeerBlocks {
     fn default() -> Self {
-        Self::new(None)
+        Self::new(crate::config::default_peer_block_cache_window())
     }
 }
 
 impl PeerBlocks {
-    /// `configured` is [`IndexerConfig::peer_block_cache_window`]; zero never
-    /// reaches here, [`CrossZoneVerifier::start`] rejects it.
-    fn new(configured: Option<u32>) -> Self {
+    /// `configured` is [`IndexerConfig::peer_block_cache_window`]; zero is
+    /// unrepresentable there.
+    fn new(configured: NonZeroU32) -> Self {
         Self {
             chains: Arc::default(),
-            window: configured.map_or(DEFAULT_BODY_WINDOW, u64::from),
+            window: NonZeroU64::from(configured).get(),
         }
     }
 
@@ -648,10 +645,6 @@ impl CrossZoneVerifier {
     /// Returns `None` when cross-zone messaging is disabled.
     pub fn start(config: &IndexerConfig) -> Option<Self> {
         let cross_zone = config.cross_zone.as_ref()?;
-        assert!(
-            config.peer_block_cache_window != Some(0),
-            "peer_block_cache_window must not be 0: omit it for the default 1024, use u32::MAX for effectively unbounded"
-        );
         let self_zone: ZoneId = *config.channel_id.as_ref();
         let peers = PeerBlocks::new(config.peer_block_cache_window);
         let watch = PeerWatch::default();
@@ -1372,10 +1365,15 @@ mod tests {
         }
     }
 
-    /// A verifier whose peer cache keeps `window` bodies behind the run tip.
-    fn verifier_with_window(window: u32) -> CrossZoneVerifier {
+    /// `n` as a test cache window.
+    fn window(n: u32) -> NonZeroU32 {
+        NonZeroU32::new(n).expect("test windows are nonzero")
+    }
+
+    /// A verifier whose peer cache keeps `n` bodies behind the run tip.
+    fn verifier_with_window(n: u32) -> CrossZoneVerifier {
         CrossZoneVerifier {
-            peers: PeerBlocks::new(Some(window)),
+            peers: PeerBlocks::new(window(n)),
             ..verifier()
         }
     }
@@ -2399,7 +2397,7 @@ mod tests {
 
     #[tokio::test]
     async fn advancing_the_prefix_evicts_bodies_deeper_than_the_window() {
-        let peers = PeerBlocks::new(Some(1));
+        let peers = PeerBlocks::new(window(1));
         let chain = linked_chain(4);
         cache_chain_with_slots(&peers, chain.clone()).await;
 
@@ -2436,7 +2434,7 @@ mod tests {
 
     #[tokio::test]
     async fn exactly_window_bodies_stay_behind_the_tip() {
-        let peers = PeerBlocks::new(Some(2));
+        let peers = PeerBlocks::new(window(2));
         cache_chain_with_slots(&peers, linked_chain(5)).await;
 
         // Tip 5, window 2: the floor is 3, so ids 3 and 4 are the two bodies
@@ -2461,7 +2459,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_u32_max_window_never_evicts() {
-        let peers = PeerBlocks::new(Some(u32::MAX));
+        let peers = PeerBlocks::new(window(u32::MAX));
         cache_chain_with_slots(&peers, linked_chain(6)).await;
 
         for block_id in GENESIS_BLOCK_ID..=6 {
@@ -2475,28 +2473,23 @@ mod tests {
         }
     }
 
+    /// Zero is unrepresentable in the config type, so a zero window dies at
+    /// parse, and an omitted field takes the 1024 default.
     #[test]
-    #[should_panic(expected = "peer_block_cache_window must not be 0")]
-    fn start_rejects_a_zero_window() {
-        let config = IndexerConfig {
-            consensus_info_polling_interval: Duration::from_secs(1),
-            bedrock_config: crate::config::ClientConfig {
-                addr: "http://localhost:8080".parse().expect("valid url"),
-                auth: None,
-            },
-            channel_id: ChannelId::from([1; 32]),
-            cross_zone: Some(cross_zone_inbox_core::CrossZoneConfig { peers: Vec::new() }),
-            cross_zone_accept_unverified: Vec::new(),
-            peer_block_cache_window: Some(0),
-            bridge_lock_holdings: Vec::new(),
-            allow_chain_reset: false,
-        };
-        let _ = CrossZoneVerifier::start(&config);
+    fn a_zero_window_is_rejected_at_config_parse() {
+        assert!(
+            serde_json::from_str::<NonZeroU32>("0").is_err(),
+            "zero must not deserialize into the window type"
+        );
+        assert_eq!(
+            crate::config::default_peer_block_cache_window(),
+            window(1024)
+        );
     }
 
     #[tokio::test]
     async fn eviction_leaves_the_run_and_its_admission_rules_intact() {
-        let peers = PeerBlocks::new(Some(1));
+        let peers = PeerBlocks::new(window(1));
         let chain = linked_chain(4);
         cache_chain_with_slots(&peers, chain.iter().take(3).cloned().collect()).await;
         // Tip 3, window 1: id 1 is demoted.
