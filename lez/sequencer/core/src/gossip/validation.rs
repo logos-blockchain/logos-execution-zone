@@ -9,6 +9,10 @@ use common::transaction::LeeTransaction;
 const BLOCK_HEADER_OVERHEAD: u64 = 200;
 
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Accept dominates and the value is transient per gossiped message; boxing would add an allocation on the hot validation path"
+)]
 pub enum TxEvaluation {
     /// Structurally valid and authenticated; forward and admit.
     Accept(LeeTransaction),

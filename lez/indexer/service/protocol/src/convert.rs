@@ -249,12 +249,20 @@ impl From<lee::public_transaction::Message> for PublicMessage {
             account_ids,
             nonces,
             instruction_data,
+            payer,
+            gas_limit,
+            tip,
+            max_fee,
         } = value;
         Self {
             program_id: program_id.into(),
             account_ids: account_ids.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
+            payer: payer.into(),
+            gas_limit,
+            tip,
+            max_fee,
         }
     }
 }
@@ -266,6 +274,10 @@ impl From<PublicMessage> for lee::public_transaction::Message {
             account_ids,
             nonces,
             instruction_data,
+            payer,
+            gas_limit,
+            tip,
+            max_fee,
         } = value;
         Self::new_preserialized(
             program_id.into(),
@@ -275,6 +287,7 @@ impl From<PublicMessage> for lee::public_transaction::Message {
                 .map(|x| lee_core::account::Nonce(*x))
                 .collect(),
             instruction_data,
+            lee::FeeFields::new(payer.into(), gas_limit, tip, max_fee),
         )
     }
 }

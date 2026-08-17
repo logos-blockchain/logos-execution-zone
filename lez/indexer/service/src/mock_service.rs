@@ -366,6 +366,10 @@ fn mock_public_tx(
             ],
             nonces: vec![block_id as u128, (block_id + 1) as u128],
             instruction_data: vec![1, 2, 3, 4],
+            payer: AccountId { value: [0; 32] },
+            gas_limit: 0,
+            tip: 0,
+            max_fee: 0,
         },
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],

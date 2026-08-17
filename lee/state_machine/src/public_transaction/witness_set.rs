@@ -5,6 +5,7 @@ use crate::{PrivateKey, PublicKey, Signature, public_transaction::Message};
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WitnessSet {
     pub(crate) signatures_and_public_keys: Vec<(Signature, PublicKey)>,
+    pub(crate) fee_witness: Option<(Signature, PublicKey)>,
 }
 
 impl WitnessSet {
@@ -22,13 +23,35 @@ impl WitnessSet {
             .collect();
         Self {
             signatures_and_public_keys,
+            fee_witness: None,
         }
+    }
+
+    /// Adds a sponsor's fee authorization: a signature over the same message
+    /// hash by an account outside the ordinary witness set.
+    #[must_use]
+    pub fn with_fee_signer(mut self, message: &Message, payer_key: &PrivateKey) -> Self {
+        let message_hash = message.hash();
+        self.fee_witness = Some((
+            Signature::new(payer_key, &message_hash),
+            PublicKey::new_from_private_key(payer_key),
+        ));
+        self
+    }
+
+    #[must_use]
+    pub const fn fee_witness(&self) -> Option<&(Signature, PublicKey)> {
+        self.fee_witness.as_ref()
     }
 
     #[must_use]
     pub fn is_valid_for(&self, message: &Message) -> bool {
         let message_hash = message.hash();
-        for (signature, public_key) in self.signatures_and_public_keys() {
+        for (signature, public_key) in self
+            .signatures_and_public_keys()
+            .iter()
+            .chain(self.fee_witness())
+        {
             if !signature.is_valid_for(&message_hash, public_key) {
                 return false;
             }
@@ -50,6 +73,7 @@ impl WitnessSet {
     pub const fn from_raw_parts(signatures_and_public_keys: Vec<(Signature, PublicKey)>) -> Self {
         Self {
             signatures_and_public_keys,
+            fee_witness: None,
         }
     }
 }

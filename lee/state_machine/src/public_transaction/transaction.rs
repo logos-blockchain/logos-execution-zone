@@ -251,6 +251,7 @@ pub mod tests {
             vec![],
             vec![],
             vec![0; 4],
+            crate::fees::FeeFields::ZERO,
         );
         let witness_set = WitnessSet::from_raw_parts(vec![]);
         let tx = PublicTransaction::new(message, witness_set);

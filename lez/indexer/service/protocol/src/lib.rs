@@ -222,6 +222,10 @@ pub struct PublicMessage {
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
+    pub payer: AccountId,
+    pub gas_limit: u64,
+    pub tip: u64,
+    pub max_fee: u128,
 }
 
 pub type InstructionData = Vec<u32>;

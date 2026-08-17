@@ -858,6 +858,7 @@ impl WalletCore {
             account_ids,
             nonces,
             instruction_data,
+            lee::FeeFields::ZERO,
         );
 
         let message_hash = message.hash();

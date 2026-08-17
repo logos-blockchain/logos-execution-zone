@@ -19,6 +19,10 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         account_ids,
         nonces,
         instruction_data,
+        payer,
+        gas_limit,
+        tip,
+        max_fee,
     } = message;
     let WitnessSet {
         signatures_and_public_keys,
@@ -50,6 +54,16 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
                 <div class="info-row">
                     <span class="info-label">"Signatures:"</span>
                     <span class="info-value">{signatures_count.to_string()}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Fee Payer:"</span>
+                    <span class="info-value hash">{payer.to_string()}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Gas Limit / Tip / Max Fee:"</span>
+                    <span class="info-value">
+                        {format!("{gas_limit} / {tip} / {max_fee}")}
+                    </span>
                 </div>
             </div>
 

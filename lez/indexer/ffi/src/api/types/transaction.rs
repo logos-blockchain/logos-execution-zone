@@ -65,6 +65,12 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
                     std_vec.into_iter().map(Into::into).collect()
                 },
                 instruction_data: value.message.instruction_data.into(),
+                // FIXME:  The FFI surface does not carry fee fields yet;
+                // reconstruct them as zero (the exempt/system value).
+                payer: AccountId { value: [0; 32] },
+                gas_limit: 0,
+                tip: 0,
+                max_fee: 0,
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: {
@@ -100,6 +106,11 @@ impl From<PublicMessage> for FfiPublicMessage {
             account_ids,
             nonces,
             instruction_data,
+            // FIXME: Not carried over the FFI yet.
+            payer: _,
+            gas_limit: _,
+            tip: _,
+            max_fee: _,
         } = value;
 
         Self {
