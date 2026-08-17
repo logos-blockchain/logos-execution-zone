@@ -447,6 +447,18 @@ impl AccountManager {
             .collect()
     }
 
+    /// The account that pays this transaction's fee: the first public signing
+    /// account. Its ordinary signature covers the message, so it is always
+    /// fee-authorized without a separate fee witness.
+    pub fn fee_payer_account_id(&self) -> Option<AccountId> {
+        self.states.iter().find_map(|state| match state {
+            State::Public { account, .. } | State::PublicKeycard { account, .. } => {
+                Some(account.account_id)
+            }
+            State::Private(_) => None,
+        })
+    }
+
     pub fn public_account_ids(&self) -> Vec<AccountId> {
         self.states
             .iter()
@@ -745,6 +757,19 @@ mod tests {
             pin: None,
             dummy_commitment_root: [0; 32],
         }
+    }
+
+    #[test]
+    fn fee_payer_is_the_first_public_account() {
+        let manager = manager(vec![private_state(), public_state(), public_state()]);
+        let expected = manager.public_account_ids()[0];
+        assert_eq!(manager.fee_payer_account_id(), Some(expected));
+    }
+
+    #[test]
+    fn no_public_account_means_no_fee_payer() {
+        let manager = manager(vec![private_state()]);
+        assert_eq!(manager.fee_payer_account_id(), None);
     }
 
     #[test]
