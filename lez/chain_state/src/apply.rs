@@ -87,6 +87,9 @@ pub fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), Bloc
             header: block.header.hash,
         });
     }
+    if !block.has_valid_producer_signature() {
+        return Err(BlockIngestError::InvalidProducerSignature);
+    }
 
     match tip {
         None => {
@@ -258,6 +261,21 @@ mod tests {
         let err =
             apply_block(Some(&tip_of(&genesis)), &block2, &mut state).expect_err("should reject");
         assert!(matches!(err, BlockIngestError::BrokenChainLink { .. }));
+    }
+
+    #[test]
+    fn producer_signature_must_verify() {
+        let mut state = initial_state();
+        let genesis = produce_dummy_block(1, None, vec![]);
+        // Forge the producer: replace it with a different key and re-hash so
+        // the hash check passes but the signature no longer verifies.
+        let mut forged = genesis;
+        forged.header.producer = lee::PublicKey::new_from_private_key(
+            &lee::PrivateKey::try_new([9_u8; 32]).expect("valid key"),
+        );
+        forged.header.hash = forged.recompute_hash();
+        let err = apply_block(None, &forged, &mut state).expect_err("should reject");
+        assert!(matches!(err, BlockIngestError::InvalidProducerSignature));
     }
 
     #[test]

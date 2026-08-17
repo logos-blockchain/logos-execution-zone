@@ -153,6 +153,7 @@ pub struct BlockHeader {
     pub prev_block_hash: HashType,
     pub hash: HashType,
     pub timestamp: Timestamp,
+    pub producer: PublicKey,
     pub signature: Signature,
 }
 
@@ -303,6 +304,12 @@ pub struct PublicKey(
     #[schemars(with = "String", description = "base64-encoded public key")]
     pub [u8; 32],
 );
+
+impl Display for PublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct EphemeralPublicKey(
@@ -470,6 +477,7 @@ pub enum BlockIngestError {
         header: HashType,
     },
     EmptyBlock,
+    InvalidProducerSignature,
     InvalidClockTransaction,
     InvalidFeeTransaction,
     NonPublicGenesisTransaction,

@@ -613,6 +613,7 @@ impl From<common::block::BlockHeader> for BlockHeader {
             prev_block_hash,
             hash,
             timestamp,
+            producer,
             signature,
         } = value;
         Self {
@@ -620,6 +621,7 @@ impl From<common::block::BlockHeader> for BlockHeader {
             prev_block_hash: prev_block_hash.into(),
             hash: hash.into(),
             timestamp,
+            producer: producer.into(),
             signature: signature.into(),
         }
     }
@@ -634,6 +636,7 @@ impl TryFrom<BlockHeader> for common::block::BlockHeader {
             prev_block_hash,
             hash,
             timestamp,
+            producer,
             signature,
         } = value;
         Ok(Self {
@@ -641,6 +644,7 @@ impl TryFrom<BlockHeader> for common::block::BlockHeader {
             prev_block_hash: prev_block_hash.into(),
             hash: hash.into(),
             timestamp,
+            producer: producer.try_into()?,
             signature: signature.into(),
         })
     }
@@ -866,6 +870,9 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
                 Self::InvalidClockTransaction
             }
             indexer_core::BlockIngestError::InvalidFeeTransaction => Self::InvalidFeeTransaction,
+            indexer_core::BlockIngestError::InvalidProducerSignature => {
+                Self::InvalidProducerSignature
+            }
             indexer_core::BlockIngestError::NonPublicGenesisTransaction => {
                 Self::NonPublicGenesisTransaction
             }

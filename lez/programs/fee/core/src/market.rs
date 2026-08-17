@@ -31,8 +31,20 @@ pub const BASE_FEE_STOR_MAX: Fee = u64::MAX / MAX_GAS_STOR;
 
 pub const SMOOTHING_WINDOW: usize = 50;
 
+// FIXME: Provisional: re-pin with the LEZ wire-format numbers (spec Parameters TODO).
+/// Execution gas charged to every private transaction (STARK receipt
+/// verification, RISC Zero 3.0.5).
+pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
+/// Proof bytes inside every private transaction.
+pub const PROOF_BYTES: u64 = 223_551;
+/// Payload size every private transaction is padded to.
+pub const PRIVATE_PAD_BYTES: u64 = 512;
+/// Canonical serialized size of every private transaction.
+pub const PRIVATE_GAS_STOR: u64 = 224_063;
+
 // Genesis validation: the ±12.5% bound and elasticity framing assume
 // MAX = 2·TARGET for both resources.
+// FIXME: we can derive one from another, no need for this
 const _: () = assert!(MAX_GAS_EXEC == 2 * TARGET_GAS_EXEC);
 const _: () = assert!(MAX_GAS_STOR == 2 * TARGET_GAS_STOR);
 

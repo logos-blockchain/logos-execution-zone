@@ -6,8 +6,10 @@ use lee_core::{
     program::{PdaSeed, ProgramId},
 };
 
+pub mod assess;
 pub mod market;
 pub mod state;
+pub mod validity;
 
 const FEE_STATE_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/State/0000000/";
 const FEE_ESCROW_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Escrow/000000/";

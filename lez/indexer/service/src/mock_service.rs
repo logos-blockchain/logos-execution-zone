@@ -13,7 +13,8 @@ use indexer_service_protocol::{
     CommitmentSetDigest, Data, EncryptedAccountData, HashType, IndexerStatus, IndexerSyncState,
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, PublicActionWithID,
-    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    PublicKey, PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow,
+    WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -467,6 +468,7 @@ fn build_mock_block(
             prev_block_hash: prev_hash,
             hash: block_hash,
             timestamp,
+            producer: PublicKey([0_u8; 32]),
             signature: Signature([0_u8; 64]),
         },
         body: BlockBody {
