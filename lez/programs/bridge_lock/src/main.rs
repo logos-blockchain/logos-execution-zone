@@ -1,16 +1,35 @@
+use std::convert::Infallible;
+
 use bridge_lock_core::{
     Instruction, config_account_id, config_bytes, config_seed, escrow_account_id, escrow_seed,
     read_config,
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Data},
     program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountDiffOutput, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call, write_update_from_diff_output,
     },
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
+
+/// Every data write in this program replaces the account's data wholesale with an
+/// already-fully-computed encoding, so `diff_data` already *is* the new data verbatim —
+/// materializing it is a passthrough.
+fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
+    Ok(diff_data
+        .try_into()
+        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+}
+
+fn unchanged(account_id: AccountId) -> AccountDiffOutput {
+    AccountDiffOutput::new(AccountDiff {
+        id: account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: None,
+    })
+}
 
 fn main() {
     let (
@@ -21,7 +40,18 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff {
+            pre_state,
+            diff_data,
+        } => {
+            let data = update_from_diff(pre_state.clone(), diff_data.clone())
+                .expect("update_from_diff should not fail");
+            write_update_from_diff_output(&pre_state, &diff_data, &data);
+            return;
+        }
+    };
 
     assert!(
         caller_program_id.is_none(),
@@ -143,25 +173,21 @@ fn lock(
     // Move the real native balance holder -> escrow. bridge_lock owns both accounts,
     // so it debits the holder and credits the escrow directly; conservation holds
     // because the same amount moves between them.
-    let holder_new = holder
-        .account
-        .balance
-        .checked_sub(amount)
-        .expect("insufficient balance to lock");
-    let escrow_new = escrow
-        .account
-        .balance
-        .checked_add(amount)
-        .expect("escrow balance overflow");
+    let holder_post = AccountDiffOutput::new(AccountDiff {
+        id: holder.account_id,
+        diff_balance: BalanceDiff::Sub(amount),
+        diff_data: None,
+    });
 
-    let mut holder_account = holder.account.clone();
-    holder_account.balance = holder_new;
-    let holder_post = AccountPostState::new(holder_account);
-
-    let mut escrow_account = escrow.account.clone();
-    escrow_account.balance = escrow_new;
-    let escrow_post =
-        AccountPostState::new_claimed_if_default(escrow_account, Claim::Pda(escrow_seed()));
+    let escrow_post = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: escrow.account_id,
+            diff_balance: BalanceDiff::Add(amount),
+            diff_data: None,
+        },
+        escrow.account.program_owner,
+        Claim::Pda(escrow_seed()),
+    );
 
     let call = ChainedCall::new(
         outbox_program_id,
@@ -175,19 +201,15 @@ fn lock(
         },
     );
 
-    let config_post = AccountPostState::new(config.account.clone());
+    let config_post = unchanged(config.account_id);
+    let outbox_post = unchanged(outbox.account_id);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
-        vec![config, holder, escrow, outbox.clone()],
-        vec![
-            config_post,
-            holder_post,
-            escrow_post,
-            AccountPostState::new(outbox.account),
-        ],
+        vec![config, holder, escrow, outbox],
+        vec![config_post, holder_post, escrow_post, outbox_post],
     )
     .with_chained_calls(vec![call])
     .write();
@@ -227,13 +249,15 @@ fn init_config(
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = config_bytes(outbox_program_id, target_program_id)
-        .to_vec()
-        .try_into()
-        .expect("pinned ids fit in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
+    let config_post = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: config.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: Some(config_bytes(outbox_program_id, target_program_id).to_vec()),
+        },
+        config.account.program_owner,
+        Claim::Pda(config_seed()),
+    );
 
     ProgramOutput::new(
         self_program_id,

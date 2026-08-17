@@ -5,7 +5,7 @@ use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
     account::AccountWithMetadata,
-    program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
+    program::{ChainedCall, InstructionData, ProgramId, ProgramOutput, UpdateFromDiffOutput},
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
 
@@ -93,6 +93,7 @@ pub fn execute_and_prove_with_padded_inputs(
     } = program_with_dependencies;
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
+    let mut update_from_diff_results = Vec::new();
 
     let initial_call = ChainedCall {
         program_id: initial_program.id(),
@@ -120,6 +121,26 @@ pub fn execute_and_prove_with_padded_inputs(
             .decode()
             .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
 
+        // Prove `update_from_diff` for every account this call's diff writes data to, in the
+        // same order `execution_state::derive_from_outputs` will visit them, so
+        // `update_from_diff_results` lines up positionally with the circuit's own traversal.
+        for (pre, diff_output) in program_output
+            .pre_states
+            .iter()
+            .zip(&program_output.post_states)
+        {
+            let Some(diff_data) = diff_output.diff().diff_data.clone() else {
+                continue;
+            };
+            let update_receipt = program.prove_update_from_diff(pre.account.clone(), diff_data)?;
+            let update_output: UpdateFromDiffOutput = update_receipt
+                .journal
+                .decode()
+                .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+            update_from_diff_results.push(update_output.data);
+            env_builder.add_assumption(update_receipt);
+        }
+
         // TODO: remove clone
         program_outputs.push(program_output.clone());
 
@@ -145,6 +166,7 @@ pub fn execute_and_prove_with_padded_inputs(
         account_identities,
         program_id: program_with_dependencies.program.id(),
         dummy_inputs,
+        update_from_diff_results,
     };
 
     env_builder.write(&circuit_input).unwrap();

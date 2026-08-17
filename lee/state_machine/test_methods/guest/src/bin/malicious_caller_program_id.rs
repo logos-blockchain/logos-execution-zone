@@ -1,5 +1,9 @@
-use lee_core::program::{
-    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, DEFAULT_PROGRAM_ID, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call,
+    },
 };
 
 type Instruction = ();
@@ -13,11 +17,22 @@ fn main() {
             instruction: (),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "malicious_caller_program_id program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let post_states = pre_states
         .iter()
-        .map(|a| AccountPostState::new(a.account.clone()))
+        .map(|a| {
+            AccountDiffOutput::new(AccountDiff {
+                id: a.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            })
+        })
         .collect();
 
     // Deliberately output wrong caller_program_id.

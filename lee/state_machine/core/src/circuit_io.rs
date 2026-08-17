@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountWithMetadata, Data},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
@@ -21,6 +21,15 @@ pub struct PrivacyPreservingCircuitInput {
     /// Program ID.
     pub program_id: ProgramId,
     pub dummy_inputs: Vec<DummyInput>,
+    /// The materialized `data` result for every `AccountDiff` with `diff_data.is_some()`
+    /// encountered across `program_outputs`, in the same order the circuit visits them (the
+    /// same account/chained-call traversal order `account_identities` aligns to). The host
+    /// proves each one via `Program::prove_update_from_diff` and adds the resulting receipt as
+    /// an `env_builder` assumption; the circuit reconstructs the expected
+    /// `UpdateFromDiffOutput{pre_state, diff_data, data}` journal from `pre_state` (known from
+    /// the pre-state), `diff_data` (known from the diff), and this `data`, then checks it via
+    /// `env::verify` — so this value is untrusted input, made trustworthy only by that check.
+    pub update_from_diff_results: Vec<Data>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

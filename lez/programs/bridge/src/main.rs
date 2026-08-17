@@ -1,15 +1,24 @@
 use bridge_core::Instruction;
 use lee_core::{
-    account::Account,
-    program::{AccountPostState, ChainedCall, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{Account, AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, Claim, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call,
+    },
 };
 
 fn unchanged_post_states(
     pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     pre_states
         .iter()
-        .map(|pre_state| AccountPostState::new(pre_state.account.clone()))
+        .map(|pre_state| {
+            AccountDiffOutput::new(AccountDiff {
+                id: pre_state.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            })
+        })
         .collect()
 }
 
@@ -22,7 +31,12 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "bridge program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     assert!(
         caller_program_id.is_none(),
@@ -76,14 +90,27 @@ fn main() {
                 // First mint: claim the receipt — its existence is the record,
                 // the account's contents are never read — and chain the vault
                 // transfer.
-                let receipt_post = AccountPostState::new_claimed_if_default(
-                    receipt.account,
+                let receipt_post = AccountDiffOutput::new_claimed_if_default(
+                    AccountDiff {
+                        id: receipt.account_id,
+                        diff_balance: BalanceDiff::Add(0),
+                        diff_data: None,
+                    },
+                    receipt.account.program_owner,
                     Claim::Pda(bridge_core::deposit_receipt_seed(l1_deposit_op_id)),
                 );
 
                 let post_states = vec![
-                    AccountPostState::new(bridge.account.clone()),
-                    AccountPostState::new(recipient_vault.account.clone()),
+                    AccountDiffOutput::new(AccountDiff {
+                        id: bridge.account_id,
+                        diff_balance: BalanceDiff::Add(0),
+                        diff_data: None,
+                    }),
+                    AccountDiffOutput::new(AccountDiff {
+                        id: recipient_vault.account_id,
+                        diff_balance: BalanceDiff::Add(0),
+                        diff_data: None,
+                    }),
                     receipt_post,
                 ];
 

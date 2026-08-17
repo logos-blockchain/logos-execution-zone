@@ -1,4 +1,7 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+};
 
 /// A variant of `noop` that asserts every `pre_state.is_authorized == true` before echoing
 /// the `post_states`. Any unauthorized `pre_state` panics the guest, failing the whole
@@ -15,7 +18,12 @@ fn main() {
             ..
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "auth_asserting_noop program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     for pre in &pre_states {
         assert!(
@@ -27,7 +35,13 @@ fn main() {
 
     let post_states = pre_states
         .iter()
-        .map(|account| AccountPostState::new(account.account.clone()))
+        .map(|account| {
+            AccountDiffOutput::new(AccountDiff {
+                id: account.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            })
+        })
         .collect();
     ProgramOutput::new(
         self_program_id,

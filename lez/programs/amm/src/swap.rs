@@ -1,7 +1,7 @@
 pub use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall},
+    account::{AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountDiffOutput, ChainedCall},
 };
 
 /// Validates swap setup: checks pool is active, vaults match, and reserves are sufficient.
@@ -73,22 +73,25 @@ fn create_swap_post_states(
     withdraw_a: u128,
     deposit_b: u128,
     withdraw_b: u128,
-) -> Vec<AccountPostState> {
-    let mut pool_post = pool.account;
+) -> Vec<AccountDiffOutput> {
     let pool_post_definition = PoolDefinition {
         reserve_a: pool_def_data.reserve_a + deposit_a - withdraw_a,
         reserve_b: pool_def_data.reserve_b + deposit_b - withdraw_b,
         ..pool_def_data
     };
 
-    pool_post.data = Data::from(&pool_post_definition);
+    let pool_post = AccountDiffOutput::new(AccountDiff {
+        id: pool.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(Data::from(&pool_post_definition).as_ref().to_vec()),
+    });
 
     vec![
-        AccountPostState::new(pool_post),
-        AccountPostState::new(vault_a.account),
-        AccountPostState::new(vault_b.account),
-        AccountPostState::new(user_holding_a.account),
-        AccountPostState::new(user_holding_b.account),
+        pool_post,
+        crate::unchanged(vault_a.account_id),
+        crate::unchanged(vault_b.account_id),
+        crate::unchanged(user_holding_a.account_id),
+        crate::unchanged(user_holding_b.account_id),
     ]
 }
 
@@ -103,7 +106,7 @@ pub fn swap_exact_input(
     swap_amount_in: u128,
     min_amount_out: u128,
     token_in_id: AccountId,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<AccountDiffOutput>, Vec<ChainedCall>) {
     let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
@@ -228,7 +231,7 @@ pub fn swap_exact_output(
     exact_amount_out: u128,
     max_amount_in: u128,
     token_in_id: AccountId,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<AccountDiffOutput>, Vec<ChainedCall>) {
     let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =

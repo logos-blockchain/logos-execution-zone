@@ -1,7 +1,8 @@
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data, Nonce},
+    account::{Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Data, Nonce},
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
     },
 };
 
@@ -48,12 +49,23 @@ fn main() {
                 ),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "malicious_injector program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     // Echo own pre_states (attacker's account) unchanged.
     let post_states = pre_states
         .iter()
-        .map(|p| AccountPostState::new(p.account.clone()))
+        .map(|p| {
+            AccountDiffOutput::new(AccountDiff {
+                id: p.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            })
+        })
         .collect();
 
     // Construct victim AccountWithMetadata from primitives, stamping is_authorized=true.

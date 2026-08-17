@@ -1,22 +1,25 @@
 use authenticated_transfer_core::Instruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
+    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
 };
 
 /// Initializes a default account under the ownership of this program.
-fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
-    let account_to_claim = AccountPostState::new_claimed(pre_state.account, Claim::Authorized);
-
-    // Continue only if the account to claim has default values
+fn initialize_account(pre_state: AccountWithMetadata) -> AccountDiffOutput {
+    // Continue only if the account to claim has default values.
     assert!(
-        account_to_claim.account() == &Account::default(),
+        pre_state.account == Account::default(),
         "Account must be uninitialized"
     );
 
-    account_to_claim
+    AccountDiffOutput::new_claimed(
+        AccountDiff {
+            id: pre_state.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: None,
+        },
+        Claim::Authorized,
+    )
 }
 
 /// Transfers `balance_to_move` native balance from `sender` to `recipient`.
@@ -24,36 +27,26 @@ fn transfer(
     sender: AccountWithMetadata,
     recipient: AccountWithMetadata,
     balance_to_move: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     // Continue only if the sender has authorized this operation.
     assert!(sender.is_authorized, "Sender must be authorized");
 
-    // Create accounts post states, with updated balances
-    let sender_post = {
-        // Modify sender's balance
-        let mut sender_post_account = sender.account;
-        sender_post_account.balance = sender_post_account
-            .balance
-            .checked_sub(balance_to_move)
-            .expect("Sender has insufficient balance");
-        AccountPostState::new(sender_post_account)
-    };
+    let sender_post = AccountDiffOutput::new(AccountDiff {
+        id: sender.account_id,
+        diff_balance: BalanceDiff::Sub(balance_to_move),
+        diff_data: None,
+    });
 
-    let recipient_post = {
-        // Modify recipient's balance
-        let mut recipient_post_account = recipient.account;
-        recipient_post_account.balance = recipient_post_account
-            .balance
-            .checked_add(balance_to_move)
-            .expect("Recipient balance overflow");
-
-        // Claim recipient account if it has default program owner
-        if recipient_post_account.program_owner == DEFAULT_PROGRAM_ID {
-            AccountPostState::new_claimed(recipient_post_account, Claim::Authorized)
-        } else {
-            AccountPostState::new(recipient_post_account)
-        }
-    };
+    // Claim recipient account if it has default program owner.
+    let recipient_post = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: recipient.account_id,
+            diff_balance: BalanceDiff::Add(balance_to_move),
+            diff_data: None,
+        },
+        recipient.account.program_owner,
+        Claim::Authorized,
+    );
 
     vec![sender_post, recipient_post]
 }
@@ -70,7 +63,12 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "authenticated_transfer program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let post_states = match instruction {
         Instruction::Initialize => {

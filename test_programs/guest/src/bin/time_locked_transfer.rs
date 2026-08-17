@@ -10,7 +10,10 @@
 //!   2 - clock account (read-only, e.g. `CLOCK_01`).
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+};
 
 /// (`amount`, `deadline_timestamp`).
 type Instruction = (u128, u64);
@@ -24,7 +27,12 @@ fn main() {
             instruction: (amount, deadline),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "time_locked_transfer program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let Ok([sender_pre, receiver_pre, clock_pre]) = <[_; 3]>::try_from(pre_states) else {
         panic!("Expected exactly 3 input accounts: sender, receiver, clock");
@@ -42,31 +50,30 @@ fn main() {
         clock_data.timestamp,
     );
 
-    let mut sender_post = sender_pre.account.clone();
-    let mut receiver_post = receiver_pre.account.clone();
-
-    sender_post.balance = sender_post
-        .balance
-        .checked_sub(amount)
-        .expect("Insufficient balance");
-    receiver_post.balance = receiver_post
-        .balance
-        .checked_add(amount)
-        .expect("Balance overflow");
+    let sender_post = AccountDiffOutput::new(AccountDiff {
+        id: sender_pre.account_id,
+        diff_balance: BalanceDiff::Sub(amount),
+        diff_data: None,
+    });
+    let receiver_post = AccountDiffOutput::new(AccountDiff {
+        id: receiver_pre.account_id,
+        diff_balance: BalanceDiff::Add(amount),
+        diff_data: None,
+    });
 
     // Clock account is read-only: post state equals pre state.
-    let clock_post = clock_pre.account.clone();
+    let clock_post = AccountDiffOutput::new(AccountDiff {
+        id: clock_pre.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: None,
+    });
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
         vec![sender_pre, receiver_pre, clock_pre],
-        vec![
-            AccountPostState::new(sender_post),
-            AccountPostState::new(receiver_post),
-            AccountPostState::new(clock_post),
-        ],
+        vec![sender_post, receiver_post, clock_post],
     )
     .write();
 }

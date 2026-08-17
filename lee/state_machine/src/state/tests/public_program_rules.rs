@@ -1,31 +1,6 @@
 use super::*;
 
 #[test]
-fn program_should_fail_if_modifies_nonces() {
-    let account_id = AccountId::new([1; 32]);
-    let mut state = V03State::new()
-        .with_public_account_balances([(account_id, 100)])
-        .with_test_programs();
-    let account_ids = vec![account_id];
-    let program_id = crate::test_methods::nonce_changer().id();
-    let message =
-        public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
-
-    assert!(matches!(
-        result,
-        Err(LeeError::InvalidProgramBehavior(
-            InvalidProgramBehaviorError::ExecutionValidationFailed(
-                ExecutionValidationError::ModifiedNonce { account_id: err_account_id }
-            )
-        )) if err_account_id == account_id
-    ));
-}
-
-#[test]
 fn program_should_fail_if_output_accounts_exceed_inputs() {
     let mut state = V03State::new()
         .with_public_account_balances([(AccountId::new([1; 32]), 0)])
@@ -132,132 +107,6 @@ fn program_should_fail_if_it_drops_a_declared_account() {
 }
 
 #[test]
-fn program_should_fail_if_modifies_program_owner_with_only_non_default_program_owner() {
-    let initial_data = [(
-        AccountId::new([1; 32]),
-        Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id(),
-            ..Account::default()
-        },
-    )];
-    let mut state = V03State::new()
-        .with_public_accounts(initial_data)
-        .with_test_programs();
-    let account_id = AccountId::new([1; 32]);
-    let account = state.get_account_by_id(account_id);
-    // Assert the target account only differs from the default account in the program owner
-    // field
-    assert_ne!(account.program_owner, Account::default().program_owner);
-    assert_eq!(account.balance, Account::default().balance);
-    assert_eq!(account.nonce, Account::default().nonce);
-    assert_eq!(account.data, Account::default().data);
-    let program_id = crate::test_methods::program_owner_changer().id();
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
-
-    assert!(matches!(
-        result,
-        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
-        ))) if err_account_id == account_id
-    ));
-}
-
-#[test]
-fn program_should_fail_if_modifies_program_owner_with_only_non_default_balance() {
-    let initial_data = HashMap::new();
-    let mut state = V03State::new()
-        .with_public_accounts(initial_data)
-        .with_test_programs()
-        .with_non_default_accounts_but_default_program_owners();
-    let account_id = AccountId::new([255; 32]);
-    let account = state.get_account_by_id(account_id);
-    // Assert the target account only differs from the default account in balance field
-    assert_eq!(account.program_owner, Account::default().program_owner);
-    assert_ne!(account.balance, Account::default().balance);
-    assert_eq!(account.nonce, Account::default().nonce);
-    assert_eq!(account.data, Account::default().data);
-    let program_id = crate::test_methods::program_owner_changer().id();
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
-
-    assert!(matches!(
-        result,
-        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
-        ))) if err_account_id == account_id
-    ));
-}
-
-#[test]
-fn program_should_fail_if_modifies_program_owner_with_only_non_default_nonce() {
-    let initial_data = HashMap::new();
-    let mut state = V03State::new()
-        .with_public_accounts(initial_data)
-        .with_test_programs()
-        .with_non_default_accounts_but_default_program_owners();
-    let account_id = AccountId::new([254; 32]);
-    let account = state.get_account_by_id(account_id);
-    // Assert the target account only differs from the default account in nonce field
-    assert_eq!(account.program_owner, Account::default().program_owner);
-    assert_eq!(account.balance, Account::default().balance);
-    assert_ne!(account.nonce, Account::default().nonce);
-    assert_eq!(account.data, Account::default().data);
-    let program_id = crate::test_methods::program_owner_changer().id();
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
-
-    assert!(matches!(
-        result,
-        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
-        ))) if err_account_id == account_id
-    ));
-}
-
-#[test]
-fn program_should_fail_if_modifies_program_owner_with_only_non_default_data() {
-    let initial_data = HashMap::new();
-    let mut state = V03State::new()
-        .with_public_accounts(initial_data)
-        .with_test_programs()
-        .with_non_default_accounts_but_default_program_owners();
-    let account_id = AccountId::new([253; 32]);
-    let account = state.get_account_by_id(account_id);
-    // Assert the target account only differs from the default account in data field
-    assert_eq!(account.program_owner, Account::default().program_owner);
-    assert_eq!(account.balance, Account::default().balance);
-    assert_eq!(account.nonce, Account::default().nonce);
-    assert_ne!(account.data, Account::default().data);
-    let program_id = crate::test_methods::program_owner_changer().id();
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
-
-    assert!(matches!(
-        result,
-        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
-        ))) if err_account_id == account_id
-    ));
-}
-
-#[test]
 fn program_should_fail_if_transfers_balance_from_non_owned_account() {
     let sender_account_id = AccountId::new([1; 32]);
     let receiver_account_id = AccountId::new([2; 32]);
@@ -340,8 +189,8 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
-        ))) if total_balance_pre_states == 0.into() && total_balance_post_states == 1.into()
+            ExecutionValidationError::MismatchedTotalBalance { total_added, total_subbed }
+        ))) if total_added == 1.into() && total_subbed == 0.into()
     ));
 }
 
@@ -371,7 +220,7 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
-        ))) if total_balance_pre_states == 100.into() && total_balance_post_states == 99.into()
+            ExecutionValidationError::MismatchedTotalBalance { total_added, total_subbed }
+        ))) if total_added == 0.into() && total_subbed == 1.into()
     ));
 }

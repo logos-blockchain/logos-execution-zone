@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountDiffOutput, Claim},
 };
 use token_core::TokenHolding;
 
@@ -9,7 +9,7 @@ pub fn transfer(
     sender: AccountWithMetadata,
     recipient: AccountWithMetadata,
     balance_to_move: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     assert!(sender.is_authorized, "Sender authorization is missing");
 
     let mut sender_holding =
@@ -98,14 +98,21 @@ pub fn transfer(
         }
     }
 
-    let mut sender_post = sender.account;
-    sender_post.data = Data::from(&sender_holding);
+    let sender_post = AccountDiffOutput::new(AccountDiff {
+        id: sender.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(Data::from(&sender_holding).as_ref().to_vec()),
+    });
 
-    let mut recipient_post = recipient.account;
-    recipient_post.data = Data::from(&recipient_holding);
+    let recipient_post = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: recipient.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: Some(Data::from(&recipient_holding).as_ref().to_vec()),
+        },
+        recipient.account.program_owner,
+        Claim::Authorized,
+    );
 
-    vec![
-        AccountPostState::new(sender_post),
-        AccountPostState::new_claimed_if_default(recipient_post, Claim::Authorized),
-    ]
+    vec![sender_post, recipient_post]
 }

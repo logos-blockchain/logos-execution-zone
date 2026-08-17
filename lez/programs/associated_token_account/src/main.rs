@@ -1,5 +1,5 @@
 use associated_token_account_core::Instruction;
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramCall, ProgramInput, ProgramOutput, read_lee_call};
 
 fn main() {
     let (
@@ -10,7 +10,12 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "associated_token_account program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let pre_states_clone = pre_states.clone();
 

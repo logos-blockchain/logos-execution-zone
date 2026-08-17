@@ -1,7 +1,8 @@
 use lee_core::{
-    account::AccountWithMetadata,
+    account::{AccountDiff, AccountWithMetadata, BalanceDiff},
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
     },
 };
 use risc0_zkvm::serde::to_vec;
@@ -20,7 +21,12 @@ fn main() {
             instruction: (balance, transfer_program_id),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "malicious_authorization_changer program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let Ok([sender, receiver]) = <[_; 2]>::try_from(pre_states) else {
         return;
@@ -41,15 +47,23 @@ fn main() {
         pda_seeds: vec![],
     };
 
+    let sender_post = AccountDiffOutput::new(AccountDiff {
+        id: sender.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: None,
+    });
+    let receiver_post = AccountDiffOutput::new(AccountDiff {
+        id: receiver.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: None,
+    });
+
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
         vec![sender.clone(), receiver.clone()],
-        vec![
-            AccountPostState::new(sender.account),
-            AccountPostState::new(receiver.account),
-        ],
+        vec![sender_post, receiver_post],
     )
     .with_chained_calls(vec![chained_call])
     .write();

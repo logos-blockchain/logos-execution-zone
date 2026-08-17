@@ -6,7 +6,7 @@
 )]
 
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data},
+    account::{Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Data},
     program::Claim,
 };
 use token_core::{
@@ -23,6 +23,24 @@ use crate::{
 
 // TODO: Move tests to a proper modules like burn, mint, transfer, etc, so that they are more
 // unit-test.
+
+/// Builds the `AccountDiff` a program must have emitted to turn `pre` into `expected_post`, for
+/// asserting against `AccountDiffOutput::diff()` in tests that (pre-diff-native-refactor) used to
+/// compare full post-state `Account`s directly.
+fn expected_diff(pre: &AccountWithMetadata, expected_post: &Account) -> AccountDiff {
+    let diff_balance = if expected_post.balance >= pre.account.balance {
+        BalanceDiff::Add(expected_post.balance - pre.account.balance)
+    } else {
+        BalanceDiff::Sub(pre.account.balance - expected_post.balance)
+    };
+    let diff_data = (expected_post.data != pre.account.data)
+        .then(|| expected_post.data.as_ref().to_vec());
+    AccountDiff {
+        id: pre.account_id,
+        diff_balance,
+        diff_data,
+    }
+}
 
 struct BalanceForTests;
 struct IdForTests;
@@ -581,6 +599,8 @@ fn new_definition_non_default_second_account_should_fail() {
 fn new_definition_with_valid_inputs_succeeds() {
     let definition_account = AccountForTests::definition_account_uninit();
     let holding_account = AccountForTests::holding_account_uninit();
+    let definition_account_pre = definition_account.clone();
+    let holding_account_pre = holding_account.clone();
 
     let post_states = new_fungible_definition(
         definition_account,
@@ -591,13 +611,19 @@ fn new_definition_with_valid_inputs_succeeds() {
 
     let [definition_account, holding_account] = post_states.try_into().unwrap();
     assert_eq!(
-        *definition_account.account(),
-        AccountForTests::definition_account_unclaimed().account
+        *definition_account.diff(),
+        expected_diff(
+            &definition_account_pre,
+            &AccountForTests::definition_account_unclaimed().account
+        )
     );
 
     assert_eq!(
-        *holding_account.account(),
-        AccountForTests::holding_account_unclaimed().account
+        *holding_account.diff(),
+        expected_diff(
+            &holding_account_pre,
+            &AccountForTests::holding_account_unclaimed().account
+        )
     );
 }
 
@@ -630,16 +656,23 @@ fn transfer_without_sender_authorization_should_fail() {
 fn transfer_with_valid_inputs_succeeds() {
     let sender = AccountForTests::holding_account_init();
     let recipient = AccountForTests::holding_account2_init();
+    let (sender_pre, recipient_pre) = (sender.clone(), recipient.clone());
     let post_states = transfer(sender, recipient, BalanceForTests::transfer_amount());
     let [sender_post, recipient_post] = post_states.try_into().unwrap();
 
     assert_eq!(
-        *sender_post.account(),
-        AccountForTests::holding_account_init_post_transfer().account
+        *sender_post.diff(),
+        expected_diff(
+            &sender_pre,
+            &AccountForTests::holding_account_init_post_transfer().account
+        )
     );
     assert_eq!(
-        *recipient_post.account(),
-        AccountForTests::holding_account2_init_post_transfer().account
+        *recipient_post.diff(),
+        expected_diff(
+            &recipient_pre,
+            &AccountForTests::holding_account2_init_post_transfer().account
+        )
     );
 }
 
@@ -663,16 +696,23 @@ fn transfer_with_master_nft_invalid_recipient_balance() {
 fn transfer_with_master_nft_success() {
     let sender = AccountForTests::holding_account_master_nft();
     let recipient = AccountForTests::holding_account_uninit();
+    let (sender_pre, recipient_pre) = (sender.clone(), recipient.clone());
     let post_states = transfer(sender, recipient, BalanceForTests::printable_copies());
     let [sender_post, recipient_post] = post_states.try_into().unwrap();
 
     assert_eq!(
-        *sender_post.account(),
-        AccountForTests::holding_account_master_nft_post_transfer().account
+        *sender_post.diff(),
+        expected_diff(
+            &sender_pre,
+            &AccountForTests::holding_account_master_nft_post_transfer().account
+        )
     );
     assert_eq!(
-        *recipient_post.account(),
-        AccountForTests::holding_account_with_master_nft_transferred_to().account
+        *recipient_post.diff(),
+        expected_diff(
+            &recipient_pre,
+            &AccountForTests::holding_account_with_master_nft_transferred_to().account
+        )
     );
 }
 
@@ -680,16 +720,23 @@ fn transfer_with_master_nft_success() {
 fn token_initialize_account_succeeds() {
     let sender = AccountForTests::holding_account_init();
     let recipient = AccountForTests::holding_account2_init();
+    let (sender_pre, recipient_pre) = (sender.clone(), recipient.clone());
     let post_states = transfer(sender, recipient, BalanceForTests::transfer_amount());
     let [sender_post, recipient_post] = post_states.try_into().unwrap();
 
     assert_eq!(
-        *sender_post.account(),
-        AccountForTests::holding_account_init_post_transfer().account
+        *sender_post.diff(),
+        expected_diff(
+            &sender_pre,
+            &AccountForTests::holding_account_init_post_transfer().account
+        )
     );
     assert_eq!(
-        *recipient_post.account(),
-        AccountForTests::holding_account2_init_post_transfer().account
+        *recipient_post.diff(),
+        expected_diff(
+            &recipient_pre,
+            &AccountForTests::holding_account2_init_post_transfer().account
+        )
     );
 }
 
@@ -746,6 +793,8 @@ fn burn_total_supply_underflow() {
 fn burn_success() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_with_authorization();
+    let (definition_account_pre, holding_account_pre) =
+        (definition_account.clone(), holding_account.clone());
     let post_states = burn(
         definition_account,
         holding_account,
@@ -755,12 +804,18 @@ fn burn_success() {
     let [def_post, holding_post] = post_states.try_into().unwrap();
 
     assert_eq!(
-        *def_post.account(),
-        AccountForTests::definition_account_post_burn().account
+        *def_post.diff(),
+        expected_diff(
+            &definition_account_pre,
+            &AccountForTests::definition_account_post_burn().account
+        )
     );
     assert_eq!(
-        *holding_post.account(),
-        AccountForTests::holding_account_post_burn().account
+        *holding_post.diff(),
+        expected_diff(
+            &holding_account_pre,
+            &AccountForTests::holding_account_post_burn().account
+        )
     );
 }
 
@@ -816,6 +871,8 @@ fn mint_mismatched_token_definition() {
 fn mint_success() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_without_authorization();
+    let (definition_account_pre, holding_account_pre) =
+        (definition_account.clone(), holding_account.clone());
     let post_states = mint(
         definition_account,
         holding_account,
@@ -825,12 +882,18 @@ fn mint_success() {
     let [def_post, holding_post] = post_states.try_into().unwrap();
 
     assert_eq!(
-        *def_post.account(),
-        AccountForTests::definition_account_mint().account
+        *def_post.diff(),
+        expected_diff(
+            &definition_account_pre,
+            &AccountForTests::definition_account_mint().account
+        )
     );
     assert_eq!(
-        *holding_post.account(),
-        AccountForTests::holding_account_same_definition_mint().account
+        *holding_post.diff(),
+        expected_diff(
+            &holding_account_pre,
+            &AccountForTests::holding_account_same_definition_mint().account
+        )
     );
 }
 
@@ -838,6 +901,8 @@ fn mint_success() {
 fn mint_uninit_holding_success() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_account_uninit();
+    let (definition_account_pre, holding_account_pre) =
+        (definition_account.clone(), holding_account.clone());
     let post_states = mint(
         definition_account,
         holding_account,
@@ -847,12 +912,15 @@ fn mint_uninit_holding_success() {
     let [def_post, holding_post] = post_states.try_into().unwrap();
 
     assert_eq!(
-        *def_post.account(),
-        AccountForTests::definition_account_mint().account
+        *def_post.diff(),
+        expected_diff(
+            &definition_account_pre,
+            &AccountForTests::definition_account_mint().account
+        )
     );
     assert_eq!(
-        *holding_post.account(),
-        AccountForTests::init_mint().account
+        *holding_post.diff(),
+        expected_diff(&holding_account_pre, &AccountForTests::init_mint().account)
     );
     assert_eq!(holding_post.required_claim(), Some(Claim::Authorized));
 }
@@ -1033,16 +1101,24 @@ fn print_nft_master_nft_insufficient_balance() {
 fn print_nft_success() {
     let master_account = AccountForTests::holding_account_master_nft();
     let printed_account = AccountForTests::holding_account_uninit();
+    let (master_account_pre, printed_account_pre) =
+        (master_account.clone(), printed_account.clone());
     let post_states = print_nft(master_account, printed_account);
 
     let [post_master_nft, post_printed] = post_states.try_into().unwrap();
 
     assert_eq!(
-        *post_master_nft.account(),
-        AccountForTests::holding_account_master_nft_after_print().account
+        *post_master_nft.diff(),
+        expected_diff(
+            &master_account_pre,
+            &AccountForTests::holding_account_master_nft_after_print().account
+        )
     );
     assert_eq!(
-        *post_printed.account(),
-        AccountForTests::holding_account_printed_nft().account
+        *post_printed.diff(),
+        expected_diff(
+            &printed_account_pre,
+            &AccountForTests::holding_account_printed_nft().account
+        )
     );
 }

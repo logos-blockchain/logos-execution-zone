@@ -1,4 +1,7 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::{Account, AccountDiff, BalanceDiff, Data},
+    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call, write_update_from_diff_output},
+};
 
 // Hello-world with authorization example program.
 //
@@ -25,7 +28,18 @@ fn main() {
             instruction: greeting,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff {
+            pre_state,
+            diff_data,
+        } => {
+            let data = update_from_diff(pre_state.clone(), diff_data.clone())
+                .expect("update_from_diff should not fail");
+            write_update_from_diff_output(&pre_state, &diff_data, &data);
+            return;
+        }
+    };
 
     // Unpack the input account pre state
     let [pre_state] = pre_states
@@ -39,20 +53,24 @@ fn main() {
     assert!(pre_state.is_authorized, "Missing required authorization");
     // ####
 
-    // Construct the post state account values
-    let post_account = {
-        let mut this = pre_state.account.clone();
-        let mut bytes = this.data.into_inner();
+    // Construct the new data value
+    let new_data = {
+        let mut bytes = pre_state.account.data.clone().into_inner();
         bytes.extend_from_slice(&greeting);
-        this.data = bytes
-            .try_into()
-            .expect("Data should fit within the allowed limits");
-        this
+        bytes
     };
 
-    // Wrap the post state account values inside a `AccountPostState` instance.
+    // Wrap the diff inside a `AccountDiffOutput` instance.
     // This is used to forward the account claiming request if any
-    let post_state = AccountPostState::new_claimed_if_default(post_account, Claim::Authorized);
+    let post_state = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: pre_state.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: Some(new_data),
+        },
+        pre_state.account.program_owner,
+        Claim::Authorized,
+    );
 
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms
@@ -67,4 +85,10 @@ fn main() {
         vec![post_state],
     )
     .write();
+}
+
+fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, std::convert::Infallible> {
+    Ok(diff_data
+        .try_into()
+        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
 }
