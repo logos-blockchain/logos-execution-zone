@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// production traffic should rely on.
 pub const DATA_MAX_LENGTH: ByteSize = ByteSize::kib(700);
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, BorshSerialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, BorshSerialize)]
 pub struct Data(Vec<u8>);
 
 impl Data {
@@ -84,6 +84,21 @@ impl AsRef<[u8]> for Data {
     }
 }
 
+impl Serialize for Data {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Explicit `serialize_bytes` (rather than relying on `Vec<u8>`'s own derive, which goes
+        // through the generic per-element `serialize_seq` path) is what lets a binary format like
+        // `risc0_zkvm::serde` pack these bytes densely instead of one 4-byte word per byte. A
+        // human-readable format like `serde_json` still produces the same plain array either way
+        // (verified: its `serialize_bytes` writes a JSON array, byte-for-byte identical to the
+        // old derived output), so this is a pure win with no wire-format change there.
+        serializer.serialize_bytes(&self.0)
+    }
+}
+
 impl<'de> Deserialize<'de> for Data {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -106,22 +121,19 @@ impl<'de> Deserialize<'de> for Data {
                 )
             }
 
+            // A human-readable format like `serde_json` routes a JSON array through here (its
+            // `deserialize_bytes` delegates to `deserialize_seq` for a `[...]` token) — checked
+            // incrementally, one element at a time, so an oversized claim is rejected without
+            // ever over-allocating.
             fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
             where
                 A: serde::de::SeqAccess<'de>,
             {
-                let mut vec = Vec::with_capacity(
-                    seq.size_hint().unwrap_or(0).min(
-                        usize::try_from(DATA_MAX_LENGTH.as_u64())
-                            .expect("DATA_MAX_LENGTH fits in usize"),
-                    ),
-                );
+                let mut vec =
+                    Vec::with_capacity(seq.size_hint().unwrap_or(0).min(data_max_length()));
 
                 while let Some(value) = seq.next_element()? {
-                    if vec.len()
-                        >= usize::try_from(DATA_MAX_LENGTH.as_u64())
-                            .expect("DATA_MAX_LENGTH fits in usize")
-                    {
+                    if vec.len() >= data_max_length() {
                         return Err(serde::de::Error::custom(DataTooBigError));
                     }
                     vec.push(value);
@@ -129,9 +141,34 @@ impl<'de> Deserialize<'de> for Data {
 
                 Ok(Data(vec))
             }
+
+            // A binary format like `risc0_zkvm::serde` calls this directly for `deserialize_bytes`
+            // (see `Data::deserialize` below). Note this check is necessarily a post-hoc reject,
+            // not a preventive cap: `v` arrives already fully materialized by the deserializer
+            // (RISC0's own implementation allocates the claimed length up front, before any
+            // visitor method runs) — accepted because no untrusted, unreconstructed bytes ever
+            // reach this path in this codebase today (see the -7-2 design notes for the audit of
+            // every call site).
+            fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                check_len(v.len())?;
+                Ok(Data(v))
+            }
+
+            // Defensive completeness for a deserializer that hands over borrowed bytes instead of
+            // an owned buffer; not exercised by any format currently in use in this codebase.
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                check_len(v.len())?;
+                Ok(Data(v.to_vec()))
+            }
         }
 
-        deserializer.deserialize_seq(DataVisitor)
+        deserializer.deserialize_bytes(DataVisitor)
     }
 }
 
@@ -152,6 +189,18 @@ impl BorshDeserialize for Data {
                 Ok(Self(vec_bytes))
             }
         }
+    }
+}
+
+fn data_max_length() -> usize {
+    usize::try_from(DATA_MAX_LENGTH.as_u64()).expect("DATA_MAX_LENGTH fits in usize")
+}
+
+fn check_len<E: serde::de::Error>(len: usize) -> Result<(), E> {
+    if len > data_max_length() {
+        Err(serde::de::Error::custom(DataTooBigError))
+    } else {
+        Ok(())
     }
 }
 
@@ -208,6 +257,42 @@ mod tests {
         let json = serde_json::to_string(&data).unwrap();
 
         let result: Result<Data, _> = serde_json::from_str(&json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn risc0_round_trip_survives_non_word_aligned_lengths() {
+        // 7 bytes doesn't divide evenly by the 4-byte word size, exercising the padding path.
+        let data = Data::try_from(vec![1, 2, 3, 4, 5, 6, 7]).unwrap();
+        let words = risc0_zkvm::serde::to_vec(&data).unwrap();
+        let round_tripped: Data = risc0_zkvm::serde::from_slice(&words).unwrap();
+        assert_eq!(data, round_tripped);
+    }
+
+    #[test]
+    fn risc0_encoding_packs_four_bytes_per_word() {
+        // Locks in the actual win: one length word plus ceil(N/4) packed data words, not the old
+        // one-word-per-byte encoding (which would be 1 + N words here).
+        let data = Data::try_from(vec![0_u8; 101]).unwrap();
+        let words = risc0_zkvm::serde::to_vec(&data).unwrap();
+        assert_eq!(words.len(), 1 + 101_usize.div_ceil(4));
+    }
+
+    #[test]
+    fn risc0_deserialize_rejects_oversized_claimed_length() {
+        // Hand-built word stream: a length word claiming one more byte than DATA_MAX_LENGTH
+        // allows, followed by enough (zero) data words to satisfy RISC0's own length-vs-buffer
+        // bounds check — otherwise it rejects with its own DeserializeUnexpectedEnd before ever
+        // reaching Data's own cap check, which isn't what this test means to exercise.
+        let claimed_len = u32::try_from(DATA_MAX_LENGTH.as_u64())
+            .unwrap()
+            .checked_add(1)
+            .unwrap();
+        let mut words = vec![claimed_len];
+        let data_word_count = usize::try_from(claimed_len).unwrap().div_ceil(4);
+        words.resize(1_usize.checked_add(data_word_count).unwrap(), 0_u32);
+
+        let result: Result<Data, _> = risc0_zkvm::serde::from_slice(&words);
         assert!(result.is_err());
     }
 }
