@@ -1,4 +1,12 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use std::convert::Infallible;
+
+use lee_core::{
+    account::{Account, AccountDiff, BalanceDiff, Data},
+    program::{
+        AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        write_update_from_diff_output,
+    },
+};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 
 const PRIZE: u128 = 150;
@@ -52,7 +60,18 @@ fn main() {
             instruction: solution,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff {
+            pre_state,
+            diff_data,
+        } => {
+            let data = update_from_diff(pre_state.clone(), diff_data.clone())
+                .expect("update_from_diff should not fail");
+            write_update_from_diff_output(&pre_state, &diff_data, &data);
+            return;
+        }
+    };
 
     let Ok([pinata, winner]) = <[_; 2]>::try_from(pre_states) else {
         return;
@@ -64,31 +83,35 @@ fn main() {
         return;
     }
 
-    let mut pinata_post = pinata.account.clone();
-    let mut winner_post = winner.account.clone();
-    pinata_post.balance = pinata_post
-        .balance
-        .checked_sub(PRIZE)
-        .expect("Not enough balance in the pinata");
-    pinata_post.data = data
-        .next_data()
-        .to_vec()
-        .try_into()
-        .expect("33 bytes should fit into Data");
-    winner_post.balance = winner_post
-        .balance
-        .checked_add(PRIZE)
-        .expect("Overflow when adding prize to winner");
+    let pinata_post = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: pinata.account_id,
+            diff_balance: BalanceDiff::Sub(PRIZE),
+            diff_data: Some(data.next_data().to_vec()),
+        },
+        pinata.account.program_owner,
+        Claim::Authorized,
+    );
+    let winner_post = AccountDiffOutput::new(AccountDiff {
+        id: winner.account_id,
+        diff_balance: BalanceDiff::Add(PRIZE),
+        diff_data: None,
+    });
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
         vec![pinata, winner],
-        vec![
-            AccountPostState::new_claimed_if_default(pinata_post, Claim::Authorized),
-            AccountPostState::new(winner_post),
-        ],
+        vec![pinata_post, winner_post],
     )
     .write();
+}
+
+/// The challenge's next-data is fully computed before being written, so `diff_data` already *is*
+/// the new data verbatim — materializing it is a passthrough.
+fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
+    Ok(diff_data
+        .try_into()
+        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
 }

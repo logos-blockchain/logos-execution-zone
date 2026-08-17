@@ -1,18 +1,33 @@
+use std::convert::Infallible;
+
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, SeenShard, inbox_config_account_id,
     inbox_config_seed, inbox_seen_shard_account_id, inbox_seen_shard_seed,
     inbox_source_marker_account_id,
 };
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff, Data},
     program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountDiffOutput, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call, write_update_from_diff_output,
     },
 };
 
-fn unchanged(pre: &AccountWithMetadata) -> AccountPostState {
-    AccountPostState::new(pre.account.clone())
+/// Every data write in this program replaces the account's data wholesale with an
+/// already-fully-computed encoding, so `diff_data` already *is* the new data verbatim —
+/// materializing it is a passthrough.
+fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
+    Ok(diff_data
+        .try_into()
+        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+}
+
+fn unchanged(pre: &AccountWithMetadata) -> AccountDiffOutput {
+    AccountDiffOutput::new(AccountDiff {
+        id: pre.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: None,
+    })
 }
 
 fn main() {
@@ -24,7 +39,18 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff {
+            pre_state,
+            diff_data,
+        } => {
+            let data = update_from_diff(pre_state.clone(), diff_data.clone())
+                .expect("update_from_diff should not fail");
+            write_update_from_diff_output(&pre_state, &diff_data, &data);
+            return;
+        }
+    };
 
     assert!(
         caller_program_id.is_none(),
@@ -117,13 +143,13 @@ fn dispatch(
         (unchanged(&seen), vec![])
     } else {
         shard.insert(msg.src_block_hash, msg.src_tx_index);
-        let mut seen_account = seen.account.clone();
-        seen_account.data = shard
-            .to_bytes()
-            .try_into()
-            .expect("seen shard fits in account data");
-        let seen_post = AccountPostState::new_claimed_if_default(
-            seen_account,
+        let seen_post = AccountDiffOutput::new_claimed_if_default(
+            AccountDiff {
+                id: seen.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: Some(shard.to_bytes()),
+            },
+            seen.account.program_owner,
             Claim::Pda(inbox_seen_shard_seed(&msg.src_zone, msg.src_block_id)),
         );
 
@@ -201,13 +227,15 @@ fn init_config(
         );
     }
 
-    let mut config_account = config_meta.account.clone();
-    config_account.data = config
-        .to_bytes()
-        .try_into()
-        .expect("inbox config fits in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(inbox_config_seed()));
+    let config_post = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: config_meta.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: Some(config.to_bytes()),
+        },
+        config_meta.account.program_owner,
+        Claim::Pda(inbox_config_seed()),
+    );
 
     ProgramOutput::new(
         self_program_id,

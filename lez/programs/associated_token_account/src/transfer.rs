@@ -1,7 +1,4 @@
-use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ChainedCall, ProgramId},
-};
+use lee_core::{account::AccountWithMetadata, program::{AccountDiffOutput, ChainedCall, ProgramId}};
 use token_core::TokenHolding;
 
 pub fn transfer_from_associated_token_account(
@@ -10,7 +7,7 @@ pub fn transfer_from_associated_token_account(
     recipient: AccountWithMetadata,
     ata_program_id: ProgramId,
     amount: u128,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<AccountDiffOutput>, Vec<ChainedCall>) {
     let token_program_id = sender_ata.account.program_owner;
     assert!(owner.is_authorized, "Owner authorization is missing");
     let definition_id = TokenHolding::try_from(&sender_ata.account.data)
@@ -24,9 +21,9 @@ pub fn transfer_from_associated_token_account(
     );
 
     let post_states = vec![
-        AccountPostState::new(owner.account.clone()),
-        AccountPostState::new(sender_ata.account.clone()),
-        AccountPostState::new(recipient.account.clone()),
+        crate::unchanged(owner.account_id),
+        crate::unchanged(sender_ata.account_id),
+        crate::unchanged(recipient.account_id),
     ];
     let mut sender_ata_auth = sender_ata.clone();
     sender_ata_auth.is_authorized = true;

@@ -37,8 +37,12 @@
 //! - `flash_swap_self_call_targets_correct_program`: zero-amount self-call isolation test
 //! - `flash_swap_standalone_invariant_check_rejected`: `caller_program_id` access control
 
-use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -77,7 +81,12 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<FlashSwapInstruction>();
+    ) = match read_lee_call::<FlashSwapInstruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "flash_swap_initiator program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     match instruction {
         FlashSwapInstruction::Initiate {
@@ -166,8 +175,16 @@ fn main() {
                 instruction_words,
                 vec![vault_pre.clone(), receiver_pre.clone()],
                 vec![
-                    AccountPostState::new(vault_pre.account),
-                    AccountPostState::new(receiver_pre.account),
+                    AccountDiffOutput::new(AccountDiff {
+                        id: vault_pre.account_id,
+                        diff_balance: BalanceDiff::Add(0),
+                        diff_data: None,
+                    }),
+                    AccountDiffOutput::new(AccountDiff {
+                        id: receiver_pre.account_id,
+                        diff_balance: BalanceDiff::Add(0),
+                        diff_data: None,
+                    }),
                 ],
             )
             .with_chained_calls(vec![call_1, call_2, call_3])
@@ -201,13 +218,19 @@ fn main() {
                 min_vault_balance
             );
 
+            let account_id = vault.account_id;
+
             // Pass-through: no state changes in the invariant check step.
             ProgramOutput::new(
                 self_program_id,
                 caller_program_id,
                 instruction_words,
-                vec![vault.clone()],
-                vec![AccountPostState::new(vault.account)],
+                vec![vault],
+                vec![AccountDiffOutput::new(AccountDiff {
+                    id: account_id,
+                    diff_balance: BalanceDiff::Add(0),
+                    diff_data: None,
+                })],
             )
             .write();
         }

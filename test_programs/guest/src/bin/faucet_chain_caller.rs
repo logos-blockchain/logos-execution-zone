@@ -1,7 +1,8 @@
 use lee_core::{
-    account::AccountId,
+    account::{AccountDiff, AccountId, BalanceDiff},
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
     },
 };
 use risc0_zkvm::serde::to_vec;
@@ -18,11 +19,22 @@ fn main() {
             instruction: (faucet_program_id, vault_program_id, recipient_id, amount),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "faucet_chain_caller program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let post_states: Vec<_> = pre_states
         .iter()
-        .map(|pre| AccountPostState::new(pre.account.clone()))
+        .map(|pre| {
+            AccountDiffOutput::new(AccountDiff {
+                id: pre.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            })
+        })
         .collect();
 
     assert_eq!(pre_states.len(), 2);

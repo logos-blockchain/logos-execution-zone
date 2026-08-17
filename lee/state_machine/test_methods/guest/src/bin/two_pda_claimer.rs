@@ -1,5 +1,8 @@
-use lee_core::program::{
-    AccountPostState, Claim, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, Claim, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    },
 };
 
 /// Claims two `pre_states` under the same `seed`. Used to exercise the tx-wide
@@ -17,14 +20,33 @@ fn main() {
             instruction: seed,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "two_pda_claimer program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let Ok([pre_a, pre_b]) = <[_; 2]>::try_from(pre_states) else {
         return;
     };
 
-    let claim_a = AccountPostState::new_claimed(pre_a.account.clone(), Claim::Pda(seed));
-    let claim_b = AccountPostState::new_claimed(pre_b.account.clone(), Claim::Pda(seed));
+    let claim_a = AccountDiffOutput::new_claimed(
+        AccountDiff {
+            id: pre_a.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: None,
+        },
+        Claim::Pda(seed),
+    );
+    let claim_b = AccountDiffOutput::new_claimed(
+        AccountDiff {
+            id: pre_b.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: None,
+        },
+        Claim::Pda(seed),
+    );
 
     ProgramOutput::new(
         self_program_id,

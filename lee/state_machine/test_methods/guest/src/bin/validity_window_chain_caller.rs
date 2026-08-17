@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountPostState, BlockValidityWindow, ChainedCall, ProgramId, ProgramInput, ProgramOutput,
-    TimestampValidityWindow, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, BlockValidityWindow, ChainedCall, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, TimestampValidityWindow, read_lee_call,
+    },
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -22,10 +25,15 @@ fn main() {
             instruction: (block_validity_window, chained_program_id, chained_block_validity_window),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "validity_window_chain_caller program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let [pre] = <[_; 1]>::try_from(pre_states.clone()).expect("Expected exactly one pre state");
-    let post = pre.account.clone();
+    let account_id = pre.account_id;
 
     let chained_instruction = to_vec(&(
         chained_block_validity_window,
@@ -44,7 +52,11 @@ fn main() {
         caller_program_id,
         instruction_words,
         vec![pre],
-        vec![AccountPostState::new(post)],
+        vec![AccountDiffOutput::new(AccountDiff {
+            id: account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: None,
+        })],
     )
     .with_block_validity_window(block_validity_window)
     .with_chained_calls(vec![chained_call])

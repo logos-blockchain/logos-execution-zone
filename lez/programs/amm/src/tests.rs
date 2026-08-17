@@ -6,7 +6,7 @@ use amm_core::{
 };
 use lee::{PrivateKey, PublicKey, PublicTransaction, V03State, public_transaction};
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data},
+    account::{Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Data},
     program::{ChainedCall, ProgramId},
 };
 use token_core::{TokenDefinition, TokenHolding};
@@ -20,6 +20,24 @@ use crate::{
 
 const TOKEN_PROGRAM_ID: ProgramId = [15; 8];
 const AMM_PROGRAM_ID: ProgramId = [42; 8];
+
+/// Builds the `AccountDiff` a program must have emitted to turn `pre` into `expected_post`, for
+/// asserting against `AccountDiffOutput::diff()` in tests that (pre-diff-native-refactor) used to
+/// compare full post-state `Account`s directly.
+fn expected_diff(pre: &AccountWithMetadata, expected_post: &Account) -> AccountDiff {
+    let diff_balance = if expected_post.balance >= pre.account.balance {
+        BalanceDiff::Add(expected_post.balance - pre.account.balance)
+    } else {
+        BalanceDiff::Sub(pre.account.balance - expected_post.balance)
+    };
+    let diff_data = (expected_post.data != pre.account.data)
+        .then(|| expected_post.data.as_ref().to_vec());
+    AccountDiff {
+        id: pre.account_id,
+        diff_balance,
+        diff_data,
+    }
+}
 
 struct BalanceForTests;
 struct ChainedCallForTests;
@@ -2163,9 +2181,12 @@ fn call_add_liquidity_chained_call_successsful() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_add_successful().account
-            == *pool_post.account()
+    assert_eq!(
+        *pool_post.diff(),
+        expected_diff(
+            &AccountWithMetadataForTests::pool_definition_init(),
+            &AccountWithMetadataForTests::pool_definition_add_successful().account
+        )
     );
 
     let chained_call_lp = chained_calls[0].clone();
@@ -2336,9 +2357,12 @@ fn call_remove_liquidity_chained_call_successful() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_remove_successful().account
-            == *pool_post.account()
+    assert_eq!(
+        *pool_post.diff(),
+        expected_diff(
+            &AccountWithMetadataForTests::pool_definition_init(),
+            &AccountWithMetadataForTests::pool_definition_remove_successful().account
+        )
     );
 
     let chained_call_lp = chained_calls[0].clone();
@@ -2504,9 +2528,12 @@ fn call_new_definition_chained_call_successful() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_add_successful().account
-            == *pool_post.account()
+    assert_eq!(
+        *pool_post.diff(),
+        expected_diff(
+            &AccountWithMetadataForTests::pool_definition_active(),
+            &AccountWithMetadataForTests::pool_definition_add_successful().account
+        )
     );
 
     let chained_call_lp = chained_calls[0].clone();
@@ -2638,8 +2665,12 @@ fn call_swap_chained_call_successful_1() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_swap_test_1().account == *pool_post.account()
+    assert_eq!(
+        *pool_post.diff(),
+        expected_diff(
+            &AccountWithMetadataForTests::pool_definition_init(),
+            &AccountWithMetadataForTests::pool_definition_swap_test_1().account
+        )
     );
 
     let chained_call_a = chained_calls[0].clone();
@@ -2670,8 +2701,12 @@ fn call_swap_chained_call_successful_2() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_swap_test_2().account == *pool_post.account()
+    assert_eq!(
+        *pool_post.diff(),
+        expected_diff(
+            &AccountWithMetadataForTests::pool_definition_init(),
+            &AccountWithMetadataForTests::pool_definition_swap_test_2().account
+        )
     );
 
     let chained_call_a = chained_calls[1].clone();
@@ -2837,9 +2872,12 @@ fn call_swap_exact_output_chained_call_successful() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_swap_exact_output_test_1().account
-            == *pool_post.account()
+    assert_eq!(
+        *pool_post.diff(),
+        expected_diff(
+            &AccountWithMetadataForTests::pool_definition_init(),
+            &AccountWithMetadataForTests::pool_definition_swap_exact_output_test_1().account
+        )
     );
 
     let chained_call_a = chained_calls[0].clone();
@@ -2870,9 +2908,12 @@ fn call_swap_exact_output_chained_call_successful_2() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_swap_exact_output_test_2().account
-            == *pool_post.account()
+    assert_eq!(
+        *pool_post.diff(),
+        expected_diff(
+            &AccountWithMetadataForTests::pool_definition_init(),
+            &AccountWithMetadataForTests::pool_definition_swap_exact_output_test_2().account
+        )
     );
 
     let chained_call_a = chained_calls[1].clone();
@@ -2979,7 +3020,8 @@ fn new_definition_lp_asymmetric_amounts() {
 
     // check the minted LP amount
     let pool_post = post_states[0].clone();
-    let pool_def = PoolDefinition::try_from(&pool_post.account().data).unwrap();
+    let pool_data: Data = pool_post.diff().diff_data.clone().unwrap().try_into().unwrap();
+    let pool_def = PoolDefinition::try_from(&pool_data).unwrap();
     assert_eq!(
         pool_def.liquidity_pool_supply,
         BalanceForTests::lp_supply_init()
@@ -3011,7 +3053,8 @@ fn new_definition_lp_symmetric_amounts() {
     );
 
     let pool_post = post_states[0].clone();
-    let pool_def = PoolDefinition::try_from(&pool_post.account().data).unwrap();
+    let pool_data: Data = pool_post.diff().diff_data.clone().unwrap().try_into().unwrap();
+    let pool_def = PoolDefinition::try_from(&pool_data).unwrap();
     assert_eq!(pool_def.liquidity_pool_supply, expected_lp);
 
     let chained_call_lp = chained_calls[0].clone();

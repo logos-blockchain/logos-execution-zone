@@ -24,8 +24,12 @@
 //! called by any program. In production, a callback would typically verify the caller
 //! if it needs to trust the context it is called from.
 
-use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -47,7 +51,12 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<CallbackInstruction>();
+    ) = match read_lee_call::<CallbackInstruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "flash_swap_callback program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     // pre_states[0] = vault (after transfer out), pre_states[1] = receiver (after transfer out)
     let Ok([vault_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {
@@ -84,8 +93,16 @@ fn main() {
         instruction_words,
         vec![vault_pre.clone(), receiver_pre.clone()],
         vec![
-            AccountPostState::new(vault_pre.account),
-            AccountPostState::new(receiver_pre.account),
+            AccountDiffOutput::new(AccountDiff {
+                id: vault_pre.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            }),
+            AccountDiffOutput::new(AccountDiff {
+                id: receiver_pre.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            }),
         ],
     )
     .with_chained_calls(chained_calls)

@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountDiffOutput, Claim},
 };
 use token_core::TokenHolding;
 
@@ -8,7 +8,7 @@ use token_core::TokenHolding;
 pub fn print_nft(
     master_account: AccountWithMetadata,
     printed_account: AccountWithMetadata,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     assert!(
         master_account.is_authorized,
         "Master NFT Account must be authorized"
@@ -39,17 +39,26 @@ pub fn print_nft(
     );
     *print_balance = print_balance.checked_sub(1).expect("Checked above");
 
-    let mut master_account_post = master_account.account;
-    master_account_post.data = Data::from(&master_account_data);
-
-    let mut printed_account_post = printed_account.account;
-    printed_account_post.data = Data::from(&TokenHolding::NftPrintedCopy {
-        definition_id,
-        owned: true,
-    });
-
     vec![
-        AccountPostState::new(master_account_post),
-        AccountPostState::new_claimed(printed_account_post, Claim::Authorized),
+        AccountDiffOutput::new(AccountDiff {
+            id: master_account.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: Some(Data::from(&master_account_data).as_ref().to_vec()),
+        }),
+        AccountDiffOutput::new_claimed(
+            AccountDiff {
+                id: printed_account.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: Some(
+                    Data::from(&TokenHolding::NftPrintedCopy {
+                        definition_id,
+                        owned: true,
+                    })
+                    .as_ref()
+                    .to_vec(),
+                ),
+            },
+            Claim::Authorized,
+        ),
     ]
 }

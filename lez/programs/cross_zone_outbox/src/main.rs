@@ -1,8 +1,21 @@
+use std::convert::Infallible;
+
 use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda, outbox_pda_seed};
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff, Data},
+    program::{
+        AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        write_update_from_diff_output,
+    },
 };
+
+/// The record is fully computed before being written, so `diff_data` already *is* the new data
+/// verbatim — materializing it is a passthrough.
+fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
+    Ok(diff_data
+        .try_into()
+        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+}
 
 fn main() {
     let (
@@ -13,7 +26,18 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff {
+            pre_state,
+            diff_data,
+        } => {
+            let data = update_from_diff(pre_state.clone(), diff_data.clone())
+                .expect("update_from_diff should not fail");
+            write_update_from_diff_output(&pre_state, &diff_data, &data);
+            return;
+        }
+    };
 
     // The emitter, and the only identity here the state machine verifies: it
     // checks a guest's claimed caller against the real one. Note this is the
@@ -66,8 +90,7 @@ fn main() {
         "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
     );
 
-    let mut post_account = outbox.account.clone();
-    post_account.data = OutboxRecord {
+    let new_data = OutboxRecord {
         emitter,
         target_zone,
         ordinal,
@@ -75,13 +98,15 @@ fn main() {
         target_accounts,
         payload,
     }
-    .to_bytes()
-    .try_into()
-    .expect("OutboxRecord fits in account data");
+    .to_bytes();
 
     // Unconditional, since the pre-state is provably default by the assert above.
-    let post = AccountPostState::new_claimed(
-        post_account,
+    let post = AccountDiffOutput::new_claimed(
+        AccountDiff {
+            id: outbox.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: Some(new_data),
+        },
         Claim::Pda(outbox_pda_seed(emitter, &target_zone, ordinal)),
     );
 

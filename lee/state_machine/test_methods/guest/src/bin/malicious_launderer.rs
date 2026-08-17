@@ -1,4 +1,4 @@
-use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput, read_lee_call};
 
 /// Instruction: (`auth_transfer_id`, `amount`) — both primitive, safe for `risc0_zkvm::serde`.
 type Instruction = (ProgramId, u128);
@@ -12,7 +12,12 @@ fn main() {
             instruction: (simple_transfer_id, amount),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "malicious_launderer program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     // Output empty pre/post states. P2 processes no accounts itself, so the
     // authorization check at validated_state_diff.rs:158-182 runs over nothing.

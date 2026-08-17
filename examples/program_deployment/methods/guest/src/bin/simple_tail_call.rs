@@ -1,5 +1,9 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
+    },
 };
 
 // Tail Call example program.
@@ -33,7 +37,12 @@ fn main() {
             instruction: (),
         },
         instruction_data,
-    ) = read_lee_inputs::<()>();
+    ) = match read_lee_call::<()>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "simple_tail_call program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     // Unpack the input account pre state
     let [pre_state] = pre_states
@@ -42,7 +51,11 @@ fn main() {
         .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
 
     // Create the (unchanged) post state
-    let post_state = AccountPostState::new(pre_state.account.clone());
+    let post_state = AccountDiffOutput::new(AccountDiff {
+        id: pre_state.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: None,
+    });
 
     // Create the chained call
     let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();
