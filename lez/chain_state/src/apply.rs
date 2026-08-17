@@ -286,6 +286,44 @@ mod tests {
     }
 
     #[test]
+    fn fee_state_advances_with_the_chain() {
+        let mut state = initial_state();
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let mut tip = tip_of(&genesis);
+        for id in 2..=5_u64 {
+            let block = produce_dummy_block(id, Some(tip.hash), vec![]);
+            apply_block(Some(&tip), &block, &mut state).expect("block applies");
+            tip = tip_of(&block);
+        }
+
+        let fee_state = fee_core::state::FeeState::from_bytes(
+            &state
+                .get_account_by_id(system_accounts::fee_state_account_id())
+                .data
+                .into_inner(),
+        );
+        // Five blocks applied: height tracks the chain; zero load holds the floor.
+        assert_eq!(fee_state.height, 5);
+        assert_eq!(fee_state.base_fee_exec, fee_core::market::BASE_FEE_EXEC_MIN);
+        assert_eq!(fee_state.base_fee_stor, fee_core::market::BASE_FEE_STOR_MIN);
+        assert_eq!(fee_state.payout_carry, 0);
+        // Escrow and inbox hold no balance.
+        assert_eq!(
+            state
+                .get_account_by_id(system_accounts::fee_escrow_account_id())
+                .balance,
+            0
+        );
+        assert_eq!(
+            state
+                .get_account_by_id(system_accounts::fee_inbox_account_id())
+                .balance,
+            0
+        );
+    }
+
+    #[test]
     fn missing_fee_tx_is_invalid_fee() {
         let mut state = initial_state();
         // Correct clock tail but no fee tx before it.

@@ -13,5 +13,8 @@ programs.workspace = true
 
 serde.workspace = true
 
+[dev-dependencies]
+fee_core.workspace = true
+
 [lints]
 workspace = true

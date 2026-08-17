@@ -38,10 +38,21 @@ fn initial_state() -> lee::V03State {
             )
         })
         .collect::<Vec<_>>();
+
+    // push clock system accounts
     for clock_id in system_accounts::clock_account_ids() {
         public_accounts.push((clock_id, system_accounts::clock_account()));
     }
-    for fee_id in system_accounts::fee_account_ids() {
+
+    // push fee system accounts
+    public_accounts.push((
+        system_accounts::fee_state_account_id(),
+        system_accounts::fee_state_account(),
+    ));
+    for fee_id in [
+        system_accounts::fee_escrow_account_id(),
+        system_accounts::fee_inbox_account_id(),
+    ] {
         public_accounts.push((fee_id, system_accounts::fee_account()));
     }
 

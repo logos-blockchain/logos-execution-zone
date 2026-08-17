@@ -6,6 +6,9 @@ use lee_core::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod market;
+pub mod state;
+
 const FEE_STATE_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/State/0000000/";
 const FEE_ESCROW_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Escrow/000000/";
 const FEE_INBOX_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Inbox/0000000/";

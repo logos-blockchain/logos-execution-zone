@@ -45,6 +45,7 @@ members = [
   "lez/programs/clock",
   "lez/programs/faucet",
   "lez/programs/fee",
+  "lez/programs/fee/core",
   "lez/programs/pinata",
   "lez/programs/pinata_token",
   "lez/programs/token",

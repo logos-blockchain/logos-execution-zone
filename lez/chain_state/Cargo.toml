@@ -25,4 +25,5 @@ tokio.workspace = true
 
 [dev-dependencies]
 testnet_initial_state.workspace = true
+system_accounts.workspace = true
 serde_json.workspace = true
