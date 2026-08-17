@@ -45,13 +45,6 @@ pub struct SharedSecretKey(pub [u8; 32]);
 
 /// The ML-KEM-768 ciphertext produced during encapsulation; transmitted on-wire in place of the
 /// former ECDH ephemeral public key.
-///
-/// Always `ML_KEM_768_CIPHERTEXT_LEN` (1088) bytes in the honest case, but nothing here enforces
-/// that length; malformed values are a deliberate, valid input this type has to represent (see
-/// e.g. `key_management::mod::tests`' `short_epk`), rejected later at the point of use
-/// (decapsulation), not at deserialize time. Its `Serialize`/`Deserialize` impls below pack bytes
-/// densely on the wire (`serialize_bytes`/`deserialize_bytes`) rather than one word per byte, with
-/// no new length cap added since one doesn't already exist for this type.
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct EphemeralPublicKey(pub Vec<u8>);
 
@@ -113,11 +106,6 @@ impl<'de> Deserialize<'de> for Ciphertext {
     }
 }
 
-/// Shared by [`EphemeralPublicKey`] and [`Ciphertext`]'s `Deserialize` impls: both are plain,
-/// uncapped byte blobs, so one visitor covers both — `deserialize_bytes` on a binary format like
-/// `risc0_zkvm::serde` calls `visit_byte_buf` directly (packed bytes, the actual encoding win);
-/// on a human-readable format like `serde_json` it delegates to `deserialize_seq` for a `[...]`
-/// token, calling `visit_seq` — same wire format as before, unaffected by this fix.
 struct BytesVisitor;
 
 impl<'de> serde::de::Visitor<'de> for BytesVisitor {
@@ -131,8 +119,6 @@ impl<'de> serde::de::Visitor<'de> for BytesVisitor {
     where
         A: serde::de::SeqAccess<'de>,
     {
-        // Deliberately not pre-allocated from `seq.size_hint()`: this type has no natural length
-        // cap to bound that hint against, and it's an untrusted claim on this path.
         let mut vec = Vec::new();
         while let Some(value) = seq.next_element()? {
             vec.push(value);
