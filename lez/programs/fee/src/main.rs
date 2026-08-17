@@ -7,10 +7,11 @@
 //! before the clock invocation. Fee accounts are assigned to the fee program at
 //! genesis, so no claiming is required here.
 //!
-//! Skeleton stage: verifies its accounts and echoes them unchanged; the block
-//! fee summary is validated byte-for-byte (all-zero) by the transition.
+//! Applies the per-block market update to the fee-state account; the block fee
+//! summary is validated byte-for-byte (all-zero until metering lands), so
+//! escrow and inbox stay untouched.
 
-use fee_core::Instruction;
+use fee_core::{Instruction, market, state::FeeState};
 use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
 
 fn main() {
@@ -19,7 +20,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: _summary,
+            instruction: summary,
         },
         instruction_words,
     ) = read_lee_inputs::<Instruction>();
@@ -48,8 +49,32 @@ fn main() {
         panic!("Fee accounts must be owned by the fee program");
     }
 
+    // A summary above the per-block caps is not a valid block; the transition
+    // also pins the summary byte-for-byte.
+    //
+    // TODO(#754): the revenue fields are not bounded here. While the summary is
+    // pinned all-zero this cannot bite, but once charging lifts the pin an
+    // attacker-supplied `revenue_base` near u128::MAX would reach the smoothing
+    // window and trip its checked-add (a consensus fault). Bound it to
+    // `gas_used_exec·base_fee_exec + gas_used_stor·base_fee_stor` then.
+    if summary.gas_used_exec > market::MAX_GAS_EXEC || summary.gas_used_stor > market::MAX_GAS_STOR
+    {
+        panic!("Block fee summary exceeds per-block gas caps");
+    }
+
+    let mut fee_state = FeeState::from_bytes(&pre_state.account.data.clone().into_inner());
+    let payout = fee_state.apply_block(&summary);
+    // Until charging lands the summary is all-zero, so no payout can be owed.
+    assert!(payout == 0, "no payout can accrue under zero fees");
+
+    let mut post_state_account = pre_state.account.clone();
+    post_state_account.data = fee_state
+        .to_bytes()
+        .try_into()
+        .expect("FeeState data should fit in account data");
+
     let posts = vec![
-        AccountPostState::new(pre_state.account.clone()),
+        AccountPostState::new(post_state_account),
         AccountPostState::new(pre_escrow.account.clone()),
         AccountPostState::new(pre_inbox.account.clone()),
     ];

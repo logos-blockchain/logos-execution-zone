@@ -215,11 +215,20 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             system_accounts::sequencer_stake_config_account_id(),
             system_accounts::sequencer_stake_config_account(),
         )])
-        .chain(
-            system_accounts::fee_account_ids()
-                .into_iter()
-                .map(|fee_id| (fee_id, system_accounts::fee_account())),
-        )
+        .chain([
+            (
+                system_accounts::fee_state_account_id(),
+                system_accounts::fee_state_account(),
+            ),
+            (
+                system_accounts::fee_escrow_account_id(),
+                system_accounts::fee_account(),
+            ),
+            (
+                system_accounts::fee_inbox_account_id(),
+                system_accounts::fee_account(),
+            ),
+        ])
         .collect()
 }
 
@@ -432,6 +441,28 @@ mod tests {
             let account = state.get_account_by_id(*id);
             assert_eq!(account.program_owner, fee_program_id.into());
             assert_eq!(account.balance, 0);
+        }
+
+        // The fee-state account carries the genesis market state; escrow and
+        // inbox start empty.
+        let fee_state = fee_core::state::FeeState::from_bytes(
+            &state
+                .get_account_by_id(system_accounts::fee_state_account_id())
+                .data
+                .into_inner(),
+        );
+        assert_eq!(fee_state, fee_core::state::FeeState::genesis());
+        for empty_id in [
+            system_accounts::fee_escrow_account_id(),
+            system_accounts::fee_inbox_account_id(),
+        ] {
+            assert!(
+                state
+                    .get_account_by_id(empty_id)
+                    .data
+                    .into_inner()
+                    .is_empty()
+            );
         }
     }
 

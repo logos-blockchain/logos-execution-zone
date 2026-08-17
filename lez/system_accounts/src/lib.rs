@@ -100,6 +100,20 @@ pub fn fee_account() -> Account {
     }
 }
 
+/// The fee-state account at genesis: owned by the fee program, carrying the
+/// genesis market state in its data.
+#[must_use]
+pub fn fee_state_account() -> Account {
+    Account {
+        program_owner: programs::fee().id(),
+        data: fee_core::state::FeeState::genesis()
+            .to_bytes()
+            .try_into()
+            .expect("FeeState data should fit"),
+        ..Account::default()
+    }
+}
+
 #[must_use]
 pub const fn clock_account_ids() -> [AccountId; 3] {
     clock_core::CLOCK_PROGRAM_ACCOUNT_IDS

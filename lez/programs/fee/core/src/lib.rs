@@ -6,9 +6,20 @@ use lee_core::{
     program::{PdaSeed, ProgramId},
 };
 
+pub mod market;
+pub mod state;
+
 const FEE_STATE_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/State/0000000/";
 const FEE_ESCROW_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Escrow/000000/";
 const FEE_INBOX_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Inbox/0000000/";
+
+/// A base-fee price, in atomic units.
+///
+/// Base fees, gas, and per-resource fee products fit `u64` by the per-block gas
+/// caps; balances and revenue totals are [`Balance`] (`u128`).
+///
+/// NOTE: The `u64`/`u128` split is deliberate, per the fee spec.
+pub type Fee = u64;
 
 /// Per-block fee summary carried as the fee invocation's instruction and
 /// validated byte-for-byte by the transition. All-zero until fee metering

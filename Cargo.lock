@@ -1557,6 +1557,7 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "serde",
  "serde_json",
+ "system_accounts",
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
@@ -12417,6 +12418,7 @@ dependencies = [
 name = "testnet_initial_state"
 version = "0.1.0"
 dependencies = [
+ "fee_core",
  "key_protocol",
  "lee",
  "lee_core",
