@@ -45,6 +45,10 @@ pub struct SharedSecretKey(pub [u8; 32]);
 
 /// The ML-KEM-768 ciphertext produced during encapsulation; transmitted on-wire in place of the
 /// former ECDH ephemeral public key. Always `ML_KEM_768_CIPHERTEXT_LEN` (1088) bytes.
+///
+/// Derived `Serialize` has the same `risc0_zkvm::serde` word-per-byte encoding overhead
+/// `account::data::Data` had before its `-7-2` fix (see that type's `Serialize`/`Deserialize`
+/// impls) — a candidate for the same treatment, deliberately left out of that PR's scope.
 #[derive(
     Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize,
 )]
@@ -52,6 +56,8 @@ pub struct EphemeralPublicKey(pub Vec<u8>);
 
 pub struct EncryptionScheme;
 
+/// See [`EphemeralPublicKey`]'s doc comment — same derived-`Serialize` word-encoding overhead,
+/// same deliberately-out-of-scope status for `-7-2`.
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Clone, Default, PartialEq, Eq))]
 pub struct Ciphertext(pub(crate) Vec<u8>);
