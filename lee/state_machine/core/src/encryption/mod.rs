@@ -44,21 +44,42 @@ impl EphemeralSecretKey {
 pub struct SharedSecretKey(pub [u8; 32]);
 
 /// The ML-KEM-768 ciphertext produced during encapsulation; transmitted on-wire in place of the
-/// former ECDH ephemeral public key. Always `ML_KEM_768_CIPHERTEXT_LEN` (1088) bytes.
+/// former ECDH ephemeral public key.
 ///
-/// Derived `Serialize` has the same `risc0_zkvm::serde` word-per-byte encoding overhead
-/// `account::data::Data` had before its `-7-2` fix (see that type's `Serialize`/`Deserialize`
-/// impls) — a candidate for the same treatment, deliberately left out of that PR's scope.
-#[derive(
-    Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize,
-)]
+/// Always `ML_KEM_768_CIPHERTEXT_LEN` (1088) bytes in the honest case, but — unlike
+/// `account::data::Data` — nothing here enforces that length; malformed values are a deliberate,
+/// valid input this type has to represent (see e.g. `key_management::mod::tests`' `short_epk`),
+/// rejected later at the point of use (decapsulation), not at deserialize time. See its
+/// `Serialize`/`Deserialize` impls below for the same `serialize_bytes`/`deserialize_bytes`
+/// word-packing fix `Data` got in `-7-2` — applied here without a new length cap, since one
+/// doesn't already exist for this type.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct EphemeralPublicKey(pub Vec<u8>);
+
+impl Serialize for EphemeralPublicKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_bytes(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for EphemeralPublicKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer
+            .deserialize_bytes(BytesVisitor)
+            .map(EphemeralPublicKey)
+    }
+}
 
 pub struct EncryptionScheme;
 
-/// See [`EphemeralPublicKey`]'s doc comment — same derived-`Serialize` word-encoding overhead,
-/// same deliberately-out-of-scope status for `-7-2`.
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+/// See [`EphemeralPublicKey`]'s doc comment — same fix, same no-new-cap reasoning.
+#[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Clone, Default, PartialEq, Eq))]
 pub struct Ciphertext(pub(crate) Vec<u8>);
 
@@ -72,6 +93,67 @@ impl std::fmt::Debug for Ciphertext {
             acc
         });
         write!(f, "Ciphertext({hex})")
+    }
+}
+
+impl Serialize for Ciphertext {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_bytes(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for Ciphertext {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_bytes(BytesVisitor).map(Ciphertext)
+    }
+}
+
+/// Shared by [`EphemeralPublicKey`] and [`Ciphertext`]'s `Deserialize` impls: both are plain,
+/// uncapped byte blobs (unlike `account::data::Data`, see its own visitor for the capped
+/// version), so one visitor covers both — `deserialize_bytes` on a binary format like
+/// `risc0_zkvm::serde` calls `visit_byte_buf` directly (packed bytes, the actual encoding win);
+/// on a human-readable format like `serde_json` it delegates to `deserialize_seq` for a `[...]`
+/// token, calling `visit_seq` — same wire format as before, unaffected by this fix.
+struct BytesVisitor;
+
+impl<'de> serde::de::Visitor<'de> for BytesVisitor {
+    type Value = Vec<u8>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(formatter, "a byte array")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        // Deliberately not pre-allocated from `seq.size_hint()`: unlike `Data`, this type has no
+        // natural length cap to bound that hint against, and it's an untrusted claim on this path.
+        let mut vec = Vec::new();
+        while let Some(value) = seq.next_element()? {
+            vec.push(value);
+        }
+        Ok(vec)
+    }
+
+    fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(v)
+    }
+
+    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(v.to_vec())
     }
 }
 
@@ -307,5 +389,35 @@ mod tests {
         let esk_a = EphemeralSecretKey::new(&account_id, &random_seed, &crate::account::Nonce(0));
         let esk_b = EphemeralSecretKey::new(&account_id, &random_seed, &crate::account::Nonce(1));
         assert_ne!(esk_a.0, esk_b.0);
+    }
+
+    #[test]
+    fn ephemeral_public_key_risc0_round_trip_survives_non_word_aligned_lengths() {
+        let epk = EphemeralPublicKey(vec![1, 2, 3, 4, 5, 6, 7]);
+        let words = risc0_zkvm::serde::to_vec(&epk).unwrap();
+        let round_tripped: EphemeralPublicKey = risc0_zkvm::serde::from_slice(&words).unwrap();
+        assert_eq!(epk, round_tripped);
+    }
+
+    #[test]
+    fn ephemeral_public_key_risc0_encoding_packs_four_bytes_per_word() {
+        let epk = EphemeralPublicKey(vec![0_u8; ML_KEM_768_CIPHERTEXT_LEN]);
+        let words = risc0_zkvm::serde::to_vec(&epk).unwrap();
+        assert_eq!(words.len(), 1 + ML_KEM_768_CIPHERTEXT_LEN.div_ceil(4));
+    }
+
+    #[test]
+    fn ciphertext_risc0_round_trip_survives_non_word_aligned_lengths() {
+        let ct = Ciphertext(vec![1, 2, 3, 4, 5, 6, 7]);
+        let words = risc0_zkvm::serde::to_vec(&ct).unwrap();
+        let round_tripped: Ciphertext = risc0_zkvm::serde::from_slice(&words).unwrap();
+        assert_eq!(ct.0, round_tripped.0);
+    }
+
+    #[test]
+    fn ciphertext_risc0_encoding_packs_four_bytes_per_word() {
+        let ct = Ciphertext(vec![0_u8; 101]);
+        let words = risc0_zkvm::serde::to_vec(&ct).unwrap();
+        assert_eq!(words.len(), 1 + 101_usize.div_ceil(4));
     }
 }
