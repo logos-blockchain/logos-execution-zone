@@ -7,19 +7,17 @@ use sequencer_service_rpc::RpcClient as SequencerRpcClient;
 use super::{
     super::{
         log_step,
-        transfers::helpers::{assert_transaction_kind, transfer_artifact},
+        transfers::helpers::{transfer_artifact, wait_for_transfer_inclusion},
     },
     require_sequencer,
 };
 use crate::{
     cucumber::{
         error::{StepError, StepResult},
+        steps::indexer::convergence::wait_for_named_transfer_indexed,
         world::CucumberWorld,
     },
-    tf::{
-        IndexerCatchUpError, wait_for_indexer_to_index_transactions_with_timeout,
-        wait_for_indexer_to_reach_with_timeout,
-    },
+    tf::{IndexerCatchUpError, wait_for_indexer_to_reach_with_timeout},
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -70,32 +68,17 @@ async fn assert_committee_transfer_is_included(
     log_step(step);
     let artifact = transfer_artifact(world, &transfer_name)?;
     let sequencer = require_sequencer(world.sequencer_registry()?.registry(), &sequencer_alias)?;
-    let timeout = Duration::from_secs(timeout_seconds);
-    let wait = async {
-        loop {
-            if let Some((transaction, block_id)) =
-                SequencerRpcClient::get_transaction(sequencer.client(), artifact.hash)
-                    .await
-                    .map_err(|error| StepError::QueryFailed {
-                        message: error.to_string(),
-                    })?
-            {
-                assert_transaction_kind(&artifact, &transaction)?;
-                break Ok::<u64, StepError>(block_id);
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    };
-    let block_id = tokio::time::timeout(timeout, wait)
-        .await
-        .map_err(|_elapsed| StepError::Timeout {
-            message: format!(
-                "transfer '{transfer_name}' was not included on sequencer '{sequencer_alias}' within {timeout:?}"
-            ),
-        })??;
+    let block_id = wait_for_transfer_inclusion(
+        sequencer.client(),
+        &artifact,
+        Duration::from_secs(timeout_seconds),
+        &format!("transfer '{transfer_name}' was not included on sequencer '{sequencer_alias}'"),
+    )
+    .await?;
     world
         .environment
         .transfers
+        .artifacts
         .get_mut(&transfer_name)
         .ok_or_else(|| StepError::UnknownTransferArtifact {
             name: transfer_name.clone(),
@@ -105,43 +88,43 @@ async fn assert_committee_transfer_is_included(
 }
 
 #[then(
-    expr = "sequencer {string} observes the receiver balance increase by {int} within {int} seconds"
+    expr = "sequencer {string} observes the receiver balance increase for transfer {string} by {int} within {int} seconds"
 )]
 async fn sequencer_observes_receiver_balance_increase(
     world: &mut CucumberWorld,
     step: &Step,
     observer_alias: String,
+    transfer_name: String,
     amount: u128,
     timeout_seconds: u64,
 ) -> StepResult {
     log_step(step);
+    let artifact = transfer_artifact(world, &transfer_name)?;
     let context = world.sequencer_registry()?;
     let registry = context.registry();
     let observer = require_sequencer(registry, &observer_alias)?;
-    if world.environment.committee_balance_observer.as_deref() != Some(&observer_alias) {
+    if artifact.receiver_balance_observer.as_deref() != Some(&observer_alias) {
         return Err(StepError::AssertionFailed {
             message: format!(
                 "receiver baseline was not recorded on observing sequencer '{observer_alias}'"
             ),
         });
     }
-    let receiver = world
-        .environment
-        .committee_receiver
-        .ok_or(StepError::MissingObservation {
-            field: "committee receiver account",
+    let receiver = artifact.receiver;
+    let initial_balance = artifact.receiver_balance_before;
+    if artifact.amount != amount {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "transfer '{transfer_name}' has amount {}, expected {amount}",
+                artifact.amount
+            ),
+        });
+    }
+    let expected_balance = initial_balance
+        .checked_add(artifact.amount)
+        .ok_or_else(|| StepError::AssertionFailed {
+            message: format!("receiver balance overflow after adding {amount}"),
         })?;
-    let initial_balance = world.environment.committee_receiver_balance_before.ok_or(
-        StepError::MissingObservation {
-            field: "committee receiver balance baseline",
-        },
-    )?;
-    let expected_balance =
-        initial_balance
-            .checked_add(amount)
-            .ok_or_else(|| StepError::AssertionFailed {
-                message: format!("receiver balance overflow after adding {amount}"),
-            })?;
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {
         loop {
@@ -165,7 +148,7 @@ async fn sequencer_observes_receiver_balance_increase(
                 "sequencer '{observer_alias}' did not observe receiver balance {expected_balance} within {timeout:?}"
             ),
         })??;
-    world.environment.committee_indexer_target_height = Some(
+    world.environment.indexer.committee_target_height = Some(
         observer
             .client()
             .get_last_block_id()
@@ -229,34 +212,11 @@ async fn indexer_finalizes_committee_chain(
     log_step(step);
     let context = world.sequencer_registry()?;
     let artifact = transfer_artifact(world, &transfer_name)?;
-    let transfer_block =
-        artifact
-            .inclusion_block
-            .ok_or_else(|| StepError::MissingTransferInclusion {
-                name: transfer_name.clone(),
-            })?;
     let timeout = Duration::from_secs(timeout_seconds);
-    let result = wait_for_indexer_to_index_transactions_with_timeout(
-        context.indexer(),
-        &[artifact.hash],
-        transfer_block,
-        timeout,
-    )
-    .await;
-    let mut height = result.map_err(|error| match error {
-        IndexerCatchUpError::Timeout {
-            target: timeout_target,
-            last_observed,
-            elapsed,
-        } => StepError::Timeout {
-            message: format!(
-                "indexer did not reach transfer '{transfer_name}' committee block {timeout_target}; last observed {last_observed} after {elapsed:?}"
-            ),
-        },
-        IndexerCatchUpError::SequencerQuery { message }
-        | IndexerCatchUpError::IndexerQuery { message } => StepError::QueryFailed { message },
-    })?;
-    if let Some(committee_target) = world.environment.committee_indexer_target_height
+    let mut height =
+        wait_for_named_transfer_indexed(context.indexer(), &artifact, &transfer_name, timeout)
+            .await?;
+    if let Some(committee_target) = world.environment.indexer.committee_target_height
         && committee_target > height
     {
         height = wait_for_indexer_to_reach_with_timeout(
@@ -279,7 +239,7 @@ async fn indexer_finalizes_committee_chain(
                 | IndexerCatchUpError::IndexerQuery { message } => StepError::QueryFailed { message },
             })?;
     }
-    world.environment.committee_indexer_finalized_height = Some(height);
+    world.environment.indexer.committee_finalized_height = Some(height);
     Ok(())
 }
 
@@ -296,7 +256,7 @@ async fn finalized_indexer_blocks_match_sequencer(
     log_step(step);
     let context = world.sequencer_registry()?;
     let sequencer = require_sequencer(context.registry(), &sequencer_alias)?;
-    let finalized = world.environment.committee_indexer_finalized_height.ok_or(
+    let finalized = world.environment.indexer.committee_finalized_height.ok_or(
         StepError::MissingObservation {
             field: "committee indexer finalized height",
         },

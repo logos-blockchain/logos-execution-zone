@@ -53,8 +53,6 @@ async fn transfer_between_configured_private_accounts(
         })?;
     let transfer_hash = context.private_transfer(sender, receiver, amount).await?;
 
-    world.environment.private_sender_initial_balance = Some(sender_initial_balance);
-    world.environment.private_receiver_initial_balance = Some(receiver_initial_balance);
     insert_transfer_artifact(
         world,
         transfer_name,
@@ -64,6 +62,10 @@ async fn transfer_between_configured_private_accounts(
             receiver,
             amount,
             kind: TransferKind::Private,
+            sender_balance_before: sender_initial_balance,
+            receiver_balance_before: receiver_initial_balance,
+            sender_nonce_before: None,
+            receiver_balance_observer: None,
             inclusion_block: None,
         },
     )?;

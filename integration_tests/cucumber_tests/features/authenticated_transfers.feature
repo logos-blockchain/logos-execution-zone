@@ -10,7 +10,7 @@ Feature: Authenticated transfers
     When I transfer 100 from the first configured public account to the second as "PUBLIC_TRANSFER"
     Then the sender balance for transfer "PUBLIC_TRANSFER" decreases by 100
     And the receiver balance for transfer "PUBLIC_TRANSFER" increases by 100
-    And transfer "PUBLIC_TRANSFER" is included in a block
+    And transfer "PUBLIC_TRANSFER" is included in a block within 120 seconds
     And only the sender signs transfer "PUBLIC_TRANSFER"
     And the indexer catches up to transfer "PUBLIC_TRANSFER" within 120 seconds
     Then I stop the runtime
@@ -40,8 +40,8 @@ Feature: Authenticated transfers
     And I transfer 100 from the first configured public account to the second as "SECOND_TRANSFER"
     Then the sender balance across transfers "FIRST_TRANSFER" and "SECOND_TRANSFER" decreases by 200
     And the receiver balance across transfers "FIRST_TRANSFER" and "SECOND_TRANSFER" increases by 200
-    And transfer "FIRST_TRANSFER" is included in a block
-    And transfer "SECOND_TRANSFER" is included in a block
+    And transfer "FIRST_TRANSFER" is included in a block within 120 seconds
+    And transfer "SECOND_TRANSFER" is included in a block within 120 seconds
     And only the sender signs transfer "FIRST_TRANSFER"
     And only the sender signs transfer "SECOND_TRANSFER"
     And the sender nonce advances across transfers "FIRST_TRANSFER" and "SECOND_TRANSFER"
@@ -59,7 +59,7 @@ Feature: Authenticated transfers
     When I transfer 100 from the first configured public account to the new account as "NEW_ACCOUNT_TRANSFER"
     Then the sender balance for transfer "NEW_ACCOUNT_TRANSFER" decreases by 100
     And the new account balance for transfer "NEW_ACCOUNT_TRANSFER" is 100
-    And transfer "NEW_ACCOUNT_TRANSFER" is included in a block
+    And transfer "NEW_ACCOUNT_TRANSFER" is included in a block within 120 seconds
     And the sender and new account sign transfer "NEW_ACCOUNT_TRANSFER"
     And the indexer catches up to transfer "NEW_ACCOUNT_TRANSFER" within 120 seconds
     Then I stop the runtime
@@ -75,6 +75,6 @@ Feature: Authenticated transfers
     And the receiver private balance for transfer "PRIVATE_TRANSFER" increases by 100
     And the sender private commitment for transfer "PRIVATE_TRANSFER" is in sequencer state
     And the receiver private commitment for transfer "PRIVATE_TRANSFER" is in sequencer state
-    And transfer "PRIVATE_TRANSFER" is included in a block
+    And transfer "PRIVATE_TRANSFER" is included in a block within 120 seconds
     And the indexer catches up to transfer "PRIVATE_TRANSFER" within 120 seconds
     Then I stop the runtime

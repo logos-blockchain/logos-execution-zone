@@ -8,7 +8,7 @@ use crate::{
     indexer_client::IndexerClient,
     tf::{
         BedrockCluster, LezIndexerClient, LezRuntime, LezSequencerClient,
-        LezSequencerRegistryClient,
+        LezSequencerRegistryClient, LezStackHandle,
     },
 };
 
@@ -21,10 +21,7 @@ use crate::{
 /// Deployment ownership remains in `crate::tf`; Cucumber owns cloned handles
 /// and scenario state only.
 pub struct LezScenarioContext {
-    bedrock: BedrockCluster,
-    indexer: LezIndexerClient,
-    sequencer: LezSequencerClient,
-    wallet: LezRuntime,
+    stack: LezStackHandle,
 }
 
 /// Cucumber's view of the TF-owned multi-sequencer registry deployment.
@@ -74,7 +71,7 @@ impl LezSequencerRegistryScenarioContext {
     /// Returns the JSON-RPC client for the deployed LEZ indexer.
     #[must_use]
     pub fn indexer_client(&self) -> &IndexerClient {
-        self.indexer.client()
+        self.indexer().client()
     }
 
     /// Returns the TF-owned sequencer registry handle.
@@ -85,75 +82,52 @@ impl LezSequencerRegistryScenarioContext {
 }
 
 impl LezScenarioContext {
-    /// Clones the handles exposed by the existing TF deployment registry.
-    pub fn from_deployment(deployment: &DeployContext<AppHostEnv>) -> Result<Self, StepError> {
-        Ok(Self {
-            bedrock: deployment.require::<BedrockCluster>().map_err(|error| {
-                StepError::MissingComponent {
-                    component: "BedrockCluster",
-                    message: error.to_string(),
-                }
-            })?,
-            indexer: deployment.require::<LezIndexerClient>().map_err(|error| {
-                StepError::MissingComponent {
-                    component: "LezIndexerClient",
-                    message: error.to_string(),
-                }
-            })?,
-            sequencer: deployment
-                .require::<LezSequencerClient>()
-                .map_err(|error| StepError::MissingComponent {
-                    component: "LezSequencerClient",
-                    message: error.to_string(),
-                })?,
-            wallet: deployment.require::<LezRuntime>().map_err(|error| {
-                StepError::MissingComponent {
-                    component: "LezRuntime",
-                    message: error.to_string(),
-                }
-            })?,
-        })
+    /// Creates the Cucumber view from the complete-stack capability returned
+    /// by `LezLocalApp::deploy`.
+    #[must_use]
+    pub const fn from_stack(stack: LezStackHandle) -> Self {
+        Self { stack }
     }
 
     /// Returns the deployed Bedrock cluster handle.
     #[must_use]
     pub const fn bedrock(&self) -> &BedrockCluster {
-        &self.bedrock
+        self.stack.bedrock()
     }
 
     /// Returns the deployed LEZ indexer handle.
     #[must_use]
     pub const fn indexer(&self) -> &LezIndexerClient {
-        &self.indexer
+        self.stack.indexer()
     }
 
     /// Returns the JSON-RPC client for the deployed LEZ indexer.
     #[must_use]
     pub fn indexer_client(&self) -> &IndexerClient {
-        self.indexer.client()
+        self.indexer().client()
     }
 
     /// Returns the deployed LEZ sequencer handle.
     #[must_use]
     pub const fn sequencer(&self) -> &LezSequencerClient {
-        &self.sequencer
+        self.stack.sequencer()
     }
 
     /// Returns the JSON-RPC client for the deployed LEZ sequencer.
     #[must_use]
     pub fn sequencer_client(&self) -> &SequencerClient {
-        self.sequencer.client()
+        self.sequencer().client()
     }
 
     /// Returns the deployed LEZ wallet runtime handle.
     #[must_use]
     pub const fn wallet(&self) -> &LezRuntime {
-        &self.wallet
+        self.stack.wallet()
     }
 
     /// Returns the public account IDs currently imported into the wallet.
     pub async fn existing_public_accounts(&self) -> Result<Vec<AccountId>, StepError> {
-        self.wallet
+        self.wallet()
             .existing_public_accounts()
             .await
             .map_err(|error| StepError::QueryFailed {
@@ -163,7 +137,7 @@ impl LezScenarioContext {
 
     /// Returns the private account IDs currently imported into the wallet.
     pub async fn existing_private_accounts(&self) -> Result<Vec<AccountId>, StepError> {
-        self.wallet
+        self.wallet()
             .existing_private_accounts()
             .await
             .map_err(|error| StepError::QueryFailed {
@@ -176,7 +150,7 @@ impl LezScenarioContext {
         &self,
         account_id: AccountId,
     ) -> Result<Option<u128>, StepError> {
-        self.wallet
+        self.wallet()
             .private_account_balance(account_id)
             .await
             .map_err(|error| StepError::QueryFailed {
@@ -189,7 +163,7 @@ impl LezScenarioContext {
         &self,
         account_id: AccountId,
     ) -> Result<Option<lee_core::Commitment>, StepError> {
-        self.wallet
+        self.wallet()
             .private_account_commitment(account_id)
             .await
             .map_err(|error| StepError::QueryFailed {
@@ -202,7 +176,7 @@ impl LezScenarioContext {
         &self,
         account_id: AccountId,
     ) -> Result<Option<lee::PublicKey>, StepError> {
-        self.wallet
+        self.wallet()
             .public_account_signing_key(account_id)
             .await
             .map_err(|error| StepError::QueryFailed {
@@ -217,7 +191,7 @@ impl LezScenarioContext {
         to: AccountId,
         amount: u128,
     ) -> Result<HashType, StepError> {
-        self.wallet
+        self.wallet()
             .public_transfer(from, to, amount)
             .await
             .map_err(|error| StepError::QueryFailed {
@@ -232,7 +206,7 @@ impl LezScenarioContext {
         to: AccountId,
         amount: u128,
     ) -> Result<HashType, StepError> {
-        self.wallet
+        self.wallet()
             .private_transfer(from, to, amount)
             .await
             .map_err(|error| StepError::QueryFailed {
@@ -242,7 +216,7 @@ impl LezScenarioContext {
 
     /// Synchronizes the wallet with the latest sequencer block.
     pub async fn sync_wallet_to_latest_block(&self) -> Result<(), StepError> {
-        self.wallet
+        self.wallet()
             .sync_to_latest_block()
             .await
             .map_err(|error| StepError::QueryFailed {
@@ -252,7 +226,7 @@ impl LezScenarioContext {
 
     /// Creates a fresh public account in the scenario wallet.
     pub async fn new_public_account(&self) -> Result<AccountId, StepError> {
-        self.wallet
+        self.wallet()
             .new_public_account()
             .await
             .map_err(|error| StepError::QueryFailed {
@@ -267,7 +241,7 @@ impl LezScenarioContext {
         to: AccountId,
         amount: u128,
     ) -> Result<HashType, StepError> {
-        self.wallet
+        self.wallet()
             .public_transfer_to_new_account(from, to, amount)
             .await
             .map_err(|error| StepError::QueryFailed {
@@ -281,7 +255,7 @@ impl LezScenarioContext {
         account_id: AccountId,
         label: wallet::account::Label,
     ) -> Result<(), StepError> {
-        self.wallet
+        self.wallet()
             .set_public_account_label(account_id, label)
             .await
             .map_err(|error| StepError::QueryFailed {
@@ -296,7 +270,7 @@ impl LezScenarioContext {
         to: wallet::account::Label,
         amount: u128,
     ) -> Result<HashType, StepError> {
-        self.wallet
+        self.wallet()
             .public_transfer_by_labels(from, to, amount)
             .await
             .map_err(|error| StepError::QueryFailed {

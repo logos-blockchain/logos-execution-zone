@@ -8,7 +8,7 @@ use super::{
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
-    world::{CucumberWorld, TransferArtifact, TransferKind},
+    world::{CucumberWorld, RejectedTransferAttempt, TransferArtifact, TransferKind},
 };
 
 #[when(
@@ -60,11 +60,6 @@ async fn transfer_between_configured_public_accounts(
         })?;
     let transfer_hash = context.public_transfer(sender, receiver, amount).await?;
 
-    if world.environment.sender_initial_balance.is_none() {
-        world.environment.sender_initial_balance = Some(sender_initial_balance);
-        world.environment.receiver_initial_balance = Some(receiver_initial_balance);
-        world.environment.sender_initial_nonce = Some(sender_initial_nonce);
-    }
     insert_transfer_artifact(
         world,
         transfer_name,
@@ -74,6 +69,10 @@ async fn transfer_between_configured_public_accounts(
             receiver,
             amount,
             kind: TransferKind::Public,
+            sender_balance_before: sender_initial_balance,
+            receiver_balance_before: receiver_initial_balance,
+            sender_nonce_before: Some(sender_initial_nonce),
+            receiver_balance_observer: None,
             inclusion_block: None,
         },
     )?;
@@ -90,22 +89,22 @@ async fn transfer_between_labeled_public_accounts(
     log_step(step);
     ensure_transfer_name_available(world, &transfer_name)?;
     let context = world.lez()?;
-    let sender_label =
-        world
-            .environment
-            .public_sender_label
-            .clone()
-            .ok_or(StepError::MissingObservation {
-                field: "public sender label",
-            })?;
-    let receiver_label =
-        world
-            .environment
-            .public_receiver_label
-            .clone()
-            .ok_or(StepError::MissingObservation {
-                field: "public receiver label",
-            })?;
+    let sender_label = world
+        .environment
+        .accounts
+        .public_sender_label
+        .clone()
+        .ok_or(StepError::MissingObservation {
+            field: "public sender label",
+        })?;
+    let receiver_label = world
+        .environment
+        .accounts
+        .public_receiver_label
+        .clone()
+        .ok_or(StepError::MissingObservation {
+            field: "public receiver label",
+        })?;
     let accounts = context.existing_public_accounts().await?;
     let sender = accounts
         .first()
@@ -129,6 +128,18 @@ async fn transfer_between_labeled_public_accounts(
         .map_err(|error| StepError::QueryFailed {
             message: error.to_string(),
         })?;
+    let sender_initial_nonce = context
+        .sequencer_client()
+        .get_accounts_nonces(vec![sender])
+        .await
+        .map_err(|error| StepError::QueryFailed {
+            message: error.to_string(),
+        })?
+        .into_iter()
+        .next()
+        .ok_or_else(|| StepError::QueryFailed {
+            message: format!("no nonce returned for sender {sender:?}"),
+        })?;
     let transfer_hash = context
         .public_transfer_by_labels(
             Label::new(&sender_label),
@@ -137,8 +148,6 @@ async fn transfer_between_labeled_public_accounts(
         )
         .await?;
 
-    world.environment.sender_initial_balance = Some(sender_initial_balance);
-    world.environment.receiver_initial_balance = Some(receiver_initial_balance);
     insert_transfer_artifact(
         world,
         transfer_name,
@@ -148,6 +157,10 @@ async fn transfer_between_labeled_public_accounts(
             receiver,
             amount,
             kind: TransferKind::Public,
+            sender_balance_before: sender_initial_balance,
+            receiver_balance_before: receiver_initial_balance,
+            sender_nonce_before: Some(sender_initial_nonce),
+            receiver_balance_observer: None,
             inclusion_block: None,
         },
     )?;
@@ -174,6 +187,7 @@ async fn transfer_to_new_public_account(
         .ok_or(StepError::MissingSelectedAccount)?;
     let receiver = world
         .environment
+        .accounts
         .new_public_account
         .ok_or(StepError::MissingSelectedAccount)?;
     let sender_initial_balance = context
@@ -200,9 +214,6 @@ async fn transfer_to_new_public_account(
         .public_transfer_to_new_account(sender, receiver, amount)
         .await?;
 
-    world.environment.sender_initial_balance = Some(sender_initial_balance);
-    world.environment.receiver_initial_balance = Some(receiver_initial_balance);
-    world.environment.sender_initial_nonce = Some(sender_initial_nonce);
     insert_transfer_artifact(
         world,
         transfer_name,
@@ -212,6 +223,10 @@ async fn transfer_to_new_public_account(
             receiver,
             amount,
             kind: TransferKind::Public,
+            sender_balance_before: sender_initial_balance,
+            receiver_balance_before: receiver_initial_balance,
+            sender_nonce_before: Some(sender_initial_nonce),
+            receiver_balance_observer: None,
             inclusion_block: None,
         },
     )?;
@@ -273,12 +288,14 @@ async fn attempt_insufficient_public_transfer(
         Err(error) => error.to_string(),
     };
 
-    world.environment.rejected_transfer_sender = Some(sender);
-    world.environment.rejected_transfer_receiver = Some(receiver);
-    world.environment.rejected_transfer_amount = Some(amount);
-    world.environment.sender_initial_balance = Some(sender_initial_balance);
-    world.environment.receiver_initial_balance = Some(receiver_initial_balance);
-    world.environment.sender_initial_nonce = Some(sender_initial_nonce);
-    world.environment.transfer_rejection = Some(rejection);
+    world.environment.transfers.rejected = Some(RejectedTransferAttempt {
+        sender,
+        receiver,
+        amount,
+        sender_balance_before: sender_initial_balance,
+        receiver_balance_before: receiver_initial_balance,
+        sender_nonce_before: sender_initial_nonce,
+        error: rejection,
+    });
     Ok(())
 }

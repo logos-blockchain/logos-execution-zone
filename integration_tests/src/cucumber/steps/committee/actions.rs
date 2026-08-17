@@ -114,7 +114,7 @@ async fn configure_committee(
                 step.value
             ),
         })?;
-    world.environment.committee_configuration =
+    world.environment.committee.committee_configuration =
         Some(crate::cucumber::world::CommitteeConfiguration {
             leader_alias,
             authorized_sequencers,
@@ -192,7 +192,7 @@ async fn sequencer_synchronizes(
         &format!("sequencer '{joining_alias}' to synchronize to '{source_alias}'"),
     )
     .await?;
-    world.environment.committee_join_height = Some(join_height);
+    world.environment.committee.committee_join_height = Some(join_height);
     Ok(())
 }
 
@@ -208,11 +208,14 @@ async fn committee_is_active(
     timeout_seconds: u64,
 ) -> StepResult {
     log_step(step);
-    let configuration = world.environment.committee_configuration.as_ref().ok_or(
-        StepError::MissingObservation {
+    let configuration = world
+        .environment
+        .committee
+        .committee_configuration
+        .as_ref()
+        .ok_or(StepError::MissingObservation {
             field: "committee configuration",
-        },
-    )?;
+        })?;
     if configuration.leader_alias != leader_alias {
         return Err(StepError::AssertionFailed {
             message: format!(
@@ -357,6 +360,7 @@ async fn sequencers_advance_across_rotation_blocks(
     let join_height =
         world
             .environment
+            .committee
             .committee_join_height
             .ok_or(StepError::MissingObservation {
                 field: "committee join height",
@@ -384,7 +388,7 @@ async fn sequencers_advance_across_rotation_blocks(
         &format!("sequencer '{second_alias}' across committee rotation windows"),
     )
     .await?;
-    world.environment.committee_rotation_target = Some(target);
+    world.environment.committee.committee_rotation_target = Some(target);
     Ok(())
 }
 
@@ -417,7 +421,15 @@ async fn submit_committee_transfer(
             message: format!("receiver account index {receiver_index} is out of range"),
         })?
         .account_id;
-    if world.environment.committee_receiver != Some(receiver) {
+    let pending_observation = world
+        .environment
+        .transfers
+        .pending_observation
+        .as_ref()
+        .ok_or(StepError::MissingObservation {
+            field: "committee transfer receiver baseline",
+        })?;
+    if pending_observation.receiver != receiver {
         return Err(StepError::AssertionFailed {
             message: format!(
                 "transfer receiver {receiver:?} does not match the recorded observer baseline"
@@ -435,6 +447,13 @@ async fn submit_committee_transfer(
         .next()
         .ok_or_else(|| StepError::QueryFailed {
             message: format!("no nonce returned for deterministic sender {sender:?}"),
+        })?;
+    let sender_balance_before = sequencer
+        .client()
+        .get_account_balance(sender)
+        .await
+        .map_err(|error| StepError::QueryFailed {
+            message: error.to_string(),
         })?;
     let signing_key = initial_pub_accounts_private_keys()
         .get(sender_index)
@@ -457,7 +476,14 @@ async fn submit_committee_transfer(
         .map_err(|error| StepError::QueryFailed {
             message: error.to_string(),
         })?;
-    world.environment.committee_receiver = Some(receiver);
+    let submitted_observation = world
+        .environment
+        .transfers
+        .pending_observation
+        .take()
+        .ok_or(StepError::MissingObservation {
+            field: "committee transfer receiver baseline",
+        })?;
     insert_transfer_artifact(
         world,
         transfer_name,
@@ -467,6 +493,10 @@ async fn submit_committee_transfer(
             receiver,
             amount,
             kind: TransferKind::Public,
+            sender_balance_before,
+            receiver_balance_before: submitted_observation.receiver_balance_before,
+            sender_nonce_before: Some(nonce),
+            receiver_balance_observer: Some(submitted_observation.observer_alias),
             inclusion_block: None,
         },
     )?;
@@ -495,8 +525,11 @@ async fn record_committee_balance_baseline(
         .map_err(|error| StepError::QueryFailed {
             message: error.to_string(),
         })?;
-    world.environment.committee_receiver = Some(account);
-    world.environment.committee_receiver_balance_before = Some(balance);
-    world.environment.committee_balance_observer = Some(observer_alias);
+    world.environment.transfers.pending_observation =
+        Some(crate::cucumber::world::PendingTransferObservation {
+            receiver: account,
+            receiver_balance_before: balance,
+            observer_alias,
+        });
     Ok(())
 }

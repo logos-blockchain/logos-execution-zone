@@ -1,1 +1,1 @@
-mod convergence;
+pub(crate) mod convergence;

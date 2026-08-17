@@ -15,15 +15,18 @@ fn assert_first_public_account_balance(world: &mut CucumberWorld, step: &Step) -
     log_step(step);
     let account = world
         .environment
+        .accounts
         .selected_account
         .ok_or(StepError::MissingSelectedAccount)?;
     let observed_balance = world
         .environment
+        .accounts
         .observed_balance
         .ok_or(StepError::MissingObservedBalance)?;
     let expected_balance =
         world
             .environment
+            .accounts
             .expected_balance
             .ok_or_else(|| StepError::AssertionFailed {
                 message: "expected balance was not recorded".to_owned(),

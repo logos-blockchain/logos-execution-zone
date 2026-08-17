@@ -23,12 +23,49 @@ impl Default for LezLocalApp {
     }
 }
 
-/// Root handle indicating that the complete LEZ stack was deployed.
+/// Capability for the complete deployed LEZ stack.
 ///
-/// Component resources are owned by their individually exposed handles in the
-/// application runtime registry.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct LezStackHandle;
+/// The same component handles are also exposed individually through the
+/// deployment registry so teardown can stop them in dependency order.
+#[derive(Clone)]
+pub struct LezStackHandle {
+    bedrock: BedrockCluster,
+    indexer: super::LezIndexerClient,
+    sequencer: super::LezSequencerClient,
+    wallet: super::LezRuntime,
+}
+
+impl LezStackHandle {
+    pub(crate) const fn new(
+        bedrock: BedrockCluster,
+        indexer: super::LezIndexerClient,
+        sequencer: super::LezSequencerClient,
+        wallet: super::LezRuntime,
+    ) -> Self {
+        Self {
+            bedrock,
+            indexer,
+            sequencer,
+            wallet,
+        }
+    }
+
+    pub(crate) const fn bedrock(&self) -> &BedrockCluster {
+        &self.bedrock
+    }
+
+    pub(crate) const fn indexer(&self) -> &super::LezIndexerClient {
+        &self.indexer
+    }
+
+    pub(crate) const fn sequencer(&self) -> &super::LezSequencerClient {
+        &self.sequencer
+    }
+
+    pub(crate) const fn wallet(&self) -> &super::LezRuntime {
+        &self.wallet
+    }
+}
 
 impl LezLocalApp {
     /// Creates a complete LEZ deployment with default configuration.
@@ -109,7 +146,7 @@ impl AppDeployment<AppHostEnv> for LezLocalApp {
             || indexer.clone(),
             |dir| indexer.clone().with_state_dir(dir.join("lez/indexer")),
         );
-        ctx.deploy_and_expose(indexer).await?;
+        let indexer = ctx.deploy_and_expose(indexer).await?;
 
         let sequencer = SequencerApp::new(self.sequencer, bedrock.primary_api_addr());
         let sequencer = scenario_base_dir.as_ref().map_or_else(
@@ -128,9 +165,9 @@ impl AppDeployment<AppHostEnv> for LezLocalApp {
             || wallet.clone(),
             |dir| wallet.clone().with_state_dir(dir.join("lez/wallet")),
         );
-        ctx.deploy_and_expose(wallet).await?;
+        let wallet = ctx.deploy_and_expose(wallet).await?;
 
-        Ok(LezStackHandle)
+        Ok(LezStackHandle::new(bedrock, indexer, sequencer, wallet))
     }
 }
 

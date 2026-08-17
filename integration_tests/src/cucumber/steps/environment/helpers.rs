@@ -42,7 +42,7 @@ pub(crate) async fn deploy_lez_stack(
         app.without_private_account_initialization()
     };
 
-    world.deployment_mut().deploy(app).await.map_err(|error| {
+    let stack = world.deployment_mut().deploy(app).await.map_err(|error| {
         warn!(target: TARGET,
             "Cucumber step '{}' failed during deployment: {error:?}",
             step.value
@@ -52,8 +52,7 @@ pub(crate) async fn deploy_lez_stack(
         }
     })?;
 
-    let context = LezScenarioContext::from_deployment(world.deployment())?;
-    world.set_lez(context)
+    world.set_lez(LezScenarioContext::from_stack(stack))
 }
 
 pub(crate) async fn deploy_lez_sequencer_registry(

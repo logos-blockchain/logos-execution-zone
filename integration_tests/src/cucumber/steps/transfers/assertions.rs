@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use common::transaction::LeeTransaction;
 use cucumber::{gherkin::Step, then};
 use lee_core::account::Nonce;
@@ -6,8 +8,9 @@ use sequencer_service_rpc::RpcClient as _;
 use super::{
     super::log_step,
     helpers::{
-        assert_transaction_kind, expected_public_signing_key, get_transfer_transaction,
-        rejected_transfer_details, transfer_artifact, transfer_details,
+        assert_private_balance_delta, assert_public_balance_delta, expected_public_signing_key,
+        get_transfer_transaction, rejected_transfer_details, transfer_artifact, transfer_details,
+        wait_for_transfer_inclusion,
     },
 };
 use crate::cucumber::{
@@ -48,11 +51,10 @@ fn two_transfer_details(
                 ),
             })?;
     let initial_balance = if sender {
-        world.environment.sender_initial_balance
+        first.sender_balance_before
     } else {
-        world.environment.receiver_initial_balance
-    }
-    .ok_or(StepError::MissingObservedBalance)?;
+        first.receiver_balance_before
+    };
     Ok((first_account, initial_balance, amount))
 }
 
@@ -65,37 +67,17 @@ async fn assert_sender_balance_decreased(
 ) -> StepResult {
     log_step(step);
     let (sender, initial_balance, amount) = transfer_details(world, &transfer_name, true)?;
-    if amount != expected_amount {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "expected sender balance decrease {expected_amount}, got transfer amount {amount}"
-            ),
-        });
-    }
-    let observed_balance = world
-        .lez()?
-        .sequencer_client()
-        .get_account_balance(sender)
-        .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
-    let expected_balance =
-        initial_balance
-            .checked_sub(amount)
-            .ok_or_else(|| StepError::AssertionFailed {
-                message: format!(
-                    "sender initial balance {initial_balance} is below transfer amount {amount}"
-                ),
-            })?;
-    if observed_balance != expected_balance {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "sender {sender:?} has balance {observed_balance}, expected {expected_balance}"
-            ),
-        });
-    }
-    world.environment.sender_observed_balance = Some(observed_balance);
+    let observed_balance = assert_public_balance_delta(
+        world,
+        sender,
+        initial_balance,
+        amount,
+        expected_amount,
+        false,
+        "sender",
+    )
+    .await?;
+    world.environment.accounts.sender_observed_balance = Some(observed_balance);
     Ok(())
 }
 
@@ -108,35 +90,17 @@ async fn assert_receiver_balance_increased(
 ) -> StepResult {
     log_step(step);
     let (receiver, initial_balance, amount) = transfer_details(world, &transfer_name, false)?;
-    if amount != expected_amount {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "expected receiver balance increase {expected_amount}, got transfer amount {amount}"
-            ),
-        });
-    }
-    let observed_balance = world
-        .lez()?
-        .sequencer_client()
-        .get_account_balance(receiver)
-        .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
-    let expected_balance =
-        initial_balance
-            .checked_add(amount)
-            .ok_or_else(|| StepError::AssertionFailed {
-                message: format!("receiver balance overflow for transfer amount {amount}"),
-            })?;
-    if observed_balance != expected_balance {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "receiver {receiver:?} has balance {observed_balance}, expected {expected_balance}"
-            ),
-        });
-    }
-    world.environment.receiver_observed_balance = Some(observed_balance);
+    let observed_balance = assert_public_balance_delta(
+        world,
+        receiver,
+        initial_balance,
+        amount,
+        expected_amount,
+        true,
+        "receiver",
+    )
+    .await?;
+    world.environment.accounts.receiver_observed_balance = Some(observed_balance);
     Ok(())
 }
 
@@ -151,37 +115,17 @@ async fn assert_sender_balance_decreased_across_transfers(
     log_step(step);
     let (sender, initial_balance, amount) =
         two_transfer_details(world, &first_name, &second_name, true)?;
-    if amount != expected_amount {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "expected sender balance decrease {expected_amount}, got transfer amount {amount}"
-            ),
-        });
-    }
-    let expected_balance =
-        initial_balance
-            .checked_sub(amount)
-            .ok_or_else(|| StepError::AssertionFailed {
-                message: format!(
-                    "sender initial balance {initial_balance} is below transfer amount {amount}"
-                ),
-            })?;
-    let observed_balance = world
-        .lez()?
-        .sequencer_client()
-        .get_account_balance(sender)
-        .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
-    if observed_balance != expected_balance {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "sender {sender:?} has balance {observed_balance}, expected {expected_balance}"
-            ),
-        });
-    }
-    world.environment.sender_observed_balance = Some(observed_balance);
+    let observed_balance = assert_public_balance_delta(
+        world,
+        sender,
+        initial_balance,
+        amount,
+        expected_amount,
+        false,
+        "sender",
+    )
+    .await?;
+    world.environment.accounts.sender_observed_balance = Some(observed_balance);
     Ok(())
 }
 
@@ -196,36 +140,17 @@ async fn assert_receiver_balance_increased_across_transfers(
     log_step(step);
     let (receiver, initial_balance, amount) =
         two_transfer_details(world, &first_name, &second_name, false)?;
-    if amount != expected_amount {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "expected receiver balance increase {expected_amount}, got transfer amount {amount}"
-            ),
-        });
-    }
-    let expected_balance = initial_balance.checked_add(amount).ok_or_else(|| {
-        StepError::AssertionFailed {
-            message: format!(
-                "receiver initial balance {initial_balance} overflowed for transfer amount {amount}"
-            ),
-        }
-    })?;
-    let observed_balance = world
-        .lez()?
-        .sequencer_client()
-        .get_account_balance(receiver)
-        .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
-    if observed_balance != expected_balance {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "receiver {receiver:?} has balance {observed_balance}, expected {expected_balance}"
-            ),
-        });
-    }
-    world.environment.receiver_observed_balance = Some(observed_balance);
+    let observed_balance = assert_public_balance_delta(
+        world,
+        receiver,
+        initial_balance,
+        amount,
+        expected_amount,
+        true,
+        "receiver",
+    )
+    .await?;
+    world.environment.accounts.receiver_observed_balance = Some(observed_balance);
     Ok(())
 }
 
@@ -240,6 +165,7 @@ async fn assert_new_account_balance(
     let artifact = transfer_artifact(world, &transfer_name)?;
     let account = world
         .environment
+        .accounts
         .new_public_account
         .ok_or(StepError::MissingSelectedAccount)?;
     if artifact.receiver != account {
@@ -265,7 +191,7 @@ async fn assert_new_account_balance(
             ),
         });
     }
-    world.environment.receiver_observed_balance = Some(observed_balance);
+    world.environment.accounts.receiver_observed_balance = Some(observed_balance);
     Ok(())
 }
 
@@ -279,43 +205,19 @@ async fn assert_sender_private_balance_decreased(
     log_step(step);
     let artifact = transfer_artifact(world, &transfer_name)?;
     let account = artifact.sender;
-    let initial_balance =
-        world
-            .environment
-            .private_sender_initial_balance
-            .ok_or(StepError::MissingObservation {
-                field: "private sender initial balance",
-            })?;
+    let initial_balance = artifact.sender_balance_before;
     let amount = artifact.amount;
-    if amount != expected_amount {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "expected private sender balance decrease {expected_amount}, got transfer amount {amount}"
-            ),
-        });
-    }
-    let expected_balance = initial_balance.checked_sub(amount).ok_or_else(|| {
-        StepError::AssertionFailed {
-            message: format!(
-                "private sender initial balance {initial_balance} is below transfer amount {amount}"
-            ),
-        }
-    })?;
-    let observed_balance = world
-        .lez()?
-        .private_account_balance(account)
-        .await?
-        .ok_or_else(|| StepError::QueryFailed {
-            message: format!("private sender {account:?} has no synchronized wallet balance"),
-        })?;
-    if observed_balance != expected_balance {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "private sender {account:?} has balance {observed_balance}, expected {expected_balance}"
-            ),
-        });
-    }
-    world.environment.private_sender_observed_balance = Some(observed_balance);
+    let observed_balance = assert_private_balance_delta(
+        world,
+        account,
+        initial_balance,
+        amount,
+        expected_amount,
+        false,
+        "private sender",
+    )
+    .await?;
+    world.environment.accounts.private_sender_observed_balance = Some(observed_balance);
     Ok(())
 }
 
@@ -329,41 +231,19 @@ async fn assert_receiver_private_balance_increased(
     log_step(step);
     let artifact = transfer_artifact(world, &transfer_name)?;
     let account = artifact.receiver;
-    let initial_balance = world.environment.private_receiver_initial_balance.ok_or(
-        StepError::MissingObservation {
-            field: "private receiver initial balance",
-        },
-    )?;
+    let initial_balance = artifact.receiver_balance_before;
     let amount = artifact.amount;
-    if amount != expected_amount {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "expected private receiver balance increase {expected_amount}, got transfer amount {amount}"
-            ),
-        });
-    }
-    let expected_balance = initial_balance
-        .checked_add(amount)
-        .ok_or_else(|| StepError::AssertionFailed {
-            message: format!(
-                "private receiver initial balance {initial_balance} overflowed for transfer amount {amount}"
-            ),
-        })?;
-    let observed_balance = world
-        .lez()?
-        .private_account_balance(account)
-        .await?
-        .ok_or_else(|| StepError::QueryFailed {
-            message: format!("private receiver {account:?} has no synchronized wallet balance"),
-        })?;
-    if observed_balance != expected_balance {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "private receiver {account:?} has balance {observed_balance}, expected {expected_balance}"
-            ),
-        });
-    }
-    world.environment.private_receiver_observed_balance = Some(observed_balance);
+    let observed_balance = assert_private_balance_delta(
+        world,
+        account,
+        initial_balance,
+        amount,
+        expected_amount,
+        true,
+        "private receiver",
+    )
+    .await?;
+    world.environment.accounts.private_receiver_observed_balance = Some(observed_balance);
     Ok(())
 }
 
@@ -402,7 +282,7 @@ async fn assert_receiver_private_commitment_in_state(
 )]
 fn assert_transfer_is_rejected(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
-    if world.environment.transfer_rejection.is_none() {
+    if world.environment.transfers.rejected.is_none() {
         return Err(StepError::AssertionFailed {
             message: "expected the insufficient-balance transfer to be rejected".to_owned(),
         });
@@ -417,11 +297,7 @@ fn assert_transfer_is_rejected(world: &mut CucumberWorld, step: &Step) -> StepRe
 )]
 fn assert_no_transfer_is_included(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
-    if world.environment.transfer_rejection.is_none()
-        || world.environment.rejected_transfer_sender.is_none()
-        || world.environment.rejected_transfer_receiver.is_none()
-        || world.environment.rejected_transfer_amount.is_none()
-    {
+    if world.environment.transfers.rejected.is_none() {
         return Err(StepError::AssertionFailed {
             message: "a rejected transfer must not produce a transaction hash".to_owned(),
         });
@@ -448,7 +324,7 @@ async fn assert_sender_balance_unchanged(world: &mut CucumberWorld, step: &Step)
             ),
         });
     }
-    world.environment.sender_observed_balance = Some(observed_balance);
+    world.environment.accounts.sender_observed_balance = Some(observed_balance);
     Ok(())
 }
 
@@ -471,25 +347,31 @@ async fn assert_receiver_balance_unchanged(world: &mut CucumberWorld, step: &Ste
             ),
         });
     }
-    world.environment.receiver_observed_balance = Some(observed_balance);
+    world.environment.accounts.receiver_observed_balance = Some(observed_balance);
     Ok(())
 }
 
-#[then(expr = "transfer {string} is included in a block")]
+#[then(expr = "transfer {string} is included in a block within {int} seconds")]
 async fn assert_transfer_is_included(
     world: &mut CucumberWorld,
     step: &Step,
     transfer_name: String,
+    timeout_seconds: u64,
 ) -> StepResult {
     log_step(step);
     let artifact = transfer_artifact(world, &transfer_name)?;
     let context = world.lez()?;
-    let (transaction, block_id) =
-        get_transfer_transaction(context.sequencer_client(), artifact.hash).await?;
-    assert_transaction_kind(&artifact, &transaction)?;
+    let block_id = wait_for_transfer_inclusion(
+        context.sequencer_client(),
+        &artifact,
+        Duration::from_secs(timeout_seconds),
+        &format!("transfer '{transfer_name}' was not included in a block"),
+    )
+    .await?;
     world
         .environment
         .transfers
+        .artifacts
         .get_mut(&transfer_name)
         .ok_or_else(|| StepError::UnknownTransferArtifact {
             name: transfer_name.clone(),
@@ -552,6 +434,7 @@ async fn assert_sender_and_new_account_sign(
     let sender = artifact.sender;
     let receiver = world
         .environment
+        .accounts
         .new_public_account
         .ok_or(StepError::MissingSelectedAccount)?;
     let context = world.lez()?;
@@ -588,56 +471,6 @@ async fn assert_sender_and_new_account_sign(
     Ok(())
 }
 
-#[then(expr = "only the sender signs transfers {string} and {string}")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn assert_only_sender_signs_both_transfers(
-    world: &mut CucumberWorld,
-    step: &Step,
-    first_name: String,
-    second_name: String,
-) -> StepResult {
-    log_step(step);
-    let first = transfer_artifact(world, &first_name)?;
-    let second = transfer_artifact(world, &second_name)?;
-    let sender = first.sender;
-    if second.sender != sender {
-        return Err(StepError::AssertionFailed {
-            message: "the two transfers have different senders".to_owned(),
-        });
-    }
-    let expected_sender =
-        expected_public_signing_key(sender).ok_or_else(|| StepError::QueryFailed {
-            message: format!("sender {sender:?} is not in the configured public accounts"),
-        })?;
-    let context = world.lez()?;
-    for (name, artifact) in [(first_name, first), (second_name, second)] {
-        let (transaction, _) =
-            get_transfer_transaction(context.sequencer_client(), artifact.hash).await?;
-        let LeeTransaction::Public(transaction) = transaction else {
-            return Err(StepError::AssertionFailed {
-                message: format!("transfer '{name}' was not public"),
-            });
-        };
-        let signers: Vec<_> = transaction
-            .witness_set()
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_, public_key)| public_key)
-            .collect();
-        if signers != vec![&expected_sender] {
-            return Err(StepError::AssertionFailed {
-                message: format!(
-                    "expected only sender {expected_sender:?} to sign transfer '{name}', got {signers:?}"
-                ),
-            });
-        }
-    }
-    Ok(())
-}
-
 #[then(expr = "the sender nonce advances across transfers {string} and {string}")]
 #[expect(
     clippy::needless_pass_by_ref_mut,
@@ -658,13 +491,11 @@ async fn assert_sender_nonce_advances(
         });
     }
     let sender = first.sender;
-    let initial_nonce =
-        world
-            .environment
-            .sender_initial_nonce
-            .ok_or(StepError::MissingObservation {
-                field: "sender initial nonce",
-            })?;
+    let initial_nonce = first
+        .sender_nonce_before
+        .ok_or(StepError::MissingObservation {
+            field: "first transfer sender nonce",
+        })?;
     let expected_nonce =
         Nonce(
             initial_nonce

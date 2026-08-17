@@ -35,9 +35,9 @@ async fn query_first_public_account_balance(world: &mut CucumberWorld, step: &St
             message: format!("account {account:?} is not in the configured public accounts"),
         })?;
 
-    world.environment.selected_account = Some(account);
-    world.environment.observed_balance = Some(observed_balance);
-    world.environment.expected_balance = Some(expected_balance);
+    world.environment.accounts.selected_account = Some(account);
+    world.environment.accounts.observed_balance = Some(observed_balance);
+    world.environment.accounts.expected_balance = Some(expected_balance);
     Ok(())
 }
 
@@ -69,8 +69,8 @@ async fn query_first_private_account_balance(world: &mut CucumberWorld, step: &S
             ),
         })?;
 
-    world.environment.selected_account = Some(account);
-    world.environment.observed_balance = Some(observed_balance);
-    world.environment.expected_balance = Some(expected_balance);
+    world.environment.accounts.selected_account = Some(account);
+    world.environment.accounts.observed_balance = Some(observed_balance);
+    world.environment.accounts.expected_balance = Some(expected_balance);
     Ok(())
 }

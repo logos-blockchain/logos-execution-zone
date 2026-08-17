@@ -28,7 +28,7 @@ Feature: LEZ multi-sequencer committee convergence
     When I record deterministic public account 1 balance on sequencer "SEQ_A"
     When I submit 10 from deterministic public account 0 to account 1 through sequencer "SEQ_B" as "COMMITTEE_TRANSFER"
     Then transfer "COMMITTEE_TRANSFER" is included in a block on sequencer "SEQ_B" within 120 seconds
-    Then sequencer "SEQ_A" observes the receiver balance increase by 10 within 120 seconds
+    Then sequencer "SEQ_A" observes the receiver balance increase for transfer "COMMITTEE_TRANSFER" by 10 within 120 seconds
     And the indexer finalizes transfer "COMMITTEE_TRANSFER" on the committee chain within 120 seconds
     Then finalized indexer blocks match sequencer "SEQ_A"
     And the indexer is not stalled

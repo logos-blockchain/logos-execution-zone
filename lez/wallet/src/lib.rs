@@ -53,7 +53,7 @@ pub mod poller;
 pub mod program_facades;
 pub mod storage;
 
-const LEZ_CUCUMBER_RUN: &str = "LEZ_CUCUMBER_RUN";
+pub const SUPPRESS_VERBOSE_PRINTS: &str = "SUPPRESS_VERBOSE_PRINTS";
 
 pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
 
@@ -717,7 +717,7 @@ impl WalletCore {
         println!("Transaction hash is {tx_hash}");
         let (tx, block_id) = self.poll_transaction(tx_hash).await?;
         println!("Transaction is included in block {block_id}");
-        if std::env::var_os(LEZ_CUCUMBER_RUN).is_none() {
+        if std::env::var_os(SUPPRESS_VERBOSE_PRINTS).is_none() {
             println!("Transaction data is {tx:?}");
         }
         self.store_persistent_data()?;
@@ -733,7 +733,7 @@ impl WalletCore {
         println!("Transaction hash is {tx_hash}");
         let (tx, block_id) = self.poll_transaction(tx_hash).await?;
         println!("Transaction is included in block {block_id}");
-        if std::env::var_os(LEZ_CUCUMBER_RUN).is_none() {
+        if std::env::var_os(SUPPRESS_VERBOSE_PRINTS).is_none() {
             println!("Transaction data is {tx:?}");
         }
         if let common::transaction::LeeTransaction::PrivacyPreserving(private_tx) = tx {

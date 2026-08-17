@@ -9,13 +9,48 @@ use crate::{
     cucumber::{
         error::{StepError, StepResult},
         steps::transfers::helpers::transfer_artifact,
-        world::CucumberWorld,
+        world::{CucumberWorld, TransferArtifact},
     },
     tf::{
-        IndexerCatchUpError, wait_for_indexer_to_catch_up_with_timeout,
+        IndexerCatchUpError, LezIndexerClient, wait_for_indexer_to_catch_up_with_timeout,
         wait_for_indexer_to_index_transactions_with_timeout,
     },
 };
+
+pub async fn wait_for_named_transfer_indexed(
+    indexer: &LezIndexerClient,
+    artifact: &TransferArtifact,
+    transfer_name: &str,
+    timeout: Duration,
+) -> Result<u64, StepError> {
+    let target_block =
+        artifact
+            .inclusion_block
+            .ok_or_else(|| StepError::MissingTransferInclusion {
+                name: transfer_name.to_owned(),
+            })?;
+    wait_for_indexer_to_index_transactions_with_timeout(
+        indexer,
+        &[artifact.hash],
+        target_block,
+        timeout,
+    )
+    .await
+    .map_err(|error| match error {
+        IndexerCatchUpError::Timeout {
+            target,
+            last_observed,
+            elapsed,
+        } => StepError::Timeout {
+            message: format!(
+                "indexer did not index transfer '{transfer_name}' through target block {target}; \
+                 last observed indexer block {last_observed} after {elapsed:?}"
+            ),
+        },
+        IndexerCatchUpError::SequencerQuery { message }
+        | IndexerCatchUpError::IndexerQuery { message } => StepError::QueryFailed { message },
+    })
+}
 
 #[then(
     expr = "the transferred public account states for transfer {string} match between the sequencer and indexer"
@@ -65,34 +100,15 @@ async fn wait_for_named_transfer_indexer(
 ) -> StepResult {
     log_step(step);
     let artifact = transfer_artifact(world, &transfer_name)?;
-    let block_id = artifact
-        .inclusion_block
-        .ok_or_else(|| StepError::MissingTransferInclusion {
-            name: transfer_name.clone(),
-        })?;
     let context = world.lez()?;
-    let result = wait_for_indexer_to_index_transactions_with_timeout(
+    let height = wait_for_named_transfer_indexed(
         context.indexer(),
-        &[artifact.hash],
-        block_id,
+        &artifact,
+        &transfer_name,
         Duration::from_secs(timeout_seconds),
     )
-    .await;
-    let height = result.map_err(|error| match error {
-        IndexerCatchUpError::Timeout {
-            target,
-            last_observed,
-            elapsed,
-        } => StepError::Timeout {
-            message: format!(
-                "indexer did not reach transfer '{transfer_name}' target block {target}; \
-                 last observed indexer block {last_observed} after {elapsed:?}"
-            ),
-        },
-        IndexerCatchUpError::SequencerQuery { message }
-        | IndexerCatchUpError::IndexerQuery { message } => StepError::QueryFailed { message },
-    })?;
-    world.environment.observed_indexer_height = Some(height);
+    .await?;
+    world.environment.indexer.observed_height = Some(height);
     Ok(())
 }
 
@@ -123,6 +139,6 @@ async fn wait_for_indexer(
         | IndexerCatchUpError::IndexerQuery { message } => StepError::QueryFailed { message },
     })?;
 
-    world.environment.observed_indexer_height = Some(height);
+    world.environment.indexer.observed_height = Some(height);
     Ok(())
 }

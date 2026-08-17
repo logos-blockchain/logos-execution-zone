@@ -28,8 +28,9 @@ pub enum TransferKind {
     Private,
 }
 
-/// Identifies one successful transfer and records its inclusion lifecycle.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Identifies one successful transfer and records the observations needed to
+/// assert its lifecycle.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransferArtifact {
     /// Transaction hash returned by the sequencer.
     pub hash: common::HashType,
@@ -41,8 +42,62 @@ pub struct TransferArtifact {
     pub amount: u128,
     /// Transaction kind.
     pub kind: TransferKind,
+    /// Sender balance observed immediately before submission.
+    pub sender_balance_before: u128,
+    /// Receiver balance observed immediately before submission.
+    pub receiver_balance_before: u128,
+    /// Sender nonce observed immediately before submission, when available.
+    pub sender_nonce_before: Option<lee_core::account::Nonce>,
+    /// Sequencer alias on which the receiver baseline was observed, when it
+    /// was intentionally recorded on a different sequencer.
+    pub receiver_balance_observer: Option<String>,
     /// Block containing the transaction, once observed.
     pub inclusion_block: Option<u64>,
+}
+
+/// Observations staged before a successful transfer artifact can be created.
+///
+/// The committee scenario records its receiver baseline on one sequencer in a
+/// separate step, before submitting the transaction through another sequencer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingTransferObservation {
+    /// Receiver whose balance was observed.
+    pub receiver: lee::AccountId,
+    /// Receiver balance observed before submission.
+    pub receiver_balance_before: u128,
+    /// Sequencer alias on which the observation was made.
+    pub observer_alias: String,
+}
+
+/// State retained for a rejected transfer attempt. Rejected attempts do not
+/// produce successful transfer artifacts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RejectedTransferAttempt {
+    /// Sending account.
+    pub sender: lee::AccountId,
+    /// Receiving account.
+    pub receiver: lee::AccountId,
+    /// Amount requested by the rejected transfer.
+    pub amount: u128,
+    /// Sender balance observed before submission.
+    pub sender_balance_before: u128,
+    /// Receiver balance observed before submission.
+    pub receiver_balance_before: u128,
+    /// Sender nonce observed before submission.
+    pub sender_nonce_before: lee_core::account::Nonce,
+    /// Error returned by the wallet submission.
+    pub error: String,
+}
+
+/// Successful and rejected transfer observations collected by a scenario.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TransferState {
+    /// Successful transfers indexed by their scenario-provided names.
+    pub artifacts: HashMap<String, TransferArtifact>,
+    /// Baseline recorded before a committee transfer is submitted.
+    pub pending_observation: Option<PendingTransferObservation>,
+    /// The latest rejected transfer attempt, if one was made.
+    pub rejected: Option<RejectedTransferAttempt>,
 }
 
 /// Lifecycle state recorded for explicit and fallback runtime teardown.
@@ -66,67 +121,64 @@ pub struct CommitteeConfiguration {
     pub authorized_sequencers: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default)]
-/// Observable account and indexer state recorded during a scenario.
-pub struct EnvironmentState {
+/// Account observations recorded during a scenario.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AccountState {
     /// Account selected for the balance assertion.
     pub selected_account: Option<lee::AccountId>,
     /// Balance returned by the sequencer.
     pub observed_balance: Option<u128>,
     /// Balance configured for the selected account.
     pub expected_balance: Option<u128>,
-    /// Last indexer block observed by the convergence step.
-    pub observed_indexer_height: Option<u64>,
     /// Fresh recipient account created for the new-account transfer scenario.
     pub new_public_account: Option<lee::AccountId>,
-    /// Sender balance recorded before the public transfer.
-    pub sender_initial_balance: Option<u128>,
-    /// Receiver balance recorded before the public transfer.
-    pub receiver_initial_balance: Option<u128>,
     /// Sender balance observed after the public transfer.
     pub sender_observed_balance: Option<u128>,
     /// Receiver balance observed after the public transfer.
     pub receiver_observed_balance: Option<u128>,
-    /// Sender private balance recorded before the private transfer.
-    pub private_sender_initial_balance: Option<u128>,
-    /// Receiver private balance recorded before the private transfer.
-    pub private_receiver_initial_balance: Option<u128>,
     /// Sender private balance observed after the private transfer.
     pub private_sender_observed_balance: Option<u128>,
     /// Receiver private balance observed after the private transfer.
     pub private_receiver_observed_balance: Option<u128>,
-    /// Successful transfers recorded by their scenario-provided names.
-    pub transfers: HashMap<String, TransferArtifact>,
-    /// Sender nonce before the first public transfer.
-    pub sender_initial_nonce: Option<lee_core::account::Nonce>,
-    /// Error returned when a public transfer is rejected.
-    pub transfer_rejection: Option<String>,
-    /// Sender account for a rejected public transfer.
-    pub rejected_transfer_sender: Option<lee::AccountId>,
-    /// Receiver account for a rejected public transfer.
-    pub rejected_transfer_receiver: Option<lee::AccountId>,
-    /// Amount requested by a rejected public transfer.
-    pub rejected_transfer_amount: Option<u128>,
     /// Label assigned to the public transfer sender.
     pub public_sender_label: Option<String>,
     /// Label assigned to the public transfer receiver.
     pub public_receiver_label: Option<String>,
+}
+
+/// Indexer observations recorded during a scenario.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct IndexerState {
+    /// Last indexer block observed by a generic convergence step.
+    pub observed_height: Option<u64>,
+    /// Sequencer height used as the committee indexer convergence target.
+    pub committee_target_height: Option<u64>,
+    /// Actual indexer finalized height reached during committee convergence.
+    pub committee_finalized_height: Option<u64>,
+}
+
+/// Committee observations recorded during a multi-sequencer scenario.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CommitteeState {
     /// Source sequencer height recorded when another sequencer joins.
     pub committee_join_height: Option<u64>,
     /// Target height reached during the committee rotation phase.
     pub committee_rotation_target: Option<u64>,
-    /// Deterministic receiver used for the committee transfer baseline.
-    pub committee_receiver: Option<lee::AccountId>,
-    /// Receiver balance before the committee transfer.
-    pub committee_receiver_balance_before: Option<u128>,
-    /// Alias whose balance was recorded as the transfer observer baseline.
-    pub committee_balance_observer: Option<String>,
-    /// Sequencer height used as the indexer convergence target.
-    pub committee_indexer_target_height: Option<u64>,
-    /// Actual indexer finalized height reached during convergence.
-    pub committee_indexer_finalized_height: Option<u64>,
     /// Committee configuration declared before sequencer startup.
     pub committee_configuration: Option<CommitteeConfiguration>,
+}
+
+/// Observable state recorded during a scenario.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EnvironmentState {
+    /// Account observations.
+    pub accounts: AccountState,
+    /// Transfer artifacts and transfer attempts.
+    pub transfers: TransferState,
+    /// Indexer observations.
+    pub indexer: IndexerState,
+    /// Multi-sequencer committee observations.
+    pub committee: CommitteeState,
 }
 
 /// Per-scenario state for Cucumber tests that deploy LEZ applications.
@@ -304,13 +356,10 @@ impl CucumberWorld {
                     RuntimeTeardownState::NotAttempted | RuntimeTeardownState::Succeeded => None,
                 },
             )
-            .field("selected_account", &diagnostic_environment.selected_account)
-            .field("observed_balance", &diagnostic_environment.observed_balance)
-            .field("expected_balance", &diagnostic_environment.expected_balance)
-            .field(
-                "observed_indexer_height",
-                &diagnostic_environment.observed_indexer_height,
-            )
+            .field("accounts", &diagnostic_environment.accounts)
+            .field("transfers", &diagnostic_environment.transfers)
+            .field("indexer", &diagnostic_environment.indexer)
+            .field("committee", &diagnostic_environment.committee)
             .field("test_context", &self.test_context)
             .field("scenario_base_dir", &self.scenario_base_dir)
             .field(

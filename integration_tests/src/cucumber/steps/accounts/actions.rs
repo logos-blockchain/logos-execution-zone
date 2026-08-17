@@ -38,7 +38,7 @@ async fn create_new_public_account(world: &mut CucumberWorld, step: &Step) -> St
             });
         }
     }
-    world.environment.new_public_account = Some(account);
+    world.environment.accounts.new_public_account = Some(account);
     Ok(())
 }
 
@@ -68,7 +68,7 @@ async fn label_configured_public_accounts(
     context
         .set_public_account_label(receiver, Label::new(&receiver_label))
         .await?;
-    world.environment.public_sender_label = Some(sender_label);
-    world.environment.public_receiver_label = Some(receiver_label);
+    world.environment.accounts.public_sender_label = Some(sender_label);
+    world.environment.accounts.public_receiver_label = Some(receiver_label);
     Ok(())
 }
