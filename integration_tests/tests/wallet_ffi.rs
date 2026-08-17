@@ -27,6 +27,10 @@ use lee::{
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::program::DEFAULT_PROGRAM_ID;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{MultiNodeTestContextConfig, bedrock_channel_id},
+};
 use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
@@ -288,6 +292,28 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         tx_hash: FfiBytes32,
         transaction_status: *mut bool,
+    ) -> error::WalletFfiError;
+
+    fn wallet_ffi_client_rotation(handle: *mut WalletHandle) -> error::WalletFfiError;
+
+    fn wallet_ffi_get_callibration_limit(
+        handle: *mut WalletHandle,
+        callibration_limit: *mut usize,
+    ) -> error::WalletFfiError;
+
+    fn wallet_ffi_get_distribution_limit(
+        handle: *mut WalletHandle,
+        distribution_limit: *mut usize,
+    ) -> error::WalletFfiError;
+
+    fn wallet_ffi_set_callibration_limit(
+        handle: *mut WalletHandle,
+        callibration_limit: usize,
+    ) -> error::WalletFfiError;
+
+    fn wallet_ffi_set_distribution_limit(
+        handle: *mut WalletHandle,
+        distribution_limit: usize,
     ) -> error::WalletFfiError;
 }
 
@@ -2097,6 +2123,80 @@ fn test_wallet_ffi_more_labels() -> Result<()> {
         wallet_ffi_free_string(lab_3);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_wallet_ffi_modify_config_field_multiseq() -> Result<()> {
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+            num_nodes: 2,
+            bedrock_channel: bedrock_channel_id(),
+        }))
+        .build_blocking()?;
+
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
+
+    let mut distribution_limit_upd = 0;
+    let mut callibration_limit_upd = 0;
+
+    // Default config have callibration limit and distribution limit as 1.
+    // Checking then modifying them
+    let err = unsafe {
+        wallet_ffi_get_callibration_limit(wallet_ffi_handle, &raw mut callibration_limit_upd)
+    };
+
+    assert_eq!(err, error::WalletFfiError::Success);
+
+    let err = unsafe {
+        wallet_ffi_get_distribution_limit(wallet_ffi_handle, &raw mut distribution_limit_upd)
+    };
+
+    assert_eq!(err, error::WalletFfiError::Success);
+
+    assert_eq!(distribution_limit_upd, 1);
+    assert_eq!(callibration_limit_upd, 5);
+
+    callibration_limit_upd = 10;
+    distribution_limit_upd = 2;
+
+    let err =
+        unsafe { wallet_ffi_set_callibration_limit(wallet_ffi_handle, callibration_limit_upd) };
+
+    assert_eq!(err, error::WalletFfiError::Success);
+
+    let err =
+        unsafe { wallet_ffi_set_distribution_limit(wallet_ffi_handle, distribution_limit_upd) };
+
+    assert_eq!(err, error::WalletFfiError::Success);
+
+    callibration_limit_upd = 0;
+    distribution_limit_upd = 0;
+
+    let err = unsafe {
+        wallet_ffi_get_callibration_limit(wallet_ffi_handle, &raw mut callibration_limit_upd)
+    };
+
+    assert_eq!(err, error::WalletFfiError::Success);
+
+    let err = unsafe {
+        wallet_ffi_get_distribution_limit(wallet_ffi_handle, &raw mut distribution_limit_upd)
+    };
+
+    assert_eq!(err, error::WalletFfiError::Success);
+
+    assert_eq!(distribution_limit_upd, 2);
+    assert_eq!(callibration_limit_upd, 10);
+
+    // Check that rotation passes after that.
+    let err = unsafe { wallet_ffi_client_rotation(wallet_ffi_handle) };
+
+    assert_eq!(err, error::WalletFfiError::Success);
 
     Ok(())
 }
