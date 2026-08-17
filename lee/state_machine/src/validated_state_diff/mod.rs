@@ -128,10 +128,14 @@ impl ValidatedStateDiff {
                 // like every guest program in this codebase, relying here on `catch_unwind` to
                 // play the same role the zkVM executor plays for a real guest: converting a
                 // rejected input into a graceful `Err` instead of unwinding past this call.
-                let program_loader_core::Instruction::Deploy { update_auth } =
-                    risc0_zkvm::serde::from_slice(&chained_call.instruction_data).map_err(|e| {
-                        LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
-                    })?;
+                let program_loader_core::Instruction::Deploy {
+                    image_id,
+                    segment_count,
+                    first_segment,
+                    update_auth,
+                } = risc0_zkvm::serde::from_slice(&chained_call.instruction_data).map_err(|e| {
+                    LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
+                })?;
                 // The bytecode itself travels via the transaction's own `raw_payload`, not
                 // `instruction_data` and not `chained_call.raw_payload` (which no guest can ever
                 // set) — see `Message::raw_payload`'s doc comment for why. Deploy only ever runs
@@ -146,6 +150,9 @@ impl ValidatedStateDiff {
                         chained_call.program_account_id,
                         &chained_call.pre_states,
                         &bytecode,
+                        image_id,
+                        segment_count,
+                        first_segment,
                         update_auth,
                     )
                 })

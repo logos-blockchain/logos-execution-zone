@@ -336,10 +336,14 @@ impl V03State {
     ///
     /// An account that matches neither owner isn't a deployed program, whatever its contents —
     /// this is the single place that distinction is enforced, so callers never have to remember
-    /// to re-check it themselves. `Ok(None)` means no such program exists (missing account or
-    /// segment); `Err(LeeError::InvalidProgramBytecode(_))` means one exists but its segments
-    /// don't reconstruct to the `image_id` its own header declares — a defense-in-depth check
-    /// against a corrupted or malformed segment set, distinguishable from plain absence.
+    /// to re-check it themselves. `Ok(None)` means no such program exists — including, ordinarily,
+    /// a multi-transaction `Deploy` sequence that hasn't (yet, or ever going to) land every one of
+    /// its `segment_count` segments; a caller mid-sequence sees exactly the same result as a
+    /// program that was never deployed at all, by construction, since a missing segment is
+    /// detected the same way regardless of cause. `Err(LeeError::InvalidProgramBytecode(_))` means
+    /// every segment exists but they don't reconstruct to the `image_id` the header declares — a
+    /// defense-in-depth check against a corrupted or malformed segment set, distinguishable from
+    /// plain absence.
     pub fn get_program(
         &self,
         program_account_id: AccountId,
