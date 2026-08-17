@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 common.workspace = true
+fee_core.workspace = true
 lee.workspace = true
 lee_core.workspace = true
 logos-blockchain-core.workspace = true

@@ -6,7 +6,7 @@ use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
     test_utils::sequencer_sign_key_for_testing,
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 use kameo::actor::Spawn as _;
 use lee::{
@@ -147,8 +147,9 @@ fn setup_sequencer_config() -> SequencerConfig {
 }
 
 #[test]
-fn only_the_cross_zone_inbox_is_sequencer_only() {
+fn only_the_cross_zone_inbox_and_fee_are_sequencer_only() {
     assert!(is_sequencer_only_program(programs::cross_zone_inbox().id()));
+    assert!(is_sequencer_only_program(programs::fee().id()));
     assert!(!is_sequencer_only_program(
         programs::cross_zone_outbox().id()
     ));
@@ -173,6 +174,11 @@ fn committee_cooldown_needs_the_channel_to_advance() {
         Some(submitted_at),
         Some(Slot::new(100 + cooldown))
     ));
+}
+
+/// The forced zero-fee invocation appended to every block before the clock.
+fn zero_fee_tx() -> LeeTransaction {
+    LeeTransaction::Public(fee_invocation(fee_core::Instruction::default()))
 }
 
 fn create_signing_key_for_account1() -> lee::PrivateKey {
@@ -1380,11 +1386,12 @@ async fn replay_transactions_are_rejected_in_the_same_block() {
         .unwrap()
         .unwrap();
 
-    // Only one user tx should be included; the clock tx is always appended last.
+    // Only one user tx should be included; the fee and clock txs are always appended last.
     assert_eq!(
         block.body.transactions,
         vec![
             tx.clone(),
+            zero_fee_tx(),
             LeeTransaction::Public(clock_invocation(block.header.timestamp))
         ]
     );
@@ -1419,6 +1426,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
         block.body.transactions,
         vec![
             tx.clone(),
+            zero_fee_tx(),
             LeeTransaction::Public(clock_invocation(block.header.timestamp))
         ]
     );
@@ -1435,12 +1443,13 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
         .await
         .unwrap()
         .unwrap();
-    // The replay is rejected, so only the clock tx is in the block.
+    // The replay is rejected, so only the fee and clock txs are in the block.
     assert_eq!(
         block.body.transactions,
-        vec![LeeTransaction::Public(clock_invocation(
-            block.header.timestamp
-        ))]
+        vec![
+            zero_fee_tx(),
+            LeeTransaction::Public(clock_invocation(block.header.timestamp))
+        ]
     );
 }
 
@@ -1481,6 +1490,7 @@ async fn restart_from_storage() {
             block.body.transactions,
             vec![
                 tx.clone(),
+                zero_fee_tx(),
                 LeeTransaction::Public(clock_invocation(block.header.timestamp))
             ]
         );
@@ -1606,9 +1616,10 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
         new_block.body.transactions,
         vec![
             tx,
+            zero_fee_tx(),
             LeeTransaction::Public(clock_invocation(new_block.header.timestamp))
         ],
-        "New block should contain the submitted transaction and the clock invocation"
+        "New block should contain the submitted transaction and the fee and clock invocations"
     );
 }
 
@@ -1651,12 +1662,13 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
         .unwrap()
         .unwrap();
 
-    // Both transactions were dropped. Only the system-appended clock tx remains.
+    // Both transactions were dropped. Only the system-appended fee and clock txs remain.
     assert_eq!(
         block.body.transactions,
-        vec![LeeTransaction::Public(clock_invocation(
-            block.header.timestamp
-        ))]
+        vec![
+            zero_fee_tx(),
+            LeeTransaction::Public(clock_invocation(block.header.timestamp))
+        ]
     );
 }
 
@@ -1707,12 +1719,13 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         .unwrap()
         .unwrap();
 
-    // The user tx must have been dropped; only the mandatory clock invocation remains.
+    // The user tx must have been dropped; only the mandatory fee and clock invocations remain.
     assert_eq!(
         block.body.transactions,
-        vec![LeeTransaction::Public(clock_invocation(
-            block.header.timestamp
-        ))]
+        vec![
+            zero_fee_tx(),
+            LeeTransaction::Public(clock_invocation(block.header.timestamp))
+        ]
     );
 }
 

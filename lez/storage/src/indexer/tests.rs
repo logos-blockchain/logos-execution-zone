@@ -41,10 +41,17 @@ fn initial_state() -> lee::V03State {
     for clock_id in system_accounts::clock_account_ids() {
         public_accounts.push((clock_id, system_accounts::clock_account()));
     }
+    for fee_id in system_accounts::fee_account_ids() {
+        public_accounts.push((fee_id, system_accounts::fee_account()));
+    }
 
     lee::V03State::new()
         .with_public_accounts(public_accounts)
-        .with_programs([programs::authenticated_transfer(), programs::clock()])
+        .with_programs([
+            programs::authenticated_transfer(),
+            programs::clock(),
+            programs::fee(),
+        ])
 }
 
 #[test]

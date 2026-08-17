@@ -5,7 +5,7 @@
 use common::{
     HashType,
     block::{Block, BlockMeta},
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 use lee::{GENESIS_BLOCK_ID, V03State};
 
@@ -123,7 +123,7 @@ pub fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), Bloc
 /// [`BlockIngestError`] so the caller can park rather than crash. Operates in
 /// place; the caller commits only on `Ok`.
 pub fn apply_block_to_state(block: &Block, state: &mut V03State) -> Result<(), BlockIngestError> {
-    let (clock_tx, user_txs) = block
+    let (clock_tx, front) = block
         .body
         .transactions
         .split_last()
@@ -134,6 +134,16 @@ pub fn apply_block_to_state(block: &Block, state: &mut V03State) -> Result<(), B
     };
     if *clock_tx != clock_invocation(block.header.timestamp) {
         return Err(BlockIngestError::InvalidClockTransaction);
+    }
+
+    let (fee_tx, user_txs) = front
+        .split_last()
+        .ok_or(BlockIngestError::InvalidFeeTransaction)?;
+    let LeeTransaction::Public(fee_tx) = fee_tx else {
+        return Err(BlockIngestError::InvalidFeeTransaction);
+    };
+    if *fee_tx != fee_invocation(fee_core::Instruction::default()) {
+        return Err(BlockIngestError::InvalidFeeTransaction);
     }
 
     let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
@@ -162,9 +172,18 @@ pub fn apply_block_to_state(block: &Block, state: &mut V03State) -> Result<(), B
     }
 
     state
-        .transition_from_public_transaction(clock_tx, block.header.block_id, block.header.timestamp)
+        .transition_from_public_transaction(fee_tx, block.header.block_id, block.header.timestamp)
         .map_err(|err| BlockIngestError::StateTransition {
             tx_index: user_txs.len().try_into().expect("tx index fits in u64"),
+            reason: format!("{:#}", anyhow::Error::from(err)),
+        })?;
+
+    state
+        .transition_from_public_transaction(clock_tx, block.header.block_id, block.header.timestamp)
+        .map_err(|err| BlockIngestError::StateTransition {
+            tx_index: (user_txs.len().saturating_add(1))
+                .try_into()
+                .expect("tx index fits in u64"),
             reason: format!("{:#}", anyhow::Error::from(err)),
         })?;
 
@@ -264,6 +283,45 @@ mod tests {
         .into_pending_block(&sequencer_sign_key_for_testing());
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(err, BlockIngestError::EmptyBlock));
+    }
+
+    #[test]
+    fn missing_fee_tx_is_invalid_fee() {
+        let mut state = initial_state();
+        // Correct clock tail but no fee tx before it.
+        let block = HashableBlockData {
+            block_id: 1,
+            prev_block_hash: HashType([0_u8; 32]),
+            timestamp: 100,
+            transactions: vec![
+                produce_dummy_empty_transaction(),
+                LeeTransaction::Public(clock_invocation(100)),
+            ],
+        }
+        .into_pending_block(&sequencer_sign_key_for_testing());
+        let err = apply_block(None, &block, &mut state).expect_err("should reject");
+        assert!(matches!(err, BlockIngestError::InvalidFeeTransaction));
+    }
+
+    #[test]
+    fn nonzero_fee_summary_is_invalid_fee() {
+        let mut state = initial_state();
+        let bad_summary = fee_core::BlockFeeSummary {
+            gas_used_exec: 1,
+            ..fee_core::BlockFeeSummary::default()
+        };
+        let block = HashableBlockData {
+            block_id: 1,
+            prev_block_hash: HashType([0_u8; 32]),
+            timestamp: 100,
+            transactions: vec![
+                LeeTransaction::Public(fee_invocation(bad_summary)),
+                LeeTransaction::Public(clock_invocation(100)),
+            ],
+        }
+        .into_pending_block(&sequencer_sign_key_for_testing());
+        let err = apply_block(None, &block, &mut state).expect_err("should reject");
+        assert!(matches!(err, BlockIngestError::InvalidFeeTransaction));
     }
 
     #[test]

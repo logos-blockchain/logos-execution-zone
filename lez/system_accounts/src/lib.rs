@@ -68,6 +68,39 @@ pub fn bridge_account() -> Account {
 }
 
 #[must_use]
+pub fn fee_state_account_id() -> AccountId {
+    fee_core::compute_fee_state_account_id(programs::fee().id())
+}
+
+#[must_use]
+pub fn fee_escrow_account_id() -> AccountId {
+    fee_core::compute_fee_escrow_account_id(programs::fee().id())
+}
+
+#[must_use]
+pub fn fee_inbox_account_id() -> AccountId {
+    fee_core::compute_fee_inbox_account_id(programs::fee().id())
+}
+
+/// Fee program account IDs in the order expected by the fee program.
+#[must_use]
+pub fn fee_account_ids() -> [AccountId; 3] {
+    [
+        fee_state_account_id(),
+        fee_escrow_account_id(),
+        fee_inbox_account_id(),
+    ]
+}
+
+#[must_use]
+pub fn fee_account() -> Account {
+    Account {
+        program_owner: programs::fee().id(),
+        ..Account::default()
+    }
+}
+
+#[must_use]
 pub const fn clock_account_ids() -> [AccountId; 3] {
     clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
 }

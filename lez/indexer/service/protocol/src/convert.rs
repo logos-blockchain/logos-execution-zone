@@ -832,6 +832,7 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::InvalidClockTransaction => {
                 Self::InvalidClockTransaction
             }
+            indexer_core::BlockIngestError::InvalidFeeTransaction => Self::InvalidFeeTransaction,
             indexer_core::BlockIngestError::NonPublicGenesisTransaction => {
                 Self::NonPublicGenesisTransaction
             }

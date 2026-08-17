@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use common::{
     block::Block,
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 use lee::{GENESIS_BLOCK_ID, V03State};
 use log::warn;
@@ -215,6 +215,20 @@ fn apply_block_transactions(mut block: Block, state: &mut V03State) -> DbResult<
         ));
     }
 
+    let expected_fee = LeeTransaction::Public(fee_invocation(fee_core::Instruction::default()));
+
+    let fee_tx = block.body.transactions.pop().ok_or_else(|| {
+        DbError::db_interaction_error(
+            "Block must contain fee transaction before the clock transaction".to_owned(),
+        )
+    })?;
+
+    if fee_tx != expected_fee {
+        return Err(DbError::db_interaction_error(
+            "Second-to-last transaction in block must be the fee invocation".to_owned(),
+        ));
+    }
+
     for transaction in block.body.transactions {
         if block.header.block_id == GENESIS_BLOCK_ID {
             let genesis_tx = match transaction {
@@ -246,6 +260,24 @@ fn apply_block_transactions(mut block: Block, state: &mut V03State) -> DbResult<
                 })?;
         }
     }
+
+    let LeeTransaction::Public(fee_public_tx) = fee_tx else {
+        return Err(DbError::db_interaction_error(
+            "Fee invocation must be a public transaction".to_owned(),
+        ));
+    };
+
+    state
+        .transition_from_public_transaction(
+            &fee_public_tx,
+            block.header.block_id,
+            block.header.timestamp,
+        )
+        .map_err(|err| {
+            DbError::db_interaction_error(format!(
+                "fee transaction execution failed with err {err:?}"
+            ))
+        })?;
 
     let LeeTransaction::Public(clock_public_tx) = clock_tx else {
         return Err(DbError::db_interaction_error(

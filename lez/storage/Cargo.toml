@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 common.workspace = true
+fee_core.workspace = true
 lee.workspace = true
 
 thiserror.workspace = true

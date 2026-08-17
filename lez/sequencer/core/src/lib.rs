@@ -13,7 +13,7 @@ use chain_state::{
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
@@ -1116,6 +1116,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
+        let fee_tx = fee_invocation(fee_core::Instruction::default());
+        let fee_lee_tx = LeeTransaction::Public(fee_tx.clone());
         let clock_tx = clock_invocation(new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
@@ -1137,6 +1139,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
+                std::slice::from_ref(&fee_lee_tx),
                 std::slice::from_ref(&clock_lee_tx),
             ]
             .concat();
@@ -1165,7 +1168,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 if from_store
                     && !self.fits_in_an_empty_block(
                         &tx,
-                        &clock_lee_tx,
+                        &[fee_lee_tx.clone(), clock_lee_tx.clone()],
                         new_block_height,
                         prev_block_hash,
                         new_block_timestamp,
@@ -1242,6 +1245,11 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 break;
             }
         }
+
+        working_state
+            .transition_from_public_transaction(&fee_tx, new_block_height, new_block_timestamp)
+            .context("Fee transaction failed. Aborting block production.")?;
+        valid_transactions.push(fee_lee_tx);
 
         working_state
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
@@ -1326,8 +1334,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         &self.block_publisher
     }
 
-    /// Whether a block carrying nothing but `tx` and the clock would be within
-    /// the size limit.
+    /// Whether a block carrying nothing but `tx` and the appended system
+    /// transactions (fee and clock) would be within the size limit.
     ///
     /// Distinguishes "does not fit in this block" from "does not fit in any
     /// block". The first is an ordinary deferral; the second, for a transaction
@@ -1336,14 +1344,14 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     fn fits_in_an_empty_block(
         &self,
         tx: &LeeTransaction,
-        clock_tx: &LeeTransaction,
+        system_txs: &[LeeTransaction],
         block_id: u64,
         prev_block_hash: HashType,
         timestamp: u64,
     ) -> Result<bool> {
         let alone = HashableBlockData {
             block_id,
-            transactions: vec![tx.clone(), clock_tx.clone()],
+            transactions: [std::slice::from_ref(tx), system_txs].concat(),
             prev_block_hash,
             timestamp,
         };
@@ -1877,6 +1885,9 @@ fn build_genesis_state(
         .chain(inbox_config_tx)
         .chain(supply_txs)
         .chain(bootstrap_stake_txs)
+        .chain(std::iter::once(fee_invocation(
+            fee_core::Instruction::default(),
+        )))
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
             state
@@ -2070,10 +2081,11 @@ fn bridge_lock_holdings(
 ///
 /// The cross-zone inbox is injected solely by the watcher; a user-submitted call
 /// must be rejected at ingress, since `TransactionOrigin` is not carried in the
-/// block.
+/// block. The fee program is invoked solely by the forced per-block fee
+/// transaction.
 #[must_use]
 pub fn is_sequencer_only_program(program_id: lee::ProgramId) -> bool {
-    cross_zone::is_sequencer_only_program(program_id)
+    cross_zone::is_sequencer_only_program(program_id) || program_id == programs::fee().id()
 }
 
 fn build_supply_account_genesis_transaction(
@@ -2242,8 +2254,9 @@ fn build_finalize_unstake_tx(
 
 /// User transactions of an orphaned block to return to the mempool: everything
 /// except the trailing clock tx, sequencer-generated bridge deposits (replayed
-/// from their own bedrock events) and sequencer-only cross-zone txs (replayed
-/// by the watcher; the ingress guard rejects them as `User`).
+/// from their own bedrock events) and sequencer-only txs — cross-zone dispatches
+/// (replayed by the watcher) and the fee tx (regenerated every block; the
+/// ingress guard rejects them as `User`).
 fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
     let Some((_clock, rest)) = block.body.transactions.split_last() else {
         return Vec::new();

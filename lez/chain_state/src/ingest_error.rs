@@ -26,6 +26,8 @@ pub enum BlockIngestError {
     EmptyBlock,
     #[error("Last transaction must be the public clock invocation for the block timestamp")]
     InvalidClockTransaction,
+    #[error("Second-to-last transaction must be the canonical public fee invocation")]
+    InvalidFeeTransaction,
     #[error("Genesis block must contain only public transactions")]
     NonPublicGenesisTransaction,
     #[error("State transition failed at transaction {tx_index}: {reason}")]

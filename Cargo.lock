@@ -1548,6 +1548,7 @@ dependencies = [
  "anyhow",
  "borsh",
  "common",
+ "fee_core",
  "futures",
  "lee",
  "lee_core",
@@ -1801,6 +1802,7 @@ dependencies = [
  "base64 0.22.1",
  "borsh",
  "clock_core",
+ "fee_core",
  "hex",
  "lee",
  "lee_core",
@@ -3270,6 +3272,22 @@ dependencies = [
  "cfg-if",
  "rustix",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "fee_core"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "serde",
+]
+
+[[package]]
+name = "fee_program"
+version = "0.1.0"
+dependencies = [
+ "fee_core",
+ "lee_core",
 ]
 
 [[package]]
@@ -9417,6 +9435,7 @@ dependencies = [
  "cross_zone_marker_core",
  "cross_zone_outbox_core",
  "faucet_core",
+ "fee_core",
  "lee",
  "lee_core",
  "ping_core",
@@ -10964,6 +10983,7 @@ dependencies = [
  "cross_zone",
  "cross_zone_inbox_core",
  "faucet_core",
+ "fee_core",
  "futures",
  "hex",
  "humantime-serde",
@@ -11748,6 +11768,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "common",
+ "fee_core",
  "lee",
  "log",
  "programs",
@@ -11990,6 +12011,7 @@ dependencies = [
  "bridge_core",
  "clock_core",
  "faucet_core",
+ "fee_core",
  "lee_core",
  "programs",
  "sequencer_stake_core",
