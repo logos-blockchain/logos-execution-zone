@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountDiffOutput, Claim},
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -9,7 +9,7 @@ pub fn mint(
     definition_account: AccountWithMetadata,
     user_holding_account: AccountWithMetadata,
     amount_to_mint: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     assert!(
         definition_account.is_authorized,
         "Definition authorization is missing"
@@ -59,14 +59,20 @@ pub fn mint(
         _ => panic!("Mismatched Token Definition and Token Holding types"),
     }
 
-    let mut definition_post = definition_account.account;
-    definition_post.data = Data::from(&definition);
-
-    let mut holding_post = user_holding_account.account;
-    holding_post.data = Data::from(&holding);
-
     vec![
-        AccountPostState::new(definition_post),
-        AccountPostState::new_claimed_if_default(holding_post, Claim::Authorized),
+        AccountDiffOutput::new(AccountDiff {
+            id: definition_account.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: Some(Data::from(&definition)),
+        }),
+        AccountDiffOutput::new_claimed_if_default(
+            AccountDiff {
+                id: user_holding_account.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: Some(Data::from(&holding)),
+            },
+            user_holding_account.account.program_owner.into(),
+            Claim::Authorized,
+        ),
     ]
 }

@@ -1,4 +1,7 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+};
 
 type Instruction = ();
 
@@ -11,25 +14,29 @@ fn main() {
             ..
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "minter program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let account_pre = &pre.account;
-    let mut account_post = account_pre.clone();
-    account_post.balance = account_post
-        .balance
-        .checked_add(1)
-        .expect("Balance overflow");
+    let account_id = pre.account_id;
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
         vec![pre],
-        vec![AccountPostState::new(account_post)],
+        vec![AccountDiffOutput::new(AccountDiff {
+            id: account_id,
+            diff_balance: BalanceDiff::Add(1),
+            diff_data: None,
+        })],
     )
     .write();
 }

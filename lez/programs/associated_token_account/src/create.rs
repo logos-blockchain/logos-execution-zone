@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{AccountPostState, ChainedCall, Claim, ProgramId},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
+    program::{AccountDiffOutput, ChainedCall, Claim, ProgramId},
 };
 
 pub fn create_associated_token_account(
@@ -8,7 +8,7 @@ pub fn create_associated_token_account(
     token_definition: AccountWithMetadata,
     ata_account: AccountWithMetadata,
     ata_program_id: ProgramId,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<AccountDiffOutput>, Vec<ChainedCall>) {
     // No authorization check needed: create is idempotent, so anyone can call it safely.
     let token_program_id: lee_core::program::ProgramId =
         token_definition.account.program_owner.into();
@@ -19,22 +19,32 @@ pub fn create_associated_token_account(
         ata_program_id,
     );
 
+    let owner_post = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: owner.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: None,
+        },
+        owner.account.program_owner.into(),
+        Claim::Authorized,
+    );
+
     // Idempotent: already initialized → no-op
     if ata_account.account != Account::default() {
         return (
             vec![
-                AccountPostState::new_claimed_if_default(owner.account.clone(), Claim::Authorized),
-                AccountPostState::new(token_definition.account.clone()),
-                AccountPostState::new(ata_account.account.clone()),
+                owner_post,
+                crate::unchanged(token_definition.account_id),
+                crate::unchanged(ata_account.account_id),
             ],
             vec![],
         );
     }
 
     let post_states = vec![
-        AccountPostState::new_claimed_if_default(owner.account.clone(), Claim::Authorized),
-        AccountPostState::new(token_definition.account.clone()),
-        AccountPostState::new(ata_account.account.clone()),
+        owner_post,
+        crate::unchanged(token_definition.account_id),
+        crate::unchanged(ata_account.account_id),
     ];
     let ata_account_auth = AccountWithMetadata {
         is_authorized: true,

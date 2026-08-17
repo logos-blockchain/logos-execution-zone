@@ -10,12 +10,14 @@ fn main() {
         account_identities,
         program_id,
         dummy_inputs,
+        update_from_diff_results,
     } = env::read();
 
     let execution_state = execution_state::ExecutionState::derive_from_outputs(
         &account_identities,
         program_id,
         program_outputs,
+        update_from_diff_results,
     );
 
     let output = output::compute_circuit_output(execution_state, &account_identities, dummy_inputs);

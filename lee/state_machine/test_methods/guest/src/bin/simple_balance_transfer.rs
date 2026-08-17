@@ -1,4 +1,7 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+};
 
 type Instruction = u128;
 
@@ -11,11 +14,23 @@ fn main() {
             instruction: balance,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "simple_balance_transfer program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
-        let account_post =
-            AccountPostState::new_claimed_if_default(account_pre.account, Claim::Authorized);
+        let account_post = AccountDiffOutput::new_claimed_if_default(
+            AccountDiff {
+                id: account_pre.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            },
+            account_pre.account.program_owner.into(),
+            Claim::Authorized,
+        );
 
         ProgramOutput::new(
             self_program_id,
@@ -31,27 +46,34 @@ fn main() {
     let Ok([sender_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {
         return;
     };
+    let sender_owner = sender_pre.account.program_owner.into();
+    let receiver_owner = receiver_pre.account.program_owner.into();
 
-    let mut sender_post = sender_pre.account.clone();
-    let mut receiver_post = receiver_pre.account.clone();
-    sender_post.balance = sender_post
-        .balance
-        .checked_sub(balance)
-        .expect("Not enough balance to transfer");
-    receiver_post.balance = receiver_post
-        .balance
-        .checked_add(balance)
-        .expect("Overflow when adding balance");
+    let sender_post = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: sender_pre.account_id,
+            diff_balance: BalanceDiff::Sub(balance),
+            diff_data: None,
+        },
+        sender_owner,
+        Claim::Authorized,
+    );
+    let receiver_post = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: receiver_pre.account_id,
+            diff_balance: BalanceDiff::Add(balance),
+            diff_data: None,
+        },
+        receiver_owner,
+        Claim::Authorized,
+    );
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
         vec![sender_pre, receiver_pre],
-        vec![
-            AccountPostState::new_claimed_if_default(sender_post, Claim::Authorized),
-            AccountPostState::new_claimed_if_default(receiver_post, Claim::Authorized),
-        ],
+        vec![sender_post, receiver_post],
     )
     .write();
 }

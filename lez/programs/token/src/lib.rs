@@ -1,5 +1,9 @@
 //! The Token Program implementation.
 
+use std::convert::Infallible;
+
+use lee_core::account::{Account, Data};
+
 pub use token_core as core;
 
 pub mod burn;
@@ -10,3 +14,10 @@ pub mod print_nft;
 pub mod transfer;
 
 mod tests;
+
+/// Every data write in this program replaces the account's data wholesale with an
+/// already-fully-computed encoding (`TokenDefinition`/`TokenHolding`/`TokenMetadata`), so
+/// `diff_data` already *is* the new data verbatim — materializing it is a passthrough.
+pub fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
+}

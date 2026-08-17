@@ -8,32 +8,34 @@
 //! block. Clock accounts are assigned to the clock program at genesis, so no claiming is required
 //! here.
 
+use std::convert::Infallible;
+
 use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     ClockAccountData, Instruction,
 };
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff, Data},
+    program::{
+        AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        write_update_from_diff_output,
+    },
 };
 
 fn update_if_multiple(
-    pre: AccountWithMetadata,
+    pre: &AccountWithMetadata,
     divisor: u64,
     current_block_id: u64,
-    updated_data: &[u8],
-) -> (AccountWithMetadata, AccountPostState) {
-    if current_block_id.is_multiple_of(divisor) {
-        let mut post_account = pre.account.clone();
-        post_account.data = updated_data
-            .to_vec()
-            .try_into()
-            .expect("Clock account data should fit in account data");
-        (pre, AccountPostState::new(post_account))
-    } else {
-        let post = AccountPostState::new(pre.account.clone());
-        (pre, post)
-    }
+    updated_data: &Data,
+) -> AccountDiffOutput {
+    let diff_data = current_block_id
+        .is_multiple_of(divisor)
+        .then(|| updated_data.clone());
+    AccountDiffOutput::new(AccountDiff {
+        id: pre.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data,
+    })
 }
 
 fn main() {
@@ -45,7 +47,18 @@ fn main() {
             instruction: timestamp,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff {
+            pre_state,
+            diff_data,
+        } => {
+            let data = update_from_diff(pre_state.clone(), diff_data.clone())
+                .expect("update_from_diff should not fail");
+            write_update_from_diff_output(pre_state, diff_data, data);
+            return;
+        }
+    };
 
     let Ok([pre_01, pre_10, pre_50]) = <[_; 3]>::try_from(pre_states) else {
         panic!("Invalid number of input accounts");
@@ -74,15 +87,17 @@ fn main() {
         .checked_add(1)
         .expect("Next block id should be within u64 boundaries");
 
-    let updated_data = ClockAccountData {
+    let updated_data: Data = ClockAccountData {
         block_id: current_block_id,
         timestamp,
     }
-    .to_bytes();
+    .to_bytes()
+    .try_into()
+    .expect("clock account data always fits under DATA_MAX_LENGTH");
 
-    let (pre_01, post_01) = update_if_multiple(pre_01, 1, current_block_id, &updated_data);
-    let (pre_10, post_10) = update_if_multiple(pre_10, 10, current_block_id, &updated_data);
-    let (pre_50, post_50) = update_if_multiple(pre_50, 50, current_block_id, &updated_data);
+    let post_01 = update_if_multiple(&pre_01, 1, current_block_id, &updated_data);
+    let post_10 = update_if_multiple(&pre_10, 10, current_block_id, &updated_data);
+    let post_50 = update_if_multiple(&pre_50, 50, current_block_id, &updated_data);
 
     ProgramOutput::new(
         self_program_id,
@@ -92,4 +107,8 @@ fn main() {
         vec![post_01, post_10, post_50],
     )
     .write();
+}
+
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
 }

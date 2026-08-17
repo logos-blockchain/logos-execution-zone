@@ -5,12 +5,12 @@ use std::{
 
 use lee_core::{
     Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Data, apply_balance_diff},
     encryption::ViewingPublicKey,
     program::{
-        AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim,
+        AccountDiffOutput, BlockValidityWindow, CallerData, ChainedCall, Claim,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
-        TimestampValidityWindow, validate_execution,
+        TimestampValidityWindow, UpdateFromDiffOutput, validate_execution,
     },
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
@@ -62,7 +62,9 @@ impl ExecutionState {
         account_identities: &[InputAccountIdentity],
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
+        update_from_diff_results: Vec<Data>,
     ) -> Self {
+        let mut update_from_diff_results: VecDeque<Data> = update_from_diff_results.into();
         // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
         // in `account_identities`. The vec is documented as 1:1 with the program's pre_state
         // order, so position here matches `pre_state_position` used downstream in
@@ -198,6 +200,7 @@ impl ExecutionState {
                 &chained_call.pda_seeds,
                 program_output.pre_states,
                 program_output.post_states,
+                &mut update_from_diff_results,
             );
 
             for next_call in program_output.chained_calls.into_iter().rev() {
@@ -218,6 +221,11 @@ impl ExecutionState {
         assert!(
             program_outputs_iter.next().is_none(),
             "Inner call without a chained call found",
+        );
+
+        assert!(
+            update_from_diff_results.is_empty(),
+            "Extra update_from_diff_results entries beyond what any diff's diff_data consumed",
         );
 
         // Every private-PDA pre_state must have had its npk bound to its account_id, either via
@@ -270,12 +278,18 @@ impl ExecutionState {
         caller: CallerData,
         caller_pda_seeds: &[PdaSeed],
         output_pre_states: Vec<AccountWithMetadata>,
-        output_post_states: Vec<AccountPostState>,
+        output_post_states: Vec<AccountDiffOutput>,
+        update_from_diff_results: &mut VecDeque<Data>,
     ) -> HashSet<AccountId> {
         let mut authorized_output_accounts = Vec::new();
-        for (mut pre, mut post) in output_pre_states.into_iter().zip(output_post_states) {
+        for (mut pre, diff_output) in output_pre_states.into_iter().zip(output_post_states) {
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
+            // `pre` is fully consumed by the match below (destructured in the `Occupied` arm,
+            // moved into `self.pre_states` in the `Vacant` arm), so anything needed afterward —
+            // for materializing this account's diff into a full post-state — must be captured
+            // now.
+            let pre_account = pre.account.clone();
             let post_states_entry = self.post_states.entry(pre.account_id);
             match &post_states_entry {
                 Entry::Occupied(occupied) => {
@@ -408,10 +422,46 @@ impl ExecutionState {
                 authorized_output_accounts.push(pre_account_id);
             }
 
-            if let Some(claim) = post.required_claim() {
+            let diff = diff_output.diff();
+
+            let balance = apply_balance_diff(pre_account.balance, diff.diff_balance)
+                .expect("balance diff must be valid; validate_execution already checked it");
+
+            // Materialize `diff_data` into the account's new `data`, via a recursive proof: the
+            // host already proved this program's own `update_from_diff` on `(pre_account,
+            // diff_data)` and added the receipt as an assumption (see `execute_and_prove`); here
+            // we reconstruct the exact journal that receipt must have committed and check it via
+            // `env::verify`. `update_from_diff_results` supplies the one untrusted piece of that
+            // journal we can't derive locally — the resulting `data` — in the same order the host
+            // proved these receipts, matching this function's own traversal.
+            let data = if let Some(diff_data) = diff.diff_data.clone() {
+                let data = update_from_diff_results
+                    .pop_front()
+                    .expect("one update_from_diff_results entry per diff with diff_data");
+                let expected_output = UpdateFromDiffOutput {
+                    pre_state: pre_account.clone(),
+                    diff_data,
+                    data: data.clone(),
+                };
+                let journal_words =
+                    to_vec(&expected_output).expect("UpdateFromDiffOutput must be serializable");
+                env::verify(program_id, &journal_words).unwrap_or_else(
+                    |_: Infallible| unreachable!("Infallible error is never constructed"),
+                );
+                data
+            } else {
+                pre_account.data.clone()
+            };
+
+            // Ownership is either inherited unchanged, or explicitly overwritten by a claim —
+            // never reverts to default. `AccountDiff` carries no ownership info at all, so this
+            // is the only place a materialized account's owner can change.
+            let mut post_program_owner = pre_account.program_owner;
+
+            if let Some(claim) = diff_output.required_claim() {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(
-                    post.account().program_owner,
+                    pre_account.program_owner,
                     DEFAULT_PROGRAM_OWNER,
                     "Cannot claim an initialized account {pre_account_id}"
                 );
@@ -486,10 +536,15 @@ impl ExecutionState {
                     }
                 }
 
-                post.account_mut().program_owner = AccountId::from(program_id);
+                post_program_owner = AccountId::from(program_id);
             }
 
-            post_states_entry.insert_entry(post.into_account());
+            post_states_entry.insert_entry(Account {
+                program_owner: post_program_owner,
+                balance,
+                data,
+                nonce: pre_account.nonce,
+            });
         }
 
         let mut authorized_accounts = caller.authorized_accounts;

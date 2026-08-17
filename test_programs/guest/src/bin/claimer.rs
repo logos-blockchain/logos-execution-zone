@@ -1,4 +1,7 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+};
 
 type Instruction = ();
 
@@ -11,13 +14,25 @@ fn main() {
             instruction: (),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "claimer program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let account_post = AccountPostState::new_claimed(pre.account.clone(), Claim::Authorized);
+    let account_post = AccountDiffOutput::new_claimed(
+        AccountDiff {
+            id: pre.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: None,
+        },
+        Claim::Authorized,
+    );
 
     ProgramOutput::new(
         self_program_id,

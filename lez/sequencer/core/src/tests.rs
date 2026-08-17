@@ -1192,9 +1192,14 @@ async fn transaction_pre_check_native_transfer_sent_too_much() {
         0,
         0,
     );
+    // Balance-sufficiency is no longer checked in-guest — the program emits a plain
+    // `BalanceDiff::Sub` and `apply_balance_diff`'s checked arithmetic (applied unconditionally at
+    // the protocol level) rejects the insufficient balance.
     let is_failed_at_balance_mismatch = matches!(
         result.err().unwrap(),
-        lee::error::LeeError::ProgramExecutionFailed(_)
+        lee::error::LeeError::InvalidProgramBehavior(
+            lee::error::InvalidProgramBehaviorError::BalanceDiffFailed(_)
+        )
     );
 
     assert!(is_failed_at_balance_mismatch);

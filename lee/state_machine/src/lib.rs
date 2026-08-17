@@ -56,14 +56,6 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn nonce_changer() -> Program {
-        Program::new_unchecked(
-            test_methods::NONCE_CHANGER_ID,
-            Cow::Borrowed(test_methods::NONCE_CHANGER_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn extra_output() -> Program {
         Program::new_unchecked(
             test_methods::EXTRA_OUTPUT_ID,
@@ -84,14 +76,6 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::DROPPED_ACCOUNT_ID,
             Cow::Borrowed(test_methods::DROPPED_ACCOUNT_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn program_owner_changer() -> Program {
-        Program::new_unchecked(
-            test_methods::PROGRAM_OWNER_CHANGER_ID,
-            Cow::Borrowed(test_methods::PROGRAM_OWNER_CHANGER_ELF),
         )
     }
 
@@ -185,14 +169,6 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::CHAIN_CALLER_ID,
             Cow::Borrowed(test_methods::CHAIN_CALLER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn modified_transfer_program() -> Program {
-        Program::new_unchecked(
-            test_methods::MODIFIED_TRANSFER_ID,
-            Cow::Borrowed(test_methods::MODIFIED_TRANSFER_ELF),
         )
     }
 

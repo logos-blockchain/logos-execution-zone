@@ -6,7 +6,7 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     program::{
         CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
         validate_execution,
@@ -124,7 +124,7 @@ impl ValidatedStateDiff {
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
             );
-            let mut program_output = program.execute(
+            let program_output = program.execute(
                 caller_data.program_id,
                 &chained_call.pre_states,
                 &chained_call.instruction_data,
@@ -212,52 +212,74 @@ impl ValidatedStateDiff {
                 LeeError::OutOfValidityWindow
             );
 
-            for (i, post) in program_output.post_states.iter_mut().enumerate() {
-                let Some(claim) = post.required_claim() else {
-                    continue;
-                };
-                let pre = &program_output.pre_states[i];
-                let account_id = pre.account_id;
-
-                // The invoked program can only claim accounts with default program id.
-                ensure!(
-                    post.account().program_owner == DEFAULT_PROGRAM_OWNER,
-                    InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
-                );
-
-                match claim {
-                    Claim::Authorized => {
-                        // The program can only claim accounts that were authorized by the signer.
-                        ensure!(
-                            pre.is_authorized,
-                            InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
-                        );
-                    }
-                    Claim::Pda(seed) => {
-                        // The program can only claim accounts that correspond to the PDAs it is
-                        // authorized to claim. The public-execution path only sees public
-                        // accounts, so the public-PDA derivation is the correct formula here.
-                        let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
-                        ensure!(
-                            account_id == pda,
-                            InvalidProgramBehaviorError::MismatchedPdaClaim {
-                                expected: pda,
-                                actual: account_id
-                            }
-                        );
-                    }
-                }
-
-                post.account_mut().program_owner = AccountId::from(chained_call.program_id);
-            }
-
-            // Update the state diff
-            for (pre, post) in program_output
+            // Materialize each account's diff into a full post-state and update the state diff.
+            for (pre, diff_output) in program_output
                 .pre_states
                 .iter()
-                .zip(program_output.post_states.iter())
+                .zip(&program_output.post_states)
             {
-                state_diff.insert(pre.account_id, post.account().clone());
+                let account_id = pre.account_id;
+                let diff = diff_output.diff();
+
+                let balance = apply_balance_diff(pre.account.balance, diff.diff_balance)
+                    .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
+
+                let data = if let Some(diff_data) = diff.diff_data.clone() {
+                    program.execute_update_from_diff(pre.account.clone(), diff_data.into())?
+                } else {
+                    pre.account.data.clone()
+                };
+
+                // Ownership is either inherited unchanged, or explicitly overwritten by a claim
+                // — never reverts to default. `AccountDiff` carries no ownership info at all, so
+                // this is the only place a materialized account's owner can change.
+                let mut program_owner = pre.account.program_owner;
+
+                if let Some(claim) = diff_output.required_claim() {
+                    // The invoked program can only claim accounts with default program id.
+                    ensure!(
+                        pre.account.program_owner == DEFAULT_PROGRAM_OWNER,
+                        InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
+                    );
+
+                    match claim {
+                        Claim::Authorized => {
+                            // The program can only claim accounts that were authorized by the
+                            // signer.
+                            ensure!(
+                                pre.is_authorized,
+                                InvalidProgramBehaviorError::ClaimedUnauthorizedAccount {
+                                    account_id
+                                }
+                            );
+                        }
+                        Claim::Pda(seed) => {
+                            // The program can only claim accounts that correspond to the PDAs it
+                            // is authorized to claim. The public-execution path only sees public
+                            // accounts, so the public-PDA derivation is the correct formula here.
+                            let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
+                            ensure!(
+                                account_id == pda,
+                                InvalidProgramBehaviorError::MismatchedPdaClaim {
+                                    expected: pda,
+                                    actual: account_id
+                                }
+                            );
+                        }
+                    }
+
+                    program_owner = AccountId::from(chained_call.program_id);
+                }
+
+                state_diff.insert(
+                    account_id,
+                    Account {
+                        program_owner,
+                        balance,
+                        data,
+                        nonce: pre.account.nonce,
+                    },
+                );
             }
 
             // Source from `program_output.pre_states`, not `chained_call.pre_states`:

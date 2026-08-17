@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, Claim, InstructionData, PdaSeed, ProgramId, ProgramInput,
-    ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, Claim, InstructionData, PdaSeed, ProgramCall, ProgramId,
+        ProgramInput, ProgramOutput, read_lee_call,
+    },
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -22,7 +25,12 @@ fn main() {
                 (claim_seed, delegated_seed, callee_program_id, callee_instruction, sibling),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "selective_pda_delegator program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let Some((pda, rest)) = pre_states.split_first() else {
         return;
@@ -72,8 +80,12 @@ fn main() {
         instruction_words,
         vec![pda.clone()],
         // Claim first PDA supplied
-        vec![AccountPostState::new_claimed(
-            pda.account.clone(),
+        vec![AccountDiffOutput::new_claimed(
+            AccountDiff {
+                id: pda.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            },
             Claim::Pda(claim_seed),
         )],
     )

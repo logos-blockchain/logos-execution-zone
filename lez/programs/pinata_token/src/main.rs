@@ -1,7 +1,10 @@
+use std::convert::Infallible;
+
 use lee_core::{
-    account::Data,
+    account::{Account, AccountDiff, BalanceDiff, Data},
     program::{
-        AccountPostState, ChainedCall, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call, write_update_from_diff_output,
     },
 };
 use risc0_zkvm::sha::{Impl, Sha256 as _};
@@ -58,7 +61,18 @@ fn main() {
             instruction: solution,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff {
+            pre_state,
+            diff_data,
+        } => {
+            let data = update_from_diff(pre_state.clone(), diff_data.clone())
+                .expect("update_from_diff should not fail");
+            write_update_from_diff_output(pre_state, diff_data, data);
+            return;
+        }
+    };
 
     let Ok(
         [
@@ -77,17 +91,19 @@ fn main() {
         return;
     }
 
-    let mut pinata_definition_post = pinata_definition.account.clone();
-    let pinata_token_holding_post = pinata_token_holding.account.clone();
-    let winner_token_holding_post = winner_token_holding.account.clone();
-    pinata_definition_post.data = data.next_data();
+    let pinata_definition_post = AccountDiffOutput::new(AccountDiff {
+        id: pinata_definition.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(data.next_data()),
+    });
+    let token_program_owner = pinata_token_holding.account.program_owner;
 
     // Flip authorization to true for chained call
     let mut pinata_token_holding_for_chain_call = pinata_token_holding.clone();
     pinata_token_holding_for_chain_call.is_authorized = true;
 
     let chained_call = ChainedCall::new(
-        pinata_token_holding_post.program_owner.into(),
+        token_program_owner.into(),
         vec![
             pinata_token_holding_for_chain_call,
             winner_token_holding.clone(),
@@ -97,6 +113,9 @@ fn main() {
         },
     )
     .with_pda_seeds(vec![PdaSeed::new([0; 32])]);
+
+    let pinata_token_holding_post = unchanged(pinata_token_holding.account_id);
+    let winner_token_holding_post = unchanged(winner_token_holding.account_id);
 
     ProgramOutput::new(
         self_program_id,
@@ -108,11 +127,25 @@ fn main() {
             winner_token_holding,
         ],
         vec![
-            AccountPostState::new(pinata_definition_post),
-            AccountPostState::new(pinata_token_holding_post),
-            AccountPostState::new(winner_token_holding_post),
+            pinata_definition_post,
+            pinata_token_holding_post,
+            winner_token_holding_post,
         ],
     )
     .with_chained_calls(vec![chained_call])
     .write();
+}
+
+/// The challenge's next-data is fully computed before being written, so `diff_data` already *is*
+/// the new data verbatim — materializing it is a passthrough.
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
+}
+
+fn unchanged(account_id: lee_core::account::AccountId) -> AccountDiffOutput {
+    AccountDiffOutput::new(AccountDiff {
+        id: account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: None,
+    })
 }

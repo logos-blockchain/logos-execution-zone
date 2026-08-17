@@ -1,4 +1,7 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+};
 
 type Instruction = ();
 
@@ -16,20 +19,29 @@ fn main() {
             ..
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "dropped_account program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let Ok([pre1, _pre2]) = <[_; 2]>::try_from(pre_states) else {
         return;
     };
 
-    let account_pre1 = pre1.account.clone();
+    let account_id = pre1.account_id;
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
         vec![pre1],
-        vec![AccountPostState::new(account_pre1)],
+        vec![AccountDiffOutput::new(AccountDiff {
+            id: account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: None,
+        })],
     )
     .write();
 }

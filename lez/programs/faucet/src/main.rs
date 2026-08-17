@@ -1,14 +1,23 @@
 use faucet_core::Instruction;
-use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    },
 };
 
 fn unchanged_post_states(
     pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     pre_states
         .iter()
-        .map(|pre_state| AccountPostState::new(pre_state.account.clone()))
+        .map(|pre_state| {
+            AccountDiffOutput::new(AccountDiff {
+                id: pre_state.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            })
+        })
         .collect()
 }
 
@@ -21,7 +30,12 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "faucet program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     assert!(
         caller_program_id.is_none(),

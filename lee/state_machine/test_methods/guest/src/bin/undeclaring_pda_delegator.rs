@@ -1,5 +1,6 @@
 use lee_core::program::{
-    ChainedCall, InstructionData, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call,
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -20,7 +21,12 @@ fn main() {
             instruction: (seed, declare_authorized, callee_program_id, callee_instruction, sibling),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "undeclaring_pda_delegator program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let Some(first) = pre_states.first_mut() else {
         return;

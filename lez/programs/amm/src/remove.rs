@@ -2,8 +2,8 @@ use std::num::NonZeroU128;
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall},
+    account::{AccountDiff, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountDiffOutput, ChainedCall},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -19,7 +19,7 @@ pub fn remove_liquidity(
     remove_liquidity_amount: NonZeroU128,
     min_amount_to_remove_token_a: u128,
     min_amount_to_remove_token_b: u128,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<AccountDiffOutput>, Vec<ChainedCall>) {
     let remove_liquidity_amount: u128 = remove_liquidity_amount.into();
 
     // 1. Fetch Pool state
@@ -102,7 +102,6 @@ pub fn remove_liquidity(
     let active: bool = pool_def_data.liquidity_pool_supply - delta_lp != 0;
 
     // 5. Update pool account
-    let mut pool_post = pool.account;
     let pool_post_definition = PoolDefinition {
         liquidity_pool_supply: pool_def_data.liquidity_pool_supply - delta_lp,
         reserve_a: pool_def_data.reserve_a - withdraw_amount_a,
@@ -111,7 +110,11 @@ pub fn remove_liquidity(
         ..pool_def_data
     };
 
-    pool_post.data = Data::from(&pool_post_definition);
+    let pool_post = AccountDiffOutput::new(AccountDiff {
+        id: pool.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(Data::from(&pool_post_definition)),
+    });
 
     let token_program_id: lee_core::program::ProgramId =
         user_holding_a.account.program_owner.into();
@@ -155,13 +158,13 @@ pub fn remove_liquidity(
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_states = vec![
-        AccountPostState::new(pool_post),
-        AccountPostState::new(vault_a.account),
-        AccountPostState::new(vault_b.account),
-        AccountPostState::new(pool_definition_lp.account),
-        AccountPostState::new(user_holding_a.account),
-        AccountPostState::new(user_holding_b.account),
-        AccountPostState::new(user_holding_lp.account),
+        pool_post,
+        crate::unchanged(vault_a.account_id),
+        crate::unchanged(vault_b.account_id),
+        crate::unchanged(pool_definition_lp.account_id),
+        crate::unchanged(user_holding_a.account_id),
+        crate::unchanged(user_holding_b.account_id),
+        crate::unchanged(user_holding_lp.account_id),
     ];
 
     (post_states, chained_calls)

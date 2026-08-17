@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, InstructionData, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
+    },
 };
 
 type Instruction = (ProgramId, InstructionData, bool);
@@ -14,12 +17,23 @@ fn main() {
             instruction: (callee_program_id, callee_instruction, declare_pre_states),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "non_delegating_forwarder program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let (output_pre_states, output_post_states) = if declare_pre_states {
         let post_states = pre_states
             .iter()
-            .map(|account| AccountPostState::new(account.account.clone()))
+            .map(|account| {
+                AccountDiffOutput::new(AccountDiff {
+                    id: account.account_id,
+                    diff_balance: BalanceDiff::Add(0),
+                    diff_data: None,
+                })
+            })
             .collect();
         (pre_states.clone(), post_states)
     } else {

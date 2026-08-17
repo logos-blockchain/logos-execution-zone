@@ -1,8 +1,8 @@
 use lee_core::{
-    account::AccountId,
+    account::{AccountDiff, AccountId, BalanceDiff},
     program::{
-        AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
     },
 };
 
@@ -21,7 +21,12 @@ fn main() {
             instruction: (target_program_id, target_instruction_words, pda_seed),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "authority_proxy program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let mut call_pre_states = pre_states.clone();
     if let Some(seed) = pda_seed {
@@ -42,7 +47,13 @@ fn main() {
 
     let post_states = pre_states
         .iter()
-        .map(|pre| AccountPostState::new(pre.account.clone()))
+        .map(|pre| {
+            AccountDiffOutput::new(AccountDiff {
+                id: pre.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            })
+        })
         .collect();
 
     ProgramOutput::new(

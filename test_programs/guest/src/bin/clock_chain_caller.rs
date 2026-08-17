@@ -1,7 +1,9 @@
 use lee_core::{
     Timestamp,
+    account::{AccountDiff, BalanceDiff},
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
     },
 };
 use risc0_zkvm::serde::to_vec;
@@ -20,11 +22,22 @@ fn main() {
             instruction: (clock_program_id, timestamp),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => unreachable!(
+            "clock_chain_caller program never writes diff_data, so update_from_diff is never dispatched"
+        ),
+    };
 
     let post_states: Vec<_> = pre_states
         .iter()
-        .map(|pre| AccountPostState::new(pre.account.clone()))
+        .map(|pre| {
+            AccountDiffOutput::new(AccountDiff {
+                id: pre.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: None,
+            })
+        })
         .collect();
 
     let chained_call = ChainedCall {

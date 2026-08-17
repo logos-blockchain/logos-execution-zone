@@ -1,15 +1,32 @@
+use std::convert::Infallible;
+
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff, Data},
     program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountDiffOutput, Claim, DEFAULT_PROGRAM_OWNER, ProgramCall,
+        ProgramInput, ProgramOutput, read_lee_call, write_update_from_diff_output,
     },
 };
 use wrapped_token_core::{
     Instruction, MAX_MINT_AMOUNT, WrappedTokenConfig, balance_bytes, config_account_id,
     config_seed, holding_account_id, holding_seed, read_balance,
 };
+
+/// Every data write in this program replaces the account's data wholesale with an
+/// already-fully-computed encoding, so `diff_data` already *is* the new data verbatim —
+/// materializing it is a passthrough.
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
+}
+
+fn unchanged(account_id: lee_core::account::AccountId) -> AccountDiffOutput {
+    AccountDiffOutput::new(AccountDiff {
+        id: account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: None,
+    })
+}
 
 fn main() {
     let (
@@ -20,7 +37,18 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff {
+            pre_state,
+            diff_data,
+        } => {
+            let data = update_from_diff(pre_state.clone(), diff_data.clone())
+                .expect("update_from_diff should not fail");
+            write_update_from_diff_output(pre_state, diff_data, data);
+            return;
+        }
+    };
 
     match instruction {
         Instruction::Mint { recipient, amount } => mint(
@@ -106,27 +134,29 @@ fn mint(
     let new_balance = read_balance(&holding.account.data)
         .checked_add(amount)
         .expect("wrapped-token balance overflow");
-    let mut holding_account = holding.account.clone();
-    holding_account.data = balance_bytes(new_balance)
-        .to_vec()
-        .try_into()
-        .expect("balance fits in account data");
-    let holding_post = AccountPostState::new_claimed_if_default(
-        holding_account,
+    let holding_post = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: holding.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: Some(
+                balance_bytes(new_balance)
+                    .to_vec()
+                    .try_into()
+                    .expect("balance bytes fit in account data"),
+            ),
+        },
+        holding.account.program_owner.into(),
         Claim::Pda(holding_seed(&recipient)),
     );
-    let config_post = AccountPostState::new(config.account.clone());
+    let config_post = unchanged(config.account_id);
+    let marker_post = unchanged(marker.account_id);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
-        vec![marker.clone(), config, holding],
-        vec![
-            AccountPostState::new(marker.account),
-            config_post,
-            holding_post,
-        ],
+        vec![marker, config, holding],
+        vec![marker_post, config_post, holding_post],
     )
     .write();
 }
@@ -180,22 +210,34 @@ fn renounce_authority(
     );
 
     cfg.authority = None;
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
+    let new_config_data = cfg
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
 
+    let authority_program_owner = authority.account.program_owner.into();
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
-        vec![config, authority.clone()],
+        vec![config.clone(), authority.clone()],
         vec![
-            AccountPostState::new(config_account),
+            AccountDiffOutput::new(AccountDiff {
+                id: config.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: Some(new_config_data),
+            }),
             // Claimed on first use: the authority's own signature bumps its
             // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
+            AccountDiffOutput::new_claimed_if_default(
+                AccountDiff {
+                    id: authority.account_id,
+                    diff_balance: BalanceDiff::Add(0),
+                    diff_data: None,
+                },
+                authority_program_owner,
+                Claim::Authorized,
+            ),
         ],
     )
     .write();
@@ -252,22 +294,34 @@ fn update_sources(
     );
 
     cfg.sources = sources;
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
+    let new_config_data = cfg
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
 
+    let authority_program_owner = authority.account.program_owner.into();
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
-        vec![config, authority.clone()],
+        vec![config.clone(), authority.clone()],
         vec![
-            AccountPostState::new(config_account),
+            AccountDiffOutput::new(AccountDiff {
+                id: config.account_id,
+                diff_balance: BalanceDiff::Add(0),
+                diff_data: Some(new_config_data),
+            }),
             // Claimed on first use: the authority's own signature bumps its
             // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
+            AccountDiffOutput::new_claimed_if_default(
+                AccountDiff {
+                    id: authority.account_id,
+                    diff_balance: BalanceDiff::Add(0),
+                    diff_data: None,
+                },
+                authority_program_owner,
+                Claim::Authorized,
+            ),
         ],
     )
     .write();
@@ -314,13 +368,20 @@ fn init_config(
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = config_value
-        .to_bytes()
-        .try_into()
-        .expect("wrapped-token config fits in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
+    let config_post = AccountDiffOutput::new_claimed_if_default(
+        AccountDiff {
+            id: config.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: Some(
+                config_value
+                    .to_bytes()
+                    .try_into()
+                    .expect("wrapped-token config fits in account data"),
+            ),
+        },
+        config.account.program_owner.into(),
+        Claim::Pda(config_seed()),
+    );
 
     ProgramOutput::new(
         self_program_id,

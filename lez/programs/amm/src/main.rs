@@ -9,7 +9,7 @@
 use std::num::NonZero;
 
 use amm_core::Instruction;
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramCall, ProgramInput, ProgramOutput, read_lee_call, write_update_from_diff_output};
 
 fn main() {
     let (
@@ -20,7 +20,18 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff {
+            pre_state,
+            diff_data,
+        } => {
+            let data = amm_program::update_from_diff(pre_state.clone(), diff_data.clone())
+                .expect("update_from_diff should not fail");
+            write_update_from_diff_output(pre_state, diff_data, data);
+            return;
+        }
+    };
 
     let pre_states_clone = pre_states.clone();
 

@@ -2,10 +2,12 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{InstructionData, ProgramId, ProgramOutput},
+    account::{Account, AccountWithMetadata, Data},
+    program::{CallKind, InstructionData, ProgramId, ProgramOutput, UpdateFromDiffOutput},
 };
-use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor, serde::to_vec};
+use risc0_zkvm::{
+    ExecutorEnv, ExecutorEnvBuilder, Receipt, default_executor, default_prover, serde::to_vec,
+};
 use serde::Serialize;
 
 use crate::error::LeeError;
@@ -85,7 +87,8 @@ impl Program {
         Ok(program_output)
     }
 
-    /// Writes inputs to `env_builder` in the order expected by the programs.
+    /// Writes inputs to `env_builder` in the order expected by the programs, as a
+    /// `CallKind::Execute` invocation.
     pub(crate) fn write_inputs(
         program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
@@ -93,6 +96,9 @@ impl Program {
         instruction_data: &[u32],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
+        env_builder
+            .write(&CallKind::Execute)
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         env_builder
             .write(&program_id)
             .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
@@ -105,6 +111,70 @@ impl Program {
             .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         env_builder
             .write(&instruction_data)
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Invokes a program's `update_from_diff` entrypoint to materialize an `AccountDiff`'s
+    /// `diff_data` into the account's new `data`, unproven (mirrors `execute`). Used by the
+    /// public-transaction path, where the sequencer itself is the trusted party running this.
+    pub(crate) fn execute_update_from_diff(
+        &self,
+        pre_state: Account,
+        diff_data: Vec<u8>,
+    ) -> Result<Data, LeeError> {
+        let mut env_builder = ExecutorEnv::builder();
+        env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
+        Self::write_update_from_diff_inputs(&pre_state, &diff_data, &mut env_builder)?;
+        let env = env_builder.build().unwrap();
+
+        let executor = default_executor();
+        let session_info = executor
+            .execute(env, self.elf())
+            .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+
+        let output: UpdateFromDiffOutput = session_info
+            .journal
+            .decode()
+            .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+
+        Ok(output.data)
+    }
+
+    /// Same invocation as `execute_update_from_diff`, but proven rather than trusted-by-fiat.
+    /// Used by the privacy-preserving circuit, which can't take the caller's word for a
+    /// materialization result the way the sequencer can for its own — the resulting receipt is
+    /// meant to be added as an `env_builder` assumption and checked via `env::verify` inside the
+    /// circuit, not read directly.
+    pub(crate) fn prove_update_from_diff(
+        &self,
+        pre_state: Account,
+        diff_data: Vec<u8>,
+    ) -> Result<Receipt, LeeError> {
+        let mut env_builder = ExecutorEnv::builder();
+        Self::write_update_from_diff_inputs(&pre_state, &diff_data, &mut env_builder)?;
+        let env = env_builder.build().unwrap();
+
+        let prover = default_prover();
+        Ok(prover
+            .prove(env, self.elf())
+            .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
+            .receipt)
+    }
+
+    fn write_update_from_diff_inputs(
+        pre_state: &Account,
+        diff_data: &[u8],
+        env_builder: &mut ExecutorEnvBuilder,
+    ) -> Result<(), LeeError> {
+        env_builder
+            .write(&CallKind::UpdateFromDiff)
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder
+            .write(&pre_state)
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder
+            .write(&diff_data)
             .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         Ok(())
     }
