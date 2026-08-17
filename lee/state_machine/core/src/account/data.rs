@@ -89,12 +89,7 @@ impl Serialize for Data {
     where
         S: serde::Serializer,
     {
-        // Explicit `serialize_bytes` (rather than relying on `Vec<u8>`'s own derive, which goes
-        // through the generic per-element `serialize_seq` path) is what lets a binary format like
-        // `risc0_zkvm::serde` pack these bytes densely instead of one 4-byte word per byte. A
-        // human-readable format like `serde_json` still produces the same plain array either way
-        // (verified: its `serialize_bytes` writes a JSON array, byte-for-byte identical to the
-        // old derived output), so this is a pure win with no wire-format change there.
+        // Explicit `serialize_bytes` lets `risc0_zkvm::serde` pack these bytes densely.
         serializer.serialize_bytes(&self.0)
     }
 }
@@ -142,13 +137,12 @@ impl<'de> Deserialize<'de> for Data {
                 Ok(Data(vec))
             }
 
-            // A binary format like `risc0_zkvm::serde` calls this directly for `deserialize_bytes`
-            // (see `Data::deserialize` below). Note this check is necessarily a post-hoc reject,
-            // not a preventive cap: `v` arrives already fully materialized by the deserializer
-            // (RISC0's own implementation allocates the claimed length up front, before any
-            // visitor method runs) — accepted because no untrusted, unreconstructed bytes ever
-            // reach this path in this codebase today (see the -7-2 design notes for the audit of
-            // every call site).
+            // A binary format like `risc0_zkvm::serde` calls this directly for `deserialize_bytes`.
+            // Note this check is necessarily a post-hoc reject, not a preventive cap: `v`
+            // arrives already fully materialized by the deserializer (RISC0's own implementation
+            // allocates the claimed length up front, before any visitor method runs) — accepted
+            // because no untrusted, unreconstructed bytes ever reach this path in this codebase
+            // today (see the -7-2 design notes for the audit of every call site).
             fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
             where
                 E: serde::de::Error,
