@@ -36,6 +36,7 @@ pub struct SequencerSetup {
     genesis_transactions: Option<Vec<GenesisAction>>,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
     bedrock_signing_key: Option<[u8; ED25519_SECRET_KEY_SIZE]>,
+    gossip: Option<sequencer_core::config::GossipConfig>,
 }
 
 impl SequencerSetup {
@@ -48,6 +49,7 @@ impl SequencerSetup {
             genesis_transactions: None,
             cross_zone: None,
             bedrock_signing_key: None,
+            gossip: None,
         }
     }
 
@@ -75,12 +77,28 @@ impl SequencerSetup {
         self
     }
 
+    /// Build a sequencer that joins a channel another node already created,
+    /// replaying its genesis from the channel instead of the prebuilt dump.
+    #[must_use]
+    pub fn joining_existing_channel(mut self) -> Self {
+        self.genesis_transactions = Some(Vec::new());
+        self
+    }
+
     /// Pre-write a bedrock (Ed25519, 32-byte seed) signing key into the home
     /// before boot, so tests know the sequencer's public key in advance (e.g.
     /// to accredit a committee member that has not started yet).
     #[must_use]
     pub const fn with_bedrock_signing_key(mut self, key: [u8; ED25519_SECRET_KEY_SIZE]) -> Self {
         self.bedrock_signing_key = Some(key);
+        self
+    }
+
+    /// Enable p2p gossip with the given configuration.
+    /// If not set, the sequencer runs without gossip.
+    #[must_use]
+    pub fn with_gossip(mut self, gossip: sequencer_core::config::GossipConfig) -> Self {
+        self.gossip = Some(gossip);
         self
     }
 
@@ -106,14 +124,26 @@ impl SequencerSetup {
             genesis_transactions,
             cross_zone,
             bedrock_signing_key,
+            gossip,
         } = self;
 
         debug!("Using sequencer home at {}", home.display());
 
+        let bedrock_signing_key = bedrock_signing_key.or_else(|| {
+            genesis_transactions
+                .is_none()
+                .then_some(config::SEQUENCER_BEDROCK_SIGNING_KEY)
+        });
         if let Some(key_bytes) = bedrock_signing_key {
             std::fs::write(home.join("bedrock_signing_key"), key_bytes)
                 .context("Failed to write pre-generated bedrock signing key")?;
         }
+        // Pinned like the bedrock key: the prebuilt dump stakes this account.
+        std::fs::write(
+            home.join("sequencer_stake_signing_key"),
+            config::SEQUENCER_STAKE_KEY,
+        )
+        .context("Failed to write pre-generated stake signing key")?;
 
         let genesis_transactions = if let Some(genesis) = genesis_transactions {
             genesis
@@ -142,6 +172,7 @@ impl SequencerSetup {
             genesis_transactions,
             cross_zone,
             bedrock_signing_key,
+            gossip,
         )
         .context("Failed to create Sequencer config")?;
 

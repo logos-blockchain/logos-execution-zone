@@ -1,8 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
 use common::{HashType, block::Block, transaction::LeeTransaction};
-use cross_zone::{EmissionSource, build_dispatch_from_emission, extract_emission};
-use cross_zone_inbox_core::{CrossZoneRoute, message_key, routes_permit};
+use cross_zone::{
+    EmissionSource, build_dispatch_from_emission, extract_emission, is_sequencer_only_program,
+};
+use cross_zone_inbox_core::message_key;
 use futures::{Stream, StreamExt as _};
 use lee::{GENESIS_BLOCK_ID, PublicKey};
 use log::{debug, error, warn};
@@ -36,7 +38,6 @@ const STUCK_SLOT_ALERT_PASSES: u32 = 20;
 struct PeerContext {
     peer_zone: [u8; 32],
     self_zone: [u8; 32],
-    allowed_routes: Vec<CrossZoneRoute>,
     expected_pubkey: Option<PublicKey>,
 }
 
@@ -280,7 +281,6 @@ pub fn spawn_watchers(
             PeerContext {
                 peer_zone: peer.channel_id,
                 self_zone,
-                allowed_routes: peer.allowed_routes,
                 expected_pubkey,
             },
             poll_interval,
@@ -556,7 +556,6 @@ fn record_block_deliveries(
 ) -> bool {
     let peer_zone = peer.peer_zone;
     let self_zone = peer.self_zone;
-    let allowed_routes = peer.allowed_routes.as_slice();
     // Collected and written once. The pending list is a single value, so a write
     // per delivery would rewrite the whole list once per message, which is
     // quadratic in a peer block that carries many of them, on a task holding the
@@ -574,16 +573,15 @@ fn record_block_deliveries(
         if emission.target_zone != self_zone {
             continue;
         }
-        // Mirrors the inbox guest, which is the authority. Dropping here keeps
-        // an unroutable message from becoming a record that production would
-        // feed in and give up on three blocks later.
-        if !routes_permit(
-            allowed_routes,
-            message.program_id,
-            emission.target_program_id,
-        ) {
+        // Targets authorize their own sources now, so this is not authorization,
+        // it is hygiene: a delivery the zone will certainly refuse still costs a
+        // pending-list slot and three execution attempts before it is dead
+        // lettered. Kept host-side only, never in `extract_emission` or the
+        // verifier's re-derivation, where a check that depends on this build would
+        // make the two disagree and halt ingestion.
+        if is_sequencer_only_program(emission.target_program_id) {
             warn!(
-                "Watcher dropping message from peer {}: no route from that source program to that target",
+                "Watcher dropping message from peer {}: a peer may not dispatch into a sequencer-only program",
                 hex::encode(peer_zone)
             );
             continue;
@@ -667,7 +665,7 @@ mod tests {
     };
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
-    use ping_core::{SenderInstruction, ping_record_pda};
+    use ping_core::{SenderInstruction, ping_record_pda, receiver_config_account_id};
     use storage::sequencer::{DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY, RocksDBIO};
     use tempfile::TempDir;
 
@@ -680,10 +678,6 @@ mod tests {
         PeerContext {
             peer_zone: PEER_ZONE,
             self_zone: SELF_ZONE,
-            allowed_routes: vec![CrossZoneRoute {
-                src_program_id: programs::ping_sender().id(),
-                target_program_id: programs::ping_receiver().id(),
-            }],
             expected_pubkey: None,
         }
     }
@@ -707,10 +701,12 @@ mod tests {
     fn emission_to(target_program_id: lee_core::program::ProgramId) -> LeeTransaction {
         let receiver_id = programs::ping_receiver().id();
         let send = SenderInstruction::Send {
-            outbox_program_id: programs::cross_zone_outbox().id(),
             target_zone: SELF_ZONE,
             target_program_id,
-            target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+            target_accounts: vec![
+                receiver_config_account_id(receiver_id).into_value(),
+                ping_record_pda(receiver_id).into_value(),
+            ],
             payload: b"hi".to_vec(),
             ordinal: 0,
         };
@@ -1080,13 +1076,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_delivery_with_no_route_is_never_recorded() {
-        // The peer is routed to ping_receiver only. A bridging zone would also
-        // route its lock program to wrapped_token, and `ping_sender` lets its
-        // caller name wrapped_token as the target, so without the pair check
-        // this emission would be recorded and delivered, minting with nothing
-        // locked behind it. The guest rejects it too; dropping here keeps it
-        // from becoming a record production feeds in and gives up on.
+    async fn a_delivery_into_a_sequencer_only_program_is_never_recorded() {
+        // Targets authorize their own sources, so the watcher no longer decides
+        // who may reach what. It still refuses to queue a delivery the zone will
+        // certainly refuse: the inbox is injected by this node alone, so a peer
+        // naming it as a target is junk that would cost a pending slot and three
+        // execution attempts.
+        let (_dir, dbio) = store();
+        let mut cursor = None;
+        let mut tip = None;
+
+        let outcome = consume_peer_stream(
+            stream::iter(vec![peer_block_msg_to(
+                1,
+                0,
+                programs::cross_zone_inbox().id(),
+            )]),
+            &peer_context(),
+            &dbio,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            PassOutcome::Drained,
+            "a message the watcher drops is not a failure"
+        );
+        assert!(
+            recorded_keys(&dbio).is_empty(),
+            "a message aimed at a sequencer-only program must not be recorded"
+        );
+        assert_eq!(
+            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
+            Some(Slot::from(0)),
+            "the slot was fully read, so the floor still advances"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delivery_to_an_unrelated_target_is_still_recorded() {
+        // The watcher is not the authorization point any more. A target it knows
+        // nothing about is recorded and delivered, and that target decides.
         let (_dir, dbio) = store();
         let mut cursor = None;
         let mut tip = None;
@@ -1104,19 +1136,11 @@ mod tests {
         )
         .await;
 
+        assert_eq!(outcome, PassOutcome::Drained);
         assert_eq!(
-            outcome,
-            PassOutcome::Drained,
-            "an unroutable message is not a failure"
-        );
-        assert!(
-            recorded_keys(&dbio).is_empty(),
-            "a message with no route must not be recorded"
-        );
-        assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
-            Some(Slot::from(0)),
-            "the slot was fully read, so the floor still advances"
+            recorded_keys(&dbio).len(),
+            1,
+            "the watcher records it and lets the target refuse it"
         );
     }
 

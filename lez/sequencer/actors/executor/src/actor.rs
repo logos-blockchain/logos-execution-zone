@@ -60,6 +60,13 @@ impl<BP: BlockPublisherTrait> ExecutorActor<BP> {
             background_tasks,
         }
     }
+
+    /// Handle to the sequencer's mempool, for feeding externally-received
+    /// (e.g. gossiped) transactions in.
+    #[must_use]
+    pub fn mempool_handle(&self) -> MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
+        self.mempool_handle.clone()
+    }
 }
 
 impl<BP: BlockPublisherTrait + Send + 'static> Actor for ExecutorActor<BP> {
@@ -136,10 +143,10 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<ProduceBlock> for Executo
             return Ok(());
         }
 
-        info!("Our turn: collecting transactions from mempool, creating block");
+        info!("Our turn: producing a block and any committee update");
         let id = self
             .sequencer
-            .produce_new_block()
+            .run_production_turn()
             .await
             .map_err(Error::BlockProductionFailed)?;
 

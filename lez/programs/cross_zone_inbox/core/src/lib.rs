@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -13,6 +13,7 @@ const INBOX_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxCfg/000/";
 /// indistinguishable under one domain. Belt and braces, since the image id
 /// already relocates every PDA in this crate whenever the crate changes.
 const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/01/";
+const SOURCE_MARKER_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneSource/00000/";
 
 /// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
 pub type ZoneId = [u8; 32];
@@ -84,32 +85,20 @@ pub struct CrossZoneMessage {
     pub l1_inclusion_witness: Option<Vec<u8>>,
 }
 
-/// Per-peer delivery routes, plus this inbox's own zone id.
+/// This inbox's own zone id.
+///
+/// It no longer decides who may deliver what. Each target program authorizes its
+/// own sources against the marker the inbox passes, so the only thing the inbox
+/// still needs to know is which zone it is, to refuse a message addressed to
+/// itself.
 #[derive(
     Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct InboxConfig {
     pub self_zone: ZoneId,
-    /// Which deliveries each peer may make. A peer absent from this map may
-    /// deliver nothing.
-    pub allowed_routes: BTreeMap<ZoneId, Vec<CrossZoneRoute>>,
 }
 
 impl InboxConfig {
-    /// Whether `src_zone` may deliver from `src_program_id` to
-    /// `target_program_id`. A peer with no routes may deliver nothing.
-    #[must_use]
-    pub fn permits(
-        &self,
-        src_zone: &ZoneId,
-        src_program_id: ProgramId,
-        target_program_id: ProgramId,
-    ) -> bool {
-        self.allowed_routes
-            .get(src_zone)
-            .is_some_and(|routes| routes_permit(routes, src_program_id, target_program_id))
-    }
-
     /// Borsh-encoded form stored in the inbox config account.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -204,25 +193,6 @@ pub enum Instruction {
     InitConfig(InboxConfig),
 }
 
-/// Whether `routes` authorize a delivery from `src_program_id` to
-/// `target_program_id`.
-///
-/// The one place the rule lives. The inbox guest decides with it and the
-/// sequencer's watcher drops unroutable messages with it, and those two must
-/// agree: a watcher stricter than the guest loses messages silently, and one
-/// looser records deliveries the guest will refuse, which production then feeds
-/// in and gives up on.
-#[must_use]
-pub fn routes_permit(
-    routes: &[CrossZoneRoute],
-    src_program_id: ProgramId,
-    target_program_id: ProgramId,
-) -> bool {
-    routes.iter().any(|route| {
-        route.src_program_id == src_program_id && route.target_program_id == target_program_id
-    })
-}
-
 /// Content-addressed replay key for a delivered message.
 ///
 /// Hashes `(src_zone, src_block_id, src_tx_index)` under a domain separator.
@@ -286,6 +256,48 @@ pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
         .unwrap_or_else(|_| unreachable!());
     PdaSeed::new(seed)
 }
+
+/// The account naming who sent a delivery, which the inbox passes at position 0
+/// of the chained call so the target can authenticate its own sources.
+///
+/// Nothing writes or claims it, so the state machine's uninitialized-account rule
+/// skips it for being unchanged rather than for being default: anyone may send it
+/// balance, and the inbox and the targets all round-trip it untouched.
+///
+/// The address is derivable by anyone, so it is not a secret and not a
+/// capability. What makes it mean something is that a target checks it only after
+/// pinning its caller to the inbox, and only the inbox can be that caller.
+#[must_use]
+pub fn inbox_source_marker_account_id(
+    inbox_id: ProgramId,
+    src_zone: &ZoneId,
+    src_program_id: ProgramId,
+) -> AccountId {
+    AccountId::for_public_pda(
+        &inbox_id,
+        &inbox_source_marker_seed(src_zone, src_program_id),
+    )
+}
+
+/// Seed of the source marker, exposed so a target can re-derive the address of
+/// the one source it accepts and compare.
+#[must_use]
+pub fn inbox_source_marker_seed(src_zone: &ZoneId, src_program_id: ProgramId) -> PdaSeed {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+
+    let mut bytes = [0_u8; 96];
+    bytes[..32].copy_from_slice(&SOURCE_MARKER_SEED_DOMAIN);
+    bytes[32..64].copy_from_slice(src_zone);
+    for (word, chunk) in src_program_id.iter().zip(bytes[64..].chunks_exact_mut(4)) {
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
+
+    let seed: [u8; 32] = Impl::hash_bytes(&bytes)
+        .as_bytes()
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+    PdaSeed::new(seed)
+}
 #[cfg(test)]
 mod tests {
     use lee_core::account::data::DATA_MAX_LENGTH;
@@ -294,63 +306,6 @@ mod tests {
 
     fn zone(b: u8) -> ZoneId {
         [b; 32]
-    }
-
-    fn program(n: u32) -> ProgramId {
-        [n; 8]
-    }
-
-    /// The route is the pair. Two entries that are each reasonable on their own,
-    /// a lock program that may mint and a ping emitter that may reach a
-    /// receiver, must not compose into the lock program's target being
-    /// reachable from the ping emitter: that emitter lets its caller choose the
-    /// target, so it would mint with nothing locked behind it.
-    #[test]
-    fn a_route_authorizes_one_pair_and_does_not_compose() {
-        let lock = program(1);
-        let wrapped_token = program(2);
-        let ping_sender = program(3);
-        let ping_receiver = program(4);
-
-        let mut allowed_routes = BTreeMap::new();
-        allowed_routes.insert(
-            zone(9),
-            vec![
-                CrossZoneRoute {
-                    src_program_id: lock,
-                    target_program_id: wrapped_token,
-                },
-                CrossZoneRoute {
-                    src_program_id: ping_sender,
-                    target_program_id: ping_receiver,
-                },
-            ],
-        );
-        let config = InboxConfig {
-            self_zone: zone(1),
-            allowed_routes,
-        };
-
-        assert!(config.permits(&zone(9), lock, wrapped_token));
-        assert!(config.permits(&zone(9), ping_sender, ping_receiver));
-
-        assert!(
-            !config.permits(&zone(9), ping_sender, wrapped_token),
-            "an emitter whose caller picks the target must not reach the bridge's target"
-        );
-        assert!(
-            !config.permits(&zone(9), lock, ping_receiver),
-            "a route grants its own target, not every target the peer has"
-        );
-    }
-
-    #[test]
-    fn a_peer_with_no_routes_may_deliver_nothing() {
-        let config = InboxConfig {
-            self_zone: zone(1),
-            allowed_routes: BTreeMap::new(),
-        };
-        assert!(!config.permits(&zone(9), program(1), program(2)));
     }
 
     #[test]

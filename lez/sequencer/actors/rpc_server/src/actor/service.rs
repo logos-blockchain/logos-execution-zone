@@ -8,7 +8,7 @@ use jsonrpsee::{
 };
 use kameo::actor::ActorRef;
 use log::{error, warn};
-use sequencer_core::block_publisher::BlockPublisherTrait;
+use sequencer_core::{block_publisher::BlockPublisherTrait, gossip::GossipTxPublisher};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, HashType, MembershipProof, Nonce, ProgramId,
@@ -17,18 +17,21 @@ use sequencer_service_protocol::{
 pub struct Service<BP: BlockPublisherTrait + Send + 'static> {
     executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
     max_block_size: ByteSize,
+    gossip_tx_publisher: Option<GossipTxPublisher>,
 }
 
 impl<BP: BlockPublisherTrait + Send + 'static> Service<BP> {
     pub fn new(
         executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
         max_block_size: ByteSize,
+        gossip_tx_publisher: Option<GossipTxPublisher>,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
         Self {
             executor_ref,
             max_block_size,
+            gossip_tx_publisher,
         }
     }
 }
@@ -96,6 +99,12 @@ impl<BP: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer 
             );
             error!("Transaction failed before reaching mempool: {err:#?}");
         })?;
+
+        // Publish to the gossip mesh before the local mempool admission so a
+        // full mempool doesn't delay propagation.
+        if let Some(publisher) = &self.gossip_tx_publisher {
+            publisher.publish(authenticated_tx.clone());
+        }
 
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::Transaction {

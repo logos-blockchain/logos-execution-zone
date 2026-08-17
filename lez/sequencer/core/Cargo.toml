@@ -18,12 +18,14 @@ mempool.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 testnet_initial_state.workspace = true
 faucet_core.workspace = true
+authenticated_transfer_core.workspace = true
 bridge_core.workspace = true
 vault_core.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
 cross_zone.workspace = true
 cross_zone_inbox_core.workspace = true
+sequencer_stake_core.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-core.workspace = true
@@ -37,6 +39,7 @@ chrono.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tokio-util.workspace = true
+tokio-retry.workspace = true
 rand.workspace = true
 borsh.workspace = true
 bytesize.workspace = true
@@ -46,12 +49,15 @@ num-bigint.workspace = true
 risc0-zkvm.workspace = true
 futures.workspace = true
 itertools.workspace = true
+libp2p.workspace = true
 
 [features]
 default = []
 testnet = []
 # Generate mock external clients implementations for testing
 mock = []
+# Enable mDNS-based local peer discovery for gossip.
+mdns = []
 
 [dev-dependencies]
 futures.workspace = true

@@ -36,6 +36,7 @@ fn sequencer_config() -> (SequencerConfig, tempfile::TempDir) {
         genesis: Vec::new(),
         cross_zone: None,
         metrics_address: None,
+        gossip: None,
     };
 
     (config, home)

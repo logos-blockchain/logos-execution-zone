@@ -2,6 +2,7 @@
 //! cross-zone bridge. Only the cross-zone inbox may mint; the guest enforces
 //! this by reading the authorized minter from a genesis-seeded config account.
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::AccountId,
     program::{PdaSeed, ProgramId},
@@ -22,21 +23,49 @@ pub const MAX_MINT_AMOUNT: u128 = 0xFFFF_FFFF_FFFF_FFFF;
 
 const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenConfig/00/";
 const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenHold/00000";
+/// Raw 32-byte zone (channel) id, matching the inbox's.
+pub type ZoneId = [u8; 32];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
     /// Credit `amount` wrapped tokens to `recipient`'s holding. Delivered only by
-    /// the cross-zone inbox.
+    /// the cross-zone inbox, and only for a peer source this token authorizes.
     ///
-    /// Required accounts (2): the wrapped-token config PDA, then the recipient's
-    /// holding PDA.
+    /// Required accounts (3): the source marker, the wrapped-token config PDA,
+    /// then the recipient's holding PDA.
     Mint { recipient: [u8; 32], amount: u128 },
-    /// Pins `minter` (the cross-zone inbox) as the authorized minter, written once
-    /// into a default config PDA at genesis. The guest refuses a non-default
-    /// pre-state, so it cannot be re-run to hijack the minter.
+    /// Pins the minter and the peer sources it may mint for, written once into a
+    /// default config PDA at genesis. A re-run holding anything different is
+    /// refused; an identical one is a no-op, which is what genesis replay does.
     ///
     /// Required accounts (1): the wrapped-token config PDA.
-    InitConfig { minter: ProgramId },
+    InitConfig(WrappedTokenConfig),
+}
+
+/// Who may mint, and which peer sources they may mint for.
+///
+/// The source list is what makes this token authorize its own inbound value
+/// rather than trusting a central route table to have done it. Borsh because the
+/// list is variable length.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+pub struct WrappedTokenConfig {
+    /// The program allowed to call `Mint`: the cross-zone inbox.
+    pub minter: ProgramId,
+    /// The `(src_zone, src_program_id)` pairs a mint may originate from. Empty on
+    /// a zone with no peers, which authorizes nothing.
+    pub sources: Vec<(ZoneId, ProgramId)>,
+}
+
+impl WrappedTokenConfig {
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("wrapped-token config serializes")
+    }
+
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        borsh::from_slice(bytes).ok()
+    }
 }
 
 /// PDA holding the authorized minter program id (the cross-zone inbox), seeded at
@@ -71,29 +100,6 @@ pub fn holding_seed(recipient: &[u8; 32]) -> PdaSeed {
     PdaSeed::new(seed)
 }
 
-/// Encodes the authorized minter program id for the config account's data.
-#[must_use]
-pub fn minter_bytes(minter: ProgramId) -> [u8; 32] {
-    let mut bytes = [0_u8; 32];
-    for (word, chunk) in minter.iter().zip(bytes.chunks_exact_mut(4)) {
-        chunk.copy_from_slice(&word.to_le_bytes());
-    }
-    bytes
-}
-
-/// Decodes the authorized minter program id from the config account's data.
-#[must_use]
-pub fn read_minter(data: &[u8]) -> Option<ProgramId> {
-    if data.len() < 32 {
-        return None;
-    }
-    let mut minter = [0_u32; 8];
-    for (word, chunk) in minter.iter_mut().zip(data[..32].chunks_exact(4)) {
-        *word = u32::from_le_bytes(chunk.try_into().unwrap_or_else(|_| unreachable!()));
-    }
-    Some(minter)
-}
-
 /// Reads a wrapped-token balance from account data; empty data is a zero balance.
 #[must_use]
 pub fn read_balance(data: &[u8]) -> u128 {
@@ -113,9 +119,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn minter_round_trips() {
-        let minter: ProgramId = [1, 2, 3, 4, 5, 6, 7, 8];
-        assert_eq!(read_minter(&minter_bytes(minter)), Some(minter));
+    fn config_round_trips() {
+        let config = WrappedTokenConfig {
+            minter: [1, 2, 3, 4, 5, 6, 7, 8],
+            sources: vec![([7; 32], [9; 8]), ([8; 32], [4; 8])],
+        };
+        assert_eq!(
+            WrappedTokenConfig::from_bytes(&config.to_bytes()),
+            Some(config)
+        );
+    }
+
+    /// An unclaimed config reads as empty, which must not decode to a config that
+    /// authorizes anything.
+    #[test]
+    fn an_empty_config_does_not_decode() {
+        assert_eq!(WrappedTokenConfig::from_bytes(&[]), None);
+    }
+
+    /// The peer's `bridge_lock` serializes `Mint` into the emission payload, so
+    /// its tag word is wire format.
+    #[test]
+    fn mint_is_the_first_variant() {
+        let mint = Instruction::Mint {
+            recipient: [3; 32],
+            amount: 1,
+        };
+        let words = risc0_zkvm::serde::to_vec(&mint).expect("Mint serializes");
+        assert_eq!(words[0], 0);
     }
 
     #[test]

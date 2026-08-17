@@ -7,7 +7,7 @@ use logos_blockchain_core::{
     header::HeaderId,
     mantle::{
         ledger::{NoteId, Utxo},
-        ops::channel::{ChannelId, MsgId},
+        ops::channel::{ChannelId, Ed25519PublicKey, MsgId},
     },
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
@@ -52,6 +52,11 @@ impl MockBlockPublisher {
 }
 
 impl BlockPublisherTrait for MockBlockPublisher {
+    // Tests assume this node is always the one bootstrapping the channel.
+    async fn channel_exists(_config: &BedrockConfig) -> Result<bool> {
+        Ok(false)
+    }
+
     async fn new(
         config: &BedrockConfig,
         _bedrock_signing_key: Ed25519Key,
@@ -83,6 +88,22 @@ impl BlockPublisherTrait for MockBlockPublisher {
             checkpoint: mock_checkpoint(),
             released_notes: mock_released_notes(&withdrawals),
         })
+    }
+
+    async fn publish_genesis_creating_channel(
+        &self,
+        block: &Block,
+        _keys: Vec<Ed25519PublicKey>,
+    ) -> Result<PublishOutcome> {
+        self.publish_block(block, Vec::new()).await
+    }
+
+    async fn accredited_keys(&self) -> Result<Vec<Ed25519PublicKey>> {
+        Ok(Vec::new())
+    }
+
+    async fn submit_channel_config(&self, _new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
+        Ok(())
     }
 
     fn channel_id(&self) -> ChannelId {

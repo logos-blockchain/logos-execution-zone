@@ -54,6 +54,7 @@ members = [
   "lez/programs/wrapped_token",
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
+  "lez/programs/sequencer_stake",
   "lez/cross_zone",
 
   "test_programs",
@@ -118,6 +119,7 @@ cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
 bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
+sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_programs = { path = "test_programs" }
@@ -158,12 +160,23 @@ metrics-exporter-prometheus = "0.18.3"
 lru = "0.16.3"
 thiserror = "2.0"
 sha2 = "0.10.8"
+ed25519-dalek = { version = "2.2.0", default-features = false }
 hex = "0.4.3"
 bytemuck = "1.24.0"
 bytesize = { version = "2.3.1", features = ["serde"] }
 humantime-serde = "1.1"
 arc-swap = "1.7"
 humantime = "2.1"
+libp2p = { version = "0.56", features = [
+  "ed25519",
+  "gossipsub",
+  "identify",
+  "kad",
+  "macros",
+  "mdns",
+  "quic",
+  "tokio",
+] }
 aes-gcm = "0.10.3"
 toml = "0.9.8"
 bincode = "1.3.3"
@@ -188,14 +201,14 @@ schemars = "1.2"
 async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
-logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
-logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
 
 keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
 

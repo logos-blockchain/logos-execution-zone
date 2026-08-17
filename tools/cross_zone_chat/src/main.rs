@@ -29,8 +29,8 @@
     clippy::unused_async,
     clippy::needless_pass_by_value,
     clippy::infinite_loop,
-    reason = "Demo binary: stdout banner is the deliverable; ordinal/elapsed arithmetic is \
-              bounded at chat scale; the per-zone scanners and finality poller are daemon \
+    reason = "Demo binary: stdout banner is the deliverable; elapsed arithmetic is bounded at chat \
+              scale; the per-zone scanners and finality poller are daemon \
               loops that run for the process lifetime; axum handlers must be `async` and take \
               their extractors (State/Json/Query) by value to satisfy the framework's bounds."
 )]
@@ -57,11 +57,14 @@ use common::{block::BedrockStatus, transaction::LeeTransaction};
 use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, Instruction, ZoneId};
 use cross_zone_outbox_core::outbox_pda;
 use lee::{
-    ProgramId, PublicTransaction,
+    Account, ProgramId, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use log::warn;
-use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
+use log::{info, warn};
+use ping_core::{
+    ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
+    sender_config_account_id,
+};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use serde::{Deserialize, Serialize};
 use test_fixtures::{
@@ -71,6 +74,10 @@ use test_fixtures::{
 
 const HTTP_PORT: u16 = 8088;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// Ordinals probed for a free outbox slot before giving up.
+const ORDINAL_PROBE_LIMIT: u32 = 1_024;
+/// Transient RPC failures tolerated per probed slot.
+const RPC_RETRY_LIMIT: u32 = 5;
 
 /// One chat message tracked through its cross-zone pipeline. Displayed in the
 /// receiving zone's column; the stage fields drive the on-page timeline.
@@ -127,8 +134,12 @@ struct ZoneRuntime {
     /// The peer zone's channel id; the target of sends from this zone.
     other_zone: ZoneId,
     client: SequencerClient,
-    /// Monotonic outbox ordinal per (this zone -> peer); each send must use a
-    /// fresh value because the outbox PDA is claimed only when default.
+    /// Next outbox ordinal to try for (this zone -> peer).
+    ///
+    /// An outbox slot is written once and the ordinal names a slot in a space
+    /// every user of `ping_sender` shares, so a fixed starting point collides
+    /// with whatever the chain already holds. Seeded from a free slot found by
+    /// [`next_free_ordinal`], then incremented per send.
     ordinal: AtomicU32,
 }
 
@@ -304,16 +315,26 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to set up zone B sequencer")?;
 
+    let client_a = sequencer_client(seq_a.addr())?;
+    let client_b = sequencer_client(seq_b.addr())?;
+    let ordinal_a = next_free_ordinal(&client_a, &zone_b)
+        .await
+        .context("Failed to find a free outbox ordinal for zone A")?;
+    let ordinal_b = next_free_ordinal(&client_b, &zone_a)
+        .await
+        .context("Failed to find a free outbox ordinal for zone B")?;
+    info!("Outbox ordinals start at A={ordinal_a} B={ordinal_b}");
+
     let state = Arc::new(AppState {
         zone_a: ZoneRuntime {
             other_zone: zone_b,
-            client: sequencer_client(seq_a.addr())?,
-            ordinal: AtomicU32::new(0),
+            client: client_a,
+            ordinal: AtomicU32::new(ordinal_a),
         },
         zone_b: ZoneRuntime {
             other_zone: zone_a,
-            client: sequencer_client(seq_b.addr())?,
-            ordinal: AtomicU32::new(0),
+            client: client_b,
+            ordinal: AtomicU32::new(ordinal_b),
         },
         next_id: AtomicU64::new(1),
         messages: Mutex::new(Vec::new()),
@@ -363,6 +384,55 @@ fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
     SequencerClientBuilder::default()
         .build(url)
         .context("Failed to build sequencer client")
+}
+
+/// A free outbox slot for this zone's `ping_sender` to start counting from: the
+/// first unwritten one at or after a random ordinal.
+///
+/// An outbox slot is written once, so a send into an occupied one fails at block
+/// production, and `send_transaction` checks a transaction only statelessly, so
+/// nothing tells the sender. The predicate here is the one the guest asserts,
+/// asked before submitting instead of after.
+///
+/// Random rather than zero because the ordinal space is shared by every user of
+/// `ping_sender` and a slot costs one unsigned transaction to occupy, so any
+/// fixed starting point can be squatted. On a chain this process owns, which is
+/// what `just cross-zone-chat` boots, nothing is occupied and this returns on
+/// its first try; it earns its keep against a chain the tool did not create.
+///
+/// It only places the first send. Later ordinals come from incrementing, so a
+/// slot taken after this returns still collides, at a probability of the
+/// occupied count over 2^32.
+async fn next_free_ordinal(client: &SequencerClient, target_zone: &ZoneId) -> Result<u32> {
+    let outbox_id = programs::cross_zone_outbox().id();
+    let emitter = programs::ping_sender().id();
+    let start: u32 = rand::random();
+
+    for offset in 0..ORDINAL_PROBE_LIMIT {
+        let ordinal = start.wrapping_add(offset);
+        let slot = outbox_pda(outbox_id, emitter, target_zone, ordinal);
+        // Retried rather than propagated: by here the run has already paid for a
+        // Bedrock bring-up and two sequencer boots, and every other RPC caller
+        // in this tool rides out a transient error rather than ending the run.
+        let mut attempt = 0_u32;
+        let account = loop {
+            match client.get_account(slot).await {
+                Ok(account) => break account,
+                Err(err) if attempt < RPC_RETRY_LIMIT => {
+                    attempt += 1;
+                    warn!("Outbox probe failed, retrying ({attempt}/{RPC_RETRY_LIMIT}): {err}");
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                }
+                Err(err) => {
+                    return Err(err).context("Failed to read an outbox slot while probing");
+                }
+            }
+        };
+        if account == Account::default() {
+            return Ok(ordinal);
+        }
+    }
+    anyhow::bail!("No free outbox ordinal in {ORDINAL_PROBE_LIMIT} tried from {start}")
 }
 
 /// Scans one zone's new blocks. A `ping_sender` tx marks the message's source
@@ -455,7 +525,9 @@ fn decode_inbox_text(instruction_data: &[u32]) -> Option<String> {
 fn decode_send_ordinal(instruction_data: &[u32]) -> Option<u32> {
     let instruction: SenderInstruction =
         risc0_zkvm::serde::from_slice::<SenderInstruction, u32>(instruction_data).ok()?;
-    let SenderInstruction::Send { ordinal, .. } = instruction;
+    let SenderInstruction::Send { ordinal, .. } = instruction else {
+        return None;
+    };
     Some(ordinal)
 }
 
@@ -470,7 +542,9 @@ fn decode_payload(payload: &[u8]) -> Option<String> {
         .collect();
     let instruction: ReceiverInstruction =
         risc0_zkvm::serde::from_slice::<ReceiverInstruction, u32>(&words).ok()?;
-    let ReceiverInstruction::Record { payload: bytes } = instruction;
+    let ReceiverInstruction::Record { payload: bytes } = instruction else {
+        return None;
+    };
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -487,18 +561,21 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
     let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
     let send = SenderInstruction::Send {
-        outbox_program_id: outbox_id,
         target_zone: other_zone,
         target_program_id: receiver_id,
-        target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+        target_accounts: vec![
+            receiver_config_account_id(receiver_id).into_value(),
+            ping_record_pda(receiver_id).into_value(),
+        ],
         payload,
         ordinal,
     };
 
-    let outbox_account = outbox_pda(outbox_id, &other_zone, ordinal);
+    let sender_id = programs::ping_sender().id();
+    let outbox_account = outbox_pda(outbox_id, sender_id, &other_zone, ordinal);
     let message = Message::try_new(
-        programs::ping_sender().id(),
-        vec![outbox_account],
+        sender_id,
+        vec![sender_config_account_id(sender_id), outbox_account],
         vec![],
         send,
     )

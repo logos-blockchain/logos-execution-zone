@@ -9,12 +9,10 @@
 //! wrapped token is minted to the recipient. Reuses the M3/M4 spine unchanged;
 //! only the source caller (`bridge_lock`) and target (`wrapped_token`) are new.
 //!
-//! Not production-safe. The inbox allowlist gates the target program, not the
-//! source emitter, and `extract_emission` recognizes any known emitter, so in a
-//! zone that allows `wrapped_token` as a target a permissionless `ping_sender`
-//! send can carry a `wrapped_token::Mint` and mint with no lock. Making this safe
-//! needs source verification, where a value-bearing target checks the message
-//! originated from `bridge_lock`; that is out of scope for the demo.
+//! A `ping_sender` send carrying a `wrapped_token::Mint` is refused as long as no
+//! operator writes a `(ping_sender, wrapped_token)` route: the allowlist is a
+//! source-and-target pair. Nothing forbids writing that route, and the token
+//! still trusts the table rather than checking its own sources, which is #673.
 
 use std::time::Duration;
 
@@ -163,14 +161,14 @@ fn build_lock_tx(
         target_program_id: wrapped_token_id,
         target_accounts,
         payload,
-        outbox_program_id: outbox_id,
         ordinal,
     };
 
     let accounts = vec![
+        bridge_lock_core::config_account_id(bridge_lock_id),
         holder_id,
         bridge_lock_core::escrow_account_id(bridge_lock_id),
-        outbox_pda(outbox_id, &target_zone, ordinal),
+        outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
     ];
     // One nonce per signature: the holder signs, at its genesis nonce 0.
     let message = Message::try_new(bridge_lock_id, accounts, vec![0_u128.into()], lock)
