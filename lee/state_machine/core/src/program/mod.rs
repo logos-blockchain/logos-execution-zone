@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountDiff, AccountId, AccountWithMetadata, Data},
     encryption::ViewingPublicKey,
 };
 
@@ -248,7 +248,9 @@ pub struct AccountPostState {
 
 /// A claim request for an account, indicating that the executing program intends to take ownership
 /// of the account.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 pub enum Claim {
     /// The program requests ownership of the account which was authorized by the signer.
     ///
@@ -318,6 +320,63 @@ impl AccountPostState {
     #[must_use]
     pub fn into_account(self) -> Account {
         self.account
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
+pub struct AccountDiffOutput {
+    diff: AccountDiff,
+    claim: Option<Claim>,
+}
+
+impl AccountDiffOutput {
+    #[must_use]
+    pub const fn new(diff: AccountDiff) -> Self {
+        Self { diff, claim: None }
+    }
+
+    #[must_use]
+    pub const fn new_claimed(diff: AccountDiff, claim: Claim) -> Self {
+        Self {
+            diff,
+            claim: Some(claim),
+        }
+    }
+
+    // `AccountDiff` deliberately carries no ownership info, unlike `Account`, so unlike
+    // `AccountPostState::new_claimed_if_default` this needs the pre-state's owner passed in.
+    #[must_use]
+    pub fn new_claimed_if_default(
+        diff: AccountDiff,
+        pre_state_program_owner: ProgramId,
+        claim: Claim,
+    ) -> Self {
+        let is_default_owner = pre_state_program_owner == DEFAULT_PROGRAM_ID;
+        Self {
+            diff,
+            claim: is_default_owner.then_some(claim),
+        }
+    }
+
+    #[must_use]
+    pub const fn required_claim(&self) -> Option<Claim> {
+        self.claim
+    }
+
+    #[must_use]
+    pub const fn diff(&self) -> &AccountDiff {
+        &self.diff
+    }
+
+    #[must_use]
+    pub const fn diff_mut(&mut self) -> &mut AccountDiff {
+        &mut self.diff
+    }
+
+    #[must_use]
+    pub fn into_diff(self) -> AccountDiff {
+        self.diff
     }
 }
 
@@ -622,6 +681,45 @@ pub enum ExecutionValidationError {
     },
 }
 
+/// Discriminates which entrypoint a single guest invocation is for. Written by the (trusted)
+/// orchestrator only.
+///
+/// Never derived from caller-supplied `instruction_data` — so a calling program can never trick
+/// a callee into running its `update_from_diff` path instead of its real logic.
+#[derive(Serialize, Deserialize)]
+pub enum CallKind {
+    Execute,
+    UpdateFromDiff,
+}
+
+/// The guest-side view of a single invocation: either a normal instruction execution, or a
+/// request to materialize an `AccountDiff`'s `diff_data` into the account's new `data`.
+///
+/// The latter goes via that program's own `update_from_diff`.
+pub enum ProgramCall<T> {
+    Execute(ProgramInput<T>, InstructionData),
+    UpdateFromDiff {
+        pre_state: Account,
+        diff_data: Vec<u8>,
+    },
+}
+
+/// Journal committed by an `UpdateFromDiff` invocation.
+///
+/// Binds `pre_state`/`diff_data` alongside the result `data` — not just for the caller's benefit
+/// (a direct, unproven caller like `Program::execute_update_from_diff` already knows what it
+/// sent), but so that anyone verifying this journal via `env::verify` (e.g. the
+/// privacy-preserving circuit, recursively composing this receipt into its own proof) can
+/// confirm the result was produced *from these specific inputs*, not just "some execution of
+/// this program in `UpdateFromDiff` mode." Without this, a journal carrying only `data` would
+/// let an unrelated valid receipt be substituted for this account's materialization.
+#[derive(Serialize, Deserialize)]
+pub struct UpdateFromDiffOutput {
+    pub pre_state: Account,
+    pub diff_data: Vec<u8>,
+    pub data: Data,
+}
+
 /// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
 ///
 /// Returns only public-form derivations, suitable for contexts where all accounts are public
@@ -640,6 +738,41 @@ pub fn compute_public_authorized_pdas(
         .iter()
         .map(|seed| AccountId::for_public_pda(&caller, seed))
         .collect()
+}
+
+/// Reads a single LEE guest invocation, dispatching on [`CallKind`].
+///
+/// Replaces [`read_lee_inputs`] as the entrypoint read — every guest `main` should match on the
+/// returned [`ProgramCall`] rather than assume it was invoked to execute.
+#[must_use]
+pub fn read_lee_call<T: DeserializeOwned>() -> ProgramCall<T> {
+    match env::read() {
+        CallKind::Execute => {
+            let self_program_id: ProgramId = env::read();
+            let caller_program_id: Option<ProgramId> = env::read();
+            let pre_states: Vec<AccountWithMetadata> = env::read();
+            let instruction_words: InstructionData = env::read();
+            let instruction =
+                T::deserialize(&mut Deserializer::new(instruction_words.as_ref())).unwrap();
+            ProgramCall::Execute(
+                ProgramInput {
+                    self_program_id,
+                    caller_program_id,
+                    pre_states,
+                    instruction,
+                },
+                instruction_words,
+            )
+        }
+        CallKind::UpdateFromDiff => {
+            let pre_state: Account = env::read();
+            let diff_data: Vec<u8> = env::read();
+            ProgramCall::UpdateFromDiff {
+                pre_state,
+                diff_data,
+            }
+        }
+    }
 }
 
 /// Reads the LEE inputs from the guest environment.
@@ -770,6 +903,15 @@ fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> boo
         .len();
 
     number_of_accounts == number_of_account_ids
+}
+
+/// Commits an `update_from_diff` result to the journal, bound to the inputs that produced it.
+pub fn write_update_from_diff_output(pre_state: &Account, diff_data: &[u8], data: &Data) {
+    env::commit(&UpdateFromDiffOutput {
+        pre_state: pre_state.clone(),
+        diff_data: diff_data.to_vec(),
+        data: data.clone(),
+    });
 }
 
 #[cfg(test)]
