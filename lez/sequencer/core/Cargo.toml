@@ -61,6 +61,7 @@ mock = []
 mdns = []
 
 [dev-dependencies]
+cross_zone = { workspace = true, features = ["test-utils"] }
 futures.workspace = true
 test_programs.workspace = true
 lee = { workspace = true, features = ["test-utils"] }

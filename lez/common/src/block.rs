@@ -22,6 +22,18 @@ impl From<&Block> for BlockMeta {
     }
 }
 
+/// The last peer block accepted onto a cross-zone peer chain, and the link the
+/// next one has to carry.
+///
+/// `block_hash` is the recomputed hash, not `header.hash` as read: the
+/// signature does not cover that field, so a signed block may carry a bogus one
+/// and break the link against the peer's next honest block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PeerChainTip {
+    pub block_id: u64,
+    pub block_hash: HashType,
+}
+
 #[derive(Debug, Clone)]
 /// Our own hasher.
 /// Currently it is SHA256 hasher wrapper. May change in a future.

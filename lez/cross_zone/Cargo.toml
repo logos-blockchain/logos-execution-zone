@@ -7,13 +7,19 @@ license = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+# Chain-builder helpers shared by the watcher's and verifier's tests.
+test-utils = []
+
 [dependencies]
 lee.workspace = true
 lee_core.workspace = true
 programs.workspace = true
+common.workspace = true
 cross_zone_inbox_core.workspace = true
 bridge_lock_core.workspace = true
 ping_core.workspace = true
 wrapped_token_core.workspace = true
 serde.workspace = true
 risc0-zkvm.workspace = true
+hex.workspace = true

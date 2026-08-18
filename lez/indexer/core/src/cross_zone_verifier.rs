@@ -5,8 +5,14 @@ use std::{
 };
 
 use anyhow::anyhow;
-use common::{block::Block, transaction::LeeTransaction};
-use cross_zone::{EmissionSource, build_dispatch_from_emission, extract_emission};
+use common::{
+    block::{Block, PeerChainTip},
+    transaction::LeeTransaction,
+};
+use cross_zone::{
+    EmissionSource, Link, OffChain, StallState, alerts_at, build_dispatch_from_emission,
+    equivocation_report, extract_emission, link_to_tip, screen_peer_block,
+};
 use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId, message_key,
 };
@@ -35,10 +41,6 @@ const PEER_BLOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
 /// advanced by, so `waited` counts sleeps rather than wall time and, since a
 /// sleep can overshoot, understates it.
 const PEER_BLOCK_POLL_INTERVAL: Duration = Duration::from_secs(1);
-
-/// Consecutive passes a peer reader spends stuck on one slot before it says so
-/// as something more than the per-pass failure. It never reads past the slot.
-const STUCK_SLOT_ALERT_PASSES: u32 = 3;
 
 /// Why a cross-zone dispatch could not be verified.
 ///
@@ -73,44 +75,56 @@ type SeenKey = (MessageKey, [u8; 32]);
 #[derive(Default)]
 struct PeerChain {
     blocks: HashMap<u64, Block>,
-    /// Highest id such that every block from [`GENESIS_BLOCK_ID`] up to it has
-    /// been read and each links to its predecessor. `None` until genesis is read.
+    /// The head of the run: the highest id such that every block from
+    /// [`GENESIS_BLOCK_ID`] up to it has been read and each links to its
+    /// predecessor, plus that block's hash, pinned when [`Self::extend_prefix`]
+    /// walked it. `None` until genesis is read.
     ///
-    /// This, not `max(blocks.keys())`, is what the forgery test gates on: a peer
-    /// picks its own `block_id`s, and an id that does not continue the run
+    /// The id, not `max(blocks.keys())`, is what the forgery test gates on: a
+    /// peer picks its own `block_id`s, and an id that does not continue the run
     /// cannot advance the run.
+    ///
+    /// The hash is stored rather than re-read from `blocks`, so the tip
+    /// survives the tip block leaving the map; re-deriving it there would make
+    /// any future cache bounding misclassify the next honest block as
+    /// [`OffChain::NotTheGenesis`] and freeze the run.
     ///
     /// The link it walks means something only because [`accept_peer_block`]
     /// recomputes `header.hash` and checks the pinned key before anything is
     /// cached. Without that it compared two fields the peer wrote.
-    verified_prefix: Option<u64>,
+    verified_prefix: Option<PeerChainTip>,
 }
 
 impl PeerChain {
     /// The id that would extend the verified run.
     const fn next_expected(&self) -> u64 {
         match self.verified_prefix {
-            Some(prefix) => prefix.saturating_add(1),
+            Some(tip) => tip.block_id.saturating_add(1),
             None => GENESIS_BLOCK_ID,
         }
     }
 
-    /// Extends the verified run as far as the cached blocks allow.
+    /// Extends the verified run as far as the cached blocks allow, off the same
+    /// [`link_to_tip`] the watcher follows. The tip is pinned off [`Link::Next`],
+    /// whose hash [`accept_peer_block`] proved is the recomputed one.
     fn extend_prefix(&mut self) {
         while let Some(next) = self.blocks.get(&self.next_expected()) {
-            let links = match self.verified_prefix {
-                Some(prefix) => self
-                    .blocks
-                    .get(&prefix)
-                    .is_some_and(|prev| prev.header.hash == next.header.prev_block_hash),
-                // Genesis has no predecessor to link to.
-                None => true,
-            };
-            if !links {
-                return;
+            match link_to_tip(self.tip().as_ref(), next, next.header.hash) {
+                Link::Next(block_hash) => {
+                    self.verified_prefix = Some(PeerChainTip {
+                        block_id: next.header.block_id,
+                        block_hash,
+                    });
+                }
+                Link::AlreadySeen { .. } | Link::OffChain(_) => return,
             }
-            self.verified_prefix = Some(next.header.block_id);
         }
+    }
+
+    /// The tip pinning the verified run. `None` before the peer's genesis is
+    /// held.
+    const fn tip(&self) -> Option<PeerChainTip> {
+        self.verified_prefix
     }
 }
 
@@ -160,58 +174,84 @@ impl PeerBlocks {
     async fn insert(&self, zone: ZoneId, block: Block) -> bool {
         let mut chains = self.chains.write().await;
         let chain = chains.entry(zone).or_default();
-        let next = chain.next_expected();
 
-        // Below the peer's genesis as well as ahead of the run: an id under
-        // GENESIS_BLOCK_ID is on no chain the run can ever walk, and cached it
-        // would resolve as the peer's own block for ever after.
-        if block.header.block_id > next || block.header.block_id < GENESIS_BLOCK_ID {
-            debug!(
-                "Peer reader for {} not caching block {}: only block {next} continues the run verified from that peer's genesis.",
-                hex::encode(zone),
-                block.header.block_id
-            );
-            return false;
-        }
-
-        if let Some(held) = chain.blocks.get(&block.header.block_id) {
-            if held.header.hash == block.header.hash {
-                return false;
-            }
-            if block.header.block_id != next || !Self::extends_the_run(chain, &block) {
-                error!(
-                    "Peer zone {} equivocated at block {}: holding {}, refusing {}. Nothing at or above block {} can be delivered from until that peer inscribes a block continuing the run verified from its genesis.",
+        // `block` was screened on the way in, so `header.hash` is its
+        // recomputed hash and is what the synthesized tip pins.
+        let link = link_to_tip(chain.tip().as_ref(), &block, block.header.hash);
+        let continues_the_run = matches!(link, Link::Next(_));
+        match link {
+            // Ahead of the run, or a first read that is not the peer's genesis.
+            Link::OffChain(OffChain::NotTheGenesis { .. } | OffChain::SkipsAhead { .. }) => {
+                debug!(
+                    "Peer reader for {} not caching block {}: only block {} continues the run verified from that peer's genesis.",
                     hex::encode(zone),
                     block.header.block_id,
-                    held.header.hash,
-                    block.header.hash,
-                    block.header.block_id
+                    chain.next_expected()
                 );
-                return false;
+                false
             }
-            log::info!(
-                "Peer zone {} block {}: replacing held block {} with {}, which continues the verified run where the held one never could.",
-                hex::encode(zone),
-                block.header.block_id,
-                held.header.hash,
-                block.header.hash
-            );
+            Link::AlreadySeen { .. } => {
+                // Every id the run has walked is held; below the peer's genesis
+                // nothing is, and an id on no chain the run can ever walk must
+                // not be cached, or it would resolve as the peer's own block
+                // for ever after.
+                match chain.blocks.get(&block.header.block_id) {
+                    Some(held) if held.header.hash == block.header.hash => false,
+                    Some(held) => {
+                        error!(
+                            "{}",
+                            equivocation_report(
+                                &zone,
+                                block.header.block_id,
+                                held.header.hash,
+                                block.header.hash
+                            )
+                        );
+                        false
+                    }
+                    None => {
+                        debug!(
+                            "Peer reader for {} not caching block {}: below the peer's genesis, on no chain the run can walk.",
+                            hex::encode(zone),
+                            block.header.block_id
+                        );
+                        false
+                    }
+                }
+            }
+            // The one id that would extend the run. A block linking to the tip
+            // continues it; one that does not is cached only while the id is
+            // free, first write wins.
+            Link::Next(_) | Link::OffChain(OffChain::DoesNotLink { .. }) => {
+                if let Some(held) = chain.blocks.get(&block.header.block_id) {
+                    if held.header.hash == block.header.hash {
+                        return false;
+                    }
+                    if !continues_the_run {
+                        error!(
+                            "{}",
+                            equivocation_report(
+                                &zone,
+                                block.header.block_id,
+                                held.header.hash,
+                                block.header.hash
+                            )
+                        );
+                        return false;
+                    }
+                    log::info!(
+                        "Peer zone {} block {}: replacing held block {} with {}, which continues the verified run where the held one never could.",
+                        hex::encode(zone),
+                        block.header.block_id,
+                        held.header.hash,
+                        block.header.hash
+                    );
+                }
+                chain.blocks.insert(block.header.block_id, block);
+                chain.extend_prefix();
+                true
+            }
         }
-
-        chain.blocks.insert(block.header.block_id, block);
-        chain.extend_prefix();
-        true
-    }
-
-    /// Whether `block` links to the block at the head of the verified run.
-    ///
-    /// False before the peer's genesis has been read, so the first block at that
-    /// id wins and is never displaced, which is how the watcher anchors too.
-    fn extends_the_run(chain: &PeerChain, block: &Block) -> bool {
-        chain
-            .verified_prefix
-            .and_then(|prefix| chain.blocks.get(&prefix))
-            .is_some_and(|tip| block.header.prev_block_hash == tip.header.hash)
     }
 
     /// Resolves `block_id` under a single read lock.
@@ -235,7 +275,10 @@ impl PeerBlocks {
         let Some(chain) = chains.get(&zone) else {
             return PeerLookup::Behind;
         };
-        if chain.verified_prefix.is_none_or(|prefix| prefix < block_id) {
+        if chain
+            .verified_prefix
+            .is_none_or(|tip| tip.block_id < block_id)
+        {
             return PeerLookup::Behind;
         }
         chain
@@ -264,6 +307,7 @@ impl PeerBlocks {
             .await
             .get(&zone)
             .and_then(|chain| chain.verified_prefix)
+            .map(|tip| tip.block_id)
     }
 }
 
@@ -542,41 +586,26 @@ fn seen_key(msg: &CrossZoneMessage) -> SeenKey {
     )
 }
 
-/// Whether a block read off a peer's channel may enter the cache. The channel
-/// authorizes who may write, not what they may claim.
+/// Whether a block read off a peer's channel may enter the cache, screened by
+/// the same [`screen_peer_block`] policy the watcher applies. [`ScreenRefusal`]
+/// says why each check exists.
 ///
-/// The hash check is unconditional: `header.hash` is a field the peer wrote and
-/// the prefix walk compares it against the next block's `prev_block_hash`, so
-/// without recomputing it a peer can assert links it never built. The key check
-/// applies only when one is pinned, mirroring the watcher; it subsumes the hash
-/// check, but a peer with no pinned key still gets that one.
+/// [`ScreenRefusal`]: cross_zone::ScreenRefusal
 fn accept_peer_block(
     block: &Block,
     peer_zone: ZoneId,
     expected_pubkey: Option<&PublicKey>,
 ) -> bool {
-    if block.recompute_hash() != block.header.hash {
-        warn!(
-            "Peer reader dropping block {} from {}: header hash {} does not match its contents",
-            block.header.block_id,
-            hex::encode(peer_zone),
-            block.header.hash
-        );
-        return false;
+    match screen_peer_block(block, expected_pubkey) {
+        Ok(_) => true,
+        Err(refusal) => {
+            warn!(
+                "Peer reader dropping block from {}: {refusal}",
+                hex::encode(peer_zone)
+            );
+            false
+        }
     }
-
-    if let Some(expected) = expected_pubkey
-        && !block.is_signed_by(expected)
-    {
-        warn!(
-            "Peer reader dropping block {} from {}: not signed by the pinned block-signing key",
-            block.header.block_id,
-            hex::encode(peer_zone)
-        );
-        return false;
-    }
-
-    true
 }
 
 /// Reads a peer zone's finalized blocks from Bedrock into the shared cache.
@@ -597,10 +626,9 @@ async fn read_peer(
     );
 
     let mut cursor = None;
-    // The slot the reader is stuck on and how many passes it has spent there.
-    // Keyed by slot so a failure at a new slot does not inherit an older slot's
-    // count, and used only to say so once rather than every pass.
-    let mut stalled: Option<(Slot, u32)> = None;
+    // In memory only: it says how loud to be about a slot this reader is stuck
+    // on.
+    let mut stall = StallState::default();
     loop {
         match zone_indexer.next_messages(cursor).await {
             Ok(stream) => {
@@ -613,23 +641,13 @@ async fn read_peer(
                 )
                 .await;
                 cursor = pass.cursor;
-                if let Some(slot) = pass.stalled_at {
-                    let attempts = match stalled {
-                        Some((prev, attempts)) if prev == slot => attempts.saturating_add(1),
-                        _ => 1,
-                    };
-                    stalled = Some((slot, attempts));
-                    // Every threshold rather than on the crossing alone: a stall
-                    // that never clears would otherwise be reported once and
-                    // then look resolved for as long as it lasts.
-                    if attempts > 0 && attempts.is_multiple_of(STUCK_SLOT_ALERT_PASSES) {
-                        error!(
-                            "Peer reader for {} has been stuck at slot {slot:?} for {attempts} passes. The run verified from that peer's genesis stops below it, so every dispatch naming a later block stalls until this slot can be read.",
-                            hex::encode(peer_zone)
-                        );
-                    }
-                } else {
-                    stalled = None;
+                if let Some((slot, attempts)) = stall.after_pass(pass.stalled_at, pass.cursor)
+                    && alerts_at(attempts)
+                {
+                    error!(
+                        "Peer reader for {} has been stuck at slot {slot:?} for {attempts} passes. The run verified from that peer's genesis stops below it, so every dispatch naming a later block stalls until this slot can be read.",
+                        hex::encode(peer_zone)
+                    );
                 }
             }
             Err(err) => error!(
@@ -711,14 +729,12 @@ where
 #[cfg(test)]
 mod tests {
     use common::{HashType, test_utils::produce_dummy_block};
+    use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
-    use lee::{
-        PrivateKey, PublicKey, PublicTransaction,
-        public_transaction::{Message, WitnessSet},
-    };
+    use lee::{PrivateKey, PublicKey};
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
-    use ping_core::{SenderInstruction, ping_record_pda, receiver_config_account_id};
+    use ping_core::{ping_record_pda, receiver_config_account_id};
 
     use super::*;
 
@@ -744,23 +760,7 @@ mod tests {
 
     /// A `ping_sender` emission addressed to `SELF_ZONE` carrying `payload`.
     fn emission(payload: &[u8]) -> LeeTransaction {
-        let receiver_id = programs::ping_receiver().id();
-        let send = SenderInstruction::Send {
-            target_zone: SELF_ZONE,
-            target_program_id: receiver_id,
-            target_accounts: vec![
-                receiver_config_account_id(receiver_id).into_value(),
-                ping_record_pda(receiver_id).into_value(),
-            ],
-            payload: payload.to_vec(),
-            ordinal: 0,
-        };
-        let message = Message::try_new(programs::ping_sender().id(), vec![], vec![], send)
-            .expect("emission serializes");
-        LeeTransaction::Public(PublicTransaction::new(
-            message,
-            WitnessSet::from_raw_parts(vec![]),
-        ))
+        ping_emission(SELF_ZONE, programs::ping_receiver().id(), payload)
     }
 
     /// A peer-stream item inscribing `data` at `slot`.
@@ -777,18 +777,10 @@ mod tests {
     /// A hash-linked chain of `len` blocks from genesis, each carrying a `b"hi"`
     /// emission. Only a chain built this way advances the verified prefix.
     fn linked_chain(len: u64) -> Vec<Block> {
-        let mut prev = None;
-        let mut blocks = Vec::new();
-        for offset in 0..len {
-            let block = produce_dummy_block(
-                GENESIS_BLOCK_ID.saturating_add(offset),
-                prev,
-                vec![emission(b"hi")],
-            );
-            prev = Some(block.header.hash);
-            blocks.push(block);
-        }
-        blocks
+        linked_chain_to(
+            GENESIS_BLOCK_ID.saturating_add(len).saturating_sub(1),
+            |_| vec![emission(b"hi")],
+        )
     }
 
     /// A peer-stream item carrying `block`.
@@ -800,14 +792,13 @@ mod tests {
     /// `PEER_BLOCK_ID`, carries a `payload` emission. The run is what makes that
     /// block deliverable.
     fn peer_chain(payload: &[u8]) -> Vec<Block> {
-        let mut chain = linked_chain(PEER_BLOCK_ID.saturating_sub(GENESIS_BLOCK_ID));
-        let prev = chain.last().map(|block| block.header.hash);
-        chain.push(produce_dummy_block(
-            PEER_BLOCK_ID,
-            prev,
-            vec![emission(payload)],
-        ));
-        chain
+        linked_chain_to(PEER_BLOCK_ID, |block_id| {
+            vec![if block_id == PEER_BLOCK_ID {
+                emission(payload)
+            } else {
+                emission(b"hi")
+            }]
+        })
     }
 
     /// Caches a run so its last block sits inside the verified prefix.
@@ -1071,6 +1062,42 @@ mod tests {
         ));
         assert!(matches!(
             peers.resolve(PEER_ZONE, 3).await,
+            PeerLookup::Behind
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_tip_survives_the_tip_block_leaving_the_cache() {
+        // The tip is pinned at walk time, not re-derived from the blocks map:
+        // re-derived, evicting the tip block (any future cache bounding) would
+        // read as no tip at all, and the next honest block would misclassify as
+        // NotTheGenesis and freeze the run for good.
+        let peers = PeerBlocks::default();
+        let chain = linked_chain(3);
+        for block in chain.iter().take(2).cloned() {
+            peers.insert(PEER_ZONE, block).await;
+        }
+        peers
+            .chains
+            .write()
+            .await
+            .get_mut(&PEER_ZONE)
+            .expect("chain exists")
+            .blocks
+            .remove(&2);
+
+        assert!(
+            peers.insert(PEER_ZONE, chain[2].clone()).await,
+            "the next block still extends the run off the pinned tip"
+        );
+        assert_eq!(peers.verified_prefix(PEER_ZONE).await, Some(3));
+        // The evicted id keeps its classification: inside the run and absent.
+        assert!(matches!(
+            peers.resolve(PEER_ZONE, 2).await,
+            PeerLookup::InsideRun
+        ));
+        assert!(matches!(
+            peers.resolve(PEER_ZONE, 4).await,
             PeerLookup::Behind
         ));
     }

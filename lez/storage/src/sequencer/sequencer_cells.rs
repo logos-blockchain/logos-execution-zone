@@ -1,4 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use common::block::PeerChainTip;
 use common::{HashType, block::BlockMeta};
 use lee::V03State;
 
@@ -542,21 +543,8 @@ impl SimpleWritableCell for PeerFloorCellRef<'_> {
     }
 }
 
-/// The last peer block a cross-zone watcher delivered from, and the link the
-/// next one has to carry.
-///
-/// `block_hash` is the recomputed hash, not `header.hash` as read: the
-/// signature does not cover that field, so a signed block may carry a bogus one
-/// and break the link against the peer's next honest block.
-///
-/// Durable, not in-memory: a watcher that re-anchored on restart would accept a
-/// block claiming any id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct PeerChainTip {
-    pub block_id: u64,
-    pub block_hash: HashType,
-}
-
+/// The watcher's [`PeerChainTip`], durable rather than in-memory: a watcher
+/// that re-anchored on restart would accept a block claiming any id.
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
 pub struct PeerTipCell(pub PeerChainTip);
 

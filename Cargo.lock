@@ -2113,7 +2113,9 @@ name = "cross_zone"
 version = "0.1.0"
 dependencies = [
  "bridge_lock_core",
+ "common",
  "cross_zone_inbox_core",
+ "hex",
  "lee",
  "lee_core",
  "ping_core",
