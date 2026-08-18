@@ -3,11 +3,10 @@
 
 use anyhow::Result;
 use common::{HashType, block::Block};
-use futures::StreamExt as _;
 use lee_core::BlockId;
 use log::warn;
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_zone_sdk::{Slot, ZoneMessage, adapter, indexer::ZoneIndexer};
+use logos_blockchain_core::mantle::{gas::GasCost, ops::{OpId, channel::ChannelId}};
+use logos_blockchain_zone_sdk::{Deposit, Slot, Withdraw, ZoneBlock, ZoneMessage, adapter, sequencer::{DepositInfo, Event, FinalizedOp, FundingConfig, InscriptionInfo, SequencerCheckpoint, WithdrawInfo, ZoneSequencer}};
 
 /// Upper bound on the channel reads of the startup consistency check.
 const CHANNEL_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -94,12 +93,12 @@ impl std::fmt::Display for ChainMismatch {
     }
 }
 
-/// A block that must still be inscribed at `slot` if the channel is the chain
+/// A block that must still be inscribed at `checkpoint` if the channel is the chain
 /// the store was built from: the tip at the read cursor, or the recorded
 /// parked block while stalled.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Anchor {
-    slot: Slot,
+    checkpoint: SequencerCheckpoint,
     /// The anchor block's `(id, hash)`.
     ///
     /// `None` when anchored on an undeserializable inscription (no header was recorded).
@@ -107,27 +106,32 @@ pub struct Anchor {
 }
 
 impl Anchor {
-    /// Builds an anchor at `slot` on the block `(id, hash)`, or a headerless
-    /// anchor (`None`) when only the slot is known.
+    /// Builds an anchor at `checkpoint` on the block `(id, hash)`, or a headerless
+    /// anchor (`None`) when only the checkpoint is known.
     #[must_use]
-    pub const fn new(slot: Slot, block: Option<(BlockId, HashType)>) -> Self {
-        Self { slot, block }
+    pub const fn new(checkpoint: SequencerCheckpoint, block: Option<(BlockId, HashType)>) -> Self {
+        Self { checkpoint, block }
+    }
+
+    #[must_use]
+    pub const fn slot(&self) -> Slot {
+        self.checkpoint.lib_slot
     }
 
     /// Probes a channel message read at/after the anchor slot.
     /// See [`verify_chain_consistency`].
     fn probe_anchor_slot(&self, msg: &ZoneMessage, slot: Slot) -> AnchorProbe {
-        if slot < self.slot {
+        if slot < self.slot() {
             return AnchorProbe::KeepLooking;
         }
         let Some((anchor_id, anchor_hash)) = self.block else {
             // Anchored on an undeserializable inscription: any message still
             // present at that slot means the history is intact.
-            return if slot == self.slot {
+            return if slot == self.slot() {
                 AnchorProbe::SameChain
             } else {
                 AnchorProbe::Mismatch(ChainMismatch::AnchorSlotChanged {
-                    anchor_slot: self.slot,
+                    anchor_slot: self.slot(),
                 })
             };
         };
@@ -151,7 +155,7 @@ impl Anchor {
         if id > anchor_id {
             return AnchorProbe::Bail;
         }
-        if slot == self.slot {
+        if slot == self.slot() {
             // Older ids can share the anchor's slot on the same chain.
             return AnchorProbe::KeepLooking;
         }
@@ -160,7 +164,7 @@ impl Anchor {
         AnchorProbe::Mismatch(ChainMismatch::ReinscribedBlock {
             channel: (id, hash),
             slot,
-            anchor_slot: self.slot,
+            anchor_slot: self.slot(),
         })
     }
 }
@@ -192,7 +196,7 @@ impl AnchorConsistencyCheck {
     /// tip could not be read, leaving the verdict to the message scan.
     pub fn check_frontier(&mut self, channel_tip_slot: Option<Slot>) {
         if self.verdict.is_none() {
-            self.verdict = frontier_verdict(self.anchor.slot, channel_tip_slot)
+            self.verdict = frontier_verdict(self.anchor.slot(), channel_tip_slot)
                 .map(ChainConsistency::Inconsistent);
         }
     }
@@ -255,7 +259,7 @@ pub async fn verify_chain_consistency<N>(
     anchor: &Anchor,
 ) -> Result<ChainConsistency>
 where
-    N: adapter::Node + Clone + Sync,
+    N: adapter::Node + Clone + Sync + Send + 'static,
 {
     let mut check = AnchorConsistencyCheck::new(anchor.clone());
     match node.channel_state(channel_id).await {
@@ -266,21 +270,67 @@ where
         return Ok(check.finish());
     }
 
-    // `next_messages` is exclusive, so `slot - 1` includes the anchor slot.
-    let Some(from_slot) = anchor.slot.into_inner().checked_sub(1) else {
-        return Ok(ChainConsistency::Inconclusive);
+    // Placeholder funding: the reader never publishes (random key, posting is
+    // turn-gated), so the funding wallet is never exercised.
+    let funding = FundingConfig {
+        funding_pk: num_bigint::BigUint::new_const(1).into(),
+        max_tx_fee: GasCost::new(u64::MAX),
+        priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
     };
+    let mut zone_indexer = ZoneSequencer::init(channel_id, ed25519_dalek::SigningKey::from_bytes(&[42; 32]).into(), 
+    node.clone(), funding, Some(anchor.checkpoint.clone()));
 
-    let zone_indexer = ZoneIndexer::new(channel_id, node.clone());
     let scan = async {
-        let stream = zone_indexer
-            .next_messages(Some(Slot::from(from_slot)))
-            .await?;
-        let mut stream = std::pin::pin!(stream);
+        let mut finalized = Vec::new();
 
-        while let Some((msg, slot)) = stream.next().await {
-            if check.observe(&msg, slot).is_some() {
-                break;
+        match zone_indexer.next_event().await {
+                Event::BlocksProcessed {
+                    finalized: batch, ..
+                } => finalized.extend(batch),
+                Event::Ready | Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
+            }
+
+        'outer: for fin_tx in finalized {
+            for op in fin_tx.ops {
+                let zone_msg = match op {
+                    FinalizedOp::Deposit(DepositInfo {
+                        tx_hash,
+                        op_id,
+                        channel_id: _,
+                        inputs,
+                        notes,
+                        amount,
+                        metadata,
+                    }) => ZoneMessage::Deposit(Deposit {
+                        tx_hash,
+                        op_id,
+                        inputs,
+                        notes,
+                        amount,
+                        metadata,
+                    }),
+                    FinalizedOp::Withdraw(WithdrawInfo {
+                        tx_hash,
+                        op
+                    }) => ZoneMessage::Withdraw(Withdraw {
+                        tx_hash,
+                        op_id: op.op_id(),
+                        inputs: op.inputs
+                    }),
+                    FinalizedOp::Inscription(InscriptionInfo {
+                        tx_hash: _,
+                        parent_msg: _,
+                        this_msg,
+                        payload
+                    }) => ZoneMessage::Block(ZoneBlock {
+                        id: this_msg,
+                        data: payload,
+                    })
+                };
+
+                if check.observe(&zone_msg, fin_tx.l1_slot).is_some() {
+                    break 'outer;
+                }
             }
         }
         Ok::<_, anyhow::Error>(())
@@ -341,7 +391,14 @@ mod tests {
     }
 
     fn anchor_for(block: &Block, slot: Slot) -> Anchor {
-        Anchor::new(slot, Some((block.header.block_id, block.header.hash)))
+        let test_checkpoint = SequencerCheckpoint {
+            last_msg_id: MsgId::from([0_u8; 32]),
+            pending_txs: vec![],
+            lib: [1_u8; 32].into(),
+            lib_slot: slot,
+        };
+
+        Anchor::new(test_checkpoint, Some((block.header.block_id, block.header.hash)))
     }
 
     #[test]
@@ -422,7 +479,14 @@ mod tests {
     fn probe_accepts_any_message_for_a_headerless_anchor() {
         // A deserialize park records no header: any message still present at
         // the anchor slot means the history is intact.
-        let anchor = Anchor::new(Slot::from(1_000), None);
+        let test_checkpoint = SequencerCheckpoint {
+            last_msg_id: MsgId::from([0_u8; 32]),
+            pending_txs: vec![],
+            lib: [1_u8; 32].into(),
+            lib_slot: Slot::from(1_000),
+        };
+
+        let anchor = Anchor::new(test_checkpoint, None);
         let garbage = ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
             data: Inscription::try_from(&[1_u8, 2, 3][..]).expect("inscription"),
