@@ -299,6 +299,8 @@ pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::account::data::DATA_MAX_LENGTH_BYTES;
+
     use super::*;
 
     fn zone(b: u8) -> ZoneId {
@@ -381,10 +383,9 @@ mod tests {
         for index in 0..SeenShard::MAX_DELIVERIES {
             shard.insert([5; 32], u32::try_from(index).expect("index fits"));
         }
-        let max = usize::try_from(DATA_MAX_LENGTH.as_u64()).expect("cap fits in usize");
         assert_eq!(
             shard.to_bytes().len(),
-            max,
+            DATA_MAX_LENGTH_BYTES,
             "MAX_DELIVERIES is exactly what an account can carry"
         );
 
@@ -393,7 +394,7 @@ mod tests {
             u32::try_from(SeenShard::MAX_DELIVERIES).expect("index fits"),
         );
         assert!(
-            shard.to_bytes().len() > max,
+            shard.to_bytes().len() > DATA_MAX_LENGTH_BYTES,
             "and one more does not fit, so the guest would fail rather than truncate"
         );
     }
