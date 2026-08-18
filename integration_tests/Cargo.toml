@@ -65,6 +65,13 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[dev-dependencies]
+sequencer_core = { workspace = true, features = [
+  "default",
+  "testnet",
+  "test-utils",
+] }
+
 [features]
 cucumber = ["dep:cucumber"]
 

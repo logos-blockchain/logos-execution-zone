@@ -8,8 +8,11 @@ use lee_core::{
     },
 };
 use sequencer_stake_core::{
-    Instruction, PendingUnstake, SequencerEntry, SequencerKey, SequencerStakeConfig, StakeRecord,
-    sequencer_stake_config_account_id,
+    Instruction, PendingUnstake, SLASH_APPROVAL_THRESHOLD, SequencerEntry, SequencerKey,
+    SequencerStakeConfig, SlashApproval, StakeRecord,
+    ed25519_dalek::{Signature, VerifyingKey},
+    sequencer_stake_config_account_id, slash_approval_message, slash_sink_account_id,
+    slash_sink_seed,
 };
 
 fn main() {
@@ -71,6 +74,24 @@ fn main() {
                 "FinalizeUnstake is only invoked as a top-level user transaction"
             );
             let post = finalize_unstake(self_program_id, pre_states.clone());
+            (post, Vec::new())
+        }
+        Instruction::Slash {
+            sequencer_key,
+            inscription,
+            approvals,
+        } => {
+            assert!(
+                caller_program_id.is_none(),
+                "Slash is only invoked as a top-level user transaction"
+            );
+            let post = slash(
+                self_program_id,
+                pre_states.clone(),
+                sequencer_key,
+                inscription,
+                &approvals,
+            );
             (post, Vec::new())
         }
     };
@@ -324,6 +345,119 @@ fn unstake_request(
 
     vec![
         AccountPostState::new(ownership_account_new),
+        AccountPostState::new(config_account_new),
+    ]
+}
+
+/// Checks for enough distinct approvals from accredited keys over this key and
+/// inscription.
+fn verify_approvals(
+    config: &SequencerStakeConfig,
+    sequencer_key: SequencerKey,
+    inscription: [u8; 32],
+    approvals: &[SlashApproval],
+) {
+    let message = slash_approval_message(sequencer_key, inscription);
+
+    let mut approvers: Vec<SequencerKey> = Vec::with_capacity(approvals.len());
+    for approval in approvals {
+        assert!(
+            config.entries.contains_key(&approval.signer),
+            "approval from a key this config does not accredit"
+        );
+        assert!(
+            !approvers.contains(&approval.signer),
+            "the same key approved twice"
+        );
+
+        let verifying_key = VerifyingKey::from_bytes(&approval.signer.to_bytes())
+            .expect("a SequencerKey is a valid Ed25519 public key");
+        let signature = Signature::from_slice(&approval.signature)
+            .expect("approval signature should be 64 bytes");
+        verifying_key
+            .verify_strict(&message, &signature)
+            .expect("approval signature should verify against its signer");
+
+        approvers.push(approval.signer);
+    }
+
+    assert!(
+        approvers.len() >= SLASH_APPROVAL_THRESHOLD,
+        "slash carries fewer approvals than the threshold"
+    );
+}
+
+fn slash(
+    self_program_id: ProgramId,
+    pre_states: Vec<AccountWithMetadata>,
+    sequencer_key: SequencerKey,
+    inscription: [u8; 32],
+    approvals: &[SlashApproval],
+) -> Vec<AccountPostState> {
+    let [ownership_account, sink_account, config_account] =
+        <[AccountWithMetadata; 3]>::try_from(pre_states)
+            .expect("Slash requires the ownership account, the slash sink, and the config account");
+
+    assert_eq!(
+        ownership_account.account.program_owner, self_program_id,
+        "not a sequencer_stake ownership account"
+    );
+    assert_eq!(
+        sink_account.account_id,
+        slash_sink_account_id(self_program_id),
+        "second account must be the slash sink PDA"
+    );
+
+    let mut record = StakeRecord::from_bytes(ownership_account.account.data.as_ref())
+        .expect("ownership account should decode as StakeRecord");
+    assert_eq!(
+        record.sequencer_key, sequencer_key,
+        "ownership account backs a different sequencer key"
+    );
+
+    let mut config = decode_config(&config_account, self_program_id);
+    // The approvals are the whole authorization.
+    verify_approvals(&config, sequencer_key, inscription, approvals);
+
+    let entry = config
+        .entries
+        .remove(&sequencer_key)
+        .expect("slashed key must have a config entry");
+    assert_eq!(
+        entry.account_id, ownership_account.account_id,
+        "config entry points at a different ownership account"
+    );
+
+    // The whole tracked stake burns, including any pending unstake.
+    record.pending_unstake = None;
+    let mut ownership_account_new = ownership_account.account;
+    ownership_account_new.balance = ownership_account_new
+        .balance
+        .checked_sub(entry.total_staked)
+        .expect("staked balance should cover the tracked stake");
+    ownership_account_new.data = record
+        .to_bytes()
+        .try_into()
+        .expect("StakeRecord should fit in account data");
+
+    let mut sink_account_new = sink_account.account;
+    sink_account_new.balance = sink_account_new
+        .balance
+        .checked_add(entry.total_staked)
+        .expect("slash sink balance overflow");
+    // The first slash claims the sink.
+    let sink_post =
+        AccountPostState::new_claimed_if_default(sink_account_new, Claim::Pda(slash_sink_seed()));
+
+    let mut config_account_new = config_account.account;
+    config_account_new.data = config
+        .to_bytes()
+        .try_into()
+        .expect("SequencerStakeConfig should fit in account data");
+
+    vec![
+        AccountPostState::new(ownership_account_new),
+        sink_post,
         AccountPostState::new(config_account_new),
     ]
 }

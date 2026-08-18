@@ -28,10 +28,12 @@ use crate::{
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
+        GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes,
+        MarkBlockAsFinalized,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
         RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
+        PutSlashRecordBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
+        StoreUpdateOutcome,
         ZoneAnchorRecord,
     },
 };
@@ -305,6 +307,30 @@ impl Message<SetZoneCheckpointBytes> for StorageActor {
         self.dbio()
             .put_zone_sdk_checkpoint_bytes(&bytes)
             .map_err(Into::into)
+    }
+}
+
+impl Message<GetSlashRecordBytes> for StorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        GetSlashRecordBytes: GetSlashRecordBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.dbio().get_slash_record_bytes().map_err(Into::into)
+    }
+}
+
+impl Message<PutSlashRecordBytes> for StorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        PutSlashRecordBytes { bytes }: PutSlashRecordBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.dbio().put_slash_record_bytes(&bytes).map_err(Into::into)
     }
 }
 

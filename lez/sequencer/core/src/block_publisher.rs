@@ -22,7 +22,7 @@ use logos_blockchain_core::{
             },
         },
         traits::Hashable as _,
-        transactions::{MantleTxBuilder, OpsProofs, states::Unverified},
+        transactions::{MantleTxBuilder, OpsProofs, mantle_tx::MantleTx as _, states::Unverified},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -73,6 +73,8 @@ pub struct FollowUpdate {
     pub deposits: Vec<DepositInfo>,
     /// Finalized Bedrock withdraw events, to reconcile against local intents.
     pub withdrawals: Vec<WithdrawInfo>,
+    /// Finalized inscriptions that are not blocks, with the slot naming their writer.
+    pub undecodable: Vec<(MsgId, Slot)>,
 }
 
 /// Sink for the follow path: apply the channel delta to chain state and
@@ -159,6 +161,16 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
     /// connected Bedrock node. `None` if the channel does not exist.
     async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, Slot)>>;
 
+    /// The key that signed inscription `msg_id` at `slot`, or `None` if there is
+    /// none.
+    ///
+    /// Read from the L1 block, since the follow path drops the signer.
+    fn inscription_signer(
+        &self,
+        slot: Slot,
+        msg_id: MsgId,
+    ) -> impl Future<Output = Result<Option<Ed25519PublicKey>>> + Send;
+
     /// Submit a committee `ChannelConfigOp` as its own, independent Mantle
     /// tx (not bundled with any block publish). `new_keys` is the full
     /// replacement accredited-keys list; the channel administration
@@ -229,6 +241,22 @@ impl ZoneSdkPublisher {
         resp_rx
             .await
             .map_err(|_closed| anyhow!("Drive task dropped the response"))?
+    }
+
+    /// Inscribes raw bytes on the channel. Only a test that provokes an offence
+    /// needs it.
+    #[cfg(feature = "test-utils")]
+    pub async fn publish_raw_inscription(&self, data: Vec<u8>) -> Result<PublishOutcome> {
+        let inscription: Inscription = data
+            .try_into()
+            .context("Raw inscription exceeds the maximum allowed size")?;
+
+        self.dispatch(|resp| Command::Publish {
+            inscription,
+            withdrawals: Vec::new(),
+            resp,
+        })
+        .await
     }
 }
 
@@ -396,12 +424,22 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     let mut finalized_blocks = Vec::new();
                                     let mut deposits = Vec::new();
                                     let mut withdrawals = Vec::new();
-                                    for op in finalized.into_iter().flat_map(|item| item.ops) {
+                                    let mut undecodable = Vec::new();
+                                    for (l1_slot, op) in finalized.into_iter().flat_map(|item| {
+                                        item.ops.into_iter().map(move |op| (item.l1_slot, op))
+                                    }) {
                                         match op {
                                             FinalizedOp::Inscription(inscription) => {
-                                                if let Some(entry) = block_from_inscription(&inscription)
-                                                {
-                                                    finalized_blocks.push(entry);
+                                                match block_from_inscription(&inscription) {
+                                                    Some(entry) => finalized_blocks.push(entry),
+                                                    // A `ChannelConfig` arrives
+                                                    // empty and offends nobody.
+                                                    None if <Inscription as AsRef<[u8]>>::as_ref(
+                                                        &inscription.payload,
+                                                    )
+                                                    .is_empty() => {}
+                                                    None => undecodable
+                                                        .push((inscription.this_msg, l1_slot)),
                                                 }
                                             }
                                             FinalizedOp::Deposit(deposit) => deposits.push(deposit),
@@ -418,6 +456,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         finalized: finalized_blocks,
                                         deposits,
                                         withdrawals,
+                                        undecodable,
                                     }).await;
                                 }
                                 Event::Ready => {}
@@ -559,6 +598,37 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             .await
             .context("Failed to read channel state")?
             .map(|state| (state.accredited_keys.to_vec(), state.tip_slot)))
+    }
+
+    async fn inscription_signer(
+        &self,
+        slot: Slot,
+        msg_id: MsgId,
+    ) -> Result<Option<Ed25519PublicKey>> {
+        let blocks = self
+            .node
+            .immutable_blocks(slot, slot)
+            .await
+            .context("Failed to read immutable blocks for inscription attribution")?;
+
+        Ok(blocks
+            .iter()
+            .flat_map(|block| block.transactions.iter())
+            .flat_map(|tx| tx.mantle_tx().ops())
+            .filter_map(|op| match op {
+                Op::ChannelInscribe(inscribe) => Some(inscribe),
+                Op::ChannelConfig(_)
+                | Op::ChannelDeposit(_)
+                | Op::ChannelWithdraw(_)
+                | Op::ChannelTransfer(_)
+                | Op::SDPDeclare(_)
+                | Op::SDPWithdraw(_)
+                | Op::SDPActive(_)
+                | Op::LeaderClaim(_)
+                | Op::Transfer(_) => None,
+            })
+            .find(|inscribe| inscribe.channel_id == self.channel_id && inscribe.id() == msg_id)
+            .map(|inscribe| inscribe.signer))
     }
 
     async fn submit_channel_config(&self, new_keys: Vec<Ed25519PublicKey>) -> Result<()> {

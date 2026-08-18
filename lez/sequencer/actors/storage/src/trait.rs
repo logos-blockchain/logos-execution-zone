@@ -17,10 +17,12 @@ use crate::{
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
+        GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes,
+        MarkBlockAsFinalized,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
         RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
+        PutSlashRecordBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
+        StoreUpdateOutcome,
         ZoneAnchorRecord,
     },
 };
@@ -43,6 +45,8 @@ pub trait StorageActorTrait:
     + Message<GetFinalSnapshot, Reply = Result<Option<(V03State, BlockMeta)>>>
     + Message<GetZoneCheckpointBytes, Reply = Result<Option<Vec<u8>>>>
     + Message<SetZoneCheckpointBytes, Reply = Result<()>>
+    + Message<GetSlashRecordBytes, Reply = Result<Option<Vec<u8>>>>
+    + Message<PutSlashRecordBytes, Reply = Result<()>>
     + Message<DeleteZoneCheckpoint, Reply = Result<()>>
     + Message<GetZoneAnchor, Reply = Result<Option<ZoneAnchorRecord>>>
     + Message<SetZoneAnchor, Reply = Result<()>>

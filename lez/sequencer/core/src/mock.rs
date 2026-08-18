@@ -30,6 +30,8 @@ pub struct MockBlockPublisher {
     tip_slot: Option<Slot>,
     /// Canned finalized channel history returned by [`Self::read_channel_after`].
     messages: Vec<(ZoneMessage, Slot)>,
+    /// Canned signer; `None` means nothing can be attributed.
+    inscription_signer: Option<Ed25519PublicKey>,
 }
 
 impl MockBlockPublisher {
@@ -47,7 +49,15 @@ impl MockBlockPublisher {
             driver_cancellation: CancellationToken::new(),
             tip_slot,
             messages,
+            inscription_signer: None,
         }
+    }
+
+    /// Attributes every inscription to `signer`.
+    #[must_use]
+    pub const fn with_inscription_signer(mut self, signer: Ed25519PublicKey) -> Self {
+        self.inscription_signer = Some(signer);
+        self
     }
 }
 
@@ -72,6 +82,7 @@ impl BlockPublisherTrait for MockBlockPublisher {
             // so via [`Self::with_canned_channel`].
             tip_slot: Some(Slot::from(0)),
             messages: Vec::new(),
+            inscription_signer: None,
         })
     }
 
@@ -104,6 +115,15 @@ impl BlockPublisherTrait for MockBlockPublisher {
 
     async fn submit_channel_config(&self, _new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
         Ok(())
+    }
+
+    /// Whatever [`Self::with_inscription_signer`] canned.
+    async fn inscription_signer(
+        &self,
+        _slot: Slot,
+        _msg_id: MsgId,
+    ) -> Result<Option<Ed25519PublicKey>> {
+        Ok(self.inscription_signer)
     }
 
     fn channel_id(&self) -> ChannelId {
