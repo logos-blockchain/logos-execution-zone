@@ -52,7 +52,7 @@ impl BedrockApp {
             blend_core_nodes,
             test_context,
             lez_funding_wallet(),
-            false,
+            true,
         ))
     }
 
@@ -247,7 +247,14 @@ fn lez_funding_account() -> WalletAccount {
 }
 
 fn lez_funding_wallet() -> WalletConfig {
-    WalletConfig::new(vec![lez_funding_account()])
+    WalletConfig::new(
+        std::iter::repeat_with(|| WalletAccount {
+            value: 50_000_000,
+            ..lez_funding_account()
+        })
+        .take(20)
+        .collect(),
+    )
 }
 
 fn committee_funding_wallet() -> WalletConfig {
