@@ -285,8 +285,8 @@ fn program_should_fail_if_transfers_balance_from_non_owned_account() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id, owner_account_id, executing_program_id }
-        ))) if err_account_id == sender_account_id && owner_account_id != program_id.into() && executing_program_id == program_id
+            ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id }
+        ))) if err_account_id == sender_account_id
     ));
 }
 
@@ -320,8 +320,8 @@ fn program_should_fail_if_debits_owned_but_unauthorized_account() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id, owner_account_id, executing_program_id }
-        ))) if err_account_id == sender_account_id && owner_account_id == program_id.into() && executing_program_id == program_id
+            ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id }
+        ))) if err_account_id == sender_account_id
     ));
 }
 
