@@ -1547,6 +1547,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn verifies_dispatch_signed_by_any_key_in_the_pinned_set() {
+        // The multi-sequencer peer shape: the block's signer is one configured
+        // key among several, not the first one listed.
+        let signer = PublicKey::new_from_private_key(&PrivateKey::try_new([37; 32]).unwrap());
+        let mut keys = HashMap::new();
+        keys.insert(
+            PEER_ZONE,
+            vec![PublicKey::try_new([42; 32]).unwrap(), signer],
+        );
+        let verifier = verifier_with_pinned_keys(keys);
+        cache_chain(&verifier, peer_chain(b"hi")).await;
+
+        let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
+        verifier
+            .verify_block(&block, Slot::from(0))
+            .await
+            .expect("any listed key admits the source block");
+    }
+
+    #[tokio::test]
+    async fn rejects_dispatch_from_a_block_signed_by_no_key_in_the_set() {
+        // Neither pinned key signed the peer block.
+        let mut keys = HashMap::new();
+        keys.insert(
+            PEER_ZONE,
+            vec![
+                PublicKey::try_new([42; 32]).unwrap(),
+                PublicKey::new_from_private_key(&PrivateKey::try_new([99; 32]).unwrap()),
+            ],
+        );
+        let verifier = verifier_with_pinned_keys(keys);
+        cache_chain(&verifier, peer_chain(b"hi")).await;
+
+        let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
+        let err = verifier
+            .verify_block(&block, Slot::from(0))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("pinned"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn accepts_replayed_dispatch_as_noop() {
         let verifier = verifier();
         cache_chain(&verifier, peer_chain(b"hi")).await;

@@ -446,6 +446,34 @@ mod tests {
     }
 
     #[test]
+    fn a_block_signed_by_any_key_in_the_set_is_accepted() {
+        // The multi-sequencer peer shape: the block's signer is one configured
+        // key among several, not the first one listed.
+        let signer = lee::PublicKey::new_from_private_key(
+            &lee::PrivateKey::try_new([37; 32]).expect("test key"),
+        );
+        let other = lee::PublicKey::try_new([42; 32]).expect("test key");
+        let block = chain_block(GENESIS_BLOCK_ID);
+        assert_eq!(
+            screen_peer_block(&block, &[other.clone(), signer]),
+            Ok(chain_hash(GENESIS_BLOCK_ID)),
+            "any listed key admits the block, whatever its position"
+        );
+
+        // A set none of whose keys signed refuses, exactly like a wrong single
+        // key.
+        let third = lee::PublicKey::new_from_private_key(
+            &lee::PrivateKey::try_new([99; 32]).expect("test key"),
+        );
+        assert!(matches!(
+            screen_peer_block(&block, &[other, third]),
+            Err(ScreenRefusal::KeyMismatch {
+                block_id: GENESIS_BLOCK_ID
+            })
+        ));
+    }
+
+    #[test]
     fn a_stuck_slot_is_counted_but_never_read_past() {
         // Counting is only how loud to be about a slot a reader is stuck on;
         // nothing here ever moves a cursor.

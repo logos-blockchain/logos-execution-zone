@@ -1228,6 +1228,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn watcher_delivers_from_a_block_signed_by_any_pinned_key() {
+        // The multi-sequencer peer shape: the block's signer is one configured
+        // key among several, not the first one listed.
+        let (_dir, dbio) = store();
+        let mut cursor = None;
+        let mut tip = None;
+        let signer =
+            PublicKey::new_from_private_key(&lee::PrivateKey::try_new([37; 32]).expect("test key"));
+        let peer = PeerContext {
+            expected_pubkeys: vec![PublicKey::try_new([42; 32]).expect("test key"), signer],
+            ..peer_context()
+        };
+
+        let outcome = consume_peer_stream(
+            stream::iter(vec![peer_block_msg(1, 0)]),
+            &peer,
+            &dbio,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(outcome, PassOutcome::Drained);
+        assert_eq!(
+            recorded_keys(&dbio),
+            vec![message_key(&PEER_ZONE, 1, 0)],
+            "any listed key admits the block, whatever its position"
+        );
+        assert_eq!(tip, Some(tip_at(1)));
+    }
+
+    #[tokio::test]
+    async fn watcher_skips_a_block_signed_by_no_pinned_key() {
+        let (_dir, dbio) = store();
+        let mut cursor = None;
+        let mut tip = None;
+        let peer = PeerContext {
+            expected_pubkeys: vec![
+                PublicKey::try_new([42; 32]).expect("test key"),
+                PublicKey::new_from_private_key(
+                    &lee::PrivateKey::try_new([99; 32]).expect("test key"),
+                ),
+            ],
+            ..peer_context()
+        };
+
+        let outcome = consume_peer_stream(
+            stream::iter(vec![peer_block_msg(1, 0)]),
+            &peer,
+            &dbio,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        assert_eq!(outcome, PassOutcome::Stranded);
+        assert!(
+            recorded_keys(&dbio).is_empty(),
+            "a block signed by none of the pinned keys is never delivered from"
+        );
+        assert_eq!(tip, None, "a screened-out block does not advance the tip");
+    }
+
+    #[tokio::test]
     async fn a_watcher_with_no_tip_delivers_nothing_below_the_peers_genesis() {
         // A fresh watcher handed a mid-chain block has nothing to link it
         // against. Adopting it would let the peer choose where the chain starts
