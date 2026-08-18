@@ -583,9 +583,9 @@ impl ProgramOutput {
 #[cfg(feature = "host")]
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Event {
-    // Which program emitted the event.
+    /// Which program emitted the event.
     pub program_id: ProgramId,
-    // The arbitrary event-data emitted in the program output.
+    /// The arbitrary event-data emitted in the program output.
     pub data: Vec<u8>,
 }
 
