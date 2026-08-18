@@ -13,6 +13,11 @@ use serde::{Deserialize, Serialize};
 /// budgets (e.g. `SequencerConfig::max_block_size`, currently 1 MiB) before this is something
 /// production traffic should rely on.
 pub const DATA_MAX_LENGTH: ByteSize = ByteSize::kib(700);
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "usize::try_from is not yet const-stable; the value is tiny and always fits"
+)]
 pub const DATA_MAX_LENGTH_BYTES: usize = DATA_MAX_LENGTH.as_u64() as usize;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, BorshSerialize)]
