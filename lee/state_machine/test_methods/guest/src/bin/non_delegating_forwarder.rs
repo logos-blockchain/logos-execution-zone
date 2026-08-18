@@ -8,8 +8,8 @@ type Instruction = (ProgramId, InstructionData, bool);
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (callee_program_id, callee_instruction, declare_pre_states),
         },
@@ -29,14 +29,14 @@ fn main() {
     // Make exactly one chained call based on the input instruction with no
     // pda seeds, ensuring the target PDAs are never authorized.
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         output_pre_states,
         output_post_states,
     )
     .with_chained_calls(vec![ChainedCall {
-        program_id: callee_program_id,
+        program_account_id: callee_program_id.into(),
         instruction_data: callee_instruction,
         pre_states,
         pda_seeds: vec![],

@@ -15,8 +15,8 @@ type Instruction = (
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction:
                 (claim_seed, delegated_seed, callee_program_id, callee_instruction, sibling),
@@ -31,7 +31,7 @@ fn main() {
     let pda_for_callee = |is_authorized| {
         let mut for_callee = pda.clone();
         for_callee.is_authorized = is_authorized;
-        for_callee.account.program_owner = self_program_id.into();
+        for_callee.account.program_owner = self_account_id;
         for_callee
     };
 
@@ -39,7 +39,7 @@ fn main() {
     // but authorized first PDA supplied.
     // Push all the delegated seeds.
     let mut chained_calls = vec![ChainedCall {
-        program_id: callee_program_id,
+        program_account_id: callee_program_id.into(),
         instruction_data: callee_instruction,
         pre_states: std::iter::once(pda_for_callee(true))
             .chain(rest.iter().cloned())
@@ -52,7 +52,7 @@ fn main() {
     // branches.
     if let Some((sibling_program_id, sibling_pda)) = sibling {
         chained_calls.push(ChainedCall {
-            program_id: sibling_program_id,
+            program_account_id: sibling_program_id.into(),
             instruction_data: to_vec(&()).unwrap(),
             pre_states: sibling_pda.map_or_else(
                 || rest.to_vec(),
@@ -67,8 +67,8 @@ fn main() {
     }
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![pda.clone()],
         // Claim first PDA supplied

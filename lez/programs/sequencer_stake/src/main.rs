@@ -15,13 +15,20 @@ use sequencer_stake_core::{
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
         instruction_words,
     ) = read_lee_inputs::<Instruction>();
+
+    // Recover the real `ProgramId` (RISC0 image id) from the account's address: on this branch
+    // every program account lives at the direct `AccountId::from(program_id)` bijection, so this
+    // round-trip is exact. Needed wherever this program's own dispatch logic requires the
+    // underlying image id rather than the dispatch-facing `AccountId`.
+    let self_program_id = ProgramId::from(self_account_id);
+    let caller_program_id = caller_account_id.map(ProgramId::from);
 
     let (post_states, chained_calls) = match instruction {
         Instruction::Stake {
@@ -76,8 +83,8 @@ fn main() {
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         pre_states,
         post_states,
@@ -212,7 +219,7 @@ fn stake(
     ownership_account_claimed.account.program_owner = self_program_id.into();
 
     let mover_call = ChainedCall {
-        program_id: mover_program_id,
+        program_account_id: mover_program_id.into(),
         pre_states: vec![funding_account, ownership_account_claimed.clone()],
         instruction_data: mover_instruction_data,
         pda_seeds: Vec::new(),
@@ -223,7 +230,7 @@ fn stake(
     ownership_account_after_mover.account.balance = expected_balance_after;
 
     let confirm_call = ChainedCall::new(
-        self_program_id,
+        self_program_id.into(),
         vec![ownership_account_after_mover],
         &Instruction::ConfirmStake {
             expected_balance_after,
