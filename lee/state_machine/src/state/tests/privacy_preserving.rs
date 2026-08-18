@@ -361,13 +361,7 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
         AccountId::new([0; 32]),
     );
 
-    let large_data: Vec<u8> =
-        vec![
-            0;
-            usize::try_from(lee_core::account::data::DATA_MAX_LENGTH.as_u64())
-                .expect("DATA_MAX_LENGTH fits in usize")
-                + 1
-        ];
+    let large_data: Vec<u8> = vec![0; lee_core::account::data::DATA_MAX_LENGTH_BYTES + 1];
 
     let result = execute_and_prove(
         vec![public_account],
