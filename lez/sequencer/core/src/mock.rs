@@ -1,12 +1,7 @@
-#![expect(
-    clippy::elidable_lifetime_names,
-    clippy::manual_async_fn,
-    reason = "Explicit futures preserve the lifetime and Send bounds required by the actor runtime"
-)]
-
-use std::{future::Future, time::Duration};
+use std::time::Duration;
 
 use anyhow::Result;
+use async_trait::async_trait;
 use common::block::Block;
 use futures::Stream;
 use logos_blockchain_core::{
@@ -57,37 +52,34 @@ impl MockBlockPublisher {
     }
 }
 
+#[async_trait]
 impl BlockPublisherTrait for MockBlockPublisher {
     // Tests assume this node is always the one bootstrapping the channel.
-    fn channel_exists<'config>(
-        _config: &'config BedrockConfig,
-    ) -> impl Future<Output = Result<bool>> + Send + 'config {
-        async move { Ok(false) }
+    async fn channel_exists(_config: &BedrockConfig) -> Result<bool> {
+        Ok(false)
     }
 
-    fn new<'config>(
-        config: &'config BedrockConfig,
+    async fn new(
+        config: &BedrockConfig,
         _bedrock_signing_key: Ed25519Key,
         _resubmit_interval: Duration,
         _initial_checkpoint: Option<SequencerCheckpoint>,
         _on_follow: OnFollowSink,
-    ) -> impl Future<Output = Result<Self>> + Send + 'config {
-        async move {
-            Ok(Self {
-                channel_id: config.channel_id,
-                driver_cancellation: CancellationToken::new(),
-                // An existing but empty channel: `None` means *missing*, which the
-                // startup guard reads as a wiped Bedrock. Tests that want that say
-                // so via [`Self::with_canned_channel`].
-                tip_slot: Some(Slot::from(0)),
-                messages: Vec::new(),
-            })
-        }
+    ) -> Result<Self> {
+        Ok(Self {
+            channel_id: config.channel_id,
+            driver_cancellation: CancellationToken::new(),
+            // An existing but empty channel: `None` means *missing*, which the
+            // startup guard reads as a wiped Bedrock. Tests that want that say
+            // so via [`Self::with_canned_channel`].
+            tip_slot: Some(Slot::from(0)),
+            messages: Vec::new(),
+        })
     }
 
-    async fn publish_block<'blk, 'pbl: 'blk>(
-        &'pbl self,
-        block: &'blk Block,
+    async fn publish_block(
+        &self,
+        block: &Block,
         withdrawals: Vec<WithdrawArg>,
     ) -> Result<PublishOutcome> {
         // Deterministic per-block id so head dedup behaves in tests.
@@ -100,23 +92,20 @@ impl BlockPublisherTrait for MockBlockPublisher {
         })
     }
 
-    fn publish_genesis_creating_channel<'publisher>(
-        &'publisher self,
-        block: &'publisher Block,
-        _keys: Vec<Ed25519PublicKey>,
-    ) -> impl Future<Output = Result<PublishOutcome>> + Send + 'publisher {
-        async move { self.publish_block(block, Vec::new()).await }
-    }
-
-    fn accredited_keys(&self) -> impl Future<Output = Result<Vec<Ed25519PublicKey>>> + Send {
-        async { Ok(Vec::new()) }
-    }
-
-    fn submit_channel_config(
+    async fn publish_genesis_creating_channel(
         &self,
-        _new_keys: Vec<Ed25519PublicKey>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        async { Ok(()) }
+        block: &Block,
+        _keys: Vec<Ed25519PublicKey>,
+    ) -> Result<PublishOutcome> {
+        self.publish_block(block, Vec::new()).await
+    }
+
+    async fn accredited_keys(&self) -> Result<Vec<Ed25519PublicKey>> {
+        Ok(Vec::new())
+    }
+
+    async fn submit_channel_config(&self, _new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
+        Ok(())
     }
 
     fn channel_id(&self) -> ChannelId {
@@ -131,27 +120,21 @@ impl BlockPublisherTrait for MockBlockPublisher {
         self.driver_cancellation.clone()
     }
 
-    fn channel_tip_slot<'publisher>(
-        &'publisher self,
-    ) -> impl Future<Output = Result<Option<Slot>>> + Send + 'publisher {
-        async move { Ok(self.tip_slot) }
+    async fn channel_tip_slot(&self) -> Result<Option<Slot>> {
+        Ok(self.tip_slot)
     }
 
-    fn read_channel_after<'publisher>(
-        &'publisher self,
+    async fn read_channel_after(
+        &self,
         after_slot: Option<Slot>,
-    ) -> impl Future<Output = Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + 'publisher>>
-    + Send
-    + 'publisher {
-        async move {
-            // Mirror `next_messages`: `after_slot` is exclusive.
-            let messages = self
-                .messages
-                .iter()
-                .filter(move |(_, slot)| after_slot.is_none_or(|after| *slot > after))
-                .cloned();
-            Ok(futures::stream::iter(messages))
-        }
+    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + '_> {
+        // Mirror `next_messages`: `after_slot` is exclusive.
+        let messages = self
+            .messages
+            .iter()
+            .filter(move |(_, slot)| after_slot.is_none_or(|after| *slot > after))
+            .cloned();
+        Ok(futures::stream::iter(messages))
     }
 }
 

@@ -48,10 +48,10 @@ pub struct ExecutorActor<BP: BlockPublisherTrait> {
     background_tasks: Vec<TaskGroup>,
 }
 
-impl<BP: BlockPublisherTrait> ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + 'static> ExecutorActor<BP> {
     #[expect(
         clippy::manual_async_fn,
-        reason = "An explicit Send + 'static future is required by the TF deployment boundary"
+        reason = "Explicit Send future works around rust-lang/rust#100013"
     )]
     pub fn new(config: SequencerConfig) -> impl Future<Output = Self> + Send + 'static {
         async move {

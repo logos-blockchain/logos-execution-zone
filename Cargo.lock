@@ -10958,6 +10958,7 @@ name = "sequencer_core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "authenticated_transfer_core",
  "borsh",
  "bridge_core",

@@ -1,12 +1,7 @@
-#![expect(
-    clippy::elidable_lifetime_names,
-    clippy::manual_async_fn,
-    reason = "Explicit futures preserve the lifetime and Send bounds required by the actor runtime"
-)]
-
-use std::{future::Future, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, ensure};
+use async_trait::async_trait;
 use common::block::Block;
 use futures::Stream;
 use log::{info, warn};
@@ -126,53 +121,49 @@ enum Command {
 
 type CommandSender = mpsc::Sender<Command>;
 
-pub trait BlockPublisherTrait: Sized + Send + Sync + 'static {
-    fn new<'config>(
-        config: &'config BedrockConfig,
+#[async_trait]
+pub trait BlockPublisherTrait: Sized + Sync {
+    async fn new(
+        config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,
         resubmit_interval: Duration,
         initial_checkpoint: Option<SequencerCheckpoint>,
         on_follow: OnFollowSink,
-    ) -> impl Future<Output = Result<Self>> + Send + 'config;
+    ) -> Result<Self>;
 
     /// Whether the channel already exists, checked before anything else is
     /// set up (no instance, no store, no genesis yet).
-    fn channel_exists<'config>(
-        config: &'config BedrockConfig,
-    ) -> impl Future<Output = Result<bool>> + Send + 'config;
+    async fn channel_exists(config: &BedrockConfig) -> Result<bool>;
 
     /// Publish a block and return what zone-sdk made of it. Zone-sdk drives the
     /// actual submission and retries internally.
     ///
     /// The checkpoint must be persisted with the block — restoring an older one
     /// drops the inscription from the pending set, and it is never resubmitted.
-    fn publish_block<'blk, 'pbl: 'blk>(
-        &'pbl self,
-        block: &'blk Block,
+    async fn publish_block(
+        &self,
+        block: &Block,
         withdrawals: Vec<WithdrawArg>,
-    ) -> impl Future<Output = Result<PublishOutcome>> + Send + 'blk;
+    ) -> Result<PublishOutcome>;
 
     /// Create the channel and write `block` into it in one Mantle tx. Only valid
     /// while the channel does not exist, and `keys[0]` must be this sequencer's
     /// own key, since creation hands the first turn to index 0.
-    fn publish_genesis_creating_channel<'publisher>(
-        &'publisher self,
-        block: &'publisher Block,
+    async fn publish_genesis_creating_channel(
+        &self,
+        block: &Block,
         keys: Vec<Ed25519PublicKey>,
-    ) -> impl Future<Output = Result<PublishOutcome>> + Send + 'publisher;
+    ) -> Result<PublishOutcome>;
 
     /// Live (adopted, possibly not yet finalized) accredited-key snapshot for
     /// this channel, read directly from the connected Bedrock node.
-    fn accredited_keys(&self) -> impl Future<Output = Result<Vec<Ed25519PublicKey>>> + Send;
+    async fn accredited_keys(&self) -> Result<Vec<Ed25519PublicKey>>;
 
     /// Submit a committee `ChannelConfigOp` as its own, independent Mantle
     /// tx (not bundled with any block publish). `new_keys` is the full
     /// replacement accredited-keys list; the channel administration
     /// parameters posted alongside it are the `system_accounts` defaults.
-    fn submit_channel_config(
-        &self,
-        new_keys: Vec<Ed25519PublicKey>,
-    ) -> impl Future<Output = Result<()>> + Send;
+    async fn submit_channel_config(&self, new_keys: Vec<Ed25519PublicKey>) -> Result<()>;
 
     fn channel_id(&self) -> ChannelId;
 
@@ -194,19 +185,15 @@ pub trait BlockPublisherTrait: Sized + Send + Sync + 'static {
 
     /// Current channel frontier slot on the connected chain, or `None` if the
     /// channel does not exist there. Drives the startup frontier check.
-    fn channel_tip_slot<'publisher>(
-        &'publisher self,
-    ) -> impl Future<Output = Result<Option<Slot>>> + Send + 'publisher;
+    async fn channel_tip_slot(&self) -> Result<Option<Slot>>;
 
     /// Finalized channel messages from `after_slot` (exclusive) up to LIB, used
     /// for the startup consistency check and reconstruction. Pass `None` to read
     /// from the channel's genesis.
-    fn read_channel_after<'publisher>(
-        &'publisher self,
+    async fn read_channel_after(
+        &self,
         after_slot: Option<Slot>,
-    ) -> impl Future<Output = Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + 'publisher>>
-    + Send
-    + 'publisher;
+    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + '_>;
 }
 
 /// Real block publisher backed by zone-sdk's `ZoneSequencer`.
@@ -245,64 +232,61 @@ impl ZoneSdkPublisher {
     }
 }
 
+#[async_trait]
 impl BlockPublisherTrait for ZoneSdkPublisher {
-    fn channel_exists<'config>(
-        config: &'config BedrockConfig,
-    ) -> impl Future<Output = Result<bool>> + Send + 'config {
-        async move { Ok(read_channel_state(config).await?.is_some()) }
+    async fn channel_exists(config: &BedrockConfig) -> Result<bool> {
+        Ok(read_channel_state(config).await?.is_some())
     }
 
-    fn new<'config>(
-        config: &'config BedrockConfig,
+    async fn new(
+        config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,
         resubmit_interval: Duration,
         initial_checkpoint: Option<SequencerCheckpoint>,
         on_follow: OnFollowSink,
-    ) -> impl Future<Output = Result<Self>> + Send + 'config {
-        async move {
-            let basic_auth = config.auth.clone().map(Into::into);
-            let node =
-                NodeHttpClient::new(CommonHttpClient::new(basic_auth), config.node_url.clone());
+    ) -> Result<Self> {
+        let basic_auth = config.auth.clone().map(Into::into);
+        let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), config.node_url.clone());
 
-            let zone_sdk_config = ZoneSdkSequencerConfig {
-                resubmit_interval,
-                ..ZoneSdkSequencerConfig::new(FundingConfig {
-                    funding_pk: config.funding_key,
-                    max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-                    priority_fee: config.priority_fee,
-                })
-            };
+        let zone_sdk_config = ZoneSdkSequencerConfig {
+            resubmit_interval,
+            ..ZoneSdkSequencerConfig::new(FundingConfig {
+                funding_pk: config.funding_key,
+                max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
+                priority_fee: config.priority_fee,
+            })
+        };
 
-            let mut sequencer = ZoneSequencer::init_with_config(
-                config.channel_id,
-                bedrock_signing_key.clone(),
-                node.clone(),
-                zone_sdk_config,
-                initial_checkpoint,
-            );
+        let mut sequencer = ZoneSequencer::init_with_config(
+            config.channel_id,
+            bedrock_signing_key.clone(),
+            node.clone(),
+            zone_sdk_config,
+            initial_checkpoint,
+        );
 
-            // Grab readiness receiver before moving the sequencer into the drive
-            // task so we can await cold-start completion below.
-            let mut ready_rx = sequencer.subscribe_ready();
-            // Grab the turn watch before the move; the sdk actor keeps it current.
-            let turn_rx = sequencer.subscribe_turn_to_write();
+        // Grab readiness receiver before moving the sequencer into the drive
+        // task so we can await cold-start completion below.
+        let mut ready_rx = sequencer.subscribe_ready();
+        // Grab the turn watch before the move; the sdk actor keeps it current.
+        let turn_rx = sequencer.subscribe_turn_to_write();
 
-            let (command_tx, mut command_rx): (CommandSender, _) =
-                mpsc::channel(PUBLISH_INBOX_CAPACITY);
+        let (command_tx, mut command_rx): (CommandSender, _) =
+            mpsc::channel(PUBLISH_INBOX_CAPACITY);
 
-            let driver_cancellation = CancellationToken::new();
-            let driver_guard = driver_cancellation.clone().drop_guard();
-            let drive_task = tokio::spawn(async move {
-                // Dropped when this task ends (including panics in the sinks),
-                // cancelling every `driver_cancellation`.
-                let _driver_guard = driver_guard;
-                loop {
-                    #[expect(
-                        clippy::integer_division_remainder_used,
-                        reason = "tokio::select! expansion uses `%` for random branch selection"
-                    )]
-                    {
-                        tokio::select! {
+        let driver_cancellation = CancellationToken::new();
+        let driver_guard = driver_cancellation.clone().drop_guard();
+        let drive_task = tokio::spawn(async move {
+            // Dropped when this task ends (including panics in the sinks),
+            // cancelling every `driver_cancellation`.
+            let _driver_guard = driver_guard;
+            loop {
+                #[expect(
+                    clippy::integer_division_remainder_used,
+                    reason = "tokio::select! expansion uses `%` for random branch selection"
+                )]
+                {
+                    tokio::select! {
                             // Drain external commands by calling the borrowing
                             // handle — `&mut sequencer` is only available here.
                             Some(command) = command_rx.recv() => match command {
@@ -339,57 +323,57 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     }
                                     let _dontcare = resp_tx.send(msg_result);
                                 }
-                            Command::SubmitChannelConfig {
-                                new_keys,
-                                resp: resp_tx,
-                            } => {
-                                // zone-sdk funds from the node wallet, signs,
-                                // and enqueues this as its own independent
-                                // Mantle tx onto the drive loop's in-flight
-                                // pool — no manual bundling with any block
-                                // inscription.
-                                let result = sequencer
-                                    .handle()
-                                    .channel_config(
-                                        new_keys,
-                                        SlotTimeframe::from(
-                                            system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
-                                        ),
-                                        SlotTimeout::from(
-                                            system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                                        ),
-                                        system_accounts::DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD,
-                                        system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
-                                    )
-                                    .await
-                                    .map(|_| ())
-                                    .context("Failed to submit channel-config update");
+                                Command::SubmitChannelConfig {
+                                    new_keys,
+                                    resp: resp_tx,
+                                } => {
+                                    // zone-sdk funds from the node wallet, signs,
+                                    // and enqueues this as its own independent
+                                    // Mantle tx onto the drive loop's in-flight
+                                    // pool — no manual bundling with any block
+                                    // inscription.
+                                    let result = sequencer
+                                        .handle()
+                                        .channel_config(
+                                            new_keys,
+                                            SlotTimeframe::from(
+                                                system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+                                            ),
+                                            SlotTimeout::from(
+                                                system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+                                            ),
+                                            system_accounts::DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD,
+                                            system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
+                                        )
+                                        .await
+                                        .map(|_| ())
+                                        .context("Failed to submit channel-config update");
 
-                                match &result {
-                                    Ok(()) => info!("Submitted committee channel-config update"),
-                                    Err(err) => {
-                                        warn!("Channel-config update submission failed: {err:?}");
+                                    match &result {
+                                        Ok(()) => info!("Submitted committee channel-config update"),
+                                        Err(err) => {
+                                            warn!("Channel-config update submission failed: {err:?}");
+                                        }
                                     }
-                                }
 
-                                let _dontcare = resp_tx.send(result);
-                            }
-                            Command::SubmitSignedTx { tx, msg_id, resp: resp_tx } => {
-                                let submitted = sequencer
-                                    .handle()
-                                    .submit_signed_tx(*tx, msg_id)
-                                    .context("Failed to submit pre-built channel transaction");
-                                let msg_result = submitted.map(|(result, checkpoint)| PublishOutcome {
-                                    this_msg: result.tx.inscription().this_msg,
-                                    checkpoint,
-                                    released_notes: released_notes(&result.tx),
-                                });
-                                if let Err(e) = &msg_result {
-                                    warn!("zone-sdk rejected the pre-built transaction: {e:?}");
+                                    let _dontcare = resp_tx.send(result);
                                 }
-                                let _dontcare = resp_tx.send(msg_result);
-                            }
-                        },
+                                Command::SubmitSignedTx { tx, msg_id, resp: resp_tx } => {
+                                    let submitted = sequencer
+                                        .handle()
+                                        .submit_signed_tx(*tx, msg_id)
+                                        .context("Failed to submit pre-built channel transaction");
+                                    let msg_result = submitted.map(|(result, checkpoint)| PublishOutcome {
+                                        this_msg: result.tx.inscription().this_msg,
+                                        checkpoint,
+                                        released_notes: released_notes(&result.tx),
+                                    });
+                                    if let Err(e) = &msg_result {
+                                        warn!("zone-sdk rejected the pre-built transaction: {e:?}");
+                                    }
+                                    let _dontcare = resp_tx.send(msg_result);
+                                }
+                            },
                         event = sequencer.next_event() => {
                             match event {
                                 Event::BlocksProcessed {
@@ -410,80 +394,78 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         .filter_map(block_from_inscription)
                                         .collect();
 
-                                        let mut finalized_blocks = Vec::new();
-                                        let mut deposits = Vec::new();
-                                        let mut withdrawals = Vec::new();
-                                        for op in finalized.into_iter().flat_map(|item| item.ops) {
-                                            match op {
-                                                FinalizedOp::Inscription(inscription) => {
-                                                    if let Some(entry) =
-                                                        block_from_inscription(&inscription)
-                                                    {
-                                                        finalized_blocks.push(entry);
-                                                    }
-                                                }
-                                                FinalizedOp::Deposit(deposit) => deposits.push(deposit),
-                                                FinalizedOp::Withdraw(withdraw) => {
-                                                    withdrawals.push(withdraw);
+                                    let mut finalized_blocks = Vec::new();
+                                    let mut deposits = Vec::new();
+                                    let mut withdrawals = Vec::new();
+                                    for op in finalized.into_iter().flat_map(|item| item.ops) {
+                                        match op {
+                                            FinalizedOp::Inscription(inscription) => {
+                                                if let Some(entry) = block_from_inscription(&inscription)
+                                                {
+                                                    finalized_blocks.push(entry);
                                                 }
                                             }
+                                            FinalizedOp::Deposit(deposit) => deposits.push(deposit),
+                                            FinalizedOp::Withdraw(withdraw) => {
+                                                withdrawals.push(withdraw);
+                                            }
                                         }
+                                    }
 
-                                        // Nothing is awaited here: an await in this
-                                        // arm blocks the same task `publish_block`
-                                        // needs, and a non-turn sequencer never
-                                        // drains what it would be waiting on.
-                                        on_follow(FollowUpdate {
-                                            checkpoint,
-                                            adopted,
-                                            orphaned,
-                                            finalized: finalized_blocks,
-                                            deposits,
-                                            withdrawals,
-                                        });
-                                    }
-                                    Event::Ready => {}
-                                    Event::TurnNotification { notification } => {
-                                        log::info!(
-                                            "Turn update: our_turn={}, starting_slot={:?}, ends_at_slot={:?}",
-                                            notification.our_turn_to_write,
-                                            notification.starting_slot,
-                                            notification.ends_at_slot
-                                        );
-                                    }
-                                    Event::MempoolPending(_tx_hash) => {}
+                                    // Nothing is awaited here: an await in this
+                                    // arm blocks the same task `publish_block`
+                                    // needs, and a non-turn sequencer never
+                                    // drains what it would be waiting on.
+                                    on_follow(FollowUpdate {
+                                        checkpoint,
+                                        adopted,
+                                        orphaned,
+                                        finalized: finalized_blocks,
+                                        deposits,
+                                        withdrawals,
+                                    });
                                 }
+                                Event::Ready => {}
+                                Event::TurnNotification { notification } => {
+                                    log::info!(
+                                        "Turn update: our_turn={}, starting_slot={:?}, ends_at_slot={:?}",
+                                        notification.our_turn_to_write,
+                                        notification.starting_slot,
+                                        notification.ends_at_slot
+                                    );
+                                }
+                                Event::MempoolPending(_tx_hash) => {}
                             }
                         }
                     }
                 }
-            });
+            }
+        });
 
-            // Wait for cold-start backfill to complete before returning so callers
-            // can publish immediately (e.g. genesis block) without racing readiness.
-            ready_rx
-                .wait_for(|v| *v)
-                .await
-                .context("Zone-sdk readiness channel closed before becoming ready")?;
+        // Wait for cold-start backfill to complete before returning so callers
+        // can publish immediately (e.g. genesis block) without racing readiness.
+        ready_rx
+            .wait_for(|v| *v)
+            .await
+            .context("Zone-sdk readiness channel closed before becoming ready")?;
 
-            Ok(Self {
-                channel_id: config.channel_id,
-                indexer: ZoneIndexer::new(config.channel_id, node.clone()),
-                node,
-                command_tx,
-                turn_rx,
-                driver_cancellation,
-                drive_task: TaskGroup::new(vec![drive_task]),
-                bedrock_signing_key,
-                funding_key: config.funding_key,
-                priority_fee: config.priority_fee,
-            })
-        }
+        Ok(Self {
+            channel_id: config.channel_id,
+            indexer: ZoneIndexer::new(config.channel_id, node.clone()),
+            node,
+            command_tx,
+            turn_rx,
+            driver_cancellation,
+            drive_task: TaskGroup::new(vec![drive_task]),
+            bedrock_signing_key,
+            funding_key: config.funding_key,
+            priority_fee: config.priority_fee,
+        })
     }
 
-    async fn publish_block<'blk, 'pbl: 'blk>(
-        &'pbl self,
-        block: &'blk Block,
+    async fn publish_block(
+        &self,
+        block: &Block,
         withdrawals: Vec<WithdrawArg>,
     ) -> Result<PublishOutcome> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
@@ -499,114 +481,102 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         .await
     }
 
-    fn publish_genesis_creating_channel<'publisher>(
-        &'publisher self,
-        block: &'publisher Block,
-        keys: Vec<Ed25519PublicKey>,
-    ) -> impl Future<Output = Result<PublishOutcome>> + Send + 'publisher {
-        async move {
-            let own_key = self.bedrock_signing_key.public_key();
-            ensure!(
-                keys.first() == Some(&own_key),
-                "Creating the channel requires our own key first; creation gives the turn to index 0"
-            );
-            let key_count = keys.len();
-            let keys =
-                Keys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
-
-            let config_op = ChannelConfigOp {
-                channel: self.channel_id,
-                keys,
-                posting_timeframe: SlotTimeframe::from(
-                    system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
-                ),
-                posting_timeout: SlotTimeout::from(
-                    system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                ),
-                configuration_threshold: system_accounts::DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD,
-                transfer_threshold: system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
-            };
-
-            let data = borsh::to_vec(block).context("Failed to serialize genesis block")?;
-            let inscription: Inscription = data
-                .try_into()
-                .context("Genesis block exceeds maximum allowed size")?;
-            // The config op runs first and becomes the tip, so it is the parent.
-            let inscribe_op = InscriptionOp {
-                channel_id: self.channel_id,
-                inscription,
-                parent: config_op.id(),
-                signer: own_key,
-            };
-            let msg_id = inscribe_op.id();
-
-            let funded = fund_ops(
-                &self.node,
-                self.funding_key,
-                self.priority_fee,
-                [
-                    Op::ChannelConfig(config_op),
-                    Op::ChannelInscribe(inscribe_op),
-                ],
-            )
-            .await?;
-            let mantle_tx = funded.funded_tx;
-
-            let signature = self
-                .bedrock_signing_key
-                .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
-            // Creation skips the channel-config signature check, but the proof must
-            // still be well formed; index 0 is our own key.
-            let config_proof = ChannelMultiSigProof::try_new(
-                IndexedSignature::new(0, signature).into(),
-            )
-            .map_err(|err| anyhow!("Failed to assemble channel multi-sig proof: {err:?}"))?;
-
-            let mut ops_proofs: OpsProofs = OpProof::ChannelMultiSigProof(config_proof).into();
-            ops_proofs
-                .try_push(OpProof::Ed25519Sig(signature))
-                .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
-            if let Some(transfer_proof) = funded.transfer_proof {
-                ops_proofs
-                    .try_push(transfer_proof)
-                    .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
-            }
-
-            info!("Creating the channel with {key_count} accredited key(s), genesis block bundled");
-
-            let tx = Box::new(SignedMantleTx::new(mantle_tx, ops_proofs));
-            self.dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
-                .await
-        }
-    }
-
-    fn accredited_keys(&self) -> impl Future<Output = Result<Vec<Ed25519PublicKey>>> + Send {
-        async move {
-            Ok(self
-                .node
-                .channel_state(self.channel_id)
-                .await
-                .context("Failed to read channel state")?
-                .map(|state| state.accredited_keys.to_vec())
-                .unwrap_or_default())
-        }
-    }
-
-    fn submit_channel_config(
+    async fn publish_genesis_creating_channel(
         &self,
-        new_keys: Vec<Ed25519PublicKey>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        async move {
-            ensure!(
-                !new_keys.is_empty(),
-                "Refusing to submit a committee update with no accredited keys"
-            );
-            let new_keys = Keys::try_from(new_keys)
-                .map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
+        block: &Block,
+        keys: Vec<Ed25519PublicKey>,
+    ) -> Result<PublishOutcome> {
+        let own_key = self.bedrock_signing_key.public_key();
+        ensure!(
+            keys.first() == Some(&own_key),
+            "Creating the channel requires our own key first; creation gives the turn to index 0"
+        );
+        let key_count = keys.len();
+        let keys =
+            Keys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
 
-            self.dispatch(|resp| Command::SubmitChannelConfig { new_keys, resp })
-                .await
+        let config_op = ChannelConfigOp {
+            channel: self.channel_id,
+            keys,
+            posting_timeframe: SlotTimeframe::from(
+                system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+            ),
+            posting_timeout: SlotTimeout::from(system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT),
+            configuration_threshold: system_accounts::DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD,
+            transfer_threshold: system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
+        };
+
+        let data = borsh::to_vec(block).context("Failed to serialize genesis block")?;
+        let inscription: Inscription = data
+            .try_into()
+            .context("Genesis block exceeds maximum allowed size")?;
+        // The config op runs first and becomes the tip, so it is the parent.
+        let inscribe_op = InscriptionOp {
+            channel_id: self.channel_id,
+            inscription,
+            parent: config_op.id(),
+            signer: own_key,
+        };
+        let msg_id = inscribe_op.id();
+
+        let funded = fund_ops(
+            &self.node,
+            self.funding_key,
+            self.priority_fee,
+            [
+                Op::ChannelConfig(config_op),
+                Op::ChannelInscribe(inscribe_op),
+            ],
+        )
+        .await?;
+        let mantle_tx = funded.funded_tx;
+
+        let signature = self
+            .bedrock_signing_key
+            .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
+        // Creation skips the channel-config signature check, but the proof must
+        // still be well formed; index 0 is our own key.
+        let config_proof =
+            ChannelMultiSigProof::try_new(IndexedSignature::new(0, signature).into())
+                .map_err(|err| anyhow!("Failed to assemble channel multi-sig proof: {err:?}"))?;
+
+        let mut ops_proofs: OpsProofs = OpProof::ChannelMultiSigProof(config_proof).into();
+        ops_proofs
+            .try_push(OpProof::Ed25519Sig(signature))
+            .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
+        if let Some(transfer_proof) = funded.transfer_proof {
+            ops_proofs
+                .try_push(transfer_proof)
+                .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
         }
+
+        info!("Creating the channel with {key_count} accredited key(s), genesis block bundled");
+
+        let tx = Box::new(SignedMantleTx::new(mantle_tx, ops_proofs));
+        self.dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
+            .await
+    }
+
+    async fn accredited_keys(&self) -> Result<Vec<Ed25519PublicKey>> {
+        Ok(self
+            .node
+            .channel_state(self.channel_id)
+            .await
+            .context("Failed to read channel state")?
+            .map(|state| state.accredited_keys.to_vec())
+            .unwrap_or_default())
+    }
+
+    async fn submit_channel_config(&self, new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
+        ensure!(
+            !new_keys.is_empty(),
+            "Refusing to submit a committee update with no accredited keys"
+        );
+        let new_keys =
+            Keys::try_from(new_keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
+
+        self.dispatch(|resp| Command::SubmitChannelConfig { new_keys, resp })
+            .await
     }
 
     fn channel_id(&self) -> ChannelId {
@@ -625,33 +595,25 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         self.drive_task.clone()
     }
 
-    fn channel_tip_slot<'publisher>(
-        &'publisher self,
-    ) -> impl Future<Output = Result<Option<Slot>>> + Send + 'publisher {
-        async move {
-            Ok(self
-                .node
-                .channel_state(self.channel_id)
-                .await
-                .context("Failed to read channel state")?
-                .map(|state| state.tip_slot))
-        }
+    async fn channel_tip_slot(&self) -> Result<Option<Slot>> {
+        Ok(self
+            .node
+            .channel_state(self.channel_id)
+            .await
+            .context("Failed to read channel state")?
+            .map(|state| state.tip_slot))
     }
 
-    fn read_channel_after<'publisher>(
-        &'publisher self,
+    async fn read_channel_after(
+        &self,
         after_slot: Option<Slot>,
-    ) -> impl Future<Output = Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + 'publisher>>
-    + Send
-    + 'publisher {
-        async move {
-            let stream = self
-                .indexer
-                .next_messages(after_slot)
-                .await
-                .context("Failed to start channel read stream")?;
-            Ok(stream)
-        }
+    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + '_> {
+        let stream = self
+            .indexer
+            .next_messages(after_slot)
+            .await
+            .context("Failed to start channel read stream")?;
+        Ok(stream)
     }
 }
 

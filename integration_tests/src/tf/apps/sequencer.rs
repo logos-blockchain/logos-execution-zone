@@ -121,7 +121,7 @@ impl SequencerApp {
 
     #[expect(
         clippy::manual_async_fn,
-        reason = "An explicit Send + 'static future is required by the TF deployment boundary"
+        reason = "Explicit Send future works around rust-lang/rust#100013"
     )]
     fn deploy_inner(
         self,
