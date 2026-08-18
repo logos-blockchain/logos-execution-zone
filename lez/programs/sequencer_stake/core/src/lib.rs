@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+pub use ed25519_dalek;
 pub use lee_core::program::PdaSeed;
 use lee_core::{
     account::AccountId,
@@ -9,8 +10,13 @@ use lee_core::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Approvals a `Slash` must carry. Raising it moves the program id.
+pub const SLASH_APPROVAL_THRESHOLD: usize = 1;
+
 const INVALID_KEY: &str = "invalid Ed25519 public key";
 const SEQUENCER_STAKE_CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/MinSequencerStake/0000";
+const SLASH_APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashApproval/00000000";
+const SLASH_SINK_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashedStakeSink/00000";
 
 /// The Bedrock sequencer identity a stake backs. Holds only a valid Ed25519
 /// public key.
@@ -89,6 +95,24 @@ pub enum Instruction {
     /// Unsigned, permissionless: releases a pending `UnstakeRequest`.
     /// Block-inclusion validity is enforced outside this program.
     FinalizeUnstake,
+
+    /// Burns the key's whole stake to the sink and removes its entry.
+    ///
+    /// Only `approvals` authorize this. The reason for the offence is not checked.
+    Slash {
+        sequencer_key: SequencerKey,
+        /// `MsgId` of the offending inscription, raw to avoid Bedrock types.
+        inscription: [u8; 32],
+        approvals: Vec<SlashApproval>,
+    },
+}
+
+/// One accredited sequencer's signature over [`slash_approval_message`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SlashApproval {
+    pub signer: SequencerKey,
+    /// Ed25519 signature. A `Vec` because serde has no impl for 64 byte arrays.
+    pub signature: Vec<u8>,
 }
 
 /// Tag written into a claimed ownership account: which key it backs, plus any pending unstake.
@@ -170,6 +194,27 @@ impl SequencerEntry {
             Some(remaining) => remaining == 0 || remaining >= minimum,
         }
     }
+}
+
+/// Bytes an approver signs. Naming the inscription keeps the approval single use.
+#[must_use]
+pub fn slash_approval_message(sequencer_key: SequencerKey, inscription: [u8; 32]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(96);
+    message.extend_from_slice(&SLASH_APPROVAL_DOMAIN);
+    message.extend_from_slice(&sequencer_key.to_bytes());
+    message.extend_from_slice(&inscription);
+    message
+}
+
+/// Seed of the PDA burned stakes move into. Nothing moves balance out of it.
+#[must_use]
+pub const fn slash_sink_seed() -> PdaSeed {
+    PdaSeed::new(SLASH_SINK_SEED_DOMAIN)
+}
+
+#[must_use]
+pub fn slash_sink_account_id(program_id: ProgramId) -> AccountId {
+    AccountId::for_public_pda(&program_id, &slash_sink_seed())
 }
 
 /// Seed of the PDA holding the [`SequencerStakeConfig`].

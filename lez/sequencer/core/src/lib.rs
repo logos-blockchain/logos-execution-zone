@@ -60,6 +60,7 @@ pub mod gossip;
 
 #[cfg(feature = "mock")]
 pub mod mock;
+pub mod slashing;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.
@@ -142,6 +143,10 @@ pub struct SequencerCore<
     last_committee_submission_slot: Option<Slot>,
     /// Gates `FinalizeUnstake` on the committee removal being final.
     committee_absence: committee_discovery::CommitteeAbsence,
+    /// Offending inscriptions, attributed and not.
+    slash_record: slashing::SlashRecord,
+    /// Signs this node's approval of a slash.
+    bedrock_signing_key: block_publisher::Ed25519Key,
 }
 
 impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
@@ -299,15 +304,18 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let (mempool, mempool_handle) = MemPool::new(config.mempool_max_size);
         sequencer_core_metrics::record_mempool_max_size(config.mempool_max_size);
 
+        let slash_record = slashing::SlashRecord::load(store.storage_ref()).await;
+
         let block_publisher = BP::new(
             &config.bedrock_config,
-            bedrock_signing_key,
+            bedrock_signing_key.clone(),
             config.retry_pending_blocks_timeout,
             initial_checkpoint,
             Self::on_follow(
                 store.storage_ref().clone(),
                 Arc::clone(&chain),
                 mempool_handle.clone(),
+                slash_record.clone(),
             ),
         )
         .await
@@ -420,6 +428,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             watchers,
             last_committee_submission_slot: None,
             committee_absence: committee_discovery::CommitteeAbsence::default(),
+            slash_record,
+            bedrock_signing_key,
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
@@ -668,12 +678,16 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         storage_ref: ActorRef<S>,
         chain: Arc<Mutex<ChainState>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+        slash_record: slashing::SlashRecord,
     ) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
             let storage_ref = storage_ref.clone();
             let chain = Arc::clone(&chain);
             let mempool_handle = mempool_handle.clone();
+            let slash_record = slash_record.clone();
             Box::pin(async move {
+                // Before the checkpoint moves past them.
+                slash_record.report(&storage_ref, &update.undecodable).await;
                 apply_follow_update(&storage_ref, &chain, &mempool_handle, update).await;
             })
         })
@@ -703,6 +717,17 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     /// committee-config update the new state calls for.
     pub async fn run_production_turn(&mut self) -> Result<u64> {
         let live_accredited_keys = self.update_committee_absence().await;
+
+        // Never fatal: the next turn retries.
+        if let Err(err) = slashing::attribute_offences(
+            &self.block_publisher,
+            &self.slash_record,
+            self.store.storage_ref(),
+        )
+        .await
+        {
+            warn!("Offence scan failed, retrying next turn: {err:#}");
+        }
 
         let BlockWithMeta {
             block,
@@ -1006,6 +1031,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             mut working_state,
             pending_dispatches,
             finalize_unstake_txs,
+            slash_txs,
             committee_update,
         ) = {
             let chain = self.chain.lock().await;
@@ -1046,6 +1072,11 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 chain.head_state().clone(),
                 pending,
                 build_finalize_unstake_txs(chain.head_state()),
+                slashing::slash_candidates(
+                    chain.head_state(),
+                    &self.slash_record,
+                    &self.bedrock_signing_key,
+                ),
                 committee_update,
             )
         };
@@ -1127,6 +1158,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let mut pending_from_store = pending_deposits;
         pending_from_store.extend(pending_dispatches);
         pending_from_store.extend(finalize_unstake_txs);
+        pending_from_store.extend(slash_txs);
         while let Some((origin, tx, from_store)) = pending_from_store
             .pop_front()
             .map(|tx| (TransactionOrigin::Sequencer, tx, true))
@@ -1560,6 +1592,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         finalized,
         deposits,
         withdrawals,
+        undecodable: _,
     } = update;
 
     let checkpoint_bytes = block_store::checkpoint_bytes(&checkpoint)

@@ -57,6 +57,9 @@ mod reconstruction;
 /// channel id (`[0; 32]`), which the inbox guest rejects as a source.
 const PEER_ZONE: [u8; 32] = [0xbe_u8; 32];
 
+/// The inscription a test slash names; only has to match the approvals.
+const TEST_INSCRIPTION: [u8; 32] = [0xA1; 32];
+
 #[derive(borsh::BorshSerialize)]
 struct DepositMetadataForEncoding {
     recipient_id: lee::AccountId,
@@ -104,6 +107,7 @@ fn empty_follow_update() -> FollowUpdate {
         finalized: Vec::new(),
         deposits: Vec::new(),
         withdrawals: Vec::new(),
+        undecodable: Vec::new(),
     }
 }
 
@@ -3658,4 +3662,182 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         record.pending_unstake.map(|pending| pending.amount),
         Some(system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE)
     );
+}
+
+/// The sink burned stakes land in.
+fn slash_sink_id() -> AccountId {
+    sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake().id())
+}
+
+/// Stakes `amount` for a fresh key and returns everything a slash test needs.
+fn slashable_state(
+    amount: u128,
+) -> (
+    V03State,
+    sequencer_stake_core::SequencerKey,
+    AccountId,
+    PrivateKey,
+) {
+    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let ownership_key = PrivateKey::try_new([42; 32]).unwrap();
+    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let sequencer_key = test_sequencer_key(0x44);
+
+    let mut state = stake_test_state(funding_id, amount);
+    let stake = stake_transaction(
+        &state,
+        (funding_id, &funding_key),
+        (ownership_id, &ownership_key),
+        sequencer_key,
+        amount,
+    );
+    state
+        .transition_from_public_transaction(&stake, 1, 0)
+        .expect("Stake should succeed");
+
+    (state, sequencer_key, ownership_id, ownership_key)
+}
+
+/// An approval signed by `seed`'s Bedrock key.
+fn test_approval(
+    seed: u8,
+    sequencer_key: sequencer_stake_core::SequencerKey,
+) -> sequencer_stake_core::SlashApproval {
+    let key = Ed25519Key::from_bytes(&[seed; 32]);
+    let message = sequencer_stake_core::slash_approval_message(sequencer_key, TEST_INSCRIPTION);
+    sequencer_stake_core::SlashApproval {
+        signer: sequencer_stake_core::SequencerKey::new(key.public_key().to_bytes())
+            .expect("a Bedrock public key is a valid Ed25519 public key"),
+        signature: key.sign_payload(&message).to_bytes().to_vec(),
+    }
+}
+
+fn slash_transaction(
+    ownership_id: AccountId,
+    sequencer_key: sequencer_stake_core::SequencerKey,
+    approvals: Vec<sequencer_stake_core::SlashApproval>,
+) -> PublicTransaction {
+    let LeeTransaction::Public(tx) =
+        crate::slashing::build_slash_tx(ownership_id, sequencer_key, TEST_INSCRIPTION, approvals)
+            .expect("Slash tx should build")
+    else {
+        unreachable!("build_slash_tx builds a public transaction")
+    };
+    tx
+}
+
+#[test]
+fn a_slash_burns_the_tracked_stake_to_the_sink() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, _ownership_key) = slashable_state(amount);
+
+    let slash = slash_transaction(
+        ownership_id,
+        sequencer_key,
+        vec![test_approval(0x44, sequencer_key)],
+    );
+    state
+        .transition_from_public_transaction(&slash, 2, 0)
+        .expect("Slash should succeed");
+
+    assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
+    assert_eq!(state.get_account_by_id(slash_sink_id()).balance, amount);
+    assert_eq!(stake_entry(&state, sequencer_key), None);
+
+    // A replay has no entry left to burn.
+    assert!(
+        state
+            .transition_from_public_transaction(&slash, 3, 0)
+            .is_err()
+    );
+}
+
+#[test]
+fn a_slash_claws_back_a_pending_unstake() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, ownership_key) = slashable_state(amount);
+    let destination = AccountId::new([77; 32]);
+
+    let unstake = unstake_request_transaction(
+        &state,
+        (ownership_id, &ownership_key),
+        system_accounts::sequencer_stake_config_account_id(),
+        amount,
+        destination,
+    );
+    state
+        .transition_from_public_transaction(&unstake, 2, 0)
+        .expect("UnstakeRequest should succeed");
+
+    let slash = slash_transaction(
+        ownership_id,
+        sequencer_key,
+        vec![test_approval(0x44, sequencer_key)],
+    );
+    state
+        .transition_from_public_transaction(&slash, 3, 0)
+        .expect("Slash should succeed");
+
+    // The pending release burned with the rest; nothing is left to finalize.
+    assert_eq!(state.get_account_by_id(slash_sink_id()).balance, amount);
+    assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
+    let LeeTransaction::Public(finalize) = build_finalize_unstake_tx(
+        ownership_id,
+        sequencer_stake_core::PendingUnstake {
+            amount,
+            destination,
+        },
+    )
+    .unwrap() else {
+        unreachable!("build_finalize_unstake_tx builds a public transaction")
+    };
+    assert!(
+        state
+            .transition_from_public_transaction(&finalize, 4, 0)
+            .is_err()
+    );
+}
+
+#[test]
+fn a_slash_without_enough_approvals_is_rejected() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, _ownership_key) = slashable_state(amount);
+
+    // No signatures, no authorization.
+    let unapproved = slash_transaction(ownership_id, sequencer_key, Vec::new());
+    assert!(
+        state
+            .transition_from_public_transaction(&unapproved, 2, 0)
+            .is_err()
+    );
+
+    // An unaccredited signer counts for nothing.
+    let outsider = slash_transaction(
+        ownership_id,
+        sequencer_key,
+        vec![test_approval(0x55, sequencer_key)],
+    );
+    assert!(
+        state
+            .transition_from_public_transaction(&outsider, 2, 0)
+            .is_err()
+    );
+
+    // Nor an accredited signer over a different inscription.
+    let mut wrong_inscription = test_approval(0x44, sequencer_key);
+    wrong_inscription.signature = {
+        let key = Ed25519Key::from_bytes(&[0x44; 32]);
+        let message = sequencer_stake_core::slash_approval_message(sequencer_key, [0xFF; 32]);
+        key.sign_payload(&message).to_bytes().to_vec()
+    };
+    let mismatched = slash_transaction(ownership_id, sequencer_key, vec![wrong_inscription]);
+    assert!(
+        state
+            .transition_from_public_transaction(&mismatched, 2, 0)
+            .is_err()
+    );
+
+    assert_eq!(state.get_account_by_id(ownership_id).balance, amount);
+    assert_eq!(state.get_account_by_id(slash_sink_id()).balance, 0);
 }
