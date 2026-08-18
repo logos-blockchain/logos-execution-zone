@@ -43,9 +43,6 @@ impl From<&ProgramData> for Data {
 
 /// Derives the PDA seed for a deployed program's `ProgramData` account.
 ///
-/// Combines the program's content-derived identity (`image_id`), its position in a (currently
-/// always single-segment) split (`segment_number`), and who may redeploy it (`update_auth`).
-///
 /// Domain-separated from other PDA-seed derivations in the codebase so that a `deploy_pda_seed`
 /// output can never collide with a seed meant for a different purpose, even if the input triple
 /// happened to coincide.
