@@ -2953,7 +2953,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
             (
                 funding_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id(),
+                    program_owner: programs::authenticated_transfer().id().into(),
                     balance: amount,
                     ..Account::default()
                 },
@@ -2996,7 +2996,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
     let ownership_account = state.get_account_by_id(ownership_id);
     assert_eq!(
         ownership_account.program_owner,
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         "ownership account should be claimed by sequencer_stake"
     );
     assert_eq!(ownership_account.balance, amount);
@@ -3071,7 +3071,7 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
             (
                 funding_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id(),
+                    program_owner: programs::authenticated_transfer().id().into(),
                     balance: funding_balance,
                     ..Account::default()
                 },
@@ -3267,7 +3267,7 @@ fn an_ownership_account_cannot_stand_in_for_the_config_account() {
 
     assert_eq!(
         state.get_account_by_id(other_ownership_id).program_owner,
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         "the stand-in is owned by sequencer_stake, so ownership alone would not catch it"
     );
 
@@ -3304,7 +3304,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
             (
                 funding_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id(),
+                    program_owner: programs::authenticated_transfer().id().into(),
                     balance: amount,
                     ..Account::default()
                 },
@@ -3368,7 +3368,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
     assert_eq!(
         state.get_account_by_id(ownership_id).program_owner,
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         "the ownership account stays claimed after a full exit"
     );
 
@@ -3401,7 +3401,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
     assert_eq!(
         stake_account.program_owner,
-        programs::sequencer_stake().id()
+        programs::sequencer_stake().id().into()
     );
     assert_eq!(
         stake_account.balance,

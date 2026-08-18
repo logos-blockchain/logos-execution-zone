@@ -820,7 +820,7 @@ fn undeclaring_public_delegation(
 
     let pre_state = AccountWithMetadata::new(
         Account {
-            program_owner: delegator.id(),
+            program_owner: delegator.id().into(),
             ..Account::default()
         },
         false,

@@ -31,7 +31,7 @@ fn main() {
     let pda_for_callee = |is_authorized| {
         let mut for_callee = pda.clone();
         for_callee.is_authorized = is_authorized;
-        for_callee.account.program_owner = self_program_id;
+        for_callee.account.program_owner = self_program_id.into();
         for_callee
     };
 
