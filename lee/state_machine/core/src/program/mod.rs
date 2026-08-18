@@ -15,7 +15,7 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 pub type ProgramId = [u32; 8];
 
-/// TODO: This is a temporary conversion; will be removed once `Program` to `Account`
+/// FIXME: This is a temporary conversion; will be removed once `Program` to `Account`
 /// migration is complete.
 impl From<ProgramId> for AccountId {
     fn from(program_id: ProgramId) -> Self {
