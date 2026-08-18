@@ -22,6 +22,7 @@ log.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 hex.workspace = true
+num-traits.workspace = true
 
 [dev-dependencies]
 lee.workspace = true

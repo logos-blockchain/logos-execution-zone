@@ -9618,6 +9618,7 @@ dependencies = [
  "mempool",
  "mockall",
  "num-bigint 0.4.6",
+ "num-traits",
  "sequencer_core",
  "sequencer_stake_core",
  "sequencer_storage_actor",

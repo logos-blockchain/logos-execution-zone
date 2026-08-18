@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Result;
 use bytesize::ByteSize;
@@ -12,7 +12,7 @@ use lee::{
     Account, AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
     public_transaction::{Message, WitnessSet},
 };
-use mockall::predicate::{always, eq};
+use mockall::predicate::{always, eq, function};
 use num_bigint::BigUint;
 use sequencer_core::{
     config::{BedrockConfig, SequencerConfig},
@@ -20,7 +20,7 @@ use sequencer_core::{
 };
 use sequencer_storage_actor::mock::MockStorageActor;
 use tempfile::TempDir;
-use tokio::test;
+use tokio::{sync::mpsc, test, time::timeout};
 
 use crate::{ExecutorActor, protocol};
 
@@ -193,6 +193,78 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
             .map_err(SendError::err),
         Err(Some(crate::error::Error::MempoolIsFull))
     ));
+
+    Ok(())
+}
+
+#[test]
+async fn get_block_range_keeps_executor_responsive() -> Result<()> {
+    /// Blocks the mock storage accepts but never answers.
+    const STALLED_FIRST: u64 = 100;
+    const STALLED_LAST: u64 = 105;
+
+    let _res = env_logger::try_init();
+
+    let (config, _home) = sequencer_config();
+
+    let (stalled_tx, mut stalled_rx) = mpsc::unbounded_channel();
+    #[expect(
+        clippy::collection_is_never_read,
+        reason = "Keeping the senders alive is what makes the asker wait forever"
+    )]
+    let mut held_replies = Vec::new();
+    let mut mock_storage = prepare_mock_storage_with_empty_genesis();
+    mock_storage
+        .expect_handle_get_block()
+        .with(
+            function(|msg: &sequencer_storage_actor::protocol::GetBlock| {
+                (STALLED_FIRST..=STALLED_LAST).contains(&msg.block_id)
+            }),
+            always(),
+        )
+        .returning(move |_, ctx| {
+            // Holding the sender without ever sending leaves the asker waiting
+            // forever, while storage itself keeps draining its mailbox.
+            let (_delegated, reply_sender) = ctx.reply_sender();
+            held_replies.extend(reply_sender);
+            stalled_tx.send(()).expect("Test must still be listening");
+            Ok(None)
+        });
+
+    let storage_ref = MockStorageActor::spawn(mock_storage);
+    let executor = ExecutorActor::spawn(
+        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone()).await,
+    );
+
+    let range = (STALLED_FIRST..=STALLED_LAST)
+        .try_into()
+        .expect("Range must be within the allowed length");
+    let stalled_request = tokio::spawn({
+        let executor = executor.clone();
+        async move { executor.ask(protocol::GetBlockRange { range }).await }
+    });
+
+    stalled_rx
+        .recv()
+        .await
+        .expect("Executor must reach storage for the stalled range");
+
+    timeout(
+        Duration::from_secs(5),
+        executor.ask(protocol::GetLastBlockId),
+    )
+    .await
+    .expect("Executor must answer while the stalled range is still in flight")?;
+
+    assert!(
+        !stalled_request.is_finished(),
+        "The stalled range must still be waiting, otherwise nothing was proven"
+    );
+    stalled_request.abort();
+
+    storage_ref
+        .tell(sequencer_storage_actor::mock::Checkpoint)
+        .await?;
 
     Ok(())
 }

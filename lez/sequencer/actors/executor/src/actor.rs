@@ -1,11 +1,12 @@
 use common::{block::Block, transaction::LeeTransaction};
-use futures::{TryFutureExt as _, TryStreamExt as _, future::ready, stream::FuturesOrdered};
+use futures::{StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream};
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
     error::ActorStopReason,
     mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
+    reply::DelegatedReply,
 };
 use lee_core::{
     BlockId,
@@ -32,6 +33,9 @@ use crate::{
         GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock, Transaction,
     },
 };
+
+/// How many block lookups a single [`GetBlockRange`] keeps in flight.
+const BLOCK_RANGE_CONCURRENCY: usize = 16;
 
 // TODO: Remove `BP` once this part is moved to a separate actor
 pub struct ExecutorActor<BP: BlockPublisherTrait, S: StorageActorTrait = StorageActor> {
@@ -208,25 +212,29 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
 impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetBlockRange>
     for ExecutorActor<BP, S>
 {
-    type Reply = Result<Vec<Block>>;
+    type Reply = DelegatedReply<Result<Vec<Block>>>;
 
     async fn handle(
         &mut self,
         GetBlockRange { range }: GetBlockRange,
-        _ctx: &mut Context<Self, Self::Reply>,
+        ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        range
-            .map(|block_id| {
-                self.storage_ref
-                    .ask(sequencer_storage_actor::protocol::GetBlock { block_id })
-                    .into_future()
-                    .map_err(Into::into)
-            })
-            .collect::<FuturesOrdered<_>>()
-            .try_take_while(|block_opt| ready(Ok(block_opt.is_some())))
-            .try_filter_map(|block_opt| ready(Ok(block_opt)))
-            .try_collect()
-            .await
+        let storage_ref = self.storage_ref.clone();
+
+        ctx.spawn(async move {
+            stream::iter(range.into_inner())
+                .map(|block_id| {
+                    storage_ref
+                        .ask(sequencer_storage_actor::protocol::GetBlock { block_id })
+                        .into_future()
+                        .map_err(Into::into)
+                })
+                .buffered(BLOCK_RANGE_CONCURRENCY)
+                .try_take_while(|block_opt| ready(Ok(block_opt.is_some())))
+                .try_filter_map(|block_opt| ready(Ok(block_opt)))
+                .try_collect()
+                .await
+        })
     }
 }
 

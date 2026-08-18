@@ -134,10 +134,16 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         start_block_id: BlockId,
         end_block_id: BlockId,
     ) -> Result<Vec<Block>, ErrorObjectOwned> {
+        let range = (start_block_id..=end_block_id).try_into().map_err(|err| {
+            ErrorObjectOwned::owned(
+                ErrorCode::InvalidParams.code(),
+                format!("Invalid block range: {err:#}"),
+                None::<()>,
+            )
+        })?;
+
         self.executor_ref
-            .ask(sequencer_executor_actor::protocol::GetBlockRange {
-                range: (start_block_id..=end_block_id),
-            })
+            .ask(sequencer_executor_actor::protocol::GetBlockRange { range })
             .await
             .map_err(internal_error)
     }
