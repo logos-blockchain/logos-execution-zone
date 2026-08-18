@@ -150,7 +150,7 @@ pub fn keys_leaving_the_committee(state: &lee::V03State) -> BTreeSet<SequencerKe
 /// scan, since every `Stake`/`UnstakeRequest`/`FinalizeUnstake` keeps its
 /// `entries` map current as it executes. `None` only if the account is absent
 /// or undecodable, which genesis rules out.
-fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
+pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
     let Some(account) =
         state.get_account_by_id_ref(system_accounts::sequencer_stake_config_account_id())
     else {

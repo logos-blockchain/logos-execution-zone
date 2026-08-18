@@ -15,7 +15,7 @@ use crate::{
         DB_META_LATEST_BLOCK_META_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCH_COUNT_KEY,
         DB_META_PENDING_CROSS_ZONE_DISPATCH_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY,
         DB_META_PENDING_DEPOSIT_EVENTS_KEY, DB_META_PUBLISHED_HIGH_WATER_KEY,
-        DB_META_UNSEEN_WITHDRAW_COUNT_KEY, DB_META_ZONE_CURSOR_KEY,
+        DB_META_SLASH_RECORD_KEY, DB_META_UNSEEN_WITHDRAW_COUNT_KEY, DB_META_ZONE_CURSOR_KEY,
         DB_META_ZONE_SDK_CHECKPOINT_KEY,
     },
 };
@@ -224,6 +224,40 @@ impl SimpleWritableCell for ZoneSdkCheckpointCellRef<'_> {
             DbError::borsh_cast_message(
                 err,
                 Some("Failed to serialize zone-sdk checkpoint cell".to_owned()),
+            )
+        })
+    }
+}
+
+/// The slashing record as opaque bytes. `sequencer_core` owns the encoding.
+#[derive(BorshDeserialize)]
+pub struct SlashRecordCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for SlashRecordCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_SLASH_RECORD_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for SlashRecordCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct SlashRecordCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for SlashRecordCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_SLASH_RECORD_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for SlashRecordCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize slash record cell".to_owned()),
             )
         })
     }

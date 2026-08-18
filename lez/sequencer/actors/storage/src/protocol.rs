@@ -59,6 +59,12 @@ pub struct SetZoneCheckpointBytes {
 
 pub struct DeleteZoneCheckpoint;
 
+pub struct GetSlashRecordBytes;
+
+pub struct PutSlashRecordBytes {
+    pub bytes: Vec<u8>,
+}
+
 pub struct GetZoneAnchor;
 
 pub struct SetZoneAnchor {

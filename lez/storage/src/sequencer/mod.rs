@@ -30,8 +30,9 @@ use crate::{
         PendingCrossZoneDispatchCellOwned, PendingCrossZoneDispatchCellRef,
         PendingCrossZoneDispatchCountCell, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, PendingDepositEventsCellOwned, PendingDepositEventsCellRef,
-        PublishedHighWaterCell, UnseenWithdrawCountCell, WithdrawalReconciliationKey,
-        ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
+        PublishedHighWaterCell, SlashRecordCellOwned, SlashRecordCellRef, UnseenWithdrawCountCell,
+        WithdrawalReconciliationKey, ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned,
+        ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -43,6 +44,8 @@ pub const DB_META_LAST_FINALIZED_BLOCK_ID: &str = "last_finalized_block_id";
 pub const DB_META_LATEST_BLOCK_META_KEY: &str = "latest_block_meta";
 /// Key base for storing the zone-sdk sequencer checkpoint (opaque bytes).
 pub const DB_META_ZONE_SDK_CHECKPOINT_KEY: &str = "zone_sdk_checkpoint";
+/// Key base for storing the slashing record (opaque bytes).
+pub const DB_META_SLASH_RECORD_KEY: &str = "slash_record";
 /// Key base for storing the last channel block read back and verified from
 /// Bedrock (its L1 slot + `id`/`hash`) — the anchor for the startup
 /// consistency check and the resume point for reconstruction.
@@ -540,6 +543,14 @@ impl RocksDBIO {
 
     pub fn put_zone_sdk_checkpoint_bytes(&self, bytes: &[u8]) -> DbResult<()> {
         self.put(&ZoneSdkCheckpointCellRef(bytes), ())
+    }
+
+    pub fn get_slash_record_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self.get_opt::<SlashRecordCellOwned>(())?.map(|cell| cell.0))
+    }
+
+    pub fn put_slash_record_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&SlashRecordCellRef(bytes), ())
     }
 
     /// Remove the persisted zone-sdk checkpoint so the next startup is treated as a fresh start.
