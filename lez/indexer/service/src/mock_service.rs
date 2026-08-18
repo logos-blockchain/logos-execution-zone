@@ -9,11 +9,12 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use indexer_service_protocol::{
-    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
-    CommitmentSetDigest, Data, EncryptedAccountData, HashType, IndexerStatus, IndexerSyncState,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, PublicActionWithID,
-    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    Account, AccountDiff, AccountDiffOutput, AccountId, AccountWithMetadata, BalanceDiff,
+    BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment, CommitmentSetDigest, Data,
+    EncryptedAccountData, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
+    ProgramDeploymentTransaction, ProgramId, PublicDiff, PublicMessage, PublicTransaction,
+    Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -304,9 +305,9 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                     Transaction::Public(pub_tx) => pub_tx.message.account_ids.contains(&account_id),
                     Transaction::PrivacyPreserving(priv_tx) => priv_tx
                         .message
-                        .public_actions
+                        .public_pre_states
                         .iter()
-                        .any(|action| action.account_id == account_id),
+                        .any(|pre_state| pre_state.account_id == account_id),
                     Transaction::ProgramDeployment(_) => false,
                 })
                 .cloned()
@@ -384,16 +385,30 @@ fn mock_privacy_preserving_tx(
     tx_idx: u64,
     account_ids: &[AccountId],
 ) -> Transaction {
+    let public_account_id = account_ids[tx_idx as usize % account_ids.len()];
     Transaction::PrivacyPreserving(PrivacyPreservingTransaction {
         hash: tx_hash,
         message: PrivacyPreservingMessage {
-            public_actions: vec![PublicActionWithID {
-                account_id: account_ids[tx_idx as usize % account_ids.len()],
-                post_state: Account {
+            public_pre_states: vec![AccountWithMetadata {
+                account: Account {
                     program_owner: AccountId { value: [1_u8; 32] },
                     balance: 500,
                     data: Data(vec![0xdd, 0xee]),
                     nonce: block_id as u128,
+                },
+                is_authorized: true,
+                account_id: public_account_id,
+            }],
+            public_diffs: vec![PublicDiff {
+                account_id: public_account_id,
+                executing_program_id: ProgramId([1_u32; 8]),
+                diff: AccountDiffOutput {
+                    diff: AccountDiff {
+                        id: public_account_id,
+                        diff_balance: BalanceDiff::Add(0),
+                        diff_data: None,
+                    },
+                    claim: None,
                 },
             }],
             nonces: vec![block_id as u128],
@@ -409,6 +424,7 @@ fn mock_privacy_preserving_tx(
             }],
             block_validity_window: ValidityWindow((None, None)),
             timestamp_validity_window: ValidityWindow((None, None)),
+            signer_account_ids: vec![public_account_id],
         },
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],

@@ -62,19 +62,18 @@ fn public_diff_reflects_a_successful_transfer() {
     );
 }
 
-/// Privacy-path version of the authorization-injection attack. The test passes when the
-/// attack is rejected and the victim's balance is left untouched.
+/// Privacy-path version of the authorization-injection attack. The test passes when the attack
+/// is rejected.
 ///
-/// `execute_and_prove` succeeds because each inner receipt is individually valid and the
-/// outer circuit faithfully commits whatever the attacker's program output says, including
-/// `victim(is_authorized=true)`. The circuit has no access to chain state and cannot know
-/// the victim never signed.
-///
-/// The host-side validator is what catches the attack: it independently reconstructs
-/// `public_pre_states` from chain state using `signer_account_ids.contains(victim_id) = false`,
-/// so it expects `victim(is_authorized=false)`. The committed journal and the reconstructed
-/// expected output diverge, `receipt.verify` fails, and `from_privacy_preserving_transaction`
-/// returns an error before any state is applied.
+/// `signer_account_ids` is derived once, before the chain even starts, strictly from the
+/// *top-level* `pre_states` passed to `execute_and_prove` — here, just the attacker's own
+/// private account. The victim is only ever introduced later, inside `malicious_injector`'s
+/// chained call, so it can never be part of `signer_account_ids` regardless of what P1 forges.
+/// The circuit's own Vacant-branch consistency check (scoped to public accounts) derives the
+/// victim's expected `is_authorized` from `signer_account_ids` membership, finds it absent, and
+/// asserts that against the witnessed `is_authorized=true` — which fails, panicking inside the
+/// guest. So the attack is caught during proving itself: `execute_and_prove` returns
+/// `Err(CircuitProvingError)`, and never even reaches `from_privacy_preserving_transaction`.
 #[test]
 fn privacy_malicious_programs_cannot_drain_public_victim() {
     use lee_core::{
@@ -83,12 +82,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
     };
 
     use crate::{
-        PrivacyPreservingTransaction,
-        privacy_preserving_transaction::{
-            circuit::{ProgramWithDependencies, execute_and_prove},
-            message::Message,
-            witness_set::WitnessSet,
-        },
+        privacy_preserving_transaction::circuit::{ProgramWithDependencies, execute_and_prove},
         state::{CommitmentSet, tests::test_private_account_keys_1},
     };
 
@@ -181,54 +175,32 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         InputAccountIdentity::Public, // recipient
     ];
 
-    // execute_and_prove succeeds: all inner receipts are valid.
-    // The outer circuit commits victim(is_authorized=true) to its journal.
-    let (circuit_output, proof) = execute_and_prove(
+    let result = execute_and_prove(
         vec![attacker_pre],
         instruction_data,
         account_identities,
         &program_with_deps,
-    )
-    .expect("execute_and_prove should succeed \u{2014} the programs execute correctly");
-
-    // public_account_ids lists the Public entries from account_identities, in order.
-    // The single ciphertext belongs to attacker's private account update.
-    let message = Message::from_circuit_output(
-        vec![], // no public signers, no nonces
-        circuit_output,
     );
 
-    let witness_set = WitnessSet::for_message(&message, proof, &[]); // no signatures
-    let tx = PrivacyPreservingTransaction::new(message, witness_set);
-
-    let result = ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0);
-
     assert!(
-        matches!(result, Err(LeeError::InvalidPrivacyPreservingProof)),
-        "attack privacy transaction should be rejected with InvalidPrivacyPreservingProof"
+        matches!(result, Err(LeeError::CircuitProvingError(_))),
+        "forged victim(is_authorized=true) should be caught inside the circuit itself, since \
+         signer_account_ids is derived from the top-level pre_states only, and the victim is \
+         only ever introduced via a chained call"
     );
     assert_eq!(state.get_account_by_id(victim_id).balance, victim_balance);
     assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
 }
 
-/// Private-victim variant of the authorization-injection attack. The test passes when the
-/// attack is rejected and the recipient's balance remains zero.
-///
-/// After the circuit's Vacant branch accepts the injected `victim(is_authorized=true)`
-/// verbatim, the attacker must choose how to declare the victim in `account_identities`.
-/// There are two routes, both closed:
-///
-/// - **mask=1 (regular update)**: the circuit derives `account_id =
-///   AccountId::for_regular_private_account(&npk_from(nsk), identifier)` and asserts it matches
-///   `pre_state.account_id`. Passing this check requires the victim's `nsk`, which the attacker
-///   does not have. `execute_and_prove` panics inside the ZKVM and no proof is produced.
-///
-/// - **mask=0 (`Public`)**: the circuit places the account in `public_pre_states` and
-///   `execute_and_prove` succeeds. The host-side validator then reconstructs `public_pre_states`
-///   from chain state; `state.get_account_by_id(victim_id)` returns the default account (balance=0)
-///   because the victim has no public state entry. The committed journal and the reconstructed
-///   expected output diverge, `receipt.verify` fails, and `from_privacy_preserving_transaction`
-///   returns an error before any state is applied. This test exercises this route.
+/// Private-victim variant of the authorization-injection attack. The attacker has no `nsk` for
+/// the victim's private account, so a regular update isn't an option — the only route is to
+/// declare the victim `InputAccountIdentity::Public` and inject its data directly, since the
+/// circuit has no access to chain state and can't detect the values are fabricated. That's the
+/// exact same route `privacy_malicious_programs_cannot_drain_public_victim` exercises, so the
+/// same mechanism catches it: the victim is only ever introduced via `malicious_injector`'s
+/// chained call, never the top-level `pre_states` `signer_account_ids` is derived from, so the
+/// circuit's Vacant-branch consistency check rejects the forged `is_authorized=true` and
+/// `execute_and_prove` fails with `CircuitProvingError` before any proof is produced.
 #[test]
 fn privacy_malicious_programs_cannot_drain_private_victim() {
     use lee_core::{
@@ -237,12 +209,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
     };
 
     use crate::{
-        PrivacyPreservingTransaction,
-        privacy_preserving_transaction::{
-            circuit::{ProgramWithDependencies, execute_and_prove},
-            message::Message,
-            witness_set::WitnessSet,
-        },
+        privacy_preserving_transaction::circuit::{ProgramWithDependencies, execute_and_prove},
         state::{
             CommitmentSet,
             tests::{test_private_account_keys_1, test_private_account_keys_2},
@@ -272,15 +239,6 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
     let victim_balance = 5_000_u128;
 
     let recipient_id = AccountId::new([42_u8; 32]);
-
-    // Victim has no public state entry; only recipient is registered at genesis.
-    let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[(recipient_id, 0)]))
-        .with_programs([
-            crate::test_methods::simple_balance_transfer(),
-            crate::test_methods::malicious_injector(),
-            crate::test_methods::malicious_launderer(),
-        ]);
 
     // Build attacker's private account and its local commitment tree.
     let attacker_account = Account {
@@ -345,36 +303,18 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
         InputAccountIdentity::Public, // recipient
     ];
 
-    // execute_and_prove succeeds: simple_balance_transfer runs against the injected
-    // victim(balance=5000, is_authorized=true) and produces valid inner receipts.
-    // The outer circuit commits victim(is_authorized=true) to public_pre_states.
-    let (circuit_output, proof) = execute_and_prove(
+    let result = execute_and_prove(
         vec![attacker_pre],
         instruction_data,
         account_identities,
         &program_with_deps,
-    )
-    .expect("execute_and_prove should succeed \u{2014} the programs execute correctly");
-
-    // public_account_ids lists the Public entries from account_identities, in order.
-    // The single ciphertext belongs to attacker's private account update.
-    let message = Message::from_circuit_output(
-        vec![], // no public signers, no nonces
-        circuit_output,
     );
-
-    let witness_set = WitnessSet::for_message(&message, proof, &[]); // no signatures
-    let tx = PrivacyPreservingTransaction::new(message, witness_set);
-
-    let result = ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0);
 
     assert!(
-        matches!(result, Err(LeeError::InvalidPrivacyPreservingProof)),
-        "attack on private victim should be rejected with InvalidPrivacyPreservingProof"
+        matches!(result, Err(LeeError::CircuitProvingError(_))),
+        "forged victim(is_authorized=true) should be caught inside the circuit itself, the \
+         same way as the public-victim variant of this attack"
     );
-    // Victim has no public balance to check; confirming the recipient received nothing
-    // is sufficient to show no funds moved.
-    assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
 }
 
 /// Two malicious programs (injector + launderer) attempt to drain a victim's balance
@@ -510,7 +450,8 @@ fn privacy_garbage_proof_is_rejected() {
     ));
     let commitment = Commitment::new(&account_id, &Account::default());
     let message = Message {
-        public_actions: vec![],
+        public_pre_states: vec![],
+        public_diffs: vec![],
         nonces: vec![],
         private_actions: vec![PrivateAction {
             nullifier: Nullifier::for_account_initialization(&account_id),
@@ -524,6 +465,7 @@ fn privacy_garbage_proof_is_rejected() {
         }],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        signer_account_ids: vec![],
     };
 
     // Garbage proof bytes: not a valid borsh-encoded `InnerReceipt`.
@@ -538,4 +480,104 @@ fn privacy_garbage_proof_is_rejected() {
         Err(other) => panic!("expected InvalidPrivacyPreservingProof, got {other:?}"),
         Ok(_) => panic!("garbage proof was accepted instead of rejected"),
     }
+}
+
+/// The race condition this whole `AccountDiff` design exists to fix: a public account touched
+/// by a privacy transaction changes on-chain *after* the proof was generated but *before* the
+/// sequencer validates it (e.g. an unrelated public transfer into/out of the same account
+/// landing first). Proof validity no longer depends on a specific public-account snapshot — only
+/// on what the circuit itself witnessed and output — so the proof still verifies, and the
+/// diff it carries gets replayed against whatever the live balance actually is by the time the
+/// sequencer processes it, not the stale balance captured at proving time.
+#[test]
+fn privacy_transaction_survives_public_state_changing_after_proving() {
+    use lee_core::{
+        DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierWitness, PrivateWitness, WitnessKind,
+        account::AccountWithMetadata,
+    };
+
+    use crate::{
+        PrivacyPreservingTransaction,
+        privacy_preserving_transaction::{
+            circuit::execute_and_prove, message::Message, witness_set::WitnessSet,
+        },
+        state::tests::test_private_account_keys_1,
+    };
+
+    let program = crate::test_methods::simple_balance_transfer();
+    let recipient_keys = test_private_account_keys_1();
+
+    let sender_key = PrivateKey::try_new([3_u8; 32]).unwrap();
+    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let balance_at_proving_time = 100_u128;
+    let balance_to_move = 37_u128;
+
+    // State as it looked when the prover captured its pre-state.
+    let state_at_proving_time = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(
+            sender_id,
+            balance_at_proving_time,
+        )]))
+        .with_programs(std::iter::once(program.clone()));
+
+    let sender_pre = AccountWithMetadata::new(
+        state_at_proving_time.get_account_by_id(sender_id),
+        true,
+        sender_id,
+    );
+
+    let recipient_account_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let recipient_pre = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
+
+    let (circuit_output, proof) = execute_and_prove(
+        vec![sender_pre, recipient_pre],
+        Program::serialize_instruction(balance_to_move).unwrap(),
+        vec![
+            InputAccountIdentity::Public,
+            InputAccountIdentity::Private(PrivateWitness {
+                vpk: recipient_keys.vpk(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular { ask: None },
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
+        ],
+        &program.clone().into(),
+    )
+    .expect("execute_and_prove should succeed");
+
+    let message = Message::from_circuit_output(vec![Nonce(0)], circuit_output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[&sender_key]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    // Simulates an unrelated public transaction landing on the sender's account between
+    // proving and sequencer validation: live state now disagrees with what the prover
+    // witnessed as `sender_pre`.
+    let balance_at_validation_time = 250_u128;
+    let state_at_validation_time = state_at_proving_time.with_public_accounts(
+        public_state_from_balances(&[(sender_id, balance_at_validation_time)]),
+    );
+
+    let diff = ValidatedStateDiff::from_privacy_preserving_transaction(
+        &tx,
+        &state_at_validation_time,
+        1,
+        0,
+    )
+    .expect(
+        "proof validity must not depend on live public state matching the witnessed \
+                 pre-state",
+    );
+    let public_diff = diff.public_diff();
+
+    assert_eq!(
+        public_diff[&sender_id].balance,
+        balance_at_validation_time - balance_to_move,
+        "the diff must be replayed against live state at validation time, not the stale \
+         balance captured when the proof was generated",
+    );
 }

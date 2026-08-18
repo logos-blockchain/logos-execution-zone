@@ -4,8 +4,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
-    account::AccountWithMetadata,
-    program::{ChainedCall, InstructionData, ProgramId, ProgramOutput, UpdateFromDiffOutput},
+    account::{AccountId, AccountWithMetadata},
+    program::{
+        ChainedCall, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramId, ProgramOutput,
+        UpdateFromDiffOutput,
+    },
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
 
@@ -95,6 +98,20 @@ pub fn execute_and_prove_with_padded_inputs(
     let mut program_outputs = Vec::new();
     let mut update_from_diff_results = Vec::new();
 
+    // Captured before `pre_states` moves into `initial_call` below — this is the only place
+    // `is_authorized` is caller-supplied (every later pre_state's authorization is resolved
+    // inside the circuit from this same list), so it's also the only place we need to derive
+    // the committed signer set from. Scoped to public accounts only: this list is committed and
+    // cross-checked by the sequencer against real, signature-derived `AccountId`s, which a
+    // private (`npk`/`vpk`-derived) `AccountId` can never match — including a private account
+    // here would make it permanently unverifiable.
+    let signer_account_ids: Vec<AccountId> = pre_states
+        .iter()
+        .zip(&account_identities)
+        .filter(|(pre, identity)| pre.is_authorized && identity.is_public())
+        .map(|(pre, _)| pre.account_id)
+        .collect();
+
     let initial_call = ChainedCall {
         program_id: initial_program.id(),
         instruction_data,
@@ -124,6 +141,9 @@ pub fn execute_and_prove_with_padded_inputs(
         // Prove `update_from_diff` for every account this call's diff writes data to, in the
         // same order `execution_state::derive_from_outputs` will visit them, so
         // `update_from_diff_results` lines up positionally with the circuit's own traversal.
+        // The diff's materialization logic belongs to the account's *owner* program, not
+        // necessarily the calling program — falling back to the caller only when the account
+        // is still unclaimed (default owner), mirroring the claim-eligibility rule elsewhere.
         for (pre, diff_output) in program_output
             .pre_states
             .iter()
@@ -132,7 +152,21 @@ pub fn execute_and_prove_with_padded_inputs(
             let Some(diff_data) = diff_output.diff().diff_data.clone() else {
                 continue;
             };
-            let update_receipt = program.prove_update_from_diff(&pre.account, &diff_data)?;
+            let owner_id: ProgramId = if pre.account.program_owner == DEFAULT_PROGRAM_OWNER {
+                chained_call.program_id
+            } else {
+                pre.account.program_owner.into()
+            };
+            let owner_program = if owner_id == program.id() {
+                program
+            } else {
+                dependencies.get(&owner_id).ok_or(
+                    InvalidProgramBehaviorError::UndeclaredProgramDependency {
+                        program_id: owner_id,
+                    },
+                )?
+            };
+            let update_receipt = owner_program.prove_update_from_diff(&pre.account, &diff_data)?;
             let update_output: UpdateFromDiffOutput = update_receipt
                 .journal
                 .decode()
@@ -167,6 +201,7 @@ pub fn execute_and_prove_with_padded_inputs(
         program_id: program_with_dependencies.program.id(),
         dummy_inputs,
         update_from_diff_results,
+        signer_account_ids,
     };
 
     env_builder.write(&circuit_input).unwrap();

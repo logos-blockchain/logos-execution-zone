@@ -1,6 +1,9 @@
 use crate::api::types::{
     FfiAccountId, FfiNonce, FfiVec,
-    transaction::{FfiPrivateAction, FfiPublicAction, FfiSignaturePubKeyEntry, FfiTransaction},
+    transaction::{
+        FfiAccountWithMetadata, FfiPrivateAction, FfiPublicDiff, FfiSignaturePubKeyEntry,
+        FfiTransaction,
+    },
 };
 
 pub type FfiVecU8 = FfiVec<u8>;
@@ -19,6 +22,8 @@ pub type FfiProof = FfiVecU8;
 
 pub type FfiProgramDeploymentMessage = FfiVecU8;
 
-pub type FfiPublicActionList = FfiVec<FfiPublicAction>;
+pub type FfiPublicPreStateList = FfiVec<FfiAccountWithMetadata>;
+
+pub type FfiPublicDiffList = FfiVec<FfiPublicDiff>;
 
 pub type FfiPrivateActionList = FfiVec<FfiPrivateAction>;

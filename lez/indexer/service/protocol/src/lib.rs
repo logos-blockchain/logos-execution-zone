@@ -35,6 +35,35 @@ mod base64 {
         }
     }
 
+    pub mod opt {
+        use base64::prelude::{BASE64_STANDARD, Engine as _};
+
+        use super::{Deserializer, Serializer};
+
+        // `Option<&Vec<u8>>` isn't usable here: `#[serde(with = "base64::opt")]` always calls
+        // this with `&self.field`, i.e. `&Option<Vec<u8>>` verbatim — serde has no equivalent of
+        // `Option::as_ref` to redistribute the reference inward before the call.
+        #[expect(
+            clippy::ref_option,
+            reason = "signature is fixed by serde's `with` calling convention"
+        )]
+        pub fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+            let encoded = v.as_ref().map(|bytes| BASE64_STANDARD.encode(bytes));
+            serde::Serialize::serialize(&encoded, s)
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+            let encoded: Option<String> = serde::Deserialize::deserialize(d)?;
+            encoded
+                .map(|s| {
+                    BASE64_STANDARD
+                        .decode(s.as_bytes())
+                        .map_err(serde::de::Error::custom)
+                })
+                .transpose()
+        }
+    }
+
     pub fn serialize<S: Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
         let base64 = BASE64_STANDARD.encode(v);
         String::serialize(&base64, s)
@@ -227,9 +256,54 @@ pub struct PublicMessage {
 pub type InstructionData = Vec<u32>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct PublicActionWithID {
+pub struct AccountWithMetadata {
+    pub account: Account,
+    pub is_authorized: bool,
     pub account_id: AccountId,
-    pub post_state: Account,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum BalanceDiff {
+    Add(u128),
+    Sub(u128),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct PdaSeed(
+    #[serde(with = "base64::arr")]
+    #[schemars(with = "String", description = "base64-encoded PDA seed")]
+    pub [u8; 32],
+);
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Claim {
+    Authorized,
+    Pda(PdaSeed),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct AccountDiff {
+    pub id: AccountId,
+    pub diff_balance: BalanceDiff,
+    #[serde(with = "base64::opt")]
+    #[schemars(
+        with = "Option<String>",
+        description = "base64-encoded account data diff"
+    )]
+    pub diff_data: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct AccountDiffOutput {
+    pub diff: AccountDiff,
+    pub claim: Option<Claim>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct PublicDiff {
+    pub account_id: AccountId,
+    pub executing_program_id: ProgramId,
+    pub diff: AccountDiffOutput,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -245,11 +319,13 @@ pub struct PrivateAction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PrivacyPreservingMessage {
-    pub public_actions: Vec<PublicActionWithID>,
+    pub public_pre_states: Vec<AccountWithMetadata>,
+    pub public_diffs: Vec<PublicDiff>,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: ValidityWindow,
     pub timestamp_validity_window: ValidityWindow,
+    pub signer_account_ids: Vec<AccountId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

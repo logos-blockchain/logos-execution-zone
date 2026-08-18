@@ -225,18 +225,27 @@ typedef struct FfiAccount {
   struct FfiU128 nonce;
 } FfiAccount;
 
-typedef struct FfiPublicAction {
+typedef struct FfiAccountWithMetadata {
+  struct FfiAccount account;
+  bool is_authorized;
   FfiAccountId account_id;
-  struct FfiAccount post_state;
-} FfiPublicAction;
+} FfiAccountWithMetadata;
 
-typedef struct FfiVec_FfiPublicAction {
-  struct FfiPublicAction *entries;
+typedef struct FfiVec_FfiAccountWithMetadata {
+  struct FfiAccountWithMetadata *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiPublicAction;
+} FfiVec_FfiAccountWithMetadata;
 
-typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
+typedef struct FfiVec_FfiAccountWithMetadata FfiPublicPreStateList;
+
+/**
+ * C-compatible tagged `BalanceDiff`: `is_sub` selects `Sub` over `Add`.
+ */
+typedef struct FfiBalanceDiff {
+  bool is_sub;
+  struct FfiU128 amount;
+} FfiBalanceDiff;
 
 typedef struct FfiVec_u8 {
   uint8_t *entries;
@@ -245,6 +254,50 @@ typedef struct FfiVec_u8 {
 } FfiVec_u8;
 
 typedef struct FfiVec_u8 FfiVecU8;
+
+typedef struct FfiOption_FfiVecU8 {
+  FfiVecU8 *value;
+  bool is_some;
+} FfiOption_FfiVecU8;
+
+typedef struct FfiAccountDiff {
+  FfiAccountId id;
+  struct FfiBalanceDiff diff_balance;
+  struct FfiOption_FfiVecU8 diff_data;
+} FfiAccountDiff;
+
+/**
+ * C-compatible tagged `Claim`: `is_pda` selects `Pda(seed)` over `Authorized`, in which case
+ * `pda_seed` is meaningless.
+ */
+typedef struct FfiClaim {
+  bool is_pda;
+  struct FfiBytes32 pda_seed;
+} FfiClaim;
+
+typedef struct FfiOption_FfiClaim {
+  struct FfiClaim *value;
+  bool is_some;
+} FfiOption_FfiClaim;
+
+typedef struct FfiAccountDiffOutput {
+  struct FfiAccountDiff diff;
+  struct FfiOption_FfiClaim claim;
+} FfiAccountDiffOutput;
+
+typedef struct FfiPublicDiff {
+  FfiAccountId account_id;
+  struct FfiProgramId executing_program_id;
+  struct FfiAccountDiffOutput diff;
+} FfiPublicDiff;
+
+typedef struct FfiVec_FfiPublicDiff {
+  struct FfiPublicDiff *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiPublicDiff;
+
+typedef struct FfiVec_FfiPublicDiff FfiPublicDiffList;
 
 typedef struct FfiEncryptedAccountData {
   FfiVecU8 ciphertext;
@@ -268,11 +321,13 @@ typedef struct FfiVec_FfiPrivateAction {
 typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
 
 typedef struct FfiPrivacyPreservingMessage {
-  FfiPublicActionList public_actions;
+  FfiPublicPreStateList public_pre_states;
+  FfiPublicDiffList public_diffs;
   FfiNonceList nonces;
   FfiPrivateActionList private_actions;
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
+  FfiAccountIdList signer_account_ids;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;

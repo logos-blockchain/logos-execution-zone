@@ -3,11 +3,12 @@
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockIngestError, Ciphertext,
-    Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData, EphemeralPublicKey,
-    HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
+    Account, AccountDiff, AccountDiffOutput, AccountId, AccountWithMetadata, BalanceDiff,
+    BedrockStatus, Block, BlockBody, BlockHeader, BlockIngestError, Ciphertext, Claim, Commitment,
+    CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData, EphemeralPublicKey, HashType,
+    IndexerStatus, IndexerSyncState, Nullifier, PdaSeed, PeerHealth, PeerStatus,
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID,
+    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicDiff,
     PublicKey, PublicMessage, PublicTransaction, Signature, StallReason, Transaction,
     ValidityWindow, WitnessSet,
 };
@@ -280,11 +281,162 @@ impl From<PublicMessage> for lee::public_transaction::Message {
     }
 }
 
-impl From<lee::privacy_preserving_transaction::message::PublicActionWithID> for PublicActionWithID {
-    fn from(value: lee::privacy_preserving_transaction::message::PublicActionWithID) -> Self {
+impl From<lee_core::account::AccountWithMetadata> for AccountWithMetadata {
+    fn from(value: lee_core::account::AccountWithMetadata) -> Self {
+        let lee_core::account::AccountWithMetadata {
+            account,
+            is_authorized,
+            account_id,
+        } = value;
         Self {
-            account_id: value.account_id.into(),
-            post_state: value.post_state.into(),
+            account: account.into(),
+            is_authorized,
+            account_id: account_id.into(),
+        }
+    }
+}
+
+impl TryFrom<AccountWithMetadata> for lee_core::account::AccountWithMetadata {
+    type Error = lee_core::account::data::DataTooBigError;
+
+    fn try_from(value: AccountWithMetadata) -> Result<Self, Self::Error> {
+        let AccountWithMetadata {
+            account,
+            is_authorized,
+            account_id,
+        } = value;
+        Ok(Self {
+            account: account.try_into()?,
+            is_authorized,
+            account_id: account_id.into(),
+        })
+    }
+}
+
+impl From<lee_core::account::BalanceDiff> for BalanceDiff {
+    fn from(value: lee_core::account::BalanceDiff) -> Self {
+        match value {
+            lee_core::account::BalanceDiff::Add(amount) => Self::Add(amount),
+            lee_core::account::BalanceDiff::Sub(amount) => Self::Sub(amount),
+        }
+    }
+}
+
+impl From<BalanceDiff> for lee_core::account::BalanceDiff {
+    fn from(value: BalanceDiff) -> Self {
+        match value {
+            BalanceDiff::Add(amount) => Self::Add(amount),
+            BalanceDiff::Sub(amount) => Self::Sub(amount),
+        }
+    }
+}
+
+impl From<lee_core::program::PdaSeed> for PdaSeed {
+    fn from(value: lee_core::program::PdaSeed) -> Self {
+        Self(*value.as_bytes())
+    }
+}
+
+impl From<PdaSeed> for lee_core::program::PdaSeed {
+    fn from(value: PdaSeed) -> Self {
+        Self::new(value.0)
+    }
+}
+
+impl From<lee_core::program::Claim> for Claim {
+    fn from(value: lee_core::program::Claim) -> Self {
+        match value {
+            lee_core::program::Claim::Authorized => Self::Authorized,
+            lee_core::program::Claim::Pda(seed) => Self::Pda(seed.into()),
+        }
+    }
+}
+
+impl From<Claim> for lee_core::program::Claim {
+    fn from(value: Claim) -> Self {
+        match value {
+            Claim::Authorized => Self::Authorized,
+            Claim::Pda(seed) => Self::Pda(seed.into()),
+        }
+    }
+}
+
+impl From<lee_core::account::AccountDiff> for AccountDiff {
+    fn from(value: lee_core::account::AccountDiff) -> Self {
+        let lee_core::account::AccountDiff {
+            id,
+            diff_balance,
+            diff_data,
+        } = value;
+        Self {
+            id: id.into(),
+            diff_balance: diff_balance.into(),
+            diff_data,
+        }
+    }
+}
+
+impl From<AccountDiff> for lee_core::account::AccountDiff {
+    fn from(value: AccountDiff) -> Self {
+        let AccountDiff {
+            id,
+            diff_balance,
+            diff_data,
+        } = value;
+        Self {
+            id: id.into(),
+            diff_balance: diff_balance.into(),
+            diff_data,
+        }
+    }
+}
+
+impl From<lee_core::program::AccountDiffOutput> for AccountDiffOutput {
+    fn from(value: lee_core::program::AccountDiffOutput) -> Self {
+        let claim = value.required_claim().map(Into::into);
+        Self {
+            diff: value.into_diff().into(),
+            claim,
+        }
+    }
+}
+
+impl From<AccountDiffOutput> for lee_core::program::AccountDiffOutput {
+    fn from(value: AccountDiffOutput) -> Self {
+        let AccountDiffOutput { diff, claim } = value;
+        match claim {
+            Some(claim) => Self::new_claimed(diff.into(), claim.into()),
+            None => Self::new(diff.into()),
+        }
+    }
+}
+
+impl From<lee_core::PublicDiff> for PublicDiff {
+    fn from(value: lee_core::PublicDiff) -> Self {
+        let lee_core::PublicDiff {
+            account_id,
+            executing_program_id,
+            diff,
+        } = value;
+        Self {
+            account_id: account_id.into(),
+            executing_program_id: executing_program_id.into(),
+            diff: diff.into(),
+        }
+    }
+}
+
+impl From<PublicDiff> for lee_core::PublicDiff {
+    fn from(value: PublicDiff) -> Self {
+        let PublicDiff {
+            account_id,
+            executing_program_id,
+            diff,
+        } = value;
+        Self {
+            account_id: account_id.into(),
+            executing_program_id: executing_program_id.into(),
+            diff: diff.into(),
         }
     }
 }
@@ -303,35 +455,23 @@ impl From<lee_core::PrivateAction> for PrivateAction {
 impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
     fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
         let lee::privacy_preserving_transaction::message::Message {
-            public_actions,
+            public_pre_states,
+            public_diffs,
             nonces,
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            signer_account_ids,
         } = value;
         Self {
-            public_actions: public_actions.into_iter().map(Into::into).collect(),
+            public_pre_states: public_pre_states.into_iter().map(Into::into).collect(),
+            public_diffs: public_diffs.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             private_actions: private_actions.into_iter().map(Into::into).collect(),
             block_validity_window: block_validity_window.into(),
             timestamp_validity_window: timestamp_validity_window.into(),
+            signer_account_ids: signer_account_ids.into_iter().map(Into::into).collect(),
         }
-    }
-}
-
-impl TryFrom<PublicActionWithID>
-    for lee::privacy_preserving_transaction::message::PublicActionWithID
-{
-    type Error = lee::error::LeeError;
-
-    fn try_from(value: PublicActionWithID) -> Result<Self, Self::Error> {
-        Ok(Self {
-            account_id: value.account_id.into(),
-            post_state: value
-                .post_state
-                .try_into()
-                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
-        })
     }
 }
 
@@ -351,21 +491,26 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 
     fn try_from(value: PrivacyPreservingMessage) -> Result<Self, Self::Error> {
         let PrivacyPreservingMessage {
-            public_actions,
+            public_pre_states,
+            public_diffs,
             nonces,
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            signer_account_ids,
         } = value;
 
-        let public_actions = public_actions
+        let public_pre_states = public_pre_states
             .into_iter()
             .map(TryInto::try_into)
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?;
+        let public_diffs = public_diffs.into_iter().map(Into::into).collect();
         let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
-            public_actions,
+            public_pre_states,
+            public_diffs,
             nonces: nonces
                 .iter()
                 .map(|x| lee_core::account::Nonce(*x))
@@ -377,6 +522,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             timestamp_validity_window: timestamp_validity_window
                 .try_into()
                 .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+            signer_account_ids: signer_account_ids.into_iter().map(Into::into).collect(),
         })
     }
 }

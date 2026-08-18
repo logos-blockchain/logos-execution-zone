@@ -4,7 +4,7 @@ use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
     Nullifier, NullifierPublicKey, NullifierWitness, PrivacyPreservingCircuitOutput,
     PrivateWitness, SharedSecretKey, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiff, Nonce, data::Data},
     program::{PdaSeed, PrivateAccountKind},
 };
 
@@ -64,13 +64,6 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
 
     let balance_to_move: u128 = 37;
 
-    let expected_sender_post = Account {
-        program_owner: program.id().into(),
-        balance: 100 - balance_to_move,
-        nonce: Nonce::default(),
-        data: Data::default(),
-    };
-
     let expected_recipient_post = Account {
         program_owner: program.id().into(),
         balance: balance_to_move,
@@ -108,10 +101,23 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
 
     assert!(proof.is_valid_for(&output));
 
-    let [action] = output.public_actions.try_into().unwrap();
-    let (sender_pre, sender_post) = (action.pre, action.post);
+    let [sender_pre] = output.public_pre_states.try_into().unwrap();
     assert_eq!(sender_pre, expected_sender_pre);
-    assert_eq!(sender_post, expected_sender_post);
+
+    // The sender's `AccountDiff`, not a materialized post-state — this is the whole point of
+    // `AccountDiff`: the circuit never commits to a specific public post-state, only to what
+    // changed, so the sequencer can replay it against whatever the account's live state is by
+    // the time it processes this transaction.
+    let [public_diff] = output.public_diffs.try_into().unwrap();
+    assert_eq!(public_diff.account_id, expected_sender_pre.account_id);
+    assert_eq!(public_diff.executing_program_id, program.id());
+    assert_eq!(
+        public_diff.diff.diff().diff_balance,
+        BalanceDiff::Sub(balance_to_move)
+    );
+    assert!(public_diff.diff.diff().diff_data.is_none());
+    assert!(public_diff.diff.required_claim().is_none());
+
     assert_eq!(output.private_actions.len(), 1);
 
     let (_identifier, recipient_post) = EncryptionScheme::decrypt(
@@ -230,7 +236,8 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     .unwrap();
 
     assert!(proof.is_valid_for(&output));
-    assert!(output.public_actions.is_empty());
+    assert!(output.public_pre_states.is_empty());
+    assert!(output.public_diffs.is_empty());
     let sender_nullifier = expected_new_nullifiers[0].0;
     let recipient_nullifier = expected_new_nullifiers[1].0;
 

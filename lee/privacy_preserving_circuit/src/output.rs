@@ -2,7 +2,7 @@ use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
     EphemeralSecretKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateAccountKind,
-    PrivateAction, PrivateWitness, PublicAction, SharedSecretKey, WitnessKind,
+    PrivateAction, PrivateWitness, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
@@ -15,13 +15,21 @@ pub fn compute_circuit_output(
     account_identities: &[InputAccountIdentity],
     dummy_inputs: Vec<DummyInput>,
 ) -> PrivacyPreservingCircuitOutput {
-    let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
-        execution_state.into_parts();
+    let (
+        block_validity_window,
+        timestamp_validity_window,
+        pda_seed_by_position,
+        signer_account_ids,
+        public_diffs,
+        states_iter,
+    ) = execution_state.into_parts();
     let mut output = PrivacyPreservingCircuitOutput {
-        public_actions: Vec::new(),
+        public_pre_states: Vec::new(),
+        public_diffs,
         private_actions: Vec::new(),
         block_validity_window,
         timestamp_validity_window,
+        signer_account_ids,
     };
 
     assert_eq!(
@@ -35,10 +43,7 @@ pub fn compute_circuit_output(
     {
         match account_identity {
             InputAccountIdentity::Public => {
-                output.public_actions.push(PublicAction {
-                    pre: pre_state,
-                    post: post_state,
-                });
+                output.public_pre_states.push(pre_state);
             }
             InputAccountIdentity::Private(PrivateWitness {
                 vpk,

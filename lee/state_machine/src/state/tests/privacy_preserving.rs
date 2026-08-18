@@ -306,7 +306,17 @@ fn data_changer_program_should_fail_for_non_owned_account_in_privacy_preserving_
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    // The account's owner ([0,1,2,3,4,5,6,7]) is not `data_changer` itself and isn't declared
+    // as a dependency, so the host can't resolve whose `update_from_diff` logic should interpret
+    // this diff — caught here, before the outer circuit is even proven, rather than surfacing as
+    // a `validate_execution` panic inside the circuit (`CircuitProvingError`) the way it would if
+    // the account were instead owned by some other *declared* program.
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(
+            InvalidProgramBehaviorError::UndeclaredProgramDependency { .. }
+        ))
+    ));
 }
 
 #[test]
