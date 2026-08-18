@@ -3166,7 +3166,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![funding_id, ownership_id, config_id],
         vec![Nonce(0), Nonce(0)],
         sequencer_stake_core::Instruction::Stake {
@@ -3212,7 +3212,7 @@ fn stake_transaction(
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![
             funding_id,
             ownership_id,
@@ -3286,7 +3286,7 @@ fn unstake_request_transaction(
 ) -> PublicTransaction {
     let (ownership_id, ownership_key) = ownership;
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![ownership_id, config_slot],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
@@ -3327,7 +3327,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
     // Donate into the claimed ownership account: a balance increase needs no
     // ownership of the target.
     let message = lee::public_transaction::Message::try_new(
-        programs::authenticated_transfer().id(),
+        programs::authenticated_transfer().id().into(),
         vec![funding_id, ownership_id],
         vec![state.get_account_by_id(funding_id).nonce],
         authenticated_transfer_core::Instruction::Transfer { amount: donation },
@@ -3524,7 +3524,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 
     // Full exit, releasing back to the (now drained) funding account.
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![
             ownership_id,
             system_accounts::sequencer_stake_config_account_id(),
@@ -3627,7 +3627,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     ));
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![
             stake_id,
             system_accounts::sequencer_stake_config_account_id(),

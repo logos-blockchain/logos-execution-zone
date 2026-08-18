@@ -8,8 +8,8 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
-        validate_execution,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId,
+        compute_public_authorized_pdas, validate_execution,
     },
 };
 use log::debug;
@@ -130,7 +130,7 @@ impl ValidatedStateDiff {
                 chained_call.instruction_data
             );
             let mut program_output = program.execute(
-                caller_data.caller_account_id,
+                caller_data.program_id.map(AccountId::from),
                 &chained_call.pre_states,
                 &chained_call.instruction_data,
             )?;
@@ -140,7 +140,7 @@ impl ValidatedStateDiff {
             );
 
             let authorized_pdas = compute_public_authorized_pdas(
-                caller_data.caller_account_id,
+                caller_data.program_id.map(AccountId::from),
                 &chained_call.pda_seeds,
             );
 
@@ -194,9 +194,9 @@ impl ValidatedStateDiff {
 
             // Verify that the program output's caller_account_id matches the actual caller.
             ensure!(
-                program_output.caller_account_id == caller_data.caller_account_id,
+                program_output.caller_account_id == caller_data.program_id.map(AccountId::from),
                 InvalidProgramBehaviorError::MismatchedCallerProgramId {
-                    expected: caller_data.caller_account_id,
+                    expected: caller_data.program_id.map(AccountId::from),
                     actual: program_output.caller_account_id,
                 }
             );

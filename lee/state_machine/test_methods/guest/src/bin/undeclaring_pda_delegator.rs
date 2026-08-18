@@ -14,8 +14,8 @@ type Instruction = (
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             mut pre_states,
             instruction: (seed, declare_authorized, callee_program_id, callee_instruction, sibling),
         },
@@ -31,7 +31,7 @@ fn main() {
         let mut sibling_pre = pre_states[0].clone();
         sibling_pre.is_authorized = true;
         ChainedCall {
-            program_id: sibling_program_id,
+            program_account_id: sibling_program_id.into(),
             instruction_data: to_vec(&()).unwrap(),
             pre_states: vec![sibling_pre],
             pda_seeds: vec![],
@@ -39,7 +39,7 @@ fn main() {
     });
 
     let mut chained_calls = vec![ChainedCall {
-        program_id: callee_program_id,
+        program_account_id: callee_program_id.into(),
         instruction_data: callee_instruction,
         pre_states,
         pda_seeds: seed.into_iter().collect(),
@@ -48,8 +48,8 @@ fn main() {
 
     // Emit an output with only chained calls and no pre or post-states.
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         Vec::new(),
         Vec::new(),
