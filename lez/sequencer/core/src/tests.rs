@@ -183,7 +183,7 @@ fn cross_zone_test_config() -> SequencerConfig {
                     src_program_id: programs::ping_sender().id(),
                     target_program_id: programs::ping_receiver().id(),
                 }],
-                expected_block_signing_pubkey: None,
+                expected_block_signing_pubkeys: Vec::new(),
             }],
         }),
         ..setup_sequencer_config()

@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use common::{HashType, block::Block, transaction::LeeTransaction};
 use cross_zone::{
     EmissionSource, Link, StallState, alerts_at, build_dispatch_from_emission, equivocation_report,
-    extract_emission, is_sequencer_only_program, link_to_tip, screen_peer_block,
+    extract_emission, is_sequencer_only_program, link_to_tip, pinned_keys, screen_peer_block,
 };
 use cross_zone_inbox_core::message_key;
 use futures::{Stream, StreamExt as _};
@@ -30,7 +30,7 @@ use crate::{
 struct PeerContext {
     peer_zone: [u8; 32],
     self_zone: [u8; 32],
-    expected_pubkey: Option<PublicKey>,
+    expected_pubkeys: Vec<PublicKey>,
 }
 
 /// Why one pass over a peer's stream ended.
@@ -147,15 +147,13 @@ pub fn spawn_watchers(
             CommonHttpClient::new(bedrock_config.auth.clone().map(Into::into)),
             bedrock_config.node_url.clone(),
         );
-        let expected_pubkey = peer.expected_block_signing_pubkey.map(|bytes| {
-            PublicKey::try_new(bytes).expect("configured peer block-signing pubkey is a valid key")
-        });
+        let expected_pubkeys = pinned_keys(&peer);
         tasks.push(tokio::spawn(watch_peer(
             ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
             PeerContext {
                 peer_zone: peer.channel_id,
                 self_zone,
-                expected_pubkey,
+                expected_pubkeys,
             },
             poll_interval,
             Arc::clone(dbio),
@@ -332,7 +330,7 @@ where
                 // block this watcher cannot place is read past rather than
                 // treated as the end of the chain: the peer's own next honest
                 // block still links to the tip.
-                let link = match screen_peer_block(&block, peer.expected_pubkey.as_ref()) {
+                let link = match screen_peer_block(&block, &peer.expected_pubkeys) {
                     Ok(recomputed) => link_to_tip(tip.as_ref(), &block, recomputed),
                     Err(refusal) => {
                         skipped = skipped.saturating_add(1);
@@ -577,7 +575,7 @@ mod tests {
         PeerContext {
             peer_zone: PEER_ZONE,
             self_zone: SELF_ZONE,
-            expected_pubkey: None,
+            expected_pubkeys: Vec::new(),
         }
     }
 

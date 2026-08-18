@@ -50,7 +50,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
                 src_program_id: programs::ping_sender().id(),
                 target_program_id: receiver_id,
             }],
-            expected_block_signing_pubkey: None,
+            expected_block_signing_pubkeys: Vec::new(),
         }],
     };
 
