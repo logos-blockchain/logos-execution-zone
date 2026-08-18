@@ -134,6 +134,7 @@ tokio = { version = "1.50", features = [
   "fs",
 ] }
 tokio-util = "0.7.18"
+async-trait = "0.1"
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
 risc0-build = "3.0.5"
 kameo = "0.22.2"
@@ -160,6 +161,8 @@ metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 lru = "0.16.3"
 thiserror = "2.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 sha2 = "0.10.8"
 ed25519-dalek = { version = "2.2.0", default-features = false }
 hex = "0.4.3"

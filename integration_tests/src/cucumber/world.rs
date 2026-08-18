@@ -6,7 +6,6 @@ use std::{
 };
 
 use cucumber::World;
-use derivative::Derivative;
 use testing_framework_app::{AppHostEnv, AppHostTopology, DeployContext};
 use testing_framework_core::scenario::NodeClients;
 
@@ -186,7 +185,7 @@ pub struct EnvironmentState {
 /// Cucumber creates a fresh world for each scenario. Its deployment context
 /// starts empty; `Given` steps can deploy and expose only the applications the
 /// scenario needs. Dropping the world releases all TF-managed resources.
-#[derive(World, Derivative)]
+#[derive(World)]
 #[world(init = Self::default)]
 pub struct CucumberWorld {
     /// Testing-framework deployment registry owning exposed application handles.

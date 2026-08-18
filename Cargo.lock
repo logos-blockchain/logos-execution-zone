@@ -4778,7 +4778,6 @@ dependencies = [
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",
  "cucumber",
- "derivative",
  "faucet_core",
  "hex",
  "indexer_ffi",
