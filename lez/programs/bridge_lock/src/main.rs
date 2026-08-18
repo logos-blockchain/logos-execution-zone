@@ -126,10 +126,8 @@ fn lock(
     );
 
     assert!(holder.is_authorized, "holder must authorize the lock");
-    // The holder holding is bridge_lock-owned, so bridge_lock may debit its native
-    // balance directly (state-machine rule 5). This also pins the transfer to a
-    // genuine holding: a caller cannot substitute an account owned by some other
-    // program to emit the mint without an actual lock.
+    // Pin the transfer to a genuine holding: a caller cannot substitute an account
+    // owned by some other program to emit the mint without an actual lock.
     assert_eq!(
         holder.account.program_owner,
         self_program_id.into(),
@@ -141,9 +139,9 @@ fn lock(
         "third account must be the escrow PDA"
     );
 
-    // Move the real native balance holder -> escrow. bridge_lock owns both accounts,
-    // so it debits the holder and credits the escrow directly; conservation holds
-    // because the same amount moves between them.
+    // Move the real native balance holder -> escrow. The authorized holder is
+    // debited and the escrow credited directly; conservation holds because the
+    // same amount moves between them.
     let holder_new = holder
         .account
         .balance
