@@ -18,13 +18,20 @@ use sequencer_stake_core::{
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
+
+    // Recover the real `ProgramId` (RISC0 image id) from the account's address: on this branch
+    // every program account lives at the direct `AccountId::from(program_id)` bijection, so this
+    // round-trip is exact. Needed wherever this program's own dispatch logic requires the
+    // underlying image id rather than the dispatch-facing `AccountId`.
+    let self_program_id = ProgramId::from(self_account_id);
+    let caller_program_id = caller_account_id.map(ProgramId::from);
 
     let (post_states, chained_calls) = match instruction {
         Instruction::Stake {
@@ -97,8 +104,8 @@ fn main() {
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         pre_states,
         post_states,

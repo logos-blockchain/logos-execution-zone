@@ -8,8 +8,8 @@ type Instruction = (ProgramId, InstructionData, bool, Vec<PdaSeed>);
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (callee_program_id, callee_instruction, declare_pre_states, pda_seeds),
         },
@@ -32,8 +32,8 @@ fn main() {
     // pda_seeds it was given (typically none, so the target PDAs are never authorized) —
     // this program never claims or otherwise touches the accounts it forwards.
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         output_pre_states,
         output_post_states,
