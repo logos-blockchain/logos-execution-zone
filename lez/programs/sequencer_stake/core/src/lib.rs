@@ -67,8 +67,9 @@ impl borsh::BorshDeserialize for SequencerKey {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
-    /// Locks `amount` into the ownership account for `sequencer_key`. First
-    /// use claims the account; later calls top up the same account.
+    /// Locks `amount` into the stake funds account of `sequencer_key`'s
+    /// ownership account. First use claims both; later calls top up the same
+    /// pair.
     Stake {
         sequencer_key: SequencerKey,
         amount: u128,
@@ -89,6 +90,10 @@ pub enum Instruction {
     /// Unsigned, permissionless: releases a pending `UnstakeRequest`.
     /// Block-inclusion validity is enforced outside this program.
     FinalizeUnstake,
+
+    /// Self-chained only: moves `amount` out of the stake funds account, which
+    /// `FinalizeUnstake` authorizes by granting this program's own PDA seed.
+    ReleaseUnstake { amount: u128 },
 }
 
 /// Tag written into a claimed ownership account: which key it backs, plus any pending unstake.
@@ -152,7 +157,7 @@ pub struct SequencerEntry {
 impl SequencerEntry {
     /// Stake still backing this key once every pending release has been
     /// finalized. Candidacy and every release check measure this, never the
-    /// ownership account's balance: only balance decreases require owning an
+    /// stake funds account's balance: only balance decreases require owning an
     /// account, so anyone can credit one and push its balance above
     /// `total_staked`.
     #[must_use]
@@ -181,6 +186,17 @@ pub const fn sequencer_stake_config_seed() -> PdaSeed {
 #[must_use]
 pub fn sequencer_stake_config_account_id(program_id: ProgramId) -> AccountId {
     AccountId::for_public_pda(&program_id, &sequencer_stake_config_seed())
+}
+
+/// Seed of the PDA holding custody of funds staked through `ownership_id`.
+#[must_use]
+pub const fn stake_funds_seed(ownership_id: &AccountId) -> PdaSeed {
+    PdaSeed::new(ownership_id.to_bytes())
+}
+
+#[must_use]
+pub fn stake_funds_account_id(program_id: ProgramId, ownership_id: &AccountId) -> AccountId {
+    AccountId::for_public_pda(&program_id, &stake_funds_seed(ownership_id))
 }
 
 #[cfg(test)]
@@ -354,5 +370,21 @@ mod tests {
             sequencer_stake_config_account_id(PROGRAM_ID),
             sequencer_stake_config_account_id(PROGRAM_ID)
         );
+    }
+
+    #[test]
+    fn each_ownership_account_gets_its_own_stake_funds_account() {
+        let one = AccountId::new([1; 32]);
+        let two = AccountId::new([2; 32]);
+
+        assert_eq!(
+            stake_funds_account_id(PROGRAM_ID, &one),
+            stake_funds_account_id(PROGRAM_ID, &one)
+        );
+        assert_ne!(
+            stake_funds_account_id(PROGRAM_ID, &one),
+            stake_funds_account_id(PROGRAM_ID, &two)
+        );
+        assert_ne!(stake_funds_account_id(PROGRAM_ID, &one), one);
     }
 }

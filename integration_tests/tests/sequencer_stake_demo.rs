@@ -105,6 +105,12 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .context("Failed to create a fresh stake ownership account")?;
     info!("Fresh stake ownership account: {ownership_id}");
 
+    // The staked funds live in this PDA.
+    let funds_id = sequencer_stake_core::stake_funds_account_id(
+        programs::sequencer_stake().id(),
+        &ownership_id,
+    );
+
     let mover_instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: FUNDING_BALANCE,
@@ -129,6 +135,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             vec![
                 AccountIdentity::Public(funding_id),
                 AccountIdentity::Public(ownership_id),
+                AccountIdentity::PublicNoSign(funds_id),
                 AccountIdentity::PublicNoSign(config_id),
             ],
             stake_instruction_data,
@@ -152,16 +159,16 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         programs::sequencer_stake().id().into(),
         "ownership account should now be owned by sequencer_stake"
     );
+    let staked_balance = account_balance(&ctx, funds_id).await?;
     assert_eq!(
-        ownership_account.balance, FUNDING_BALANCE,
-        "ownership account should hold the staked balance"
+        staked_balance, FUNDING_BALANCE,
+        "the funds PDA should hold the staked balance"
     );
     let record = sequencer_stake_core::StakeRecord::from_bytes(ownership_account.data.as_ref())
         .context("ownership account data did not decode as a StakeRecord")?;
     assert_eq!(record.sequencer_key, demo_stake_key);
     info!(
-        "Ownership account confirmed: {} staked for sequencer key {}",
-        ownership_account.balance,
+        "Ownership account confirmed: {staked_balance} staked for sequencer key {}",
         hex::encode(record.sequencer_key)
     );
 
@@ -315,18 +322,18 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // Once removed, the sequencer injects FinalizeUnstake itself; this test
     // never submits one.
     poll_until(
-        "FinalizeUnstake to drain the ownership account",
+        "FinalizeUnstake to drain the stake funds account",
         90,
-        || async { Ok(get_account(&ctx, ownership_id).await?.balance == 0) },
+        || async { Ok(account_balance(&ctx, funds_id).await? == 0) },
     )
     .await?;
 
     let drained_ownership_account = get_account(&ctx, ownership_id)
         .await
-        .context("Failed to read the drained ownership account")?;
+        .context("Failed to read the ownership account after the release")?;
     assert_eq!(
         drained_ownership_account.balance, 0,
-        "ownership account should be fully drained"
+        "the ownership account never custodies the stake"
     );
     let drained_record =
         sequencer_stake_core::StakeRecord::from_bytes(drained_ownership_account.data.as_ref())

@@ -1883,8 +1883,14 @@ fn genesis_stake_message(
         vec![
             genesis_stake_funding_account(),
             ownership_id,
+            sequencer_stake_core::stake_funds_account_id(
+                programs::sequencer_stake().id(),
+                &ownership_id,
+            ),
             system_accounts::sequencer_stake_config_account_id(),
         ],
+        // Only the first two accounts sign: the funds PDA and the config
+        // account carry no nonce.
         vec![
             lee_core::account::Nonce(funding_nonce),
             lee_core::account::Nonce(0),
@@ -2140,6 +2146,10 @@ fn build_finalize_unstake_tx(
         programs::sequencer_stake().id(),
         vec![
             ownership_id,
+            sequencer_stake_core::stake_funds_account_id(
+                programs::sequencer_stake().id(),
+                &ownership_id,
+            ),
             pending.destination,
             system_accounts::sequencer_stake_config_account_id(),
         ],

@@ -3006,7 +3006,12 @@ fn diag_sequencer_stake_claims_ownership_account() {
 
     let message = lee::public_transaction::Message::try_new(
         programs::sequencer_stake().id(),
-        vec![funding_id, ownership_id, config_id],
+        vec![
+            funding_id,
+            ownership_id,
+            stake_funds_id(ownership_id),
+            config_id,
+        ],
         vec![Nonce(0), Nonce(0)],
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
@@ -3030,11 +3035,23 @@ fn diag_sequencer_stake_claims_ownership_account() {
         programs::sequencer_stake().id().into(),
         "ownership account should be claimed by sequencer_stake"
     );
-    assert_eq!(ownership_account.balance, amount);
+    assert_eq!(
+        ownership_account.balance, 0,
+        "the ownership account never custodies the stake"
+    );
+
+    let funds_account = state.get_account_by_id(stake_funds_id(ownership_id));
+    assert_eq!(
+        funds_account.program_owner,
+        programs::sequencer_stake().id().into(),
+        "the funds PDA should be claimed by sequencer_stake"
+    );
+    assert_eq!(funds_account.balance, amount);
 }
 
-/// Builds a `Stake` moving `amount` from `funding` into `ownership` via
-/// `authenticated_transfer`, taking each signer's nonce from `state`.
+/// Builds a `Stake` moving `amount` from `funding` into `ownership`'s stake
+/// funds PDA via `authenticated_transfer`, taking each signer's nonce from
+/// `state`.
 fn stake_transaction(
     state: &V03State,
     funding: (AccountId, &PrivateKey),
@@ -3055,6 +3072,7 @@ fn stake_transaction(
         vec![
             funding_id,
             ownership_id,
+            stake_funds_id(ownership_id),
             system_accounts::sequencer_stake_config_account_id(),
         ],
         vec![
@@ -3072,6 +3090,11 @@ fn stake_transaction(
     let witness_set =
         lee::public_transaction::WitnessSet::for_message(&message, &[funding_key, ownership_key]);
     PublicTransaction::new(message, witness_set)
+}
+
+/// The PDA custodying whatever `ownership_id` has staked.
+fn stake_funds_id(ownership_id: AccountId) -> AccountId {
+    sequencer_stake_core::stake_funds_account_id(programs::sequencer_stake().id(), &ownership_id)
 }
 
 fn stake_entry(
@@ -3163,11 +3186,12 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
         .transition_from_public_transaction(&stake, 1, 0)
         .expect("Stake should succeed");
 
-    // Donate into the claimed ownership account: a balance increase needs no
-    // ownership of the target.
+    // Donate into the claimed funds PDA, which is where the stake actually
+    // sits: a balance increase needs no ownership of the target.
+    let funds_id = stake_funds_id(ownership_id);
     let message = lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id(),
-        vec![funding_id, ownership_id],
+        vec![funding_id, funds_id],
         vec![state.get_account_by_id(funding_id).nonce],
         authenticated_transfer_core::Instruction::Transfer { amount: donation },
     )
@@ -3177,7 +3201,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
         .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
         .expect("donation should succeed");
 
-    let balance = state.get_account_by_id(ownership_id).balance;
+    let balance = state.get_account_by_id(funds_id).balance;
     assert_eq!(
         balance,
         amount + donation,
@@ -3396,6 +3420,17 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         .expect("FinalizeUnstake should succeed");
 
     assert_eq!(stake_entry(&state, sequencer_key), None, "key fully exited");
+    let funds_id = stake_funds_id(ownership_id);
+    assert_eq!(
+        state.get_account_by_id(funds_id).balance,
+        0,
+        "the funds PDA is drained"
+    );
+    assert_eq!(
+        state.get_account_by_id(funding_id).balance,
+        amount,
+        "the destination received the released stake"
+    );
     assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
     assert_eq!(
         state.get_account_by_id(ownership_id).program_owner,
@@ -3403,8 +3438,9 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         "the ownership account stays claimed after a full exit"
     );
 
-    // The account is still claimed, so the re-stake goes through the same
-    // already-owned account rather than needing a fresh one.
+    // Both the ownership account and its funds PDA are still claimed, so the
+    // re-stake goes through the same accounts rather than needing fresh ones;
+    // claiming them again is simply a no-op.
     let restake = stake_transaction(
         &state,
         (funding_id, &funding_key),
@@ -3420,7 +3456,54 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     assert_eq!(entry.account_id, ownership_id);
     assert_eq!(entry.total_staked, amount);
     assert_eq!(entry.total_pending_unstake, 0);
-    assert_eq!(state.get_account_by_id(ownership_id).balance, amount);
+    assert_eq!(state.get_account_by_id(funds_id).balance, amount);
+    assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
+}
+
+// `ReleaseUnstake` is the instruction that actually moves staked funds, and the
+// only thing authorizing it is the PDA seed `FinalizeUnstake` grants its callee.
+// A program's seeds grant nothing in its own top-level frame, so a direct
+// invocation must be refused outright rather than silently unauthorized.
+#[test]
+fn release_unstake_cannot_be_invoked_as_a_top_level_transaction() {
+    let funding_key = PrivateKey::try_new([38; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let ownership_key = PrivateKey::try_new([39; 32]).unwrap();
+    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let mut state = stake_test_state(funding_id, amount);
+    let stake = stake_transaction(
+        &state,
+        (funding_id, &funding_key),
+        (ownership_id, &ownership_key),
+        test_sequencer_key(0x47),
+        amount,
+    );
+    state
+        .transition_from_public_transaction(&stake, 1, 0)
+        .expect("Stake should succeed");
+
+    let funds_id = stake_funds_id(ownership_id);
+    assert_eq!(state.get_account_by_id(funds_id).balance, amount);
+
+    let message = lee::public_transaction::Message::try_new(
+        programs::sequencer_stake().id(),
+        vec![funds_id, funding_id],
+        vec![],
+        sequencer_stake_core::Instruction::ReleaseUnstake { amount },
+    )
+    .unwrap();
+    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    state
+        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
+        .expect_err("a top-level ReleaseUnstake must be refused");
+
+    assert_eq!(
+        state.get_account_by_id(funds_id).balance,
+        amount,
+        "the staked funds are untouched"
+    );
 }
 
 #[test]
@@ -3435,7 +3518,9 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
         programs::sequencer_stake().id().into()
     );
     assert_eq!(
-        stake_account.balance,
+        state
+            .get_account_by_id(stake_funds_id(bootstrap_stake_account_id(&config)))
+            .balance,
         system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE
     );
 
