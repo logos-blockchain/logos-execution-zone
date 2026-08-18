@@ -1,14 +1,15 @@
+//! Forwards a single chained call to `target_program_id` with `instruction_data`, passing
+//! through whatever `pre_states` this program itself was invoked with unchanged.
+//!
+//! Exists purely as test infrastructure: lets a test exercise "program X invokes program Y via
+//! a chained call" for an arbitrary Y and instruction, without needing a purpose-built guest for
+//! every target program under test.
+
 use lee_core::program::{
     AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
     read_lee_inputs,
 };
 
-/// Forwards a single chained call to `target_program_id` with `instruction_data`, passing
-/// through whatever `pre_states` this program itself was invoked with unchanged.
-///
-/// Exists purely as test infrastructure: lets a test exercise "program X invokes program Y via
-/// a chained call" for an arbitrary Y and instruction, without needing a purpose-built guest for
-/// every target program under test.
 type Instruction = (ProgramId, InstructionData);
 
 fn main() {
