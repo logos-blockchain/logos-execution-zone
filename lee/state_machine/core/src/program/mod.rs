@@ -844,23 +844,27 @@ pub fn validate_execution(
         }
     }
 
-    // 5. Total balance is preserved: within this call's own diffs, every decrease must be
-    //    balanced by an equal increase.
-    let Some(total_added) = WrappedBalanceSum::from_balances(post_diff.iter().filter_map(
-        |diff_output| match diff_output.diff().diff_balance {
-            BalanceDiff::Add(amount) => Some(amount),
-            BalanceDiff::Sub(_) => None,
-        },
-    )) else {
+    // 5. Total balance is preserved: within this call's own diffs, every decrease must be balanced
+    //    by an equal increase.
+    let Some(total_added) =
+        WrappedBalanceSum::from_balances(post_diff.iter().filter_map(|diff_output| {
+            match diff_output.diff().diff_balance {
+                BalanceDiff::Add(amount) => Some(amount),
+                BalanceDiff::Sub(_) => None,
+            }
+        }))
+    else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
-    let Some(total_subbed) = WrappedBalanceSum::from_balances(post_diff.iter().filter_map(
-        |diff_output| match diff_output.diff().diff_balance {
-            BalanceDiff::Sub(amount) => Some(amount),
-            BalanceDiff::Add(_) => None,
-        },
-    )) else {
+    let Some(total_subbed) =
+        WrappedBalanceSum::from_balances(post_diff.iter().filter_map(|diff_output| {
+            match diff_output.diff().diff_balance {
+                BalanceDiff::Sub(amount) => Some(amount),
+                BalanceDiff::Add(_) => None,
+            }
+        }))
+    else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 

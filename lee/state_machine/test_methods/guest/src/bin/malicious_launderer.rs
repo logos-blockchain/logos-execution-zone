@@ -1,4 +1,6 @@
-use lee_core::program::{ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput, read_lee_call};
+use lee_core::program::{
+    ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput, read_lee_call,
+};
 
 /// Instruction: (`auth_transfer_id`, `amount`) — both primitive, safe for `risc0_zkvm::serde`.
 type Instruction = (ProgramId, u128);

@@ -6,8 +6,8 @@ use token_core::{TokenDefinition, TokenHolding};
 
 #[must_use]
 pub fn initialize_account(
-    definition_account: AccountWithMetadata,
-    account_to_initialize: AccountWithMetadata,
+    definition_account: &AccountWithMetadata,
+    account_to_initialize: &AccountWithMetadata,
 ) -> Vec<AccountDiffOutput> {
     assert_eq!(
         account_to_initialize.account,

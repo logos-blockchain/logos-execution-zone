@@ -120,12 +120,12 @@ impl Program {
     /// public-transaction path, where the sequencer itself is the trusted party running this.
     pub(crate) fn execute_update_from_diff(
         &self,
-        pre_state: Account,
-        diff_data: Vec<u8>,
+        pre_state: &Account,
+        diff_data: &[u8],
     ) -> Result<Data, LeeError> {
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
-        Self::write_update_from_diff_inputs(&pre_state, &diff_data, &mut env_builder)?;
+        Self::write_update_from_diff_inputs(pre_state, diff_data, &mut env_builder)?;
         let env = env_builder.build().unwrap();
 
         let executor = default_executor();
@@ -148,11 +148,11 @@ impl Program {
     /// circuit, not read directly.
     pub(crate) fn prove_update_from_diff(
         &self,
-        pre_state: Account,
-        diff_data: Vec<u8>,
+        pre_state: &Account,
+        diff_data: &[u8],
     ) -> Result<Receipt, LeeError> {
         let mut env_builder = ExecutorEnv::builder();
-        Self::write_update_from_diff_inputs(&pre_state, &diff_data, &mut env_builder)?;
+        Self::write_update_from_diff_inputs(pre_state, diff_data, &mut env_builder)?;
         let env = env_builder.build().unwrap();
 
         let prover = default_prover();

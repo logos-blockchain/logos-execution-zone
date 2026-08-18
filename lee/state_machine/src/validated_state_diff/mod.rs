@@ -4,11 +4,11 @@ use std::{
 };
 
 use lee_core::{
-    BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
+    BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, Timestamp,
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiff, apply_balance_diff},
     program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_ID, ProgramId, compute_public_authorized_pdas,
-        validate_execution,
+        ChainedCall, Claim, DEFAULT_PROGRAM_ID, ExecutionValidationError, ProgramId,
+        compute_public_authorized_pdas, validate_execution,
     },
 };
 use log::debug;
@@ -220,8 +220,8 @@ impl ValidatedStateDiff {
                 let balance = apply_balance_diff(pre.account.balance, diff.diff_balance)
                     .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
 
-                let data = if let Some(diff_data) = diff.diff_data.clone() {
-                    program.execute_update_from_diff(pre.account.clone(), diff_data)?
+                let data = if let Some(diff_data) = &diff.diff_data {
+                    program.execute_update_from_diff(&pre.account, diff_data)?
                 } else {
                     pre.account.data.clone()
                 };
@@ -229,9 +229,7 @@ impl ValidatedStateDiff {
                 // Ownership is either inherited unchanged, or explicitly overwritten by a claim
                 // — never reverts to default. `AccountDiff` carries no ownership info at all, so
                 // this is the only place a materialized account's owner can change.
-                let mut program_owner = pre.account.program_owner;
-
-                if let Some(claim) = diff_output.required_claim() {
+                let program_owner = if let Some(claim) = diff_output.required_claim() {
                     // The invoked program can only claim accounts with default program id.
                     ensure!(
                         pre.account.program_owner == DEFAULT_PROGRAM_ID,
@@ -264,8 +262,10 @@ impl ValidatedStateDiff {
                         }
                     }
 
-                    program_owner = chained_call.program_id;
-                }
+                    chained_call.program_id
+                } else {
+                    pre.account.program_owner
+                };
 
                 state_diff.insert(
                     account_id,
@@ -419,24 +419,22 @@ impl ValidatedStateDiff {
             LeeError::OutOfValidityWindow
         );
 
-        // Build pre_states for proof verification
-        let public_pre_states: Vec<_> = public_account_ids
-            .iter()
-            .map(|account_id| {
-                AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
-                    *account_id,
-                )
-            })
-            .collect();
+        // Anchor the circuit's claimed signer set against real, cryptographically-verified
+        // signatures. Without this, a prover could satisfy claim-eligibility's authorization
+        // check for an account it never actually controls, since `is_authorized` inside the
+        // circuit is derived entirely from this list.
+        ensure!(
+            message
+                .signer_account_ids
+                .iter()
+                .all(|id| signer_account_ids.contains(id)),
+            LeeError::InvalidInput(
+                "Circuit claims a signer account with no valid signature".into()
+            )
+        );
 
         // 4. Proof verification
-        check_privacy_preserving_circuit_proof_is_valid(
-            &witness_set.proof,
-            &public_pre_states,
-            message,
-        )?;
+        check_privacy_preserving_circuit_proof_is_valid(&witness_set.proof, message)?;
 
         // 5. Commitment freshness
         state.check_commitments_are_new(&commitments)?;
@@ -444,11 +442,98 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        let public_diff = message
-            .public_actions
-            .iter()
-            .map(|action| (action.account_id, action.post_state.clone()))
-            .collect();
+        // Replay each public diff against live state, one at a time — never trusting anything
+        // the circuit internally materialized for a public account. This, not proof
+        // verification above, is what actually avoids tying this transaction's validity to a
+        // stale public-account snapshot: this step only cares about the diff's shape and this
+        // program's ownership, both independent of whatever pre-state the circuit witnessed
+        // while proving.
+        let mut public_diff: HashMap<AccountId, Account> = HashMap::new();
+        for public_diff_entry in &message.public_diffs {
+            let account_id = public_diff_entry.account_id;
+            let executing_program_id = public_diff_entry.executing_program_id;
+            let pre_account = public_diff
+                .get(&account_id)
+                .cloned()
+                .unwrap_or_else(|| state.get_account_by_id(account_id));
+            let diff = public_diff_entry.diff.diff();
+            let account_program_owner = pre_account.program_owner;
+
+            // Re-check authorization against *live* state — the circuit's own
+            // `validate_execution` check ran against a witnessed pre-state that isn't trusted
+            // for this purpose (see `check_privacy_preserving_circuit_proof_is_valid`).
+            ensure!(
+                !matches!(diff.diff_balance, BalanceDiff::Sub(amount) if amount > 0)
+                    || account_program_owner == executing_program_id,
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::UnauthorizedBalanceDecrease {
+                        account_id,
+                        owner_program_id: account_program_owner,
+                        executing_program_id,
+                    }
+                )
+            );
+            ensure!(
+                diff.diff_data.is_none()
+                    || pre_account == Account::default()
+                    || account_program_owner == executing_program_id,
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::UnauthorizedDataModification {
+                        account_id,
+                        executing_program_id,
+                    }
+                )
+            );
+
+            // Claim-eligibility, same rules as the public-transaction path's — checked against
+            // real signatures (`signer_account_ids`), not the circuit's witnessed claim.
+            let claimed_owner = if let Some(claim) = public_diff_entry.diff.required_claim() {
+                ensure!(
+                    account_program_owner == DEFAULT_PROGRAM_ID,
+                    InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
+                );
+                match claim {
+                    Claim::Authorized => {
+                        ensure!(
+                            signer_account_ids.contains(&account_id),
+                            InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
+                        );
+                    }
+                    Claim::Pda(seed) => {
+                        let pda = AccountId::for_public_pda(&executing_program_id, &seed);
+                        ensure!(
+                            account_id == pda,
+                            InvalidProgramBehaviorError::MismatchedPdaClaim {
+                                expected: pda,
+                                actual: account_id
+                            }
+                        );
+                    }
+                }
+                Some(executing_program_id)
+            } else {
+                None
+            };
+
+            // Materialize: apply_balance_diff always; dispatch update_from_diff when diff_data
+            // is Some, via the same unproven, sequencer-trusted mechanism the
+            // public-transaction path already uses.
+            let mut post = pre_account.clone();
+            post.balance = apply_balance_diff(pre_account.balance, diff.diff_balance)
+                .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
+            if let Some(diff_data) = &diff.diff_data {
+                let owner_id = claimed_owner.unwrap_or(account_program_owner);
+                let owner_program = state.programs().get(&owner_id).ok_or(
+                    InvalidProgramBehaviorError::NoOwnerProgramForDataUpdate { account_id },
+                )?;
+                post.data = owner_program.execute_update_from_diff(&pre_account, diff_data)?;
+            }
+            if let Some(owner) = claimed_owner {
+                post.program_owner = owner;
+            }
+            public_diff.insert(account_id, post);
+        }
+
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {
@@ -529,24 +614,23 @@ fn authenticate_public_transaction_signers(
     Ok(signer_account_ids)
 }
 
+/// Verifies the proof against exactly what the circuit witnessed and output — deliberately *not*
+/// reconciled against live sequencer state for public accounts. Reconciling `public_pre_states`
+/// against live state here is exactly the race condition `AccountDiff` exists to avoid: it would
+/// tie this proof's validity to a specific public-account snapshot, invalidating it the moment
+/// that account changes before this transaction is processed. Materialization (which *does* use
+/// live state) happens separately, later, via `message.public_diffs`.
 fn check_privacy_preserving_circuit_proof_is_valid(
     proof: &Proof,
-    public_pre_states: &[AccountWithMetadata],
     message: &Message,
 ) -> Result<(), LeeError> {
     let output = PrivacyPreservingCircuitOutput {
-        public_actions: public_pre_states
-            .iter()
-            .cloned()
-            .zip(&message.public_actions)
-            .map(|(pre, action)| PublicAction {
-                pre,
-                post: action.post_state.clone(),
-            })
-            .collect(),
+        public_pre_states: message.public_pre_states.clone(),
+        public_diffs: message.public_diffs.clone(),
         private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
+        signer_account_ids: message.signer_account_ids.clone(),
     };
     proof
         .is_valid_for(&output)

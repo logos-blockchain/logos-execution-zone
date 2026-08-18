@@ -40,7 +40,7 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
             } = tx;
             format!(
                 "{} public accounts, {} commitments",
-                message.public_actions.len(),
+                message.public_pre_states.len(),
                 message.private_actions.len()
             )
         }

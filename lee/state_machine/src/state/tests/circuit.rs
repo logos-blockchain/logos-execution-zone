@@ -467,7 +467,8 @@ fn private_pda_claim_succeeds() {
 
     let (output, _proof) = result.expect("private PDA claim should succeed");
     assert_eq!(output.private_actions.len(), 1);
-    assert!(output.public_actions.is_empty());
+    assert!(output.public_pre_states.is_empty());
+    assert!(output.public_diffs.is_empty());
 }
 
 /// An npk is supplied that does not match the `pre_state`'s `account_id` under

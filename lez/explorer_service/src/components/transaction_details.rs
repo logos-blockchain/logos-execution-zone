@@ -68,16 +68,18 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         witness_set,
     } = tx;
     let PrivacyPreservingMessage {
-        public_actions,
+        public_pre_states,
+        public_diffs: _,
         nonces,
         private_actions,
         block_validity_window,
         timestamp_validity_window,
+        signer_account_ids: _,
     } = message;
     let private_action_count = private_actions.len();
-    let public_account_ids: Vec<_> = public_actions
+    let public_account_ids: Vec<_> = public_pre_states
         .into_iter()
-        .map(|action| action.account_id)
+        .map(|pre_state| pre_state.account_id)
         .collect();
     let public_account_count = public_account_ids.len();
     let WitnessSet {

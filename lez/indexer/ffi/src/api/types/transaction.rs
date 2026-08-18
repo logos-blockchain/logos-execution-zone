@@ -1,19 +1,20 @@
 use indexer_service_protocol::{
-    AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
-    EphemeralPublicKey, HashType, Nullifier, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
-    ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
-    PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    AccountDiff, AccountDiffOutput, AccountId, AccountWithMetadata, BalanceDiff, Ciphertext, Claim,
+    Commitment, CommitmentSetDigest, EncryptedAccountData, EphemeralPublicKey, HashType, Nullifier,
+    PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
+    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicDiff,
+    PublicKey, PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow,
+    WitnessSet,
 };
 
 use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature,
-    FfiVec,
+    FfiU128, FfiVec,
     account::FfiAccount,
     vectors::{
         FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList,
-        FfiProgramDeploymentMessage, FfiProof, FfiPublicActionList, FfiSignaturePubKeyList,
-        FfiVecU8,
+        FfiProgramDeploymentMessage, FfiProof, FfiPublicDiffList, FfiPublicPreStateList,
+        FfiSignaturePubKeyList, FfiVecU8,
     },
 };
 
@@ -158,17 +159,13 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PrivacyPreservingMessage {
-                public_actions: {
-                    let std_vec: Vec<_> = value.message.public_actions.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| PublicActionWithID {
-                            account_id: AccountId {
-                                value: ffi_val.account_id.data,
-                            },
-                            post_state: ffi_val.post_state.into(),
-                        })
-                        .collect()
+                public_pre_states: {
+                    let std_vec: Vec<_> = value.message.public_pre_states.into();
+                    std_vec.into_iter().map(Into::into).collect()
+                },
+                public_diffs: {
+                    let std_vec: Vec<_> = value.message.public_diffs.into();
+                    std_vec.into_iter().map(Into::into).collect()
                 },
                 nonces: {
                     let std_vec: Vec<_> = value.message.nonces.into();
@@ -198,6 +195,15 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                 timestamp_validity_window: cast_ffi_validity_window(
                     value.message.timestamp_validity_window,
                 ),
+                signer_account_ids: {
+                    let std_vec: Vec<_> = value.message.signer_account_ids.into();
+                    std_vec
+                        .into_iter()
+                        .map(|ffi_val| AccountId {
+                            value: ffi_val.data,
+                        })
+                        .collect()
+                },
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: {
@@ -219,20 +225,228 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 }
 
 #[repr(C)]
-pub struct FfiPublicAction {
+pub struct FfiAccountWithMetadata {
+    pub account: FfiAccount,
+    pub is_authorized: bool,
     pub account_id: FfiAccountId,
-    pub post_state: FfiAccount,
 }
 
-impl From<PublicActionWithID> for FfiPublicAction {
-    fn from(value: PublicActionWithID) -> Self {
-        let post_state: lee::Account = value
-            .post_state
-            .try_into()
-            .expect("Source is in blocks, must fit");
+impl From<AccountWithMetadata> for FfiAccountWithMetadata {
+    fn from(value: AccountWithMetadata) -> Self {
+        let AccountWithMetadata {
+            account,
+            is_authorized,
+            account_id,
+        } = value;
+        let account: lee::Account = account.try_into().expect("Source is in blocks, must fit");
         Self {
-            account_id: value.account_id.into(),
-            post_state: post_state.into(),
+            account: account.into(),
+            is_authorized,
+            account_id: account_id.into(),
+        }
+    }
+}
+
+impl From<FfiAccountWithMetadata> for AccountWithMetadata {
+    fn from(value: FfiAccountWithMetadata) -> Self {
+        let FfiAccountWithMetadata {
+            account,
+            is_authorized,
+            account_id,
+        } = value;
+        Self {
+            account: account.into(),
+            is_authorized,
+            account_id: AccountId {
+                value: account_id.data,
+            },
+        }
+    }
+}
+
+/// C-compatible tagged `BalanceDiff`: `is_sub` selects `Sub` over `Add`.
+#[repr(C)]
+pub struct FfiBalanceDiff {
+    pub is_sub: bool,
+    pub amount: FfiU128,
+}
+
+impl From<BalanceDiff> for FfiBalanceDiff {
+    fn from(value: BalanceDiff) -> Self {
+        match value {
+            BalanceDiff::Add(amount) => Self {
+                is_sub: false,
+                amount: amount.into(),
+            },
+            BalanceDiff::Sub(amount) => Self {
+                is_sub: true,
+                amount: amount.into(),
+            },
+        }
+    }
+}
+
+impl From<FfiBalanceDiff> for BalanceDiff {
+    fn from(value: FfiBalanceDiff) -> Self {
+        let amount: u128 = value.amount.into();
+        if value.is_sub {
+            Self::Sub(amount)
+        } else {
+            Self::Add(amount)
+        }
+    }
+}
+
+/// C-compatible tagged `Claim`: `is_pda` selects `Pda(seed)` over `Authorized`, in which case
+/// `pda_seed` is meaningless.
+#[repr(C)]
+pub struct FfiClaim {
+    pub is_pda: bool,
+    pub pda_seed: FfiBytes32,
+}
+
+impl From<Claim> for FfiClaim {
+    fn from(value: Claim) -> Self {
+        match value {
+            Claim::Authorized => Self {
+                is_pda: false,
+                pda_seed: FfiBytes32::default(),
+            },
+            Claim::Pda(seed) => Self {
+                is_pda: true,
+                pda_seed: FfiBytes32 { data: seed.0 },
+            },
+        }
+    }
+}
+
+impl From<FfiClaim> for Claim {
+    fn from(value: FfiClaim) -> Self {
+        if value.is_pda {
+            Self::Pda(PdaSeed(value.pda_seed.data))
+        } else {
+            Self::Authorized
+        }
+    }
+}
+
+#[repr(C)]
+pub struct FfiAccountDiff {
+    pub id: FfiAccountId,
+    pub diff_balance: FfiBalanceDiff,
+    pub diff_data: FfiOption<FfiVecU8>,
+}
+
+impl From<AccountDiff> for FfiAccountDiff {
+    fn from(value: AccountDiff) -> Self {
+        let AccountDiff {
+            id,
+            diff_balance,
+            diff_data,
+        } = value;
+        Self {
+            id: id.into(),
+            diff_balance: diff_balance.into(),
+            diff_data: match diff_data {
+                Some(bytes) => FfiOption::from_value(bytes.into()),
+                None => FfiOption::from_none(),
+            },
+        }
+    }
+}
+
+impl From<FfiAccountDiff> for AccountDiff {
+    fn from(value: FfiAccountDiff) -> Self {
+        let FfiAccountDiff {
+            id,
+            diff_balance,
+            diff_data,
+        } = value;
+        let diff_data = if diff_data.is_some {
+            let boxed = unsafe { Box::from_raw(diff_data.value) };
+            let bytes: Vec<u8> = (*boxed).into();
+            Some(bytes)
+        } else {
+            None
+        };
+        Self {
+            id: AccountId { value: id.data },
+            diff_balance: diff_balance.into(),
+            diff_data,
+        }
+    }
+}
+
+#[repr(C)]
+pub struct FfiAccountDiffOutput {
+    pub diff: FfiAccountDiff,
+    pub claim: FfiOption<FfiClaim>,
+}
+
+impl From<AccountDiffOutput> for FfiAccountDiffOutput {
+    fn from(value: AccountDiffOutput) -> Self {
+        let AccountDiffOutput { diff, claim } = value;
+        Self {
+            diff: diff.into(),
+            claim: match claim {
+                Some(claim) => FfiOption::from_value(claim.into()),
+                None => FfiOption::from_none(),
+            },
+        }
+    }
+}
+
+impl From<FfiAccountDiffOutput> for AccountDiffOutput {
+    fn from(value: FfiAccountDiffOutput) -> Self {
+        let FfiAccountDiffOutput { diff, claim } = value;
+        let claim = if claim.is_some {
+            let boxed = unsafe { Box::from_raw(claim.value) };
+            Some((*boxed).into())
+        } else {
+            None
+        };
+        Self {
+            diff: diff.into(),
+            claim,
+        }
+    }
+}
+
+#[repr(C)]
+pub struct FfiPublicDiff {
+    pub account_id: FfiAccountId,
+    pub executing_program_id: FfiProgramId,
+    pub diff: FfiAccountDiffOutput,
+}
+
+impl From<PublicDiff> for FfiPublicDiff {
+    fn from(value: PublicDiff) -> Self {
+        let PublicDiff {
+            account_id,
+            executing_program_id,
+            diff,
+        } = value;
+        Self {
+            account_id: account_id.into(),
+            executing_program_id: executing_program_id.into(),
+            diff: diff.into(),
+        }
+    }
+}
+
+impl From<FfiPublicDiff> for PublicDiff {
+    fn from(value: FfiPublicDiff) -> Self {
+        let FfiPublicDiff {
+            account_id,
+            executing_program_id,
+            diff,
+        } = value;
+        Self {
+            account_id: AccountId {
+                value: account_id.data,
+            },
+            executing_program_id: ProgramId(executing_program_id.data),
+            diff: diff.into(),
         }
     }
 }
@@ -262,25 +476,34 @@ impl From<PrivateAction> for FfiPrivateAction {
 
 #[repr(C)]
 pub struct FfiPrivacyPreservingMessage {
-    pub public_actions: FfiPublicActionList,
+    pub public_pre_states: FfiPublicPreStateList,
+    pub public_diffs: FfiPublicDiffList,
     pub nonces: FfiNonceList,
     pub private_actions: FfiPrivateActionList,
     pub block_validity_window: [u64; 2],
     pub timestamp_validity_window: [u64; 2],
+    pub signer_account_ids: FfiAccountIdList,
 }
 
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
     fn from(value: PrivacyPreservingMessage) -> Self {
         let PrivacyPreservingMessage {
-            public_actions,
+            public_pre_states,
+            public_diffs,
             nonces,
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            signer_account_ids,
         } = value;
 
         Self {
-            public_actions: public_actions
+            public_pre_states: public_pre_states
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            public_diffs: public_diffs
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
@@ -297,6 +520,11 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
                 .into(),
             block_validity_window: cast_validity_window(block_validity_window),
             timestamp_validity_window: cast_validity_window(timestamp_validity_window),
+            signer_account_ids: signer_account_ids
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 }

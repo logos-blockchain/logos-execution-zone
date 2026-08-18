@@ -4,7 +4,7 @@ use std::{
 };
 
 use lee_core::{
-    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
+    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, PublicDiff, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Data, apply_balance_diff},
     encryption::ViewingPublicKey,
     program::{
@@ -52,6 +52,16 @@ pub struct ExecutionState {
     /// pre_state.account_id`.
     private_pda_by_position: HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
     authorized_accounts: HashSet<AccountId>,
+    /// The canonical, committed signer set. `is_authorized` for a public account's first sighting
+    /// is derived from membership in this list (or PDA-authorization via a caller's seeds) —
+    /// never trusted as an independently-reported witness — and the list itself is echoed in the
+    /// circuit's output so the sequencer can cross-check it against real signatures.
+    signer_account_ids: Vec<AccountId>,
+    /// Raw, per-call, unaggregated diffs for public accounts. This, not `post_states`, is what
+    /// the circuit ultimately outputs for public accounts: `post_states` is only ever used
+    /// internally, to give a later call in the same chain a concrete `pre_state` for an account
+    /// an earlier call already touched. See `PrivacyPreservingCircuitOutput::public_diffs`.
+    public_diffs: Vec<PublicDiff>,
 }
 
 impl ExecutionState {
@@ -60,6 +70,7 @@ impl ExecutionState {
         account_identities: &[InputAccountIdentity],
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
+        signer_account_ids: &[AccountId],
         update_from_diff_results: Vec<Data>,
     ) -> Self {
         let mut update_from_diff_results: VecDeque<Data> = update_from_diff_results.into();
@@ -115,6 +126,8 @@ impl ExecutionState {
             pda_family_binding: HashMap::new(),
             private_pda_by_position,
             authorized_accounts: HashSet::new(),
+            signer_account_ids: signer_account_ids.to_vec(),
+            public_diffs: Vec::new(),
         };
 
         let Some(first_output) = program_outputs.first() else {
@@ -254,6 +267,7 @@ impl ExecutionState {
     }
 
     /// Validate program pre and post states and populate the execution state.
+    #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
     fn validate_and_sync_states(
         &mut self,
         account_identities: &[InputAccountIdentity],
@@ -370,10 +384,52 @@ impl ExecutionState {
                             seed,
                             pre_account_id,
                         );
+                    } else {
+                        // First sighting of a non-PDA-init account. This still runs
+                        // unconditionally for its caller-PDA-seed-matching side effects (a
+                        // private PDA without an external seed legitimately authorizes via the
+                        // caller's `pda_seeds`), but the signer-list-derived result is only
+                        // *enforced* against `pre.is_authorized` for public accounts, below:
+                        // `is_authorized` has no downstream security consequence for private
+                        // accounts (claim semantics are entirely bypassed for them), and a
+                        // private `AccountId` can never legitimately appear in
+                        // `signer_account_ids` (it's derived from `npk`/`vpk`, not a real-world
+                        // signature).
+                        //
+                        // Replaces the guarantee live-state reconstruction used to provide: once
+                        // the sequencer stops reconstructing pre-states from live state (PR3),
+                        // this is the circuit's only independent check that `is_authorized` for a
+                        // top-level public account was derived honestly rather than
+                        // self-reported.
+                        let expected_is_authorized = resolve_authorization_and_record_bindings(
+                            &mut self.pda_family_binding,
+                            &mut self.private_pda_bound_positions,
+                            &self.private_pda_by_position,
+                            &mut self.authorized_accounts,
+                            pre_account_id,
+                            pre_state_position,
+                            caller_program_id,
+                            caller_pda_seeds,
+                            self.signer_account_ids.contains(&pre_account_id),
+                        );
+                        let is_public = account_identities
+                            .get(pre_state_position)
+                            .is_some_and(InputAccountIdentity::is_public);
+                        assert!(
+                            !is_public || pre_is_authorized == expected_is_authorized,
+                            "is_authorized for account {pre_account_id} doesn't match the canonical signer/PDA-authorization sources",
+                        );
                     }
                     self.pre_states.push(pre);
                 }
             }
+
+            let pre_state_position = self
+                .pre_states
+                .iter()
+                .position(|acc| acc.account_id == pre_account_id)
+                .expect("Pre state must exist at this point");
+            let account_identity = &account_identities[pre_state_position];
 
             let diff = diff_output.diff();
 
@@ -398,9 +454,9 @@ impl ExecutionState {
                 };
                 let journal_words =
                     to_vec(&expected_output).expect("UpdateFromDiffOutput must be serializable");
-                env::verify(program_id, &journal_words).unwrap_or_else(
-                    |_: Infallible| unreachable!("Infallible error is never constructed"),
-                );
+                env::verify(program_id, &journal_words).unwrap_or_else(|_: Infallible| {
+                    unreachable!("Infallible error is never constructed")
+                });
                 data
             } else {
                 pre_account.data.clone()
@@ -409,23 +465,13 @@ impl ExecutionState {
             // Ownership is either inherited unchanged, or explicitly overwritten by a claim —
             // never reverts to default. `AccountDiff` carries no ownership info at all, so this
             // is the only place a materialized account's owner can change.
-            let mut post_program_owner = pre_account.program_owner;
-
-            if let Some(claim) = diff_output.required_claim() {
+            let post_program_owner = if let Some(claim) = diff_output.required_claim() {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(
-                    pre_account.program_owner,
-                    DEFAULT_PROGRAM_ID,
+                    pre_account.program_owner, DEFAULT_PROGRAM_ID,
                     "Cannot claim an initialized account {pre_account_id}"
                 );
 
-                let pre_state_position = self
-                    .pre_states
-                    .iter()
-                    .position(|acc| acc.account_id == pre_account_id)
-                    .expect("Pre state must exist at this point");
-
-                let account_identity = &account_identities[pre_state_position];
                 if account_identity.is_public() {
                     match claim {
                         Claim::Authorized => {
@@ -489,7 +535,17 @@ impl ExecutionState {
                     }
                 }
 
-                post_program_owner = program_id;
+                program_id
+            } else {
+                pre_account.program_owner
+            };
+
+            if account_identity.is_public() {
+                self.public_diffs.push(PublicDiff {
+                    account_id: pre_account_id,
+                    executing_program_id: program_id,
+                    diff: diff_output,
+                });
             }
 
             post_states_entry.insert_entry(Account {
@@ -502,12 +558,16 @@ impl ExecutionState {
     }
 
     /// Consume self and yield the validity windows, the per-position PDA seed/program map
-    /// (recorded during `derive_from_outputs`), and an iterator over pre and post states of each
-    /// account involved in the execution. Returning everything together keeps the
-    /// fields module-private rather than forcing them visible to downstream consumers.
+    /// (recorded during `derive_from_outputs`), the committed signer set, the raw per-call
+    /// public diffs, and an iterator over pre and (internally materialized) post states of every
+    /// account involved in the execution. The materialized post state is only authoritative for
+    /// private accounts — for public ones it was only ever needed internally, for
+    /// chain-threading; `public_diffs` is the real output for those. Returning everything
+    /// together keeps the fields module-private rather than forcing them visible to downstream
+    /// consumers.
     #[expect(
         clippy::type_complexity,
-        reason = "tuple bundles four exit values from one consuming call so all fields stay private; a struct would only rename it"
+        reason = "tuple bundles several exit values from one consuming call so all fields stay private; a struct would only rename it"
     )]
     pub fn into_parts(
         mut self,
@@ -515,11 +575,15 @@ impl ExecutionState {
         BlockValidityWindow,
         TimestampValidityWindow,
         HashMap<usize, (ProgramId, PdaSeed)>,
+        Vec<AccountId>,
+        Vec<PublicDiff>,
         impl ExactSizeIterator<Item = (AccountWithMetadata, Account)>,
     ) {
         let block_validity_window = self.block_validity_window;
         let timestamp_validity_window = self.timestamp_validity_window;
         let pda_seed_by_position = std::mem::take(&mut self.private_pda_bound_positions);
+        let signer_account_ids = std::mem::take(&mut self.signer_account_ids);
+        let public_diffs = std::mem::take(&mut self.public_diffs);
         let states_iter = self.pre_states.into_iter().map(move |pre| {
             let post = self
                 .post_states
@@ -531,6 +595,8 @@ impl ExecutionState {
             block_validity_window,
             timestamp_validity_window,
             pda_seed_by_position,
+            signer_account_ids,
+            public_diffs,
             states_iter,
         )
     }

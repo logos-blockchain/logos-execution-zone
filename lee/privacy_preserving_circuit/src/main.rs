@@ -11,12 +11,14 @@ fn main() {
         program_id,
         dummy_inputs,
         update_from_diff_results,
+        signer_account_ids,
     } = env::read();
 
     let execution_state = execution_state::ExecutionState::derive_from_outputs(
         &account_identities,
         program_id,
         program_outputs,
+        &signer_account_ids,
         update_from_diff_results,
     );
 

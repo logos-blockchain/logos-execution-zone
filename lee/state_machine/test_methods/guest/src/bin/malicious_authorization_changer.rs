@@ -62,7 +62,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_words,
-        vec![sender.clone(), receiver.clone()],
+        vec![sender, receiver],
         vec![sender_post, receiver_post],
     )
     .with_chained_calls(vec![chained_call])

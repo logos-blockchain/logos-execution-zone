@@ -4,9 +4,12 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountWithMetadata, Data},
+    account::{AccountId, AccountWithMetadata, Data},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
+    program::{
+        AccountDiffOutput, BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput,
+        TimestampValidityWindow,
+    },
 };
 
 #[derive(Serialize, Deserialize)]
@@ -30,6 +33,12 @@ pub struct PrivacyPreservingCircuitInput {
     /// the pre-state), `diff_data` (known from the diff), and this `data`, then checks it via
     /// `env::verify` — so this value is untrusted input, made trustworthy only by that check.
     pub update_from_diff_results: Vec<Data>,
+    /// The accounts this transaction claims are signers. `is_authorized` for every account is
+    /// *derived* from membership in this single list — never accepted as an independent
+    /// per-account witness — and the list itself is committed to the output so the sequencer can
+    /// cross-check it against real signatures. Without that, a prover could satisfy
+    /// claim-eligibility's authorization check for an account it never actually controls.
+    pub signer_account_ids: Vec<AccountId>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -167,20 +176,40 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedAccountData,
 }
 
-#[derive(Serialize, Deserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct PublicAction {
-    pub pre: AccountWithMetadata,
-    pub post: Account,
+/// One call's raw, unaggregated diff to a public account.
+///
+/// Deliberately not collapsed into one diff per account: `AccountDiff` has no "combine two
+/// diffs" operation, especially for `diff_data`, which only composes by being applied in
+/// sequence. The sequencer replays these one at a time against its own live state — never
+/// trusting anything the circuit internally materialized for a public account, which is why the
+/// account's *value* (as opposed to its diffs) never appears here.
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+pub struct PublicDiff {
+    pub account_id: AccountId,
+    /// Carried alongside the diff because the sequencer's replay-time authorization re-check
+    /// (and PDA claim resolution) needs to know which program produced it — the same role
+    /// `chained_call.program_id` plays in the public-transaction path's live materialize loop.
+    pub executing_program_id: ProgramId,
+    pub diff: AccountDiffOutput,
 }
 
 #[derive(Serialize, Deserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
 pub struct PrivacyPreservingCircuitOutput {
-    pub public_actions: Vec<PublicAction>,
+    /// What the circuit witnessed as each public account's pre-state — deliberately *not*
+    /// reconciled against live sequencer state. Used only to verify the proof is internally
+    /// consistent (see `check_privacy_preserving_circuit_proof_is_valid`); materialization uses
+    /// live state instead, via `public_diffs`, which is what actually avoids tying this
+    /// transaction's validity to a specific public-account snapshot.
+    pub public_pre_states: Vec<AccountWithMetadata>,
+    pub public_diffs: Vec<PublicDiff>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
+    /// Committed so the sequencer can verify every account this circuit treated as authorized
+    /// really did sign the transaction — see `PrivacyPreservingCircuitInput::signer_account_ids`.
+    pub signer_account_ids: Vec<AccountId>,
 }
 
 #[cfg(any(feature = "host", test))]
@@ -219,51 +248,56 @@ mod tests {
     use super::*;
     use crate::{
         Commitment, Nullifier,
-        account::{Account, AccountId, AccountWithMetadata, Nonce},
+        account::{Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Nonce},
         encryption::{Ciphertext, EphemeralPublicKey},
     };
 
     #[test]
     fn privacy_preserving_circuit_output_to_bytes_is_compatible_with_from_slice() {
         let output = PrivacyPreservingCircuitOutput {
-            public_actions: vec![
-                PublicAction {
-                    pre: AccountWithMetadata::new(
-                        Account {
-                            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
-                            balance: 12_345_678_901_234_567_890,
-                            data: b"test data".to_vec().try_into().unwrap(),
-                            nonce: Nonce(0xFFFF_FFFF_FFFF_FFFE),
-                        },
-                        true,
-                        AccountId::new([0; 32]),
-                    ),
-                    post: Account {
+            public_pre_states: vec![
+                AccountWithMetadata::new(
+                    Account {
                         program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
-                        balance: 100,
-                        data: b"post state data".to_vec().try_into().unwrap(),
-                        nonce: Nonce(0xFFFF_FFFF_FFFF_FFFF),
+                        balance: 12_345_678_901_234_567_890,
+                        data: b"test data".to_vec().try_into().unwrap(),
+                        nonce: Nonce(0xFFFF_FFFF_FFFF_FFFE),
                     },
+                    true,
+                    AccountId::new([0; 32]),
+                ),
+                AccountWithMetadata::new(
+                    Account {
+                        program_owner: [9, 9, 9, 8, 8, 8, 7, 7],
+                        balance: 123_123_123_456_456_567_112,
+                        data: b"test data".to_vec().try_into().unwrap(),
+                        nonce: Nonce(9_999_999_999_999_999_999_999),
+                    },
+                    false,
+                    AccountId::new([1; 32]),
+                ),
+            ],
+            public_diffs: vec![
+                PublicDiff {
+                    account_id: AccountId::new([0; 32]),
+                    executing_program_id: [1, 2, 3, 4, 5, 6, 7, 8],
+                    diff: AccountDiffOutput::new(AccountDiff {
+                        id: AccountId::new([0; 32]),
+                        diff_balance: BalanceDiff::Add(100),
+                        diff_data: Some(b"post state data".to_vec()),
+                    }),
                 },
-                PublicAction {
-                    pre: AccountWithMetadata::new(
-                        Account {
-                            program_owner: [9, 9, 9, 8, 8, 8, 7, 7],
-                            balance: 123_123_123_456_456_567_112,
-                            data: b"test data".to_vec().try_into().unwrap(),
-                            nonce: Nonce(9_999_999_999_999_999_999_999),
-                        },
-                        false,
-                        AccountId::new([1; 32]),
-                    ),
-                    post: Account {
-                        program_owner: [2, 3, 4, 5, 6, 7, 8, 9],
-                        balance: 200,
-                        data: b"post state data 2".to_vec().try_into().unwrap(),
-                        nonce: Nonce(0xFFFF_FFFF_FFFF_FFFD),
-                    },
+                PublicDiff {
+                    account_id: AccountId::new([1; 32]),
+                    executing_program_id: [2, 3, 4, 5, 6, 7, 8, 9],
+                    diff: AccountDiffOutput::new(AccountDiff {
+                        id: AccountId::new([1; 32]),
+                        diff_balance: BalanceDiff::Sub(200),
+                        diff_data: Some(b"post state data 2".to_vec()),
+                    }),
                 },
             ],
+            signer_account_ids: vec![AccountId::new([0; 32])],
             private_actions: vec![PrivateAction {
                 nullifier: Nullifier::for_account_update(
                     &Commitment::new(&AccountId::new([2; 32]), &Account::default()),

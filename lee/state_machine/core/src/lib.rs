@@ -5,7 +5,7 @@
 
 pub use circuit_io::{
     DummyInput, InputAccountIdentity, NullifierWitness, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput, PrivateAction, PrivateWitness, PublicAction, WitnessKind,
+    PrivacyPreservingCircuitOutput, PrivateAction, PrivateWitness, PublicDiff, WitnessKind,
 };
 pub use commitment::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, MembershipProof,

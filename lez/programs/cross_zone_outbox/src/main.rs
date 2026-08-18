@@ -1,5 +1,3 @@
-use std::convert::Infallible;
-
 use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda, outbox_pda_seed};
 use lee_core::{
     account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff, Data},
@@ -11,10 +9,11 @@ use lee_core::{
 
 /// The record is fully computed before being written, so `diff_data` already *is* the new data
 /// verbatim — materializing it is a passthrough.
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
-    Ok(diff_data
+fn update_from_diff(_pre_state: &Account, diff_data: &[u8]) -> Data {
+    diff_data
+        .to_vec()
         .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed")
 }
 
 fn main() {
@@ -32,8 +31,7 @@ fn main() {
             pre_state,
             diff_data,
         } => {
-            let data = update_from_diff(pre_state.clone(), diff_data.clone())
-                .expect("update_from_diff should not fail");
+            let data = update_from_diff(&pre_state, &diff_data);
             write_update_from_diff_output(&pre_state, &diff_data, &data);
             return;
         }

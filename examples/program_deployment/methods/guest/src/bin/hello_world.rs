@@ -1,6 +1,9 @@
 use lee_core::{
     account::{Account, AccountDiff, BalanceDiff, Data},
-    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call, write_update_from_diff_output},
+    program::{
+        AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        write_update_from_diff_output,
+    },
 };
 
 // Hello-world example program.
@@ -34,8 +37,7 @@ fn main() {
             pre_state,
             diff_data,
         } => {
-            let data = update_from_diff(pre_state.clone(), diff_data.clone())
-                .expect("update_from_diff should not fail");
+            let data = update_from_diff(&pre_state, &diff_data);
             write_update_from_diff_output(&pre_state, &diff_data, &data);
             return;
         }
@@ -80,8 +82,9 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, std::convert::Infallible> {
-    Ok(diff_data
+fn update_from_diff(_pre_state: &Account, diff_data: &[u8]) -> Data {
+    diff_data
+        .to_vec()
         .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed")
 }

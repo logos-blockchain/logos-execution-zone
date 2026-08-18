@@ -6,8 +6,8 @@ use token_core::TokenHolding;
 
 #[must_use]
 pub fn print_nft(
-    master_account: AccountWithMetadata,
-    printed_account: AccountWithMetadata,
+    master_account: &AccountWithMetadata,
+    printed_account: &AccountWithMetadata,
 ) -> Vec<AccountDiffOutput> {
     assert!(
         master_account.is_authorized,

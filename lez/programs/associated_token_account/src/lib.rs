@@ -1,7 +1,6 @@
 //! The Associated Token Account Program implementation.
 
 pub use associated_token_account_core as core;
-
 use lee_core::{
     account::{AccountDiff, AccountId, BalanceDiff},
     program::AccountDiffOutput,
