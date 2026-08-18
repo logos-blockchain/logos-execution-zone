@@ -131,7 +131,8 @@ fn lock(
     // genuine holding: a caller cannot substitute an account owned by some other
     // program to emit the mint without an actual lock.
     assert_eq!(
-        holder.account.program_owner, self_program_id,
+        holder.account.program_owner,
+        self_program_id.into(),
         "holder account must be a bridge_lock holding"
     );
     assert_eq!(
@@ -217,7 +218,8 @@ fn init_config(
     // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
     if config.account != Account::default() {
         assert_eq!(
-            config.account.program_owner, self_program_id,
+            config.account.program_owner,
+            self_program_id.into(),
             "bridge-lock config PDA is owned by another program"
         );
         assert_eq!(

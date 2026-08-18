@@ -145,7 +145,8 @@ fn init_config(
     // rewriting its own config data on a later call.
     if config.account != Account::default() {
         assert_eq!(
-            config.account.program_owner, self_program_id,
+            config.account.program_owner,
+            self_program_id.into(),
             "wrapped-token config PDA is owned by another program"
         );
         assert_eq!(

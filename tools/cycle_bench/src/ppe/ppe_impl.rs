@@ -51,7 +51,7 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
     // Recipient stays default-owned so the first call can claim it.
     let sender = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id,
+            program_owner: auth_transfer_id.into(),
             balance: 1_000_000,
             ..Account::default()
         },
@@ -117,7 +117,7 @@ fn prove_chain_caller(
     // would cause a state mismatch on subsequent chained calls.
     let recipient_pre = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id,
+            program_owner: auth_transfer_id.into(),
             ..Account::default()
         },
         is_authorized: true,
@@ -125,7 +125,7 @@ fn prove_chain_caller(
     };
     let sender_pre = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id,
+            program_owner: auth_transfer_id.into(),
             balance: 1_000_000,
             ..Account::default()
         },

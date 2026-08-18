@@ -143,11 +143,11 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     assert_eq!(
         acc1.account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(
         acc2.account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
 
     assert_eq!(acc1.account.balance, 100);

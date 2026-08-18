@@ -8,9 +8,9 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::{
-        AccountPostState, BlockValidityWindow, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
-        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow,
-        validate_execution,
+        AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim,
+        DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
+        TimestampValidityWindow, validate_execution,
     },
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
@@ -51,7 +51,9 @@ pub struct ExecutionState {
     /// `AccountId::for_private_pda(program_id, seed, npk, vpk, identifier) ==
     /// pre_state.account_id`.
     private_pda_by_position: HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
-    authorized_accounts: HashSet<AccountId>,
+    /// The set containing non-PDA accounts authorized at their first sight, anywhere in the
+    /// call tree, remaining authorized throughout all calls.
+    globally_authorized: HashSet<AccountId>,
 }
 
 impl ExecutionState {
@@ -112,7 +114,7 @@ impl ExecutionState {
             private_pda_bound_positions: HashMap::new(),
             pda_family_binding: HashMap::new(),
             private_pda_by_position,
-            authorized_accounts: HashSet::new(),
+            globally_authorized: HashSet::new(),
         };
 
         let Some(first_output) = program_outputs.first() else {
@@ -125,12 +127,17 @@ impl ExecutionState {
             pre_states: first_output.pre_states.clone(),
             pda_seeds: Vec::new(),
         };
-        let mut chained_calls = VecDeque::from_iter([(initial_call, None)]);
+        let initial_caller_data = CallerData {
+            program_id: None,
+            authorized_accounts: HashSet::new(),
+        };
+        let mut chained_calls =
+            VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
 
         let mut program_outputs_iter = program_outputs.into_iter();
         let mut chain_calls_counter = 0;
 
-        while let Some((chained_call, caller_program_id)) = chained_calls.pop_front() {
+        while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
             assert!(
                 chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
                 "Max chained calls depth is exceeded"
@@ -166,7 +173,7 @@ impl ExecutionState {
             // by spoofing caller_program_id (e.g. passing caller_program_id = self_program_id
             // to bypass access control checks).
             assert_eq!(
-                program_output.caller_program_id, caller_program_id,
+                program_output.caller_program_id, caller_data.program_id,
                 "Program output caller_program_id does not match actual caller"
             );
 
@@ -184,18 +191,25 @@ impl ExecutionState {
                 );
             }
 
-            for next_call in program_output.chained_calls.iter().rev() {
-                chained_calls.push_front((next_call.clone(), Some(chained_call.program_id)));
-            }
-
-            execution_state.validate_and_sync_states(
+            let authorized_accounts = execution_state.validate_and_sync_states(
                 account_identities,
                 chained_call.program_id,
-                caller_program_id,
+                caller_data,
                 &chained_call.pda_seeds,
                 program_output.pre_states,
                 program_output.post_states,
             );
+
+            for next_call in program_output.chained_calls.into_iter().rev() {
+                // Push the call with newly-authorized account set.
+                chained_calls.push_front((
+                    next_call,
+                    CallerData {
+                        program_id: Some(chained_call.program_id),
+                        authorized_accounts: authorized_accounts.clone(),
+                    },
+                ));
+            }
             chain_calls_counter = chain_calls_counter.checked_add(1).expect(
                 "Chain calls counter should not overflow as it checked before incrementing",
             );
@@ -225,7 +239,7 @@ impl ExecutionState {
         for (account_id, post) in execution_state
             .pre_states
             .iter()
-            .filter(|a| a.account.program_owner == DEFAULT_PROGRAM_ID)
+            .filter(|a| a.account.program_owner == DEFAULT_PROGRAM_OWNER)
             .map(|a| {
                 let post = execution_state
                     .post_states
@@ -237,7 +251,7 @@ impl ExecutionState {
             .map(|(pre, post)| (pre.account_id, post))
         {
             assert_ne!(
-                post.program_owner, DEFAULT_PROGRAM_ID,
+                post.program_owner, DEFAULT_PROGRAM_OWNER,
                 "Account {account_id} was modified but not claimed"
             );
         }
@@ -246,16 +260,20 @@ impl ExecutionState {
     }
 
     /// Validate program pre and post states and populate the execution state.
+    ///
+    /// Return the set of authorized accounts as the result of the processed
+    /// call.
     fn validate_and_sync_states(
         &mut self,
         account_identities: &[InputAccountIdentity],
         program_id: ProgramId,
-        caller_program_id: Option<ProgramId>,
+        caller: CallerData,
         caller_pda_seeds: &[PdaSeed],
         output_pre_states: Vec<AccountWithMetadata>,
         output_post_states: Vec<AccountPostState>,
-    ) {
-        for (pre, mut post) in output_pre_states.into_iter().zip(output_post_states) {
+    ) -> HashSet<AccountId> {
+        let mut authorized_output_accounts = Vec::new();
+        for (mut pre, mut post) in output_pre_states.into_iter().zip(output_post_states) {
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
             let post_states_entry = self.post_states.entry(pre.account_id);
@@ -278,33 +296,26 @@ impl ExecutionState {
                         "Inconsistent pre state for account {pre_account_id}",
                     );
 
-                    let (previous_is_authorized, pre_state_position) = self
+                    let pre_state_position = self
                         .pre_states
                         .iter()
-                        .enumerate()
-                        .find(|(_, acc)| acc.account_id == pre_account_id)
-                        .map_or_else(
-                            || panic!(
+                        .position(|acc| acc.account_id == pre_account_id)
+                        .unwrap_or_else(|| {
+                            panic!(
                                 "Pre state must exist in execution state for account {pre_account_id}",
-                            ),
-                            |(pos, acc)| (acc.is_authorized, pos)
-                        );
+                            )
+                        });
 
-                    let is_authorized = resolve_authorization_and_record_bindings(
+                    assert_authorization_and_record_bindings(
                         &mut self.pda_family_binding,
                         &mut self.private_pda_bound_positions,
                         &self.private_pda_by_position,
-                        &mut self.authorized_accounts,
+                        &self.globally_authorized,
+                        &caller,
+                        caller_pda_seeds,
                         pre_account_id,
                         pre_state_position,
-                        caller_program_id,
-                        caller_pda_seeds,
-                        previous_is_authorized,
-                    );
-
-                    assert_eq!(
-                        pre_is_authorized, is_authorized,
-                        "Inconsistent authorization for account {pre_account_id}",
+                        pre_is_authorized,
                     );
                 }
                 Entry::Vacant(_) => {
@@ -340,10 +351,6 @@ impl ExecutionState {
                     // Subsequent calls need no re-check because the entry is already recorded on
                     // private_pda_bound_positions.
                     if let Some((authority_program_id, seed)) = external_seed {
-                        assert!(
-                            !pre.is_authorized,
-                            "Private PDA with externally-provided seed must not be authorized at position {pre_state_position}"
-                        );
                         bind_private_pda_position(
                             &mut self.private_pda_bound_positions,
                             pre_state_position,
@@ -357,15 +364,55 @@ impl ExecutionState {
                             pre_account_id,
                         );
                     }
+                    let has_private_pda_witness = self
+                        .private_pda_by_position
+                        .contains_key(&pre_state_position);
+                    if has_private_pda_witness {
+                        assert_authorization_and_record_bindings(
+                            &mut self.pda_family_binding,
+                            &mut self.private_pda_bound_positions,
+                            &self.private_pda_by_position,
+                            &self.globally_authorized,
+                            &caller,
+                            caller_pda_seeds,
+                            pre_account_id,
+                            pre_state_position,
+                            pre_is_authorized,
+                        );
+                    }
+                    if !has_private_pda_witness
+                        && authorize_first_sight_without_pda_witness(
+                            &mut self.pda_family_binding,
+                            &mut self.globally_authorized,
+                            &caller,
+                            caller_pda_seeds,
+                            pre_account_id,
+                            pre_is_authorized,
+                        )
+                    {
+                        // authorize_first_sight_without_pda_witness is only true for PDAs
+                        // which will be recorded in output journal.
+                        //
+                        // Since we are in a privacy circuit, the verifier cannot
+                        // replay the transaction to see which public PDAs were
+                        // actually authorized. We mark them false as the
+                        // verifier checks regular account signatures as well.
+                        pre.is_authorized = false;
+                    }
                     self.pre_states.push(pre);
                 }
+            }
+
+            // If an account it authorized, push it to the autorized set.
+            if pre_is_authorized {
+                authorized_output_accounts.push(pre_account_id);
             }
 
             if let Some(claim) = post.required_claim() {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(
                     post.account().program_owner,
-                    DEFAULT_PROGRAM_ID,
+                    DEFAULT_PROGRAM_OWNER,
                     "Cannot claim an initialized account {pre_account_id}"
                 );
 
@@ -439,11 +486,15 @@ impl ExecutionState {
                     }
                 }
 
-                post.account_mut().program_owner = program_id;
+                post.account_mut().program_owner = AccountId::from(program_id);
             }
 
             post_states_entry.insert_entry(post.into_account());
         }
+
+        let mut authorized_accounts = caller.authorized_accounts;
+        authorized_accounts.extend(authorized_output_accounts);
+        authorized_accounts
     }
 
     /// Consume self and yield the validity windows, the per-position PDA seed/program map
@@ -527,66 +578,127 @@ fn bind_private_pda_position(
     }
 }
 
-/// Resolve the authorization state of a `pre_state` seen again in a chained call and record
-/// any resulting bindings. Returns `true` if the `pre_state` is authorized through either a
-/// previously-seen authorization or a matching caller seed (under the public or private
-/// derivation). When a caller seed matches, also records the `(caller, seed) → account_id`
-/// family binding and, for the private form, marks the position in
-/// `private_pda_bound_positions`. Only reachable when `caller_program_id.is_some()`,
-/// top-level flows have no caller-emitted seeds, so binding at top level must come from the
-/// claim path. Free function so callers can pass individual `&mut self.*` field borrows
-/// without holding a borrow on the surrounding struct's other fields.
+/// Match `account_id` against the caller's seeds under the public-PDA derivation. `None`
+/// if no appropriate authorization given.
+fn match_caller_seed_as_public_pda(
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
+    account_id: AccountId,
+) -> Option<(PdaSeed, ProgramId)> {
+    let caller_program_id = caller.program_id?;
+    // Costy for calls with multiple seeds in one call.
+    caller_pda_seeds.iter().find_map(|seed| {
+        if AccountId::for_public_pda(&caller_program_id, seed) == account_id {
+            return Some((*seed, caller_program_id));
+        }
+        None
+    })
+}
+
+/// Match `account_id` against the caller's seeds interpreted as private-PDA derivations, using the
+/// (npk, vpk, identifier) supplied for this position. `None` when the position carries no
+/// private-PDA witness.
+fn match_caller_seed_as_private_pda(
+    private_pda_by_position: &HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
+    account_id: AccountId,
+    pre_state_position: usize,
+) -> Option<(PdaSeed, ProgramId)> {
+    let (npk, vpk, identifier) = private_pda_by_position.get(&pre_state_position)?;
+    let caller_program_id = caller.program_id?;
+    // Costy for calls with multiple seeds in one call.
+    caller_pda_seeds.iter().find_map(|seed| {
+        if AccountId::for_private_pda(&caller_program_id, seed, npk, vpk, *identifier) == account_id
+        {
+            return Some((*seed, caller_program_id));
+        }
+        None
+    })
+}
+
+/// Judge a non-private-PDA `pre_state` at its first sighting and resolve its journal mask.
+///
+/// Either the account is a public PDA in which case the public mask should be changed, or
+/// it is a regular account. For PDAs, we assert the family bindings. For regular accounts,
+/// add to global authorization set.
+fn authorize_first_sight_without_pda_witness(
+    pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
+    globally_authorized: &mut HashSet<AccountId>,
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
+    pre_account_id: AccountId,
+    pre_is_authorized: bool,
+) -> bool {
+    if let Some((seed, caller_program_id)) =
+        match_caller_seed_as_public_pda(caller, caller_pda_seeds, pre_account_id)
+    {
+        assert!(
+            pre_is_authorized,
+            "Caller-seeded public PDA must be declared authorized at first sight: {pre_account_id}"
+        );
+        assert_family_binding(pda_family_binding, caller_program_id, seed, pre_account_id);
+        true
+    } else {
+        // If an authorized account is a non-PDA one, it is globally authorized.
+        if pre_is_authorized {
+            globally_authorized.insert(pre_account_id);
+        }
+        false
+    }
+}
+
+/// When a caller seed matches, also records the `(caller, seed) → account_id` family binding
+/// and, for the private form, marks the position in `private_pda_bound_positions`. Free
+/// function so callers can pass individual `&mut self.*` field borrows without holding a borrow
+/// on the surrounding struct's other fields.
 #[expect(
     clippy::too_many_arguments,
     reason = "breaking out a context struct does not buy us anything here"
 )]
-fn resolve_authorization_and_record_bindings(
+fn assert_authorization_and_record_bindings(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
     private_pda_by_position: &HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
-    authorized_accounts: &mut HashSet<AccountId>,
+    globally_authorized: &HashSet<AccountId>,
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
     pre_account_id: AccountId,
     pre_state_position: usize,
-    caller_program_id: Option<ProgramId>,
-    caller_pda_seeds: &[PdaSeed],
-    previous_is_authorized: bool,
-) -> bool {
+    pre_is_authorized: bool,
+) {
     let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> =
-        caller_program_id.and_then(|caller| {
-            caller_pda_seeds.iter().find_map(|seed| {
-                if AccountId::for_public_pda(&caller, seed) == pre_account_id {
-                    return Some((*seed, false, caller));
-                }
-                if let Some((npk, vpk, identifier)) =
-                    private_pda_by_position.get(&pre_state_position)
-                    && AccountId::for_private_pda(&caller, seed, npk, vpk, *identifier)
-                        == pre_account_id
-                {
-                    return Some((*seed, true, caller));
-                }
-                None
-            })
-        });
+        match_caller_seed_as_public_pda(caller, caller_pda_seeds, pre_account_id)
+            .map(|(seed, caller_program_id)| (seed, false, caller_program_id))
+            .or_else(|| {
+                match_caller_seed_as_private_pda(
+                    private_pda_by_position,
+                    caller,
+                    caller_pda_seeds,
+                    pre_account_id,
+                    pre_state_position,
+                )
+                .map(|(seed, caller_program_id)| (seed, true, caller_program_id))
+            });
 
-    if let Some((seed, is_private_form, caller)) = matched_caller_seed {
-        assert_family_binding(pda_family_binding, caller, seed, pre_account_id);
+    if let Some((seed, is_private_form, caller_program_id)) = matched_caller_seed {
+        assert_family_binding(pda_family_binding, caller_program_id, seed, pre_account_id);
         if is_private_form {
             bind_private_pda_position(
                 private_pda_bound_positions,
                 pre_state_position,
-                caller,
+                caller_program_id,
                 seed,
             );
         }
     }
 
-    if authorized_accounts.contains(&pre_account_id) {
-        return true;
-    }
+    let is_authorized = matched_caller_seed.is_some()
+        || globally_authorized.contains(&pre_account_id)
+        || caller.authorized_accounts.contains(&pre_account_id);
 
-    let authorized = previous_is_authorized || matched_caller_seed.is_some();
-    if authorized {
-        authorized_accounts.insert(pre_account_id);
-    }
-    authorized
+    assert_eq!(
+        pre_is_authorized, is_authorized,
+        "Inconsistent authorization for account {pre_account_id}",
+    );
 }

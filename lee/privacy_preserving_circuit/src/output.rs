@@ -66,46 +66,28 @@ pub fn compute_circuit_output(
                     WitnessKind::Pda { .. } => pre_state.account_id,
                 };
 
-                match (kind, nullifier) {
-                    (
-                        WitnessKind::Regular { ask },
-                        NullifierWitness::Init { .. } | NullifierWitness::Update { .. },
-                    ) => {
-                        if let Some(ask) = ask {
-                            let derived = NullifierSecretKey::from(ask);
-                            match nullifier {
-                                // Check that the authorization key is actually bound to the
-                                // account Id.
-                                NullifierWitness::Update { nsk, .. } => assert_eq!(
-                                    derived, *nsk,
-                                    "Authorization secret key does not derive this account's nullifier secret key"
-                                ),
-                                NullifierWitness::Init { npk, .. } => assert_eq!(
-                                    NullifierPublicKey::from(&derived),
-                                    *npk,
-                                    "Authorization secret key does not derive this account's nullifier public key"
-                                ),
-                            }
+                if let WitnessKind::Regular { ask } = kind {
+                    if let Some(ask) = ask {
+                        let derived = NullifierSecretKey::from(ask);
+                        match nullifier {
+                            // Check that the authorization key is actually bound to the
+                            // account Id.
+                            NullifierWitness::Update { nsk, .. } => assert_eq!(
+                                derived, *nsk,
+                                "Authorization secret key does not derive this account's nullifier secret key"
+                            ),
+                            NullifierWitness::Init { npk, .. } => assert_eq!(
+                                NullifierPublicKey::from(&derived),
+                                *npk,
+                                "Authorization secret key does not derive this account's nullifier public key"
+                            ),
                         }
-                        assert_eq!(
-                            pre_state.is_authorized,
-                            ask.is_some(),
-                            "Regular private account authorization must match the supplied credential"
-                        );
                     }
-                    (WitnessKind::Pda { .. }, NullifierWitness::Init { .. }) => assert!(
-                        !pre_state.is_authorized,
-                        "Private PDA init requires unauthorized pre_state"
-                    ),
-                    // With an external seed the binding comes from the circuit input and the
-                    // pre_state is intentionally unauthorized; without one the binding comes from
-                    // a Claim or caller pda_seeds, so the pre_state must already be authorized.
-                    // When `binding` is `Some`, execution_state already asserted
-                    // `!pre_state.is_authorized`.
-                    (WitnessKind::Pda { binding }, NullifierWitness::Update { .. }) => assert!(
-                        pre_state.is_authorized ^ binding.is_some(),
-                        "Private PDA update requires authorized pre_state or external seed"
-                    ),
+                    assert_eq!(
+                        pre_state.is_authorized,
+                        ask.is_some(),
+                        "Regular private account authorization must match the supplied credential"
+                    );
                 }
 
                 let (new_nullifier, new_nonce, view_tag) = match nullifier {

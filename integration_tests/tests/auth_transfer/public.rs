@@ -213,7 +213,7 @@ async fn initialize_public_account() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(account.balance, 0);
     assert_eq!(account.nonce.0, 1);

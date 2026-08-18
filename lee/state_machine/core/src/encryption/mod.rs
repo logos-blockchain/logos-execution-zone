@@ -234,7 +234,7 @@ mod tests {
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
         let account = Account {
-            program_owner: [12_u32; 8],
+            program_owner: [12_u32; 8].into(),
             balance: 999,
             ..Account::default()
         };

@@ -33,7 +33,7 @@ fn owner_account() -> AccountWithMetadata {
 fn definition_account() -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: TOKEN_PROGRAM_ID,
+            program_owner: TOKEN_PROGRAM_ID.into(),
             balance: 0,
             data: Data::from(&TokenDefinition::Fungible {
                 name: "TEST".to_string(),
@@ -58,7 +58,7 @@ fn uninitialized_ata_account() -> AccountWithMetadata {
 fn initialized_ata_account() -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: TOKEN_PROGRAM_ID,
+            program_owner: TOKEN_PROGRAM_ID.into(),
             balance: 0,
             data: Data::from(&TokenHolding::Fungible {
                 definition_id: definition_id(),

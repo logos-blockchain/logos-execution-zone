@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::AccountId,
+    account::{AccountId, data::DATA_MAX_LENGTH},
     program::{PdaSeed, ProgramId},
 };
 use serde::{Deserialize, Serialize};
@@ -133,13 +133,25 @@ impl SeenShard {
     /// Deliveries one shard can hold before it exceeds `DATA_MAX_LENGTH`.
     ///
     /// Borsh is 32 bytes of hash, a 4-byte count, then 4 bytes per index, so
-    /// this is exactly the 100 KiB an account may carry.
+    /// this is exactly the `DATA_MAX_LENGTH` an account may carry.
     ///
     /// Out of reach only because of the L1 inscription cap: a block inscribes as
     /// one op near 1.75 MiB and a minimal emitting transaction is about 257
     /// bytes, capping a peer block near 7,100 deliveries. Raising that L1 cap
     /// past roughly 6.3 MiB puts this back in reach.
-    pub const MAX_DELIVERIES: usize = 25_591;
+    pub const MAX_DELIVERIES: usize = {
+        let remaining_bytes = DATA_MAX_LENGTH.as_u64() - 36;
+        let count = remaining_bytes
+            .checked_div(4)
+            .expect("division is well-defined");
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            reason = "usize::try_from is not yet const-stable; the value is tiny and always fits"
+        )]
+        let count = count as usize;
+        count
+    };
 
     /// Decodes a shard from account data; empty data is an unclaimed shard.
     pub fn from_bytes(bytes: &[u8]) -> borsh::io::Result<Self> {
@@ -300,8 +312,6 @@ pub fn inbox_source_marker_seed(src_zone: &ZoneId, src_program_id: ProgramId) ->
 }
 #[cfg(test)]
 mod tests {
-    use lee_core::account::data::DATA_MAX_LENGTH;
-
     use super::*;
 
     fn zone(b: u8) -> ZoneId {
@@ -379,6 +389,7 @@ mod tests {
 
     #[test]
     fn a_full_shard_fits_in_account_data() {
+        // Exact only because `DATA_MAX_LENGTH` is whole KiB, hence a multiple of 4.
         let mut shard = SeenShard::default();
         for index in 0..SeenShard::MAX_DELIVERIES {
             shard.insert([5; 32], u32::try_from(index).expect("index fits"));

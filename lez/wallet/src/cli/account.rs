@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
-use lee::{Account, PublicKey};
+use lee::{Account, AccountId, PublicKey};
 use lee_core::Identifier;
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -643,8 +643,8 @@ impl WalletSubcommand for ImportSubcommand {
 
 /// Formats account details for display, returning (description, `json_view`).
 fn format_account_details(account: &Account) -> (String, String) {
-    let auth_tr_prog_id = programs::authenticated_transfer().id();
-    let token_prog_id = programs::token().id();
+    let auth_tr_prog_id: AccountId = programs::authenticated_transfer().id().into();
+    let token_prog_id: AccountId = programs::token().id().into();
 
     match &account.program_owner {
         o if *o == auth_tr_prog_id => {
