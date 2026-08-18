@@ -128,10 +128,8 @@ impl<'de> Deserialize<'de> for Data {
                     Vec::with_capacity(seq.size_hint().unwrap_or(0).min(data_max_length()));
 
                 while let Some(value) = seq.next_element()? {
-                    if vec.len() >= data_max_length() {
-                        return Err(serde::de::Error::custom(DataTooBigError));
-                    }
                     vec.push(value);
+                    check_len(vec.len())?;
                 }
 
                 Ok(Data(vec))
