@@ -213,8 +213,7 @@ impl Case {
         let total = exec_iters.saturating_add(1).max(2);
         for iter in 0..total {
             let mut env_builder = ExecutorEnv::builder();
-            Program::write_inputs(
-                program.id(),
+            program.write_inputs(
                 caller_program_id,
                 &pre_states,
                 &instruction_words,
@@ -241,8 +240,7 @@ impl Case {
         let mut prove_segments = None;
         if prove {
             let mut env_builder = ExecutorEnv::builder();
-            Program::write_inputs(
-                program.id(),
+            program.write_inputs(
                 caller_program_id,
                 &pre_states,
                 &instruction_words,

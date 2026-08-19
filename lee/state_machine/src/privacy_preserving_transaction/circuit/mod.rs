@@ -181,8 +181,7 @@ fn execute_and_prove_program(
 ) -> Result<Receipt, LeeError> {
     // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
-    Program::write_inputs(
-        program.id(),
+    program.write_inputs(
         caller_program_id,
         pre_states,
         instruction_data,

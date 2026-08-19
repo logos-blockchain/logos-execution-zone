@@ -63,8 +63,7 @@ impl Program {
         // Write inputs to the program
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
-        Self::write_inputs(
-            self.id,
+        self.write_inputs(
             caller_program_id,
             pre_states,
             instruction_data,
@@ -90,14 +89,14 @@ impl Program {
 
     /// Writes inputs to `env_builder` in the order expected by the programs.
     pub fn write_inputs(
-        program_id: ProgramId,
+        &self,
         caller_program_id: Option<ProgramId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &[u8],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
         let header = LeeInputHeader {
-            self_program_id: program_id,
+            self_program_id: self.id,
             caller_program_id,
             pre_states: pre_states.to_vec(),
             instruction_data: instruction_data.to_vec(),
