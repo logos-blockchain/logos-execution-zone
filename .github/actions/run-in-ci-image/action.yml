@@ -43,7 +43,11 @@ runs:
         # daemon resolves compose bind mounts against the host, and the test
         # binaries bake CARGO_MANIFEST_DIR in at compile time, so the path has
         # to mean the same thing inside and outside the container.
+        #
+        # Recipes branch on GITHUB_ACTIONS, which the runner sets but `docker
+        # run` does not inherit. Valueless `--env` forwards it from the host.
         docker run --rm \
+          --env GITHUB_ACTIONS \
           --network host \
           --volume /var/run/docker.sock:/var/run/docker.sock \
           --volume "$PWD:$PWD" \

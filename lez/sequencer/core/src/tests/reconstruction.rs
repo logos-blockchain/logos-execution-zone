@@ -4,13 +4,15 @@
     reason = "We don't care about it in tests"
 )]
 
-use std::sync::Mutex;
-
 use chain_state::ChainState;
 use common::block::Block;
 use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
 use logos_blockchain_zone_sdk::{Slot, ZoneBlock, ZoneMessage};
-use storage::sequencer::sequencer_cells::ZoneAnchorRecord;
+use sequencer_storage_actor::{
+    StorageActorTrait,
+    protocol::{AddPendingCrossZoneDispatches, AddPendingDepositEvent, ZoneAnchorRecord},
+};
+use tokio::sync::Mutex;
 
 use super::*;
 use crate::{
@@ -19,13 +21,35 @@ use crate::{
 
 /// Fresh `(store, chain)` pair for a reconstruction target, as
 /// `start_from_config` would build them before the publisher starts.
-fn fresh_store_and_chain(config: &SequencerConfig) -> (SequencerStore, Mutex<ChainState>) {
+// TODO: Revisit this function, it relies to heavily on internal implementation details.
+// Will be possible to address this once block publisher is moved to another actor(-s).
+async fn fresh_store_and_chain(
+    config: &SequencerConfig,
+) -> (SequencerStore<StorageActor>, Mutex<ChainState>) {
+    let storage = StorageActor::new(&config.db_path()).expect("Failed to initialize storage actor");
+    let storage_ref = StorageActor::spawn(storage);
+    // What `start_from_config` does before it opens a store, mirrored here
+    // because these cases drive `verify_and_reconstruct` directly.
+    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
     let bootstrap_sequencer_key = Some(test_bootstrap_sequencer_key(config));
-    let (store, state) =
-        SequencerCore::<MockBlockPublisher>::open_or_create_store(config, bootstrap_sequencer_key);
-    let chain = Mutex::new(SequencerCore::<MockBlockPublisher>::restore_chain_state(
-        config, &store, &state,
-    ));
+    SequencerCore::<MockBlockPublisher>::seed_genesis_if_absent(
+        &storage_ref,
+        &signing_key,
+        bootstrap_sequencer_key,
+        config,
+    )
+    .await;
+    let store = SequencerStore::new(storage_ref, signing_key)
+        .await
+        .expect("open store");
+    let state = store
+        .get_lee_state()
+        .await
+        .expect("read state")
+        .expect("seeded store holds a state");
+    let chain = Mutex::new(
+        SequencerCore::<MockBlockPublisher>::restore_chain_state(config, &store, &state).await,
+    );
     (store, chain)
 }
 
@@ -40,35 +64,49 @@ fn block_to_channel_message(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
 
 /// Collects a sequencer's whole chain (genesis..=tip) into a canned channel,
 /// one block per slot at `slot_step` spacing.
-fn channel_from_store(store: &SequencerStore, slot_step: u64) -> Vec<(ZoneMessage, Slot)> {
+async fn channel_from_store<S: StorageActorTrait>(
+    store: &SequencerStore<S>,
+    slot_step: u64,
+) -> Vec<(ZoneMessage, Slot)> {
     let genesis_id = store.genesis_id();
-    let tip_id = store.latest_block_meta().expect("tip").expect("present").id;
-    (genesis_id..=tip_id)
-        .enumerate()
-        .map(|(index, id)| {
-            let block = store.get_block_at_id(id).expect("read").expect("present");
-            block_to_channel_message(&block, (index as u64 + 1) * slot_step)
-        })
-        .collect()
+    let tip_id = store
+        .latest_block_meta()
+        .await
+        .expect("tip")
+        .expect("present")
+        .id;
+    let mut messages = Vec::new();
+    for (index, id) in (genesis_id..=tip_id).enumerate() {
+        let block = store.block_at_id(id).await.expect("read").expect("present");
+        messages.push(block_to_channel_message(
+            &block,
+            (index as u64 + 1) * slot_step,
+        ));
+    }
+    messages
 }
 
 #[tokio::test]
 async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     // Sequencer A produces a few blocks; treat its chain as the channel.
     let config_a = setup_sequencer_config();
-    let (mut seq_a, _handle_a) =
-        SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+    let (mut seq_a, _handle_a) = start_sequencer(config_a.clone()).await;
     seq_a.run_production_turn().await.unwrap();
     seq_a.run_production_turn().await.unwrap();
-    let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
+    let tip_a = seq_a
+        .block_store()
+        .latest_block_meta()
+        .await
+        .unwrap()
+        .unwrap();
 
-    let messages = channel_from_store(seq_a.block_store(), 10);
+    let messages = channel_from_store(seq_a.block_store(), 10).await;
     let tip_slot = messages.last().unwrap().1;
     let channel_id = config_a.bedrock_config.channel_id;
 
     // Sequencer B starts from a fresh store and reconstructs A's chain.
     let config_b = setup_sequencer_config();
-    let (store_b, chain_b) = fresh_store_and_chain(&config_b);
+    let (store_b, chain_b) = fresh_store_and_chain(&config_b).await;
     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
 
     let channel_was_empty = SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
@@ -78,13 +116,13 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     .expect("reconstruct");
     assert!(!channel_was_empty);
 
-    let tip_b = store_b.latest_block_meta().unwrap().unwrap();
+    let tip_b = store_b.latest_block_meta().await.unwrap().unwrap();
     assert_eq!(tip_b.id, tip_a.id);
     assert_eq!(tip_b.hash, tip_a.hash);
 
     // State matches: initial account balances agree with sequencer A.
-    let state_b = chain_b.lock().unwrap().head_state().clone();
-    let state_a = seq_a.chain().lock().unwrap().head_state().clone();
+    let state_b = chain_b.lock().await.head_state().clone();
+    let state_a = seq_a.chain().lock().await.head_state().clone();
     for account in initial_public_user_accounts() {
         assert_eq!(
             state_b.get_account_by_id(account.account_id).balance,
@@ -92,7 +130,11 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
         );
     }
 
-    let anchor = store_b.get_zone_anchor().unwrap().expect("anchor recorded");
+    let anchor = store_b
+        .get_zone_anchor()
+        .await
+        .unwrap()
+        .expect("anchor recorded");
     assert_eq!(anchor.block_id, tip_a.id);
     assert_eq!(anchor.slot, tip_slot.into_inner());
 
@@ -103,24 +145,28 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     .await
     .expect("reconstruct idempotent");
     assert!(!channel_was_empty);
-    assert_eq!(store_b.latest_block_meta().unwrap().unwrap().id, tip_a.id);
+    assert_eq!(
+        store_b.latest_block_meta().await.unwrap().unwrap().id,
+        tip_a.id
+    );
 }
 
 #[tokio::test]
 async fn fails_when_channel_serves_a_divergent_block() {
     let config = setup_sequencer_config();
-    let (store, chain) = fresh_store_and_chain(&config);
+    let (store, chain) = fresh_store_and_chain(&config).await;
 
     // Anchor on the local genesis at some slot.
     let genesis_id = store.genesis_id();
-    let genesis = store.get_block_at_id(genesis_id).unwrap().unwrap();
+    let genesis = store.block_at_id(genesis_id).await.unwrap().unwrap();
     let anchor_slot = 100_u64;
     store
-        .set_zone_anchor(&ZoneAnchorRecord {
+        .set_zone_anchor(ZoneAnchorRecord {
             slot: anchor_slot,
             block_id: genesis_id,
             hash: genesis.header.hash,
         })
+        .await
         .unwrap();
 
     // The channel serves a different block at the anchor id/slot.
@@ -142,15 +188,16 @@ async fn fails_when_channel_serves_a_divergent_block() {
 #[tokio::test]
 async fn fails_when_channel_is_missing() {
     let config = setup_sequencer_config();
-    let (store, chain) = fresh_store_and_chain(&config);
+    let (store, chain) = fresh_store_and_chain(&config).await;
     let genesis_id = store.genesis_id();
-    let genesis = store.get_block_at_id(genesis_id).unwrap().unwrap();
+    let genesis = store.block_at_id(genesis_id).await.unwrap().unwrap();
     store
-        .set_zone_anchor(&ZoneAnchorRecord {
+        .set_zone_anchor(ZoneAnchorRecord {
             slot: 100,
             block_id: genesis_id,
             hash: genesis.header.hash,
         })
+        .await
         .unwrap();
 
     // Anchor present, but the channel does not exist on the connected chain.
@@ -169,11 +216,15 @@ async fn fails_when_channel_is_missing() {
 #[tokio::test]
 async fn fails_when_channel_reinscribes_genesis_with_a_different_hash() {
     let config = setup_sequencer_config();
-    let (store, chain) = fresh_store_and_chain(&config);
+    let (store, chain) = fresh_store_and_chain(&config).await;
 
     // Fresh store, no anchor. The channel serves a genesis at the same id but a
     // different hash — a foreign chain reinscribing genesis.
-    let mut reinscribed = store.get_block_at_id(store.genesis_id()).unwrap().unwrap();
+    let mut reinscribed = store
+        .block_at_id(store.genesis_id())
+        .await
+        .unwrap()
+        .unwrap();
     reinscribed.header.hash = HashType([0xAB_u8; 32]);
 
     let messages = vec![block_to_channel_message(&reinscribed, 10)];
@@ -195,7 +246,7 @@ async fn fails_when_channel_reinscribes_genesis_with_a_different_hash() {
 async fn fails_when_a_below_tip_channel_block_does_not_validate() {
     // A sequencer that committed blocks past genesis but never recorded an anchor.
     let config = setup_sequencer_config();
-    let (mut seq, _handle) = SequencerCoreWithMockClients::start_from_config(config.clone()).await;
+    let (mut seq, _handle) = start_sequencer(config.clone()).await;
     seq.run_production_turn().await.unwrap();
     seq.run_production_turn().await.unwrap();
 
@@ -206,7 +257,8 @@ async fn fails_when_a_below_tip_channel_block_does_not_validate() {
     let below_tip_id = seq.block_store().genesis_id() + 1;
     let mut block = seq
         .block_store()
-        .get_block_at_id(below_tip_id)
+        .block_at_id(below_tip_id)
+        .await
         .unwrap()
         .unwrap();
     block.header.hash = HashType([0xCD_u8; 32]);
@@ -230,12 +282,16 @@ async fn fails_when_a_below_tip_channel_block_does_not_validate() {
 #[tokio::test]
 async fn fails_when_a_channel_block_is_numbered_below_genesis() {
     let config = setup_sequencer_config();
-    let (store, chain) = fresh_store_and_chain(&config);
+    let (store, chain) = fresh_store_and_chain(&config).await;
 
     // A block numbered below our genesis — a foreign chain with a lower
     // numbering. Nothing local sits at that id, so it goes straight to
     // validation and parks there.
-    let mut foreign = store.get_block_at_id(store.genesis_id()).unwrap().unwrap();
+    let mut foreign = store
+        .block_at_id(store.genesis_id())
+        .await
+        .unwrap()
+        .unwrap();
     foreign.header.block_id = store.genesis_id() - 1;
 
     let messages = vec![block_to_channel_message(&foreign, 10)];
@@ -256,10 +312,14 @@ async fn fails_when_a_channel_block_is_numbered_below_genesis() {
 #[tokio::test]
 async fn fails_when_a_channel_block_does_not_extend_the_tip() {
     let config = setup_sequencer_config();
-    let (store, chain) = fresh_store_and_chain(&config);
+    let (store, chain) = fresh_store_and_chain(&config).await;
 
     // A block claiming an id far past genesis does not chain onto the local tip.
-    let mut orphan = store.get_block_at_id(store.genesis_id()).unwrap().unwrap();
+    let mut orphan = store
+        .block_at_id(store.genesis_id())
+        .await
+        .unwrap()
+        .unwrap();
     orphan.header.block_id = store.genesis_id() + 5;
 
     let messages = vec![block_to_channel_message(&orphan, 10)];
@@ -289,39 +349,42 @@ async fn fails_when_a_channel_block_does_not_extend_the_tip() {
 async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
     // Sequencer A's chain is what the channel finalized.
     let config_a = setup_sequencer_config();
-    let (mut seq_a, _mempool_a) =
-        SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+    let (mut seq_a, _mempool_a) = start_sequencer(config_a.clone()).await;
     seq_a.run_production_turn().await.unwrap();
-    let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
-    let mut messages = channel_from_store(seq_a.block_store(), 10);
+    let tip_a = seq_a
+        .block_store()
+        .latest_block_meta()
+        .await
+        .unwrap()
+        .unwrap();
+    let mut messages = channel_from_store(seq_a.block_store(), 10).await;
     let settled_slot = messages.last().unwrap().1;
 
     // Sequencer B: the cold-start backfill finalizes A's chain into its store.
-    let (seq_b, mempool_b) =
-        SequencerCoreWithMockClients::start_from_config(setup_sequencer_config()).await;
-    let finalized: Vec<(MsgId, Block)> = (seq_b.block_store().genesis_id()..=tip_a.id)
-        .map(|id| {
-            let block = seq_a.block_store().get_block_at_id(id).unwrap().unwrap();
-            (
-                MsgId::from([u8::try_from(id).expect("should be u8"); 32]),
-                block,
-            )
-        })
-        .collect();
+    let (seq_b, mempool_b) = start_sequencer(setup_sequencer_config()).await;
+    let mut finalized: Vec<(MsgId, Block)> = Vec::new();
+    for id in seq_b.block_store().genesis_id()..=tip_a.id {
+        let block = seq_a.block_store().block_at_id(id).await.unwrap().unwrap();
+        finalized.push((
+            MsgId::from([u8::try_from(id).expect("should be u8"); 32]),
+            block,
+        ));
+    }
     apply_follow_update(
-        &seq_b.store.dbio(),
+        seq_b.block_store().storage_ref(),
         &seq_b.chain(),
         &mempool_b,
         FollowUpdate {
             finalized,
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
     assert_eq!(
         seq_b
             .chain()
             .lock()
-            .unwrap()
+            .await
             .final_tip()
             .expect("backfill finalized A's chain")
             .block_id,
@@ -331,7 +394,8 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
     // A competitor published its own block at that same height.
     let parent = seq_a
         .block_store()
-        .get_block_at_id(tip_a.id - 1)
+        .block_at_id(tip_a.id - 1)
+        .await
         .unwrap()
         .unwrap();
     let competitor =
@@ -353,13 +417,19 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
     .await
     .expect("a duplicate height the final tier settled must not abort startup");
 
-    let tip_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
+    let tip_b = seq_b
+        .block_store()
+        .latest_block_meta()
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(tip_b.hash, tip_a.hash, "the finalized block stands");
 
     // The anchor tracks the block we hold, never the one we dropped.
     let anchor = seq_b
         .block_store()
         .get_zone_anchor()
+        .await
         .unwrap()
         .expect("anchor");
     assert_eq!(anchor.slot, settled_slot.into_inner());
@@ -372,31 +442,46 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
 async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history() {
     // Sequencer A's chain is what the channel finalized.
     let config_a = setup_sequencer_config();
-    let (mut seq_a, _mempool_a) =
-        SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+    let (mut seq_a, _mempool_a) = start_sequencer(config_a.clone()).await;
     seq_a.run_production_turn().await.unwrap();
-    let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
-    let messages = channel_from_store(seq_a.block_store(), 10);
+    let tip_a = seq_a
+        .block_store()
+        .latest_block_meta()
+        .await
+        .unwrap()
+        .unwrap();
+    let messages = channel_from_store(seq_a.block_store(), 10).await;
     let tip_slot = messages.last().unwrap().1;
 
     // Sequencer B adopted a competitor at that height and never saw it finalize.
-    let (seq_b, mempool_b) =
-        SequencerCoreWithMockClients::start_from_config(setup_sequencer_config()).await;
-    let genesis_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
+    let (seq_b, mempool_b) = start_sequencer(setup_sequencer_config()).await;
+    let genesis_b = seq_b
+        .block_store()
+        .latest_block_meta()
+        .await
+        .unwrap()
+        .unwrap();
     let competitor =
         common::test_utils::produce_dummy_block(tip_a.id, Some(genesis_b.hash), vec![]);
     assert_ne!(competitor.header.hash, tip_a.hash);
     apply_follow_update(
-        &seq_b.store.dbio(),
+        seq_b.block_store().storage_ref(),
         &seq_b.chain(),
         &mempool_b,
         FollowUpdate {
             adopted: vec![(MsgId::from([7_u8; 32]), competitor)],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
     assert_eq!(
-        seq_b.block_store().latest_block_meta().unwrap().unwrap().id,
+        seq_b
+            .block_store()
+            .latest_block_meta()
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
         tip_a.id,
         "the competitor is the head tip going in"
     );
@@ -415,7 +500,12 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
     .await
     .expect("finalized history must replace a conflicting head block");
 
-    let tip_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
+    let tip_b = seq_b
+        .block_store()
+        .latest_block_meta()
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(tip_b.id, tip_a.id);
     assert_eq!(
         tip_b.hash, tip_a.hash,
@@ -499,7 +589,7 @@ fn deposit_event_record(
 //     // Sequencer A produces a deposit block then a withdraw block.
 //     let config_a = bridge_funded_config();
 //     let (mut seq_a, mempool_a) =
-//         SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+//         start_sequencer(config_a.clone()).await;
 
 //     let deposit_record = deposit_event_record(deposit_op_id, deposit_amount, recipient);
 //     let deposit_tx =
@@ -523,14 +613,14 @@ fn deposit_event_record(
 //         .unwrap();
 //     seq_a.run_production_turn().await.unwrap();
 
-//     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
-//     let messages = channel_from_store(seq_a.block_store(), 10);
+//     let tip_a = seq_a.block_store().latest_block_meta().await.unwrap().unwrap();
+//     let messages = channel_from_store(seq_a.block_store(), 10).await;
 //     let tip_slot = messages.last().unwrap().1;
 //     let channel_id = config_a.bedrock_config.channel_id;
 
 //     let config_b = bridge_funded_config();
 //     let (mut seq_b, _mempool_b) =
-// SequencerCoreWithMockClients::start_from_config(config_b).await;
+// start_sequencer(config_b).await;
 
 //     // Backfill re-delivery: the deposit event is re-recorded as a pending record
 //     // before reconstruction runs. The mint no longer flows through the mempool
@@ -553,7 +643,7 @@ fn deposit_event_record(
 //     .await
 //     .expect("reconstruct");
 
-//     let tip_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
+//     let tip_b = seq_b.block_store().latest_block_meta().await.unwrap().unwrap();
 //     assert_eq!(tip_b.id, tip_a.id);
 //     assert_eq!(tip_b.hash, tip_a.hash);
 
@@ -575,8 +665,8 @@ fn deposit_event_record(
 
 //     let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
 //     let bridge_id = system_accounts::bridge_account_id();
-//     let state_b = seq_b.chain().lock().unwrap().head_state().clone();
-//     let state_a = seq_a.chain().lock().unwrap().head_state().clone();
+//     let state_b = seq_b.chain().lock().await.head_state().clone();
+//     let state_a = seq_a.chain().lock().await.head_state().clone();
 //     for account in [vault_id, bridge_id, recipient] {
 //         assert_eq!(
 //             state_b.get_account_by_id(account).balance,
@@ -592,7 +682,7 @@ fn deposit_event_record(
 
 //     let produced = seq_b
 //         .block_store()
-//         .get_block_at_id(tip_b.id + 1)
+//         .block_at_id(tip_b.id + 1)
 //         .unwrap()
 //         .expect("produced block present");
 //     assert!(
@@ -631,7 +721,7 @@ fn deposit_event_record(
 //     // Sequencer A produces a single withdraw block; treat its chain as the channel.
 //     let config_a = bridge_funded_config();
 //     let (mut seq_a, mempool_a) =
-//         SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+//         start_sequencer(config_a.clone()).await;
 //     let withdraw_tx = build_public_withdraw_tx(
 //         recipient,
 //         0,
@@ -656,20 +746,20 @@ fn deposit_event_record(
 //         "producing a withdraw must count it as unseen"
 //     );
 
-//     let messages = channel_from_store(seq_a.block_store(), 10);
+//     let messages = channel_from_store(seq_a.block_store(), 10).await;
 //     let tip_slot = messages.last().unwrap().1;
 //     let channel_id = config_a.bedrock_config.channel_id;
 
 //     // Sequencer B reconstructs A's chain from a fresh store.
 //     let config_b = bridge_funded_config();
-//     let (store_b, chain_b) = fresh_store_and_chain(&config_b);
+//     let (store_b, chain_b) = fresh_store_and_chain(&config_b).await;
 //     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
 //     SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock_b, &store_b, &chain_b,
 // true)         .await
 //         .expect("reconstruct");
 
 //     assert!(
-//         !store_b.dbio().consume_unseen_withdraw_count(key).unwrap(),
+//         !dbio_b.consume_unseen_withdraw_count(key).unwrap(),
 //         "reconstruction must not leave a phantom unseen-withdraw count"
 //     );
 // }
@@ -687,8 +777,7 @@ async fn reconstruction_reconciles_already_finished_deposit() {
 
     // Sequencer A: a single block that fully processes the bridge deposit.
     let config_a = bridge_funded_config();
-    let (mut seq_a, mempool_a) =
-        SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+    let (mut seq_a, mempool_a) = start_sequencer(config_a.clone()).await;
     let deposit_record = deposit_event_record(deposit_op_id, deposit_amount, recipient);
     let deposit_tx =
         crate::build_bridge_deposit_tx_from_event(&deposit_record).expect("build deposit tx");
@@ -698,7 +787,7 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         .unwrap();
     seq_a.run_production_turn().await.unwrap();
 
-    let messages = channel_from_store(seq_a.block_store(), 10);
+    let messages = channel_from_store(seq_a.block_store(), 10).await;
     let tip_slot = messages.last().unwrap().1;
     let channel_id = config_a.bedrock_config.channel_id;
 
@@ -706,11 +795,14 @@ async fn reconstruction_reconciles_already_finished_deposit() {
     // pre-seeded, as the cold-start backfill would when it re-observes this
     // already-finalized deposit.
     let config_b = bridge_funded_config();
-    let (store_b, chain_b) = fresh_store_and_chain(&config_b);
+    let (store_b, chain_b) = fresh_store_and_chain(&config_b).await;
     assert!(
         store_b
-            .dbio()
-            .add_pending_deposit_event(deposit_record.clone())
+            .storage_ref()
+            .ask(AddPendingDepositEvent {
+                event: deposit_record.clone()
+            })
+            .await
             .unwrap()
     );
 
@@ -724,7 +816,7 @@ async fn reconstruction_reconciles_already_finished_deposit() {
     assert_eq!(
         chain_b
             .lock()
-            .unwrap()
+            .await
             .head_state()
             .get_account_by_id(vault_id)
             .balance,
@@ -736,14 +828,15 @@ async fn reconstruction_reconciles_already_finished_deposit() {
     // dropped the pending record backfill had re-delivered — so the production
     // drain sees the deposit as minted and never re-emits it.
     assert!(
-        crate::deposit_already_minted(
-            chain_b.lock().unwrap().head_state(),
-            HashType(deposit_op_id)
-        ),
+        crate::deposit_already_minted(chain_b.lock().await.head_state(), HashType(deposit_op_id)),
         "the reconstructed deposit's receipt marks it minted"
     );
     assert!(
-        store_b.get_pending_deposit_events().unwrap().is_empty(),
+        store_b
+            .get_pending_deposit_events()
+            .await
+            .unwrap()
+            .is_empty(),
         "reconstruction drops the finalized deposit's pending record"
     );
 }
@@ -761,29 +854,38 @@ async fn reconstructed_delivery_settles_its_pending_record() {
 
     // Sequencer A produces the block that carries the delivery.
     let config_a = cross_zone_test_config();
-    let (mut seq_a, _mempool_a) =
-        SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+    let (mut seq_a, _mempool_a) = start_sequencer(config_a.clone()).await;
     seq_a
         .block_store()
-        .dbio()
-        .add_pending_cross_zone_dispatches(vec![record.clone()])
+        .storage_ref()
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![record.clone()],
+        })
+        .await
         .unwrap();
     seq_a.run_production_turn().await.unwrap();
 
-    let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
-    let messages = channel_from_store(seq_a.block_store(), 10);
+    let tip_a = seq_a
+        .block_store()
+        .latest_block_meta()
+        .await
+        .unwrap()
+        .unwrap();
+    let messages = channel_from_store(seq_a.block_store(), 10).await;
     let tip_slot = messages.last().unwrap().1;
     let channel_id = config_a.bedrock_config.channel_id;
 
     // Sequencer B holds the same record, as its own watcher would after reading
     // the peer block, and reconstructs A's chain from a fresh store.
-    let (mut seq_b, _mempool_b) =
-        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    let (mut seq_b, _mempool_b) = start_sequencer(cross_zone_test_config()).await;
     assert_eq!(
         seq_b
             .block_store()
-            .dbio()
-            .add_pending_cross_zone_dispatches(vec![record])
+            .storage_ref()
+            .ask(AddPendingCrossZoneDispatches {
+                dispatches: vec![record],
+            })
+            .await
             .unwrap(),
         1
     );
@@ -798,14 +900,19 @@ async fn reconstructed_delivery_settles_its_pending_record() {
     .await
     .expect("reconstruct");
 
-    let tip_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
+    let tip_b = seq_b
+        .block_store()
+        .latest_block_meta()
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(tip_b.id, tip_a.id);
     assert_eq!(tip_b.hash, tip_a.hash);
     assert!(
         seq_b
-            .block_store()
-            .dbio()
-            .get_pending_cross_zone_dispatches()
+            .store
+            .pending_cross_zone_dispatches()
+            .await
             .unwrap()
             .is_empty(),
         "reconstruction must settle the record of a delivery it replayed"
@@ -814,14 +921,17 @@ async fn reconstructed_delivery_settles_its_pending_record() {
     // The delivery landed exactly once, and the next turn does not re-emit it.
     let record_id = ping_record_pda(programs::ping_receiver().id());
     assert_eq!(
-        seq_b.with_state(|state| state.get_account_by_id(record_id).data.into_inner()),
+        seq_b
+            .with_state(|state| state.get_account_by_id(record_id).data.into_inner())
+            .await,
         payload,
         "the reconstructed delivery must reach its target program"
     );
     seq_b.run_production_turn().await.unwrap();
     let produced = seq_b
         .block_store()
-        .get_block_at_id(tip_b.id + 1)
+        .block_at_id(tip_b.id + 1)
+        .await
         .unwrap()
         .expect("produced block present");
     assert!(
@@ -840,24 +950,27 @@ async fn a_verified_own_block_settles_its_delivery_records() {
     let record = dispatch_record(37, ping_payload(b"verified"));
     let key = record.message_key;
 
-    let (mut seq, _mempool) =
-        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    let (mut seq, _mempool) = start_sequencer(cross_zone_test_config()).await;
     seq.block_store()
-        .dbio()
-        .add_pending_cross_zone_dispatches(vec![record])
+        .storage_ref()
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![record],
+        })
+        .await
         .unwrap();
 
     let block_id = seq.run_production_turn().await.unwrap();
     let block = seq
         .block_store()
-        .get_block_at_id(block_id)
+        .block_at_id(block_id)
+        .await
         .unwrap()
         .unwrap();
     assert_eq!(dispatches_in(&block), vec![key]);
     assert_eq!(
-        seq.block_store()
-            .dbio()
-            .get_pending_cross_zone_dispatches()
+        seq.store
+            .pending_cross_zone_dispatches()
+            .await
             .unwrap()
             .len(),
         1,
@@ -865,7 +978,7 @@ async fn a_verified_own_block_settles_its_delivery_records() {
     );
 
     // The channel serves our own chain back, tip included.
-    let messages = channel_from_store(seq.block_store(), 10);
+    let messages = channel_from_store(seq.block_store(), 10).await;
     let tip_slot = messages.last().unwrap().1;
     let mock = MockBlockPublisher::with_canned_channel(
         seq.sequencer_config.bedrock_config.channel_id,
@@ -879,9 +992,9 @@ async fn a_verified_own_block_settles_its_delivery_records() {
     .expect("reconstruct");
 
     assert!(
-        seq.block_store()
-            .dbio()
-            .get_pending_cross_zone_dispatches()
+        seq.store
+            .pending_cross_zone_dispatches()
+            .await
             .unwrap()
             .is_empty(),
         "a delivery the channel confirms must not leave a record nothing can remove"
@@ -895,19 +1008,28 @@ async fn committed_local_against_missing_channel_fails_without_anchor() {
     // anchor). Restarting it against a wiped/missing channel must still fail,
     // driven by the committed-blocks invariant rather than an anchor probe.
     let config = setup_sequencer_config();
-    {
-        let (mut seq, _handle) =
-            SequencerCoreWithMockClients::start_from_config(config.clone()).await;
+    let storage_weak = {
+        let (mut seq, _handle) = start_sequencer(config.clone()).await;
         seq.run_production_turn().await.unwrap();
         seq.run_production_turn().await.unwrap();
-        assert!(seq.block_store().latest_block_meta().unwrap().unwrap().id > 1);
-    } // drop releases the store so we can reopen it
+        assert!(
+            seq.block_store()
+                .latest_block_meta()
+                .await
+                .unwrap()
+                .unwrap()
+                .id
+                > 1
+        );
+        seq.block_store().storage_ref().downgrade()
+    };
+    storage_weak.wait_for_shutdown_with_result(|_| ()).await;
 
     // Reopen: blocks beyond genesis, no anchor. `is_fresh_start = false` stands in
     // for a checkpoint persisted by a prior sync (the mock never emits one).
-    let (store, chain) = fresh_store_and_chain(&config);
-    assert!(store.get_zone_anchor().unwrap().is_none());
-    assert!(store.latest_block_meta().unwrap().unwrap().id > 1);
+    let (store, chain) = fresh_store_and_chain(&config).await;
+    assert!(store.get_zone_anchor().await.unwrap().is_none());
+    assert!(store.latest_block_meta().await.unwrap().unwrap().id > 1);
 
     // The channel is gone: no tip, no messages.
     let mock =
