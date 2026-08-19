@@ -51,7 +51,10 @@ testing-framework-core.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 bytesize.workspace = true
-cucumber = { features = ["macros", "output-junit"], workspace = true, optional = true }
+cucumber = { features = [
+  "macros",
+  "output-junit",
+], workspace = true, optional = true }
 hex.workspace = true
 log.workspace = true
 num-bigint.workspace = true
