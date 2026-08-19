@@ -2296,12 +2296,10 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
     assert!(sequencer.store.block_at_id(2).await.unwrap().is_some());
 }
 
-/// The channel orphaning our own still-unfinalized blocks rewinds the head and
-/// prunes them from the store, so nothing in the chain state remembers we ever
-/// produced them. Producing again there would put a second, different block at
-/// a height the channel already carries — the fork that has to be prevented.
+/// zone-sdk does not resubmit an orphan, so an orphan report that re-adopts
+/// nothing frees the height for the next turn. A re-adopted block keeps it.
 #[tokio::test]
-async fn head_rewound_below_published_height_blocks_production() {
+async fn a_dropped_orphan_frees_the_published_height() {
     let config = setup_sequencer_config();
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
@@ -2312,17 +2310,32 @@ async fn head_rewound_below_published_height_blocks_production() {
         Some(published_tip),
         "publishing records the high water mark"
     );
-    assert!(
-        sequencer.rewound_below_published().await.is_none(),
-        "an intact head is free to produce"
-    );
 
     let mut produced: Vec<Block> = Vec::new();
     for id in [first, published_tip] {
         produced.push(sequencer.store.block_at_id(id).await.unwrap().unwrap());
     }
 
-    // The sdk reports both of them as orphaned.
+    // The sdk orphans the tip and re-adopts it under a fresh inscription.
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            orphaned: vec![(MsgId::from([0_u8; 32]), produced[1].clone())],
+            adopted: vec![(MsgId::from([1_u8; 32]), produced[1].clone())],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(published_tip),
+        "a re-adopted block keeps the mark"
+    );
+    assert!(sequencer.rewound_below_published().await.is_none());
+
+    // The sdk orphans both and re-adopts neither.
     apply_follow_update(
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
@@ -2337,43 +2350,81 @@ async fn head_rewound_below_published_height_blocks_production() {
     )
     .await;
 
+    assert_eq!(sequencer.next_block_height().await, first);
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(first - 1),
+        "the mark follows the rewound head"
+    );
     assert!(
-        sequencer
-            .store
-            .latest_block_meta()
-            .await
-            .unwrap()
-            .unwrap()
-            .id
-            < published_tip,
-        "the orphan report rewound the stored tip"
+        sequencer.rewound_below_published().await.is_none(),
+        "the freed height is ours to produce again"
     );
     assert_eq!(
-        sequencer.rewound_below_published().await,
-        Some(published_tip),
-        "the mark outlives the pruning and blocks the turn"
+        sequencer.run_production_turn().await.unwrap(),
+        first,
+        "production resumes at the freed height"
     );
+}
 
-    // Those inscriptions were on the channel all along: finalizing them rebases
-    // the head onto them, and production is free again. The guard is a wait.
+/// A block the channel put back is still on the channel, so its height stays
+/// reserved even when another orphan in the same update was dropped.
+#[tokio::test]
+async fn a_readopted_block_above_the_head_keeps_the_published_height() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let first = sequencer.run_production_turn().await.unwrap();
+    let second = sequencer.run_production_turn().await.unwrap();
+    let third = sequencer.run_production_turn().await.unwrap();
+    let mut produced: Vec<Block> = Vec::new();
+    for id in [first, second, third] {
+        produced.push(sequencer.store.block_at_id(id).await.unwrap().unwrap());
+    }
+
+    // A finalized floor, so the orphan report below cannot rewind past `first`.
     apply_follow_update(
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            finalized: produced
-                .iter()
-                .map(|block| (MsgId::from([1_u8; 32]), block.clone()))
-                .collect(),
+            finalized: vec![(MsgId::from([1_u8; 32]), produced[0].clone())],
             ..empty_follow_update()
         },
     )
     .await;
 
-    assert_eq!(sequencer.next_block_height().await, published_tip + 1);
-    assert!(
-        sequencer.rewound_below_published().await.is_none(),
-        "a recovered head resumes producing"
+    // The channel drops both, then puts the tip back on a parent we do not hold,
+    // so it lands above the head instead of applying.
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            orphaned: produced[1..]
+                .iter()
+                .map(|block| (MsgId::from([0_u8; 32]), block.clone()))
+                .collect(),
+            adopted: vec![(MsgId::from([2_u8; 32]), produced[2].clone())],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.next_block_height().await,
+        second,
+        "the head rewound to the finalized floor"
+    );
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(third),
+        "a dropped orphan alongside it must not free the readopted height"
+    );
+    assert_eq!(
+        sequencer.rewound_below_published().await,
+        Some(third),
+        "so the turn is still held"
     );
 }
 

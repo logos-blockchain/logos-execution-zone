@@ -159,8 +159,6 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
 
         // Never inscribe a second block at a height we already published: the
         // channel would carry two chains from there and nothing resolves that.
-        // The head rewinds under us when the sdk orphans our own unfinalized
-        // blocks, and recovers once they finalize, so this is a wait.
         if let Some(high_water) = self.sequencer.rewound_below_published().await {
             self.sequencer.update_committee_absence().await;
             warn!(
