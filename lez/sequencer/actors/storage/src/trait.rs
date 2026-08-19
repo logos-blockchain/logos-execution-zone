@@ -1,4 +1,7 @@
-use common::block::{Block, BlockMeta, PeerChainTip};
+use common::{
+    block::{Block, BlockMeta, PeerChainTip},
+    transaction::LeeTransaction,
+};
 use kameo::{Actor, message::Message};
 use lee::V03State;
 use lee_core::BlockId;
@@ -14,7 +17,7 @@ use crate::{
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
+        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
         RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
         SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
@@ -28,6 +31,7 @@ pub trait StorageActorTrait:
     + Message<ApplyStoreUpdate, Reply = Result<StoreUpdateOutcome>>
     + Message<GetBlock, Reply = Result<Option<Block>>>
     + Message<GetAllBlocks, Reply = Result<Vec<Block>>>
+    + Message<GetTransactionByHash, Reply = Result<Option<(LeeTransaction, BlockId)>>>
     + Message<DeleteBlock, Reply = Result<()>>
     + Message<MarkBlockAsFinalized, Reply = Result<()>>
     + Message<CleanPendingBlocksUpTo, Reply = Result<()>>

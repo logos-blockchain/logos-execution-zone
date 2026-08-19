@@ -1499,7 +1499,7 @@ impl RocksDBIO {
         Ok(outcome)
     }
 
-    pub fn get_all_blocks(&self) -> impl Iterator<Item = DbResult<Block>> {
+    pub fn get_all_blocks(&self) -> impl Iterator<Item = DbResult<Block>> + '_ {
         let cf_block = self.block_column();
         self.db
             .iterator_cf(&cf_block, rocksdb::IteratorMode::Start)

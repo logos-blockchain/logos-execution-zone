@@ -1,11 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use common::{
-    HashType,
-    block::{Block, BlockMeta},
-    transaction::LeeTransaction,
-};
+use common::block::{Block, BlockMeta};
 use kameo::actor::ActorRef;
 use lee::V03State;
 use lee_core::BlockId;
@@ -24,12 +20,10 @@ use sequencer_storage_actor::{
     },
 };
 
-// TODO: Refactor this to be `Cache` (or remove entirely) and move other fields to
-// [`crate::SequencerCore`].
+// TODO: Remove entirely, asking the storage actor directly and moving the
+// remaining fields to [`crate::SequencerCore`].
 pub struct SequencerStore<S: StorageActorTrait> {
     storage_ref: ActorRef<S>,
-    // TODO: Consider adding the hashmap to the database for faster recovery.
-    tx_hash_to_block_map: HashMap<HashType, BlockId>,
     genesis_id: u64,
     signing_key: lee::PrivateKey,
 }
@@ -41,30 +35,8 @@ impl<S: StorageActorTrait> SequencerStore<S> {
             .await?
             .context("Store holds no chain; it must be seeded with a genesis block first")?;
 
-        let last_id = storage_ref
-            .ask(GetLastBlockId)
-            .await?
-            .context("Store holds a first block but no last one")?;
-
-        let mut tx_hash_to_block_map = HashMap::new();
-
-        log::info!("Preparing block cache");
-        for i in genesis_id..=last_id {
-            let block = storage_ref
-                .ask(GetBlock { block_id: i })
-                .await?
-                .expect("Block should be present in the database");
-
-            tx_hash_to_block_map.extend(block_to_transactions_map(&block));
-        }
-        log::info!(
-            "Block cache prepared. Total blocks in cache: {}",
-            tx_hash_to_block_map.len()
-        );
-
         Ok(Self {
             storage_ref,
-            tx_hash_to_block_map,
             genesis_id,
             signing_key,
         })
@@ -103,8 +75,7 @@ impl<S: StorageActorTrait> SequencerStore<S> {
             .map_err(Into::into)
     }
 
-    /// Persists `block` with the effects it covers and extends the transaction
-    /// cache with the block's transactions.
+    /// Persists `block` with the effects it covers.
     pub async fn record_new_block(
         &mut self,
         block: Block,
@@ -112,7 +83,6 @@ impl<S: StorageActorTrait> SequencerStore<S> {
         state: Arc<V03State>,
         checkpoint_bytes: Option<Vec<u8>>,
     ) -> Result<()> {
-        let new_transactions_map = block_to_transactions_map(&block);
         self.storage_ref
             .ask(RecordNewBlock {
                 block,
@@ -121,30 +91,7 @@ impl<S: StorageActorTrait> SequencerStore<S> {
                 checkpoint_bytes,
             })
             .await?;
-        self.tx_hash_to_block_map.extend(new_transactions_map);
         Ok(())
-    }
-
-    /// Returns the transaction corresponding to the given hash, if it exists in the blockchain.
-    pub async fn get_transaction_by_hash(
-        &self,
-        hash: HashType,
-    ) -> Option<(LeeTransaction, BlockId)> {
-        let block_id = *self.tx_hash_to_block_map.get(&hash)?;
-        let block = self
-            .block_at_id(block_id)
-            .await
-            .ok()
-            .flatten()
-            .expect("Block should be present since the hash is in the map");
-        for transaction in block.body.transactions {
-            if transaction.hash() == hash {
-                return Some((transaction, block_id));
-            }
-        }
-        panic!(
-            "Transaction hash was in the map but transaction was not found in the block. This should never happen."
-        );
     }
 
     /// The id of the chain's last block, or `None` on a store holding no chain.
@@ -331,20 +278,11 @@ pub(crate) fn checkpoint_bytes(checkpoint: &SequencerCheckpoint) -> Result<Vec<u
     serde_json::to_vec(checkpoint).context("Failed to serialize zone-sdk checkpoint")
 }
 
-pub(crate) fn block_to_transactions_map(block: &Block) -> HashMap<HashType, u64> {
-    block
-        .body
-        .transactions
-        .iter()
-        .map(|transaction| (transaction.hash(), block.header.block_id))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use common::{block::HashableBlockData, test_utils::sequencer_sign_key_for_testing};
+    use common::{HashType, block::HashableBlockData, test_utils::sequencer_sign_key_for_testing};
     use kameo::actor::Spawn as _;
     use sequencer_storage_actor::StorageActor;
     use tempfile::tempdir;
@@ -379,37 +317,6 @@ mod tests {
             .await
             .unwrap();
         SequencerStore::new(storage_ref, signing_key).await.unwrap()
-    }
-
-    async fn open_store(path: &Path, signing_key: lee::PrivateKey) -> SequencerStore<StorageActor> {
-        let storage_ref = StorageActor::spawn(StorageActor::new(path).unwrap());
-        SequencerStore::new(storage_ref, signing_key).await.unwrap()
-    }
-
-    #[tokio::test]
-    async fn get_transaction_by_hash() {
-        let temp_dir = tempdir().unwrap();
-        let signing_key = sequencer_sign_key_for_testing();
-        let mut store = create_store(
-            temp_dir.path(),
-            &genesis_block(&signing_key),
-            signing_key.clone(),
-        )
-        .await;
-
-        let tx = common::test_utils::produce_dummy_empty_transaction();
-        let block = common::test_utils::produce_dummy_block(1, None, vec![tx.clone()]);
-
-        // Try retrieve a tx that's not in the chain yet.
-        assert_eq!(store.get_transaction_by_hash(tx.hash()).await, None);
-        // Add the block with the transaction
-        store
-            .record_new_block(block.clone(), vec![], Arc::new(V03State::new()), None)
-            .await
-            .unwrap();
-        // Try again
-        let output = store.get_transaction_by_hash(tx.hash()).await;
-        assert_eq!(Some((tx, 1)), output);
     }
 
     #[tokio::test]
@@ -489,31 +396,5 @@ mod tests {
             finalized_block.bedrock_status,
             common::block::BedrockStatus::Finalized
         ));
-    }
-
-    #[tokio::test]
-    async fn open_existing_db_caches_transactions() {
-        let temp_dir = tempdir().unwrap();
-        let path = temp_dir.path();
-        let signing_key = sequencer_sign_key_for_testing();
-        let tx = common::test_utils::produce_dummy_empty_transaction();
-
-        let storage_weak = {
-            let mut store =
-                create_store(path, &genesis_block(&signing_key), signing_key.clone()).await;
-            let block = common::test_utils::produce_dummy_block(1, None, vec![tx.clone()]);
-            store
-                .record_new_block(block.clone(), vec![], Arc::new(V03State::new()), None)
-                .await
-                .unwrap();
-            store.storage_ref().downgrade()
-        };
-        storage_weak.wait_for_shutdown_with_result(|_| ()).await;
-
-        // Re-open the store and verify that the transaction is still retrievable (which means it
-        // was cached correctly)
-        let store = open_store(path, signing_key).await;
-        let output = store.get_transaction_by_hash(tx.hash()).await;
-        assert_eq!(Some((tx, 1)), output);
     }
 }

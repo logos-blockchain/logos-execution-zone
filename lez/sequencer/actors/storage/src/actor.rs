@@ -1,6 +1,10 @@
 use std::path::Path;
 
-use common::block::{Block, BlockMeta, PeerChainTip};
+use common::{
+    block::{Block, BlockMeta, PeerChainTip},
+    transaction::LeeTransaction,
+};
+use itertools::Itertools as _;
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
@@ -9,10 +13,12 @@ use kameo::{
 };
 use lee::V03State;
 use lee_core::BlockId;
+use log::debug;
 use storage::sequencer::RocksDBIO;
 
 use crate::{
     Result, StorageActorTrait,
+    actor::tx_index::TransactionIndex,
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AddPendingDepositEvent, ApplyStoreUpdate,
@@ -22,7 +28,7 @@ use crate::{
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
+        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
         RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
         SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
@@ -30,9 +36,12 @@ use crate::{
     },
 };
 
+mod tx_index;
+
 pub struct StorageActor {
     /// `None` after [`Actor::on_stop`] closed the database.
     dbio: Option<RocksDBIO>,
+    tx_index: TransactionIndex,
 }
 
 impl StorageActor {
@@ -40,13 +49,20 @@ impl StorageActor {
     /// If the database does not exist, it will be created.
     pub fn new(location: &Path) -> Result<Self> {
         let dbio = RocksDBIO::open_or_create(location)?;
-        Ok(Self { dbio: Some(dbio) })
+        Self::new_inner(dbio)
     }
 
     /// Creates a fresh database at `location` from `dump`.
     pub fn restore_from_dump(location: &Path, dump: &DbDump) -> Result<Self> {
         let dbio = RocksDBIO::restore_from_dump(location, dump.as_db_dump())?;
-        Ok(Self { dbio: Some(dbio) })
+        Self::new_inner(dbio)
+    }
+
+    fn new_inner(dbio: RocksDBIO) -> Result<Self> {
+        Ok(Self {
+            tx_index: Self::build_tx_index(&dbio)?,
+            dbio: Some(dbio),
+        })
     }
 
     /// The open database.
@@ -59,6 +75,24 @@ impl StorageActor {
         self.dbio
             .as_ref()
             .expect("Database is closed, the actor has already stopped")
+    }
+
+    fn build_tx_index(dbio: &RocksDBIO) -> Result<TransactionIndex> {
+        debug!("Building the transaction index");
+
+        let index =
+            dbio.get_all_blocks()
+                .fold_ok(TransactionIndex::default(), |mut index, block| {
+                    index.update_from_block(&block);
+                    index
+                })?;
+
+        debug!(
+            "Transaction index built, holding {} transactions",
+            index.transaction_count()
+        );
+
+        Ok(index)
     }
 }
 
@@ -98,8 +132,10 @@ impl Message<RecordNewBlock> for StorageActor {
     ) -> Self::Reply {
         let withdrawals = withdrawals.into_iter().map(Into::into).collect::<Vec<_>>();
         self.dbio()
-            .atomic_update(&block, &withdrawals, &state, checkpoint_bytes.as_deref())
-            .map_err(Into::into)
+            .atomic_update(&block, &withdrawals, &state, checkpoint_bytes.as_deref())?;
+
+        self.tx_index.update_from_block(&block);
+        Ok(())
     }
 }
 
@@ -130,6 +166,30 @@ impl Message<GetAllBlocks> for StorageActor {
     }
 }
 
+impl Message<GetTransactionByHash> for StorageActor {
+    type Reply = Result<Option<(LeeTransaction, BlockId)>>;
+
+    async fn handle(
+        &mut self,
+        GetTransactionByHash { hash }: GetTransactionByHash,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let Some(block_id) = self.tx_index.block_for_tx(&hash) else {
+            return Ok(None);
+        };
+        let Some(block) = self.dbio().get_block(block_id)? else {
+            return Ok(None);
+        };
+
+        Ok(block
+            .body
+            .transactions
+            .into_iter()
+            .find(|transaction| transaction.hash() == hash)
+            .map(|transaction| (transaction, block_id)))
+    }
+}
+
 impl Message<DeleteBlock> for StorageActor {
     type Reply = Result<()>;
 
@@ -138,7 +198,9 @@ impl Message<DeleteBlock> for StorageActor {
         DeleteBlock { block_id }: DeleteBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.dbio().delete_block(block_id).map_err(Into::into)
+        self.dbio().delete_block(block_id)?;
+        self.tx_index.delete_block(block_id);
+        Ok(())
     }
 }
 
@@ -399,10 +461,12 @@ impl Message<ApplyStoreUpdate> for StorageActor {
             new_withdraw_intents: &new_withdraw_intents,
             zone_anchor: zone_anchor.as_ref(),
         };
-        self.dbio()
-            .store_update(&update)
-            .map(Into::into)
-            .map_err(Into::into)
+        let outcome = self.dbio().store_update(&update)?;
+
+        for (block, _) in blocks {
+            self.tx_index.update_from_block(block);
+        }
+        Ok(outcome.into())
     }
 }
 
@@ -619,33 +683,5 @@ impl Message<SetCrossZonePeerTip> for StorageActor {
         self.dbio()
             .put_cross_zone_peer_tip(peer_zone, tip)
             .map_err(Into::into)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kameo::actor::Spawn as _;
-
-    use super::*;
-
-    /// Holding the task's output keeps the stopped actor's state alive, which is exactly the
-    /// situation `on_stop` exists for: the lock has to be gone by the time the shutdown result
-    /// resolves, not by the time the state happens to be dropped.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn stopped_actor_releases_the_database_lock() {
-        let dir = tempfile::tempdir().expect("Failed to create temp dir");
-        let prepared = StorageActor::prepare();
-        let actor_ref = prepared.actor_ref().clone();
-        let join_handle = prepared.spawn(StorageActor::new(dir.path()).expect("Failed to open db"));
-
-        actor_ref
-            .stop_gracefully()
-            .await
-            .expect("Failed to stop the actor");
-        actor_ref.wait_for_shutdown_with_result(|_| ()).await;
-
-        StorageActor::new(dir.path()).expect("Database lock must be released once the actor stops");
-
-        drop(join_handle);
     }
 }

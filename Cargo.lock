@@ -9728,9 +9728,11 @@ name = "sequencer_storage_actor"
 version = "0.1.0"
 dependencies = [
  "common",
+ "itertools 0.14.0",
  "kameo",
  "lee",
  "lee_core",
+ "log",
  "mockall",
  "storage",
  "tempfile",

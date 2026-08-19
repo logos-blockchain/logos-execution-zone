@@ -29,6 +29,10 @@ pub struct GetBlock {
 
 pub struct GetAllBlocks;
 
+pub struct GetTransactionByHash {
+    pub hash: HashType,
+}
+
 pub struct DeleteBlock {
     pub block_id: BlockId,
 }

@@ -271,17 +271,17 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
 impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetTransaction>
     for ExecutorActor<BP, S>
 {
-    type Reply = Option<(LeeTransaction, BlockId)>;
+    type Reply = Result<Option<(LeeTransaction, BlockId)>>;
 
     async fn handle(
         &mut self,
         GetTransaction { tx_hash }: GetTransaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer
-            .block_store()
-            .get_transaction_by_hash(tx_hash)
+        self.storage_ref
+            .ask(sequencer_storage_actor::protocol::GetTransactionByHash { hash: tx_hash })
             .await
+            .map_err(Into::into)
     }
 }
 

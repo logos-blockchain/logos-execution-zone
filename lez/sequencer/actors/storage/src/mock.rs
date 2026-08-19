@@ -3,7 +3,10 @@
     reason = "`handle*` prefix is used for convenience with `Message` trait"
 )]
 
-use common::block::{Block, BlockMeta, PeerChainTip};
+use common::{
+    block::{Block, BlockMeta, PeerChainTip},
+    transaction::LeeTransaction,
+};
 use kameo::{
     Actor, Reply,
     actor::ActorRef,
@@ -23,7 +26,7 @@ use crate::{
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
+        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
         RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
         SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
@@ -50,6 +53,12 @@ mockall::mock! {
             msg: GetAllBlocks,
             ctx: &mut Context<Self, Result<Vec<Block>>>
         ) -> Result<Vec<Block>>;
+
+        pub fn handle_get_transaction_by_hash(
+            &mut self,
+            msg: GetTransactionByHash,
+            ctx: &mut Context<Self, Result<Option<(LeeTransaction, BlockId)>>>
+        ) -> Result<Option<(LeeTransaction, BlockId)>>;
 
         pub fn handle_delete_block(
             &mut self,
@@ -325,6 +334,18 @@ impl Message<GetAllBlocks> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_all_blocks(msg, ctx)
+    }
+}
+
+impl Message<GetTransactionByHash> for MockStorageActor {
+    type Reply = Result<Option<(LeeTransaction, BlockId)>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetTransactionByHash,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_transaction_by_hash(msg, ctx)
     }
 }
 
