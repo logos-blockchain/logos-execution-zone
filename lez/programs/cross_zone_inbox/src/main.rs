@@ -23,7 +23,7 @@ fn main() {
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     assert!(
@@ -36,14 +36,14 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             &msg,
         ),
         Instruction::InitConfig(config) => init_config(
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             &config,
         ),
     }
@@ -68,7 +68,7 @@ fn dispatch(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u8>,
+    instruction_data: Vec<u8>,
     msg: &CrossZoneMessage,
 ) {
     assert!(
@@ -140,7 +140,7 @@ fn dispatch(
         );
 
         // The payload carries the target instruction as borsh bytes: its instruction_data verbatim.
-        let instruction_data = msg.payload.clone();
+        let call_instruction_data = msg.payload.clone();
 
         // The marker leads, so a target reads its source at a fixed position
         // without knowing anything about the accounts that follow it.
@@ -149,7 +149,7 @@ fn dispatch(
         let call = ChainedCall {
             program_id: msg.target_program_id,
             pre_states: call_pre_states,
-            instruction_data,
+            instruction_data: call_instruction_data,
             pda_seeds: vec![],
         };
         (seen_post, vec![call])
@@ -164,7 +164,7 @@ fn dispatch(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         output_pre_states,
         post_states,
     )
@@ -177,7 +177,7 @@ fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u8>,
+    instruction_data: Vec<u8>,
     config: &InboxConfig,
 ) {
     // pre_states: [config PDA].
@@ -217,7 +217,7 @@ fn init_config(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config_meta],
         vec![config_post],
     )

@@ -169,15 +169,15 @@ mod tests {
     }
 
     /// The peer's `bridge_lock` serializes `Mint` into the emission payload, so
-    /// its tag word is wire format.
+    /// its tag byte is wire format.
     #[test]
     fn mint_is_the_first_variant() {
         let mint = Instruction::Mint {
             recipient: [3; 32],
             amount: 1,
         };
-        let words = borsh::to_vec(&mint).expect("Mint serializes");
-        assert_eq!(words[0], 0);
+        let bytes = borsh::to_vec(&mint).expect("Mint serializes");
+        assert_eq!(bytes[0], 0);
     }
 
     #[test]

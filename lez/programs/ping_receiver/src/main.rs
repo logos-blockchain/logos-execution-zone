@@ -19,7 +19,7 @@ fn main() {
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<ReceiverInstruction>();
 
     match instruction {
@@ -27,27 +27,27 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             payload,
         ),
         ReceiverInstruction::InitConfig(config) => init_config(
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             &config,
         ),
         ReceiverInstruction::RenounceAuthority => renounce_authority(
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
         ),
         ReceiverInstruction::UpdateSources { sources } => update_sources(
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             sources,
         ),
     }
@@ -57,7 +57,7 @@ fn record(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u8>,
+    instruction_data: Vec<u8>,
     payload: Vec<u8>,
 ) {
     // pre_states: [source marker, config PDA, record PDA].
@@ -100,7 +100,7 @@ fn record(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![marker.clone(), config.clone(), record],
         vec![
             AccountPostState::new(marker.account),
@@ -116,7 +116,7 @@ fn renounce_authority(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u8>,
+    instruction_data: Vec<u8>,
 ) {
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
@@ -169,7 +169,7 @@ fn renounce_authority(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config, authority.clone()],
         vec![
             AccountPostState::new(config_account),
@@ -187,7 +187,7 @@ fn update_sources(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u8>,
+    instruction_data: Vec<u8>,
     sources: Vec<([u8; 32], ProgramId)>,
 ) {
     // The config is read before the account list is validated, so who may call
@@ -241,7 +241,7 @@ fn update_sources(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config, authority.clone()],
         vec![
             AccountPostState::new(config_account),
@@ -259,7 +259,7 @@ fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u8>,
+    instruction_data: Vec<u8>,
     config_value: &ReceiverConfig,
 ) {
     assert!(
@@ -305,7 +305,7 @@ fn init_config(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config],
         vec![config_post],
     )

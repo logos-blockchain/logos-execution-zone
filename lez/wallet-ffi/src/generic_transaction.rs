@@ -131,7 +131,7 @@ impl Default for FfiTransactionResult {
 /// # Parameters
 /// - `handle`: Valid pointer to wallet handle
 /// - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
-/// - `instruction_data`: Valid pointer to instruction words
+/// - `instruction_data`: Valid pointer to instruction data bytes
 /// - `out_result`: Valid pointer to `FfiTransactionResult`
 ///
 /// # Returns
@@ -223,7 +223,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
 /// # Parameters
 /// - `handle`: Valid pointer to wallet handle
 /// - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
-/// - `instruction_data`: Valid pointer to instruction words
+/// - `instruction_data`: Valid pointer to instruction data bytes
 /// - `out_result`: Valid pointer to `FfiTransactionResult`
 ///
 /// # Returns

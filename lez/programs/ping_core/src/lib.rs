@@ -163,7 +163,7 @@ pub fn read_outbox(data: &[u8]) -> Option<ProgramId> {
 mod tests {
     use super::*;
 
-    /// `extract_emission` decodes `Send` off peer transactions, so its tag word is
+    /// `extract_emission` decodes `Send` off peer transactions, so its tag byte is
     /// wire format: a variant inserted ahead of it would silently shift every
     /// existing encoding.
     #[test]
@@ -175,17 +175,17 @@ mod tests {
             payload: vec![],
             ordinal: 0,
         };
-        let words = borsh::to_vec(&send).expect("Send serializes");
-        assert_eq!(words[0], 0);
+        let bytes = borsh::to_vec(&send).expect("Send serializes");
+        assert_eq!(bytes[0], 0);
     }
 
     /// `Record` is serialized by the source zone into the emission payload and
-    /// decoded by the destination, so its tag word is wire format.
+    /// decoded by the destination, so its tag byte is wire format.
     #[test]
     fn record_is_the_first_variant() {
         let record = ReceiverInstruction::Record { payload: vec![] };
-        let words = borsh::to_vec(&record).expect("Record serializes");
-        assert_eq!(words[0], 0);
+        let bytes = borsh::to_vec(&record).expect("Record serializes");
+        assert_eq!(bytes[0], 0);
     }
 
     #[test]

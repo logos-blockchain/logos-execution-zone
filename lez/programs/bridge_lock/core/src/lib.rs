@@ -120,7 +120,7 @@ mod tests {
         );
     }
 
-    /// `extract_emission` decodes `Lock` off peer transactions, so its tag word is
+    /// `extract_emission` decodes `Lock` off peer transactions, so its tag byte is
     /// wire format: a variant inserted ahead of it would silently shift every
     /// existing encoding.
     #[test]
@@ -133,7 +133,7 @@ mod tests {
             payload: vec![],
             ordinal: 0,
         };
-        let words = borsh::to_vec(&lock).expect("Lock serializes");
-        assert_eq!(words[0], 0);
+        let bytes = borsh::to_vec(&lock).expect("Lock serializes");
+        assert_eq!(bytes[0], 0);
     }
 }
