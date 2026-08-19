@@ -204,6 +204,9 @@ pub struct StoreUpdate<'update> {
 
     /// Advance the channel-read anchor.
     pub zone_anchor: Option<&'update ZoneAnchorRecord>,
+
+    /// Lower the published high water mark to this height if it is above.
+    pub lower_published_high_water: Option<u64>,
 }
 
 impl<'update> StoreUpdate<'update> {
@@ -224,6 +227,7 @@ impl<'update> StoreUpdate<'update> {
             consumed_withdrawals: &[],
             new_withdraw_intents: &[],
             zone_anchor: None,
+            lower_published_high_water: None,
         }
     }
 }
@@ -558,8 +562,8 @@ impl RocksDBIO {
         self.del::<ZoneSdkCheckpointCellOwned>(())
     }
 
-    /// The highest block id this sequencer has ever inscribed, or `None` if it
-    /// has never published. Read fresh: a head rewind prunes blocks, so the
+    /// The highest block id this sequencer must not inscribe again, or `None` if
+    /// it has never published. Read fresh: a head rewind prunes blocks, so the
     /// stored tip is not a safe substitute.
     pub fn published_high_water(&self) -> DbResult<Option<u64>> {
         self.get_opt::<PublishedHighWaterCell>(())
@@ -1406,6 +1410,7 @@ impl RocksDBIO {
             consumed_withdrawals,
             new_withdraw_intents,
             zone_anchor,
+            lower_published_high_water,
         } = *update;
 
         // 0 stands in for "no chain yet": nothing to sweep above the new tip,
@@ -1418,6 +1423,11 @@ impl RocksDBIO {
         }
         if let Some(anchor) = zone_anchor {
             self.put_batch(&ZoneAnchorCell(*anchor), (), &mut batch)?;
+        }
+        if let Some(cap) = lower_published_high_water
+            && self.published_high_water()?.is_some_and(|mark| mark > cap)
+        {
+            self.put_batch(&PublishedHighWaterCell(cap), (), &mut batch)?;
         }
 
         // Every block payload this update writes, keyed by id so a block that

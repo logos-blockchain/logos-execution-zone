@@ -146,8 +146,6 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
     let follower_client = ctx
         .sequencer_client_by_node_ids(channel, OFFENDER_SEED)
         .context("The follower has no sequencer client")?;
-    let height_before_garbage = leader_client.get_last_block_id().await?;
-
     // The offender's node never publishes, so this is the only writer with its key.
     let offender = ZoneSdkPublisher::new(
         &bedrock_config,
@@ -181,14 +179,19 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         "the offender's whole tracked stake should be gone"
     );
 
+    // Garbage taking the channel tip sheds the leader's pending inscriptions, so
+    // its height drops before it climbs again; only the climb proves liveness.
+    // That it produced *during* the garbage is already implied: attribution runs
+    // on a production turn, so the slash above could not have landed otherwise.
+    let height_after_slash = leader_client.get_last_block_id().await?;
+    wait_until("the leader to produce again after the slash", || async {
+        Ok(leader_client.get_last_block_id().await? > height_after_slash)
+    })
+    .await?;
+
     // A payload that is not a block never reaches chain state, so it takes no block id.
-    let height_after_garbage = leader_client.get_last_block_id().await?;
-    ensure!(
-        height_after_garbage > height_before_garbage,
-        "the leader should have produced blocks while the garbage was landing, \
-         but the height stayed at {height_before_garbage}"
-    );
-    for id in 1..=height_after_garbage {
+    let height = leader_client.get_last_block_id().await?;
+    for id in 1..=height {
         ensure!(
             leader_client.get_block(id).await?.is_some(),
             "block id {id} is missing: the garbage opened a gap in the chain"

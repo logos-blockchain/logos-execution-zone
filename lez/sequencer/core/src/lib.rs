@@ -666,6 +666,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 new_deposit_events: Vec::new(),
                 consumed_withdrawals: Vec::new(),
                 new_withdraw_intents: Vec::new(),
+                lower_published_high_water: None,
             })
             .await
             .context("Failed to persist reconstructed block")?;
@@ -1475,13 +1476,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     /// inscribed, so the next block would be a *second*, different block at a
     /// height the channel already carries. Callers must skip their turn.
     ///
-    /// The head alone cannot detect this: an orphan report for our own
-    /// still-unfinalized blocks rewinds it (`ChainState::apply_channel_update`)
-    /// and prunes those blocks from the store, so the tip reads as if they were
-    /// never produced. The mark is kept outside that pruning for exactly this.
-    ///
-    /// This is not a stall — the head recovers by itself once the inscriptions
-    /// we are protecting finalize and the final tier rebases onto them.
+    /// The follow path lowers the mark when the channel drops our inscription
+    /// for good, so this only holds while a re-adopted block of ours fails to apply.
     pub async fn rewound_below_published(&self) -> Option<u64> {
         let high_water = self.store.published_high_water().await.ok().flatten()?;
         (self.next_block_height().await <= high_water).then_some(high_water)
@@ -1697,6 +1693,31 @@ async fn apply_follow_update<S: StorageActorTrait>(
         let head_tip = chain.head_tip().map(|tip| BlockMeta::from(&tip));
         let head_tip_id = head_tip.as_ref().map_or(0, |tip| tip.id);
 
+        // zone-sdk drops an orphan from its pending set, so a height above the new
+        // head is ours to write again once the channel holds nothing there.
+        let head_height = head_tip.as_ref().map(|tip| tip.id);
+        let orphans_above_head: Vec<&Block> = orphaned
+            .iter()
+            .map(|(_, block)| block)
+            .filter(|block| head_height.is_none_or(|id| block.header.block_id > id))
+            .collect();
+        let none_back_on_channel = orphans_above_head.iter().all(|block| {
+            !adopted
+                .iter()
+                .any(|(_, a)| a.header.hash == block.header.hash)
+        });
+        // An adoption that parked sits above the head without being orphaned.
+        let all_adopted_applied = outcomes.iter().all(|outcome| {
+            matches!(
+                outcome,
+                AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied
+            )
+        });
+        let lower_published_high_water =
+            (!orphans_above_head.is_empty() && none_back_on_channel && all_adopted_applied)
+                .then_some(head_height)
+                .flatten();
+
         // Every block at or below the highest finalized one is irreversible, so
         // stored blocks there can be marked finalized.
         let last_finalized = irreversible.iter().map(|block| block.header.block_id).max();
@@ -1740,6 +1761,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
                 consumed_withdrawals,
                 new_withdraw_intents: Vec::new(),
                 zone_anchor: None,
+                lower_published_high_water,
             })
             .await
             .unwrap_or_else(|err| panic!("Failed to persist follow update: {err:#}"));
