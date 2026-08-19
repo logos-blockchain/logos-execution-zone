@@ -15,7 +15,9 @@ use lee::{GENESIS_BLOCK_ID, PublicKey};
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
-    CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
+    CommonHttpClient, Slot, ZoneMessage,
+    adapter::NodeHttpClient,
+    sequencer::{SequencerCheckpoint, ZoneSequencer},
 };
 use tokio::sync::RwLock;
 
@@ -306,7 +308,7 @@ impl CrossZoneVerifier {
                 peer_pubkeys.insert(peer.channel_id, pubkey);
             }
             tokio::spawn(read_peer(
-                ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
+                chain_state::consistency::new_indexer(ChannelId::from(peer.channel_id), node, None),
                 peer.channel_id,
                 peer_pubkeys.get(&peer.channel_id).cloned(),
                 peers.clone(),
@@ -585,7 +587,7 @@ fn accept_peer_block(
     reason = "the peer reader runs for the lifetime of the indexer process"
 )]
 async fn read_peer(
-    zone_indexer: ZoneIndexer<NodeHttpClient>,
+    mut zone_indexer: ZoneSequencer<NodeHttpClient>,
     peer_zone: ZoneId,
     expected_pubkey: Option<PublicKey>,
     peers: PeerBlocks,
@@ -595,47 +597,34 @@ async fn read_peer(
         "Cross-zone peer reader started for {}",
         hex::encode(peer_zone)
     );
-
     let mut cursor = None;
     // The slot the reader is stuck on and how many passes it has spent there.
     // Keyed by slot so a failure at a new slot does not inherit an older slot's
     // count, and used only to say so once rather than every pass.
     let mut stalled: Option<(Slot, u32)> = None;
     loop {
-        match zone_indexer.next_messages(cursor).await {
-            Ok(stream) => {
-                let pass = consume_peer_stream(
-                    stream,
-                    peer_zone,
-                    expected_pubkey.as_ref(),
-                    &peers,
-                    cursor,
-                )
-                .await;
-                cursor = pass.cursor;
-                if let Some(slot) = pass.stalled_at {
-                    let attempts = match stalled {
-                        Some((prev, attempts)) if prev == slot => attempts.saturating_add(1),
-                        _ => 1,
-                    };
-                    stalled = Some((slot, attempts));
-                    // Every threshold rather than on the crossing alone: a stall
-                    // that never clears would otherwise be reported once and
-                    // then look resolved for as long as it lasts.
-                    if attempts > 0 && attempts.is_multiple_of(STUCK_SLOT_ALERT_PASSES) {
-                        error!(
-                            "Peer reader for {} has been stuck at slot {slot:?} for {attempts} passes. The run verified from that peer's genesis stops below it, so every dispatch naming a later block stalls until this slot can be read.",
-                            hex::encode(peer_zone)
-                        );
-                    }
-                } else {
-                    stalled = None;
-                }
+        let stream = chain_state::consistency::next_messages(&mut zone_indexer).await;
+
+        let pass =
+            consume_peer_stream(stream, peer_zone, expected_pubkey.as_ref(), &peers, cursor).await;
+        cursor = pass.cursor;
+        if let Some(slot) = pass.stalled_at {
+            let attempts = match stalled {
+                Some((prev, attempts)) if prev == slot => attempts.saturating_add(1),
+                _ => 1,
+            };
+            stalled = Some((slot, attempts));
+            // Every threshold rather than on the crossing alone: a stall
+            // that never clears would otherwise be reported once and
+            // then look resolved for as long as it lasts.
+            if attempts > 0 && attempts.is_multiple_of(STUCK_SLOT_ALERT_PASSES) {
+                error!(
+                    "Peer reader for {} has been stuck at slot {slot:?} for {attempts} passes. The run verified from that peer's genesis stops below it, so every dispatch naming a later block stalls until this slot can be read.",
+                    hex::encode(peer_zone)
+                );
             }
-            Err(err) => error!(
-                "Peer reader next_messages failed for {}: {err}",
-                hex::encode(peer_zone)
-            ),
+        } else {
+            stalled = None;
         }
 
         tokio::time::sleep(poll_interval).await;
@@ -665,14 +654,23 @@ async fn consume_peer_stream<S>(
     resume_from: Option<Slot>,
 ) -> PeerPass
 where
-    S: Stream<Item = (ZoneMessage, Slot)>,
+    S: Stream<Item = (ZoneMessage, SequencerCheckpoint)>,
 {
     let mut stream = std::pin::pin!(stream);
     let mut cursor = resume_from;
     // The slot being consumed: cached so far, but there may be more to come.
     let mut in_progress: Option<Slot> = None;
 
-    while let Some((msg, slot)) = stream.next().await {
+    while let Some((
+        msg,
+        SequencerCheckpoint {
+            last_msg_id: _,
+            pending_txs: _,
+            lib: _,
+            lib_slot: slot,
+        },
+    )) = stream.next().await
+    {
         if in_progress != Some(slot) {
             cursor = in_progress.or(cursor);
             in_progress = Some(slot);
@@ -764,13 +762,18 @@ mod tests {
     }
 
     /// A peer-stream item inscribing `data` at `slot`.
-    fn peer_msg(data: Vec<u8>, slot: u64) -> (ZoneMessage, Slot) {
+    fn peer_msg(data: Vec<u8>, slot: u64) -> (ZoneMessage, SequencerCheckpoint) {
         (
             ZoneMessage::Block(ZoneBlock {
                 id: MsgId::from([0; 32]),
                 data: Inscription::try_from(data).expect("test inscription is within bounds"),
             }),
-            Slot::from(slot),
+            SequencerCheckpoint {
+                last_msg_id: MsgId::from([0_u8; 32]),
+                pending_txs: vec![],
+                lib: [1_u8; 32].into(),
+                lib_slot: Slot::new(slot),
+            },
         )
     }
 
@@ -792,7 +795,7 @@ mod tests {
     }
 
     /// A peer-stream item carrying `block`.
-    fn peer_block_msg(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
+    fn peer_block_msg(block: &Block, slot: u64) -> (ZoneMessage, SequencerCheckpoint) {
         peer_msg(borsh::to_vec(block).expect("block serializes"), slot)
     }
 
@@ -818,7 +821,7 @@ mod tests {
     }
 
     /// A peer-stream item whose inscription is not a decodable block.
-    fn undecodable_msg(slot: u64) -> (ZoneMessage, Slot) {
+    fn undecodable_msg(slot: u64) -> (ZoneMessage, SequencerCheckpoint) {
         peer_msg(b"not a block".to_vec(), slot)
     }
 

@@ -1451,6 +1451,7 @@ name = "chain_state"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "borsh",
  "common",
  "ed25519-dalek",

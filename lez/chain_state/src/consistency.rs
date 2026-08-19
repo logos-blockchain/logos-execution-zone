@@ -3,13 +3,26 @@
 
 use anyhow::Result;
 use common::{HashType, block::Block};
+use futures::{Stream, StreamExt};
 use lee_core::BlockId;
 use log::warn;
-use logos_blockchain_core::mantle::{gas::GasCost, ops::{OpId, channel::ChannelId}};
-use logos_blockchain_zone_sdk::{Deposit, Slot, Withdraw, ZoneBlock, ZoneMessage, adapter, sequencer::{DepositInfo, Event, FinalizedOp, FundingConfig, InscriptionInfo, SequencerCheckpoint, WithdrawInfo, ZoneSequencer}};
+use logos_blockchain_core::mantle::{
+    gas::GasCost,
+    ops::{OpId, channel::ChannelId},
+};
+use logos_blockchain_zone_sdk::{
+    Deposit, Slot, Withdraw, ZoneBlock, ZoneMessage, adapter,
+    sequencer::{
+        DepositInfo, Event, FinalizedOp, FundingConfig, InscriptionInfo, SequencerCheckpoint,
+        WithdrawInfo, ZoneSequencer,
+    },
+};
 
 /// Upper bound on the channel reads of the startup consistency check.
 const CHANNEL_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Default signing key bytes, necessary after merging zone indexer and sequecner.
+pub const DEFULT_SIGNING_KEY_BYTES: [u8; 32] = [13; 32];
 
 /// Result of comparing a caller's stored chain against the channel.
 pub enum ChainConsistency {
@@ -240,6 +253,109 @@ enum AnchorProbe {
     KeepLooking,
 }
 
+/// Migration of indexer-specific functionality after indexer removal.
+///
+/// Reads all finalized blocks into a stream.
+pub async fn next_messages<N>(
+    indexer: &mut ZoneSequencer<N>,
+) -> impl Stream<Item = (ZoneMessage, SequencerCheckpoint)>
+where
+    N: adapter::Node + Clone + Sync + Send + 'static,
+{
+    async_stream::stream! {
+        loop {
+            match indexer.next_event().await {
+                Event::BlocksProcessed {
+                    checkpoint, finalized: batch, ..
+                } => {
+                    for fin_tx in batch {
+                        for op in fin_tx.ops {
+                            let zone_msg = match op {
+                                FinalizedOp::Deposit(DepositInfo {
+                                    tx_hash,
+                                    op_id,
+                                    channel_id: _,
+                                    inputs,
+                                    notes,
+                                    amount,
+                                    metadata,
+                                }) => ZoneMessage::Deposit(Deposit {
+                                    tx_hash,
+                                    op_id,
+                                    inputs,
+                                    notes,
+                                    amount,
+                                    metadata,
+                                }),
+                                FinalizedOp::Withdraw(WithdrawInfo { tx_hash, op }) => {
+                                    ZoneMessage::Withdraw(Withdraw {
+                                        tx_hash,
+                                        op_id: op.op_id(),
+                                        inputs: op.inputs,
+                                    })
+                                }
+                                FinalizedOp::Inscription(InscriptionInfo {
+                                    tx_hash: _,
+                                    parent_msg: _,
+                                    this_msg,
+                                    payload,
+                                }) => ZoneMessage::Block(ZoneBlock {
+                                        id: this_msg,
+                                        data: payload,
+                                }),
+                            };
+
+                            // Clonuing checkpoint here can be a costly operation.
+                            // ToDo: Consider refactoring, right now, we need checkpoint here to
+                            // fully anchor an indexer, which in turn is needed for old interfaces.
+                            yield (zone_msg, checkpoint.clone());
+                        }
+                    }
+                },
+                Event::Ready => break,
+                Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
+            }
+        }
+    }
+}
+
+/// Placeholder funding config for indexer, must be provided after merging zone indexer and
+/// sequencer.
+pub fn funding_placeholder() -> FundingConfig {
+    FundingConfig {
+        funding_pk: num_bigint::BigUint::new_const(1).into(),
+        max_tx_fee: GasCost::new(u64::MAX),
+        priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
+    }
+}
+
+/// Placeholder signing_key for indexer, must be provided after merging zone indexer and sequencer.
+///
+/// NOT AN EXACT STRUCT, have conversion into necessary key type.
+///
+/// ToDo: Replace, when zone-sdk keys crate is accesable.
+pub fn signing_key_placeholder() -> ed25519_dalek::SigningKey {
+    ed25519_dalek::SigningKey::from_bytes(&DEFULT_SIGNING_KEY_BYTES)
+}
+
+/// Initialize indexer from a checkpoint.
+pub fn new_indexer<N>(
+    channel_id: ChannelId,
+    node: N,
+    checkpoint: Option<SequencerCheckpoint>,
+) -> ZoneSequencer<N>
+where
+    N: adapter::Node + Clone + Sync + Send + 'static,
+{
+    ZoneSequencer::init(
+        channel_id,
+        signing_key_placeholder().into(),
+        node,
+        funding_placeholder(),
+        checkpoint,
+    )
+}
+
 /// Detects when a local store belongs to a different chain than the connected
 /// L1 (e.g. a wiped/restarted Bedrock) so startup can react instead of silently
 /// diverging.
@@ -270,67 +386,30 @@ where
         return Ok(check.finish());
     }
 
-    // Placeholder funding: the reader never publishes (random key, posting is
-    // turn-gated), so the funding wallet is never exercised.
-    let funding = FundingConfig {
-        funding_pk: num_bigint::BigUint::new_const(1).into(),
-        max_tx_fee: GasCost::new(u64::MAX),
-        priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
-    };
-    let mut zone_indexer = ZoneSequencer::init(channel_id, ed25519_dalek::SigningKey::from_bytes(&[42; 32]).into(), 
-    node.clone(), funding, Some(anchor.checkpoint.clone()));
+    let mut zone_indexer = ZoneSequencer::init(
+        channel_id,
+        signing_key_placeholder().into(),
+        node.clone(),
+        funding_placeholder(),
+        Some(anchor.checkpoint.clone()),
+    );
 
     let scan = async {
-        let mut finalized = Vec::new();
+        let stream = next_messages(&mut zone_indexer).await;
+        let mut stream = std::pin::pin!(stream);
 
-        match zone_indexer.next_event().await {
-                Event::BlocksProcessed {
-                    finalized: batch, ..
-                } => finalized.extend(batch),
-                Event::Ready | Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
-            }
-
-        'outer: for fin_tx in finalized {
-            for op in fin_tx.ops {
-                let zone_msg = match op {
-                    FinalizedOp::Deposit(DepositInfo {
-                        tx_hash,
-                        op_id,
-                        channel_id: _,
-                        inputs,
-                        notes,
-                        amount,
-                        metadata,
-                    }) => ZoneMessage::Deposit(Deposit {
-                        tx_hash,
-                        op_id,
-                        inputs,
-                        notes,
-                        amount,
-                        metadata,
-                    }),
-                    FinalizedOp::Withdraw(WithdrawInfo {
-                        tx_hash,
-                        op
-                    }) => ZoneMessage::Withdraw(Withdraw {
-                        tx_hash,
-                        op_id: op.op_id(),
-                        inputs: op.inputs
-                    }),
-                    FinalizedOp::Inscription(InscriptionInfo {
-                        tx_hash: _,
-                        parent_msg: _,
-                        this_msg,
-                        payload
-                    }) => ZoneMessage::Block(ZoneBlock {
-                        id: this_msg,
-                        data: payload,
-                    })
-                };
-
-                if check.observe(&zone_msg, fin_tx.l1_slot).is_some() {
-                    break 'outer;
-                }
+        while let Some((
+            msg,
+            SequencerCheckpoint {
+                last_msg_id: _,
+                pending_txs: _,
+                lib: _,
+                lib_slot: slot,
+            },
+        )) = stream.next().await
+        {
+            if check.observe(&msg, slot).is_some() {
+                break;
             }
         }
         Ok::<_, anyhow::Error>(())
@@ -398,7 +477,10 @@ mod tests {
             lib_slot: slot,
         };
 
-        Anchor::new(test_checkpoint, Some((block.header.block_id, block.header.hash)))
+        Anchor::new(
+            test_checkpoint,
+            Some((block.header.block_id, block.header.hash)),
+        )
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use common::{HashType, block::BlockHeader};
-use logos_blockchain_zone_sdk::Slot;
+use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use serde::{Deserialize, Serialize};
 
 use crate::ingest_error::BlockIngestError;
@@ -14,7 +14,7 @@ pub struct StallReason {
     pub block_id: Option<u64>,
     pub block_hash: Option<HashType>,
     pub prev_block_hash: Option<HashType>,
-    pub l1_slot: Slot,
+    pub checkpoint: SequencerCheckpoint,
     pub error: BlockIngestError,
     pub first_seen: Option<u64>,
     /// Number of later non-chaining blocks (orphans, since the tip is frozen).
@@ -28,13 +28,17 @@ impl StallReason {
     /// First stall for a break, built from the breaking block's header
     /// (`None` for a deserialize break).
     #[must_use]
-    pub fn new(header: Option<&BlockHeader>, l1_slot: Slot, error: BlockIngestError) -> Self {
+    pub fn new(
+        header: Option<&BlockHeader>,
+        checkpoint: SequencerCheckpoint,
+        error: BlockIngestError,
+    ) -> Self {
         Self {
             block_id: header.map(|header| header.block_id),
             block_hash: header.map(|header| header.hash),
             prev_block_hash: header.map(|header| header.prev_block_hash),
             first_seen: header.map(|header| header.timestamp),
-            l1_slot,
+            checkpoint,
             error,
             orphans_since: 0,
         }

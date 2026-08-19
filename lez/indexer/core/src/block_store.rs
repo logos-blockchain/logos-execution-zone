@@ -12,7 +12,7 @@ use lee::{Account, AccountId, V03State};
 use lee_core::BlockId;
 use log::warn;
 use logos_blockchain_core::header::HeaderId;
-use logos_blockchain_zone_sdk::Slot;
+use logos_blockchain_zone_sdk::{Slot, sequencer::SequencerCheckpoint};
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
@@ -110,16 +110,16 @@ impl IndexerStore {
         Ok(self.dbio.calculate_state_for_id(block_id)?)
     }
 
-    pub fn get_zone_cursor(&self) -> Result<Option<Slot>> {
+    pub fn get_zone_cursor(&self) -> Result<Option<SequencerCheckpoint>> {
         let Some(bytes) = self.dbio.get_zone_sdk_indexer_cursor_bytes()? else {
             return Ok(None);
         };
-        let cursor: Slot = serde_json::from_slice(&bytes)
+        let cursor: SequencerCheckpoint = serde_json::from_slice(&bytes)
             .context("Failed to deserialize stored zone-sdk indexer cursor")?;
         Ok(Some(cursor))
     }
 
-    pub fn set_zone_cursor(&self, cursor: &Slot) -> Result<()> {
+    pub fn set_zone_cursor(&self, cursor: &SequencerCheckpoint) -> Result<()> {
         let bytes =
             serde_json::to_vec(cursor).context("Failed to serialize zone-sdk indexer cursor")?;
         self.dbio.put_zone_sdk_indexer_cursor_bytes(&bytes)?;
@@ -129,8 +129,13 @@ impl IndexerStore {
     /// The L1 inscription slot of the validated tip, written atomically with it
     /// by [`Self::accept_block`]. `None` on a cold store or one written before
     /// the slot was recorded.
-    pub fn get_tip_slot(&self) -> Result<Option<Slot>> {
-        Ok(self.dbio.get_meta_tip_slot_in_db()?.map(Slot::from))
+    pub fn get_tip_checkpoint(&self) -> Result<Option<SequencerCheckpoint>> {
+        let Some(bytes) = self.dbio.get_meta_tip_checkpoint_in_db()? else {
+            return Ok(None);
+        };
+        let checkpoint: Option<SequencerCheckpoint> =
+            serde_json::from_slice(&bytes).context("Failed to deserialize stored tip checkpoint")?;
+        Ok(checkpoint)
     }
 
     pub fn get_stall_reason(&self) -> Result<Option<StallReason>> {
@@ -196,11 +201,11 @@ impl IndexerStore {
     pub fn record_stall(
         &self,
         header: Option<&BlockHeader>,
-        l1_slot: Slot,
+        checkpoint: SequencerCheckpoint,
         error: BlockIngestError,
     ) -> Result<()> {
         let stall = self.get_stall_reason()?.map_or_else(
-            || StallReason::new(header, l1_slot, error),
+            || StallReason::new(header, checkpoint, error),
             StallReason::escalate,
         );
         self.set_stall_reason(&Some(stall))
@@ -210,7 +215,11 @@ impl IndexerStore {
     /// (scratch clone, commit only on full success) and advances the tip.
     /// Retryable apply failures return `RetryableFailure` without recording a stall
     /// or touching state; other failures record the stall and return `Parked`.
-    pub async fn accept_block(&self, block: &Block, l1_slot: Slot) -> Result<AcceptOutcome> {
+    pub async fn accept_block(
+        &self,
+        block: &Block,
+        checkpoint: SequencerCheckpoint,
+    ) -> Result<AcceptOutcome> {
         let tip = self.validated_tip()?;
 
         // Re-delivery of an already-applied block is idempotent, not a divergence
@@ -225,7 +234,7 @@ impl IndexerStore {
         // Validate before paying for the scratch clone; validation failures
         // are never retryable, so parking immediately is exact.
         if let Err(err) = validate_against_tip(tip.as_ref(), block) {
-            self.record_stall(Some(&block.header), l1_slot, err.clone())?;
+            self.record_stall(Some(&block.header), checkpoint.clone(), err.clone())?;
             return Ok(AcceptOutcome::Parked(err));
         }
 
@@ -235,14 +244,19 @@ impl IndexerStore {
             if err.is_retryable() {
                 return Ok(AcceptOutcome::RetryableFailure(err));
             }
-            self.record_stall(Some(&block.header), l1_slot, err.clone())?;
+            self.record_stall(Some(&block.header), checkpoint.clone(), err.clone())?;
             return Ok(AcceptOutcome::Parked(err));
         }
 
         let mut stored = block.clone();
         stored.bedrock_status = BedrockStatus::Finalized;
         self.dbio
-            .put_block(&stored, [0_u8; 32], l1_slot.into_inner(), &scratch)
+            .put_block(
+                &stored,
+                [0_u8; 32],
+                checkpoint.lib_slot.into_inner(),
+                &scratch,
+            )
             .context("Failed to persist accepted block")?;
 
         // Commit in-memory state (infallible) only after the DB write succeeded.
@@ -259,6 +273,7 @@ impl IndexerStore {
 #[cfg(test)]
 mod stall_reason_tests {
     use common::HashType;
+    use logos_blockchain_zone_sdk::{node_types::MsgId, sequencer::SequencerCheckpoint};
 
     use super::*;
 
@@ -273,7 +288,12 @@ mod stall_reason_tests {
             block_id: Some(7),
             block_hash: Some(HashType([1_u8; 32])),
             prev_block_hash: Some(HashType([2_u8; 32])),
-            l1_slot: Slot::from(42),
+            checkpoint: SequencerCheckpoint {
+                last_msg_id: MsgId::from([3_u8; 32]),
+                pending_txs: vec![],
+                lib: [4_u8; 32].into(),
+                lib_slot: Slot::from(42),
+            },
             error: BlockIngestError::StateTransition {
                 tx_index: 0,
                 reason: "boom".to_owned(),
@@ -292,7 +312,7 @@ mod stall_reason_tests {
         ));
         assert_eq!(got.block_hash, Some(HashType([1_u8; 32])));
         assert_eq!(got.prev_block_hash, Some(HashType([2_u8; 32])));
-        assert_eq!(got.l1_slot, Slot::from(42));
+        assert_eq!(got.checkpoint.lib_slot, Slot::from(42));
         assert_eq!(got.first_seen, Some(99));
 
         store.set_stall_reason(&None).expect("clear");
@@ -303,10 +323,20 @@ mod stall_reason_tests {
 #[cfg(test)]
 mod tests {
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
+    use logos_blockchain_zone_sdk::node_types::MsgId;
     use tempfile::tempdir;
     use testnet_initial_state::initial_pub_accounts_private_keys;
 
     use super::*;
+
+    fn checkpoint(slot: u64) -> SequencerCheckpoint {
+        SequencerCheckpoint {
+            last_msg_id: MsgId::from([0_u8; 32]),
+            pending_txs: vec![],
+            lib: [1_u8; 32].into(),
+            lib_slot: Slot::from(slot),
+        }
+    }
 
     #[test]
     fn correct_startup() {
@@ -333,7 +363,7 @@ mod tests {
         let genesis = produce_dummy_block(1, None, vec![]);
         let mut prev_hash = genesis.header.hash;
         assert!(matches!(
-            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
+            store.accept_block(&genesis, checkpoint(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
 
@@ -343,7 +373,7 @@ mod tests {
             let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
             prev_hash = block.header.hash;
             assert!(matches!(
-                store.accept_block(&block, Slot::from(0)).await.unwrap(),
+                store.accept_block(&block, checkpoint(0)).await.unwrap(),
                 AcceptOutcome::Applied
             ));
         }
@@ -373,13 +403,13 @@ mod tests {
 
         let genesis = produce_dummy_block(1, None, vec![]);
         let mut prev_hash = genesis.header.hash;
-        store.accept_block(&genesis, Slot::from(0)).await.unwrap();
+        store.accept_block(&genesis, checkpoint(0)).await.unwrap();
 
         for i in 0..10_u64 {
             let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &sign_key);
             let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
             prev_hash = block.header.hash;
-            store.accept_block(&block, Slot::from(0)).await.unwrap();
+            store.accept_block(&block, checkpoint(0)).await.unwrap();
         }
 
         // State at block N is inclusive of block N.
@@ -407,8 +437,18 @@ mod tests {
 #[cfg(test)]
 mod accept_tests {
     use common::{HashType, block::HashableBlockData, test_utils::produce_dummy_block};
+use logos_blockchain_zone_sdk::node_types::MsgId;
 
     use super::*;
+
+    fn checkpoint(slot: u64) -> SequencerCheckpoint {
+        SequencerCheckpoint {
+            last_msg_id: MsgId::from([0_u8; 32]),
+            pending_txs: vec![],
+            lib: [1_u8; 32].into(),
+            lib_slot: Slot::from(slot),
+        }
+    }
 
     fn signing_key() -> lee::PrivateKey {
         lee::PrivateKey::try_new([7_u8; 32]).expect("valid key")
@@ -433,7 +473,7 @@ mod accept_tests {
 
         let block = valid_hash_block(2, HashType([0_u8; 32]));
         let outcome = store
-            .accept_block(&block, Slot::from(0))
+            .accept_block(&block, checkpoint(0))
             .await
             .expect("accept");
 
@@ -458,7 +498,7 @@ mod accept_tests {
         block.header.timestamp = 999; // invalidates the stored hash
 
         let outcome = store
-            .accept_block(&block, Slot::from(0))
+            .accept_block(&block, checkpoint(0))
             .await
             .expect("accept");
         assert!(matches!(
@@ -474,12 +514,12 @@ mod accept_tests {
 
         let first = valid_hash_block(2, HashType([0_u8; 32]));
         store
-            .accept_block(&first, Slot::from(0))
+            .accept_block(&first, checkpoint(0))
             .await
             .expect("accept");
         let second = valid_hash_block(3, HashType([0_u8; 32]));
         store
-            .accept_block(&second, Slot::from(0))
+            .accept_block(&second, checkpoint(0))
             .await
             .expect("accept");
 
@@ -496,7 +536,7 @@ mod accept_tests {
         store
             .record_stall(
                 None,
-                Slot::from(0),
+                checkpoint(0),
                 BlockIngestError::Deserialize("bad bytes".to_owned()),
             )
             .expect("record");
@@ -514,14 +554,14 @@ mod accept_tests {
         // Genesis (block 1, clock-only) applies and advances the tip.
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
-            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
+            store.accept_block(&genesis, checkpoint(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
 
         // A block that skips ahead (id 3 while the tip is 1) parks the indexer.
         let bad = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
         assert!(matches!(
-            store.accept_block(&bad, Slot::from(0)).await.unwrap(),
+            store.accept_block(&bad, checkpoint(0)).await.unwrap(),
             AcceptOutcome::Parked(BlockIngestError::UnexpectedBlockId {
                 expected: 2,
                 got: 3
@@ -540,7 +580,7 @@ mod accept_tests {
         // The valid continuation (block 2 chaining on genesis) recovers the chain.
         let next = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
-            store.accept_block(&next, Slot::from(0)).await.unwrap(),
+            store.accept_block(&next, checkpoint(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
         assert!(
@@ -563,14 +603,14 @@ mod accept_tests {
 
         let genesis = produce_dummy_block(1, None, vec![]);
         store
-            .accept_block(&genesis, Slot::from(1_000))
+            .accept_block(&genesis, checkpoint(1_000))
             .await
             .expect("accept");
         assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_000)));
 
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         store
-            .accept_block(&block2, Slot::from(1_005))
+            .accept_block(&block2, checkpoint(1_005))
             .await
             .expect("accept");
         assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_005)));
@@ -578,7 +618,7 @@ mod accept_tests {
         // A parked block freezes the tip, so its slot must not advance either.
         let bad = produce_dummy_block(4, Some(block2.header.hash), vec![]);
         assert!(matches!(
-            store.accept_block(&bad, Slot::from(1_010)).await.unwrap(),
+            store.accept_block(&bad, checkpoint(1_010)).await.unwrap(),
             AcceptOutcome::Parked(_)
         ));
         assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_005)));
@@ -586,7 +626,7 @@ mod accept_tests {
         // Neither must a re-delivered old block move it.
         assert!(matches!(
             store
-                .accept_block(&genesis, Slot::from(1_015))
+                .accept_block(&genesis, checkpoint(1_015))
                 .await
                 .unwrap(),
             AcceptOutcome::AlreadyApplied
@@ -608,7 +648,7 @@ mod accept_tests {
 
         let genesis = produce_dummy_block(1, None, vec![]);
         store
-            .accept_block(&genesis, Slot::from(0))
+            .accept_block(&genesis, checkpoint(0))
             .await
             .expect("accept genesis");
 
@@ -618,14 +658,14 @@ mod accept_tests {
         );
         let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
         assert!(matches!(
-            store.accept_block(&block, Slot::from(0)).await.unwrap(),
+            store.accept_block(&block, checkpoint(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
         let balance_after = store.account_current_state(&from).await.unwrap().balance;
 
         // Re-deliver the exact same block: idempotent skip, no state change, no park.
         assert!(matches!(
-            store.accept_block(&block, Slot::from(0)).await.unwrap(),
+            store.accept_block(&block, checkpoint(0)).await.unwrap(),
             AcceptOutcome::AlreadyApplied
         ));
         assert_eq!(
@@ -659,7 +699,7 @@ mod accept_tests {
         // Build a short chain: genesis (1) -> block 2 -> block 3, so the tip is 3.
         let genesis = produce_dummy_block(1, None, vec![]);
         store
-            .accept_block(&genesis, Slot::from(0))
+            .accept_block(&genesis, checkpoint(0))
             .await
             .expect("accept genesis");
 
@@ -668,7 +708,7 @@ mod accept_tests {
         );
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx2]);
         assert!(matches!(
-            store.accept_block(&block2, Slot::from(0)).await.unwrap(),
+            store.accept_block(&block2, checkpoint(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
 
@@ -677,7 +717,7 @@ mod accept_tests {
         );
         let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![tx3]);
         assert!(matches!(
-            store.accept_block(&block3, Slot::from(0)).await.unwrap(),
+            store.accept_block(&block3, checkpoint(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
 
@@ -685,7 +725,7 @@ mod accept_tests {
 
         // Re-deliver block 2 (id below the tip): a re-delivery, not a divergence.
         assert!(matches!(
-            store.accept_block(&block2, Slot::from(0)).await.unwrap(),
+            store.accept_block(&block2, checkpoint(0)).await.unwrap(),
             AcceptOutcome::AlreadyApplied
         ));
         assert_eq!(
@@ -718,7 +758,7 @@ mod accept_tests {
 
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
-            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
+            store.accept_block(&genesis, checkpoint(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
         let mut prev_hash = genesis.header.hash;
@@ -735,7 +775,7 @@ mod accept_tests {
             let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
             prev_hash = block.header.hash;
             assert!(matches!(
-                store.accept_block(&block, Slot::from(0)).await.unwrap(),
+                store.accept_block(&block, checkpoint(0)).await.unwrap(),
                 AcceptOutcome::Applied
             ));
         }
@@ -764,7 +804,7 @@ mod accept_tests {
 
         let genesis = produce_dummy_block(1, None, vec![]);
         store
-            .accept_block(&genesis, Slot::from(0))
+            .accept_block(&genesis, checkpoint(0))
             .await
             .expect("accept genesis");
 
@@ -777,7 +817,7 @@ mod accept_tests {
             &sign_key,
         );
         let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
-        let outcome = store.accept_block(&block, Slot::from(0)).await.unwrap();
+        let outcome = store.accept_block(&block, checkpoint(0)).await.unwrap();
 
         assert!(matches!(
             outcome,

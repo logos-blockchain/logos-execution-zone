@@ -31,8 +31,8 @@ impl RocksDBIO {
         Ok(self.get_opt::<FirstBlockSetCell>(())?.is_some())
     }
 
-    pub fn get_meta_tip_slot_in_db(&self) -> DbResult<Option<u64>> {
-        self.get_opt::<TipSlotCell>(())
+    pub fn get_meta_tip_checkpoint_in_db(&self) -> DbResult<Option<Vec<u8>>> {
+        self.get_opt::<TipCheckpointCell>(())
             .map(|opt| opt.map(|cell| cell.0))
     }
 
