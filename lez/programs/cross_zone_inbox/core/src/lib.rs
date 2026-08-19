@@ -18,9 +18,6 @@ const SOURCE_MARKER_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneSource/00000/"
 /// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
 pub type ZoneId = [u8; 32];
 
-/// Block-signing public key pinned per peer zone.
-pub type ExpectedPubkey = [u8; 32];
-
 /// Content-addressed replay key for a delivered message.
 pub type MessageKey = [u8; 32];
 
@@ -41,24 +38,30 @@ pub struct CrossZoneRoute {
 }
 
 /// A peer zone whose outbox a zone watches for inbound cross-zone messages.
+///
+/// Unknown fields are refused so a stale or misspelled key in an operator
+/// config fails startup instead of silently pinning nothing.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CrossZonePeer {
     /// The peer's Bedrock channel; its 32 bytes double as the peer's zone id.
     pub channel_id: ZoneId,
     /// The deliveries this peer may make: which of its programs may emit, and
     /// what each of them may reach here.
     pub allowed_routes: Vec<CrossZoneRoute>,
-    /// The peer's block-signing public key, pinned to reject blocks inscribed by
-    /// anyone other than that zone's sequencer. `None` skips the check (the
-    /// channel signer is still authenticated by the zone-sdk).
+    /// The peer's block-signing public keys, pinned to reject blocks inscribed
+    /// by anyone other than that zone's sequencers: a block is acceptable when
+    /// signed by any of them, one entry per sequencer. Empty skips the check
+    /// (the channel signer is still authenticated by the zone-sdk).
     #[serde(default)]
-    pub expected_block_signing_pubkey: Option<[u8; 32]>,
+    pub expected_block_signing_pubkeys: Vec<[u8; 32]>,
 }
 
 /// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer
 /// (verifier): the peers it reads from Bedrock and, per peer, the local programs
 /// they may deliver to.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CrossZoneConfig {
     pub peers: Vec<CrossZonePeer>,
 }
