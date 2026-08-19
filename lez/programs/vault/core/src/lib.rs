@@ -1,3 +1,4 @@
+use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::PdaSeed;
 use lee_core::{account::AccountId, program::ProgramId};
 use serde::{Deserialize, Serialize};
@@ -9,7 +10,7 @@ const _: () = assert!(
     "Domain separator must be exactly 32 bytes long"
 );
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Transfers native tokens from sender to recipient's vault.
     ///

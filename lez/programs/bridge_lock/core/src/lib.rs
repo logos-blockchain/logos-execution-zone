@@ -2,6 +2,7 @@
 //! token bridge. A holder locks part of their balance into an escrow and emits a
 //! cross-zone message minting the wrapped token on the target zone.
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::AccountId,
     program::{PdaSeed, ProgramId},
@@ -13,7 +14,7 @@ const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeLockCfg/0000000/";
 
 /// Variants are append-only. risc0 serde encodes the variant as a bare leading
 /// tag word, so inserting one ahead of `Lock` shifts every existing encoding.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Lock `amount` of the holder's balance and emit a cross-zone message
     /// minting the wrapped token on `target_zone`.

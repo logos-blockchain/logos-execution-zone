@@ -1,3 +1,4 @@
+use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::PdaSeed;
 use lee_core::{
     account::{AccountId, AccountWithMetadata},
@@ -5,7 +6,7 @@ use lee_core::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Create the Associated Token Account for (owner, definition).
     /// Idempotent: no-op if the account already exists.

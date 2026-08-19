@@ -14,7 +14,7 @@ const OUTBOX_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneOutbox/00001/";
 /// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
 pub type ZoneId = [u8; 32];
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Records an outbound cross-zone message as a write to a self-owned PDA.
     ///

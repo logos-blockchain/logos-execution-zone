@@ -26,7 +26,7 @@ const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenHold/00000";
 /// Raw 32-byte zone (channel) id, matching the inbox's.
 pub type ZoneId = [u8; 32];
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Credit `amount` wrapped tokens to `recipient`'s holding. Delivered only by
     /// the cross-zone inbox, and only for a peer source this token authorizes.

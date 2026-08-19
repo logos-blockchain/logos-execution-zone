@@ -549,6 +549,7 @@ checksum = "4858a9d740c5007a9069007c3b4e91152d0506f13c1b31dd49051fd537656156"
 name = "associated_token_account_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
  "serde",
@@ -786,6 +787,7 @@ dependencies = [
 name = "authenticated_transfer_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "serde",
 ]
 
@@ -1249,6 +1251,7 @@ dependencies = [
 name = "bridge_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
  "serde",
@@ -1258,6 +1261,7 @@ dependencies = [
 name = "bridge_lock_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
  "serde",
@@ -3248,6 +3252,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 name = "faucet_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "serde",
 ]
@@ -13445,6 +13450,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 name = "vault_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
  "serde",

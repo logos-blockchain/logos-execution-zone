@@ -94,7 +94,7 @@ pub struct CrossZoneConfig {
 /// A finalized outbound message observed on a peer zone, addressed to a program
 /// on this zone. The watcher fills it from the peer's block; it is never
 /// self-reported by a user.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct CrossZoneMessage {
     pub src_zone: ZoneId,
     pub src_block_id: u64,
@@ -223,7 +223,7 @@ impl SeenShard {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Delivers a finalized peer message to its target program.
     Dispatch(CrossZoneMessage),

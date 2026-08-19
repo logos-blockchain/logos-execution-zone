@@ -1,10 +1,11 @@
+use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::PdaSeed;
 use lee_core::{account::AccountId, program::ProgramId};
 use serde::{Deserialize, Serialize};
 
 const FAUCET_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/FaucetSeed/0000000000/";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Transfers native tokens from system faucet to recipient's vault.
     ///

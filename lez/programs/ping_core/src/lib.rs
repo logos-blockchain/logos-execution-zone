@@ -14,7 +14,7 @@ pub type ZoneId = [u8; 32];
 /// Instruction to `ping_receiver`.
 ///
 /// Variants are append-only, for the same reason `SenderInstruction`'s are.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum ReceiverInstruction {
     /// Record the payload, delivered by the inbox on behalf of a peer source
     /// this receiver authorizes.
@@ -82,7 +82,7 @@ impl ReceiverConfig {
 ///
 /// Variants are append-only. risc0 serde encodes the variant as a bare leading
 /// tag word, so inserting one ahead of `Send` shifts every existing encoding.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum SenderInstruction {
     /// Emit a cross-zone message through the pinned outbox.
     ///

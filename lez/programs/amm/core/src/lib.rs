@@ -8,7 +8,7 @@ use lee_core::{
 use serde::{Deserialize, Serialize};
 
 /// AMM Program Instruction.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Initializes a new Pool (or re-initializes an inactive Pool).
     ///
