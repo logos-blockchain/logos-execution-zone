@@ -60,6 +60,19 @@ pub struct ProgramInput<T> {
     pub instruction: T,
 }
 
+/// Borsh-encoded header written to the guest as a single length-prefixed frame.
+///
+/// Carries the program identity and pre-states alongside the risc0-encoded `instruction_data`
+/// words; the instruction `T` is decoded from `instruction_data` via the risc0 codec, unchanged.
+/// This is the wire form of [`ProgramInput`], which instead holds the already-decoded instruction.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct LeeInputHeader {
+    pub self_program_id: ProgramId,
+    pub caller_program_id: Option<ProgramId>,
+    pub pre_states: Vec<AccountWithMetadata>,
+    pub instruction_data: InstructionData,
+}
+
 /// A 32-byte seed used to compute a *Program-Derived `AccountId`* (PDA).
 ///
 /// Each program can derive up to `2^256` unique account IDs by choosing different
@@ -685,14 +698,29 @@ pub fn compute_public_authorized_pdas(
         .collect()
 }
 
+/// Reads a length-prefixed frame from the guest's stdin.
+///
+/// A 4-byte little-endian length followed by that many payload bytes: the host `to_frame` layout,
+/// read via the stable `read_slice` API rather than the `#[stability::unstable]` `env::read_frame`.
+fn read_input_frame() -> Vec<u8> {
+    let mut len_bytes = [0; 4];
+    env::read_slice(&mut len_bytes);
+    let len = usize::try_from(u32::from_le_bytes(len_bytes)).expect("frame length fits in usize");
+    let mut payload: Vec<u8> = vec![0; len];
+    env::read_slice(&mut payload);
+    payload
+}
+
 /// Reads the LEE inputs from the guest environment.
 #[must_use]
 pub fn read_lee_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionData) {
-    let self_program_id: ProgramId = env::read();
-    let caller_program_id: Option<ProgramId> = env::read();
-    let pre_states: Vec<AccountWithMetadata> = env::read();
-    let instruction_words: InstructionData = env::read();
-    let instruction = T::deserialize(&mut Deserializer::new(instruction_words.as_ref())).unwrap();
+    let LeeInputHeader {
+        self_program_id,
+        caller_program_id,
+        pre_states,
+        instruction_data,
+    } = borsh::from_slice(&read_input_frame()).expect("guest input must be a valid borsh header");
+    let instruction = T::deserialize(&mut Deserializer::new(instruction_data.as_ref())).unwrap();
     (
         ProgramInput {
             self_program_id,
@@ -700,7 +728,7 @@ pub fn read_lee_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionDa
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     )
 }
 
