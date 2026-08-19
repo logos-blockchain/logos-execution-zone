@@ -91,14 +91,17 @@ impl Program {
     /// typed [`LeeError::OutOfGas`]. The only place that error string is
     /// recognized.
     ///
-    /// FIXME: This is a brittle string match; the executor should provide a typed error
+    /// FIXME: This is a brittle string match; the executor should provide a typed error.
     fn execute_session(
         env: ExecutorEnv<'_>,
         elf: &[u8],
         cycle_budget: u64,
     ) -> Result<risc0_zkvm::SessionInfo, LeeError> {
         default_executor().execute(env, elf).map_err(|e| {
-            if format!("{e:#}").contains("Session limit exceeded") {
+            // check for "Guest panicked" to prevent spoofing
+            // via `panic!("Session limit exceeded")` cases
+            let message = format!("{e:#}");
+            if message.contains("Session limit exceeded") && !message.contains("Guest panicked") {
                 LeeError::OutOfGas {
                     budget: cycle_budget,
                 }

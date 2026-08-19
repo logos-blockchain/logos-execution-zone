@@ -627,9 +627,11 @@ fn chained_calls_share_one_budget() {
     .1
     .cycles;
 
-    // Reported cycles are po2-padded per segment while the session limit gates
-    // actual executed cycles, so a boundary budget (`full_cycles - 1`) can
-    // still pass. A quarter of the chain's total is decisively insufficient.
+    // `cycles()` and the session limit gate the same unpadded user-cycle
+    // counter, but the limit is only checked before each instruction and one
+    // instruction (an ecall) can add up to MAX_INSN_CYCLES (~25k) at once, so a
+    // boundary budget (`full_cycles - 1`) can still complete. A quarter of the
+    // chain's total is decisively insufficient.
     let starved_budget = full_cycles >> 2;
     let starved =
         ValidatedStateDiff::from_public_transaction_with_budget(&tx, &state, 1, 0, starved_budget);

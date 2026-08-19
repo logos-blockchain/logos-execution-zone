@@ -119,6 +119,8 @@ fn execute_reports_cycles_within_budget() {
         )
         .expect("executes");
     assert!(cycles > 0);
+    // Holds because this transfer costs far less than the budget; not a general
+    // invariant — a session can overshoot its limit by up to one instruction.
     assert!(cycles <= DEFAULT_PUBLIC_CYCLE_BUDGET);
 }
 

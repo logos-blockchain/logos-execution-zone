@@ -167,7 +167,7 @@ impl ValidatedStateDiff {
             )?;
             cycles_used = cycles_used
                 .checked_add(call_cycles)
-                .expect("cycle sums fit u64: each call is bounded by the budget");
+                .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_id, program_output
