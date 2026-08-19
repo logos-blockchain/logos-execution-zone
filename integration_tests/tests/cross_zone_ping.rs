@@ -115,13 +115,12 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
     let outbox_id = programs::cross_zone_outbox().id();
     let ordinal = 0;
 
-    // The payload is the ping_receiver instruction, serialized as risc0 words in
-    // little-endian bytes (the contract the inbox reverses when forwarding).
+    // The payload is the ping_receiver instruction, borsh-serialized into instruction_data bytes.
     let words = borsh::to_vec(&ReceiverInstruction::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping instruction");
-    let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    let payload = words;
 
     let send = SenderInstruction::Send {
         target_zone,

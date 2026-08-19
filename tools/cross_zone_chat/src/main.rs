@@ -551,7 +551,7 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
         payload: text.as_bytes().to_vec(),
     })
     .expect("serialize record instruction");
-    let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    let payload = words;
 
     let send = SenderInstruction::Send {
         target_zone: other_zone,

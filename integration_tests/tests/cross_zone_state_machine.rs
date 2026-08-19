@@ -286,7 +286,7 @@ fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> Pub
             receiver_config_account_id(receiver_id).into_value(),
             ping_record_pda(receiver_id).into_value(),
         ],
-        payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        payload: words,
         ordinal,
     };
     let message = Message::try_new(programs::ping_sender().id(), accounts, vec![], send)
@@ -295,7 +295,7 @@ fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> Pub
 }
 
 /// The wrapped-token `Mint` the bridge forwards, serialized as the cross-zone
-/// payload (risc0 words, little-endian bytes).
+/// payload (borsh bytes).
 fn mint_payload() -> Vec<u8> {
     mint_payload_of(LOCK_AMOUNT)
 }
@@ -305,8 +305,7 @@ fn mint_payload_of(amount: u128) -> Vec<u8> {
         recipient: RECIPIENT,
         amount,
     };
-    let words = borsh::to_vec(&mint).expect("serialize mint");
-    words.iter().flat_map(|word| word.to_le_bytes()).collect()
+    borsh::to_vec(&mint).expect("serialize mint")
 }
 
 /// Runs a bridge mint of `amount` through the inbox, as the watcher would.
@@ -389,14 +388,13 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
     seed_inbox_config(&mut state, self_zone);
     seed_receiver_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
 
-    // The payload is the ping_receiver instruction, serialized as risc0 words in
-    // little-endian bytes (the contract the inbox reverses when forwarding).
+    // The payload is the ping_receiver instruction, borsh-serialized into instruction_data bytes.
     let inner = b"hello-cross-zone".to_vec();
     let words = borsh::to_vec(&ReceiverInstruction::Record {
         payload: inner.clone(),
     })
     .expect("serialize ping instruction");
-    let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    let payload = words;
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -2294,7 +2292,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         payload: b"from-the-other-block".to_vec(),
     })
     .expect("serialize ping instruction");
-    let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    let payload = words;
 
     // A different transaction index, so this is not a replay: only the source
     // block differs from what the shard is bound to.
@@ -2341,10 +2339,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         src_tx_index: 1,
         src_program_id: [9_u32; 8],
         target_program_id: receiver_id,
-        payload: control_words
-            .iter()
-            .flat_map(|word| word.to_le_bytes())
-            .collect(),
+        payload: control_words,
         l1_inclusion_witness: None,
     };
     let control_message = Message::try_new(

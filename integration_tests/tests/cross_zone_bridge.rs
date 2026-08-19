@@ -151,7 +151,7 @@ fn build_lock_tx(
         amount: LOCK_AMOUNT,
     };
     let words = borsh::to_vec(&mint).expect("serialize mint");
-    let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    let payload = words;
 
     let target_accounts = vec![
         wrapped_token_core::config_account_id(wrapped_token_id).into_value(),

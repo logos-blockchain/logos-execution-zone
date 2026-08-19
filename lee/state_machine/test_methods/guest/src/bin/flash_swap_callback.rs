@@ -27,9 +27,8 @@
 use lee_core::program::{
     AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
-use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct CallbackInstruction {
     /// If true, return the borrowed funds to the vault (happy path).
     /// If false, keep the funds (simulates a malicious callback, triggers rollback).

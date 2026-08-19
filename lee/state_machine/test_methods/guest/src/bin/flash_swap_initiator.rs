@@ -40,9 +40,8 @@
 use lee_core::program::{
     AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
-use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum FlashSwapInstruction {
     /// External entrypoint: initiate a flash swap.
     ///
