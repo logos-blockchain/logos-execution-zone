@@ -155,14 +155,14 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedAccountData,
 }
 
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct PublicAction {
     pub pre: AccountWithMetadata,
     pub post: Account,
 }
 
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
 pub struct PrivacyPreservingCircuitOutput {
     pub public_actions: Vec<PublicAction>,
