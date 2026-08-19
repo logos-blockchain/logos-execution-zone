@@ -802,7 +802,7 @@ impl CrossZoneVerifier {
         if public_tx.message().program_id != programs::cross_zone_inbox().id() {
             return None;
         }
-        match risc0_zkvm::serde::from_slice::<InboxInstruction, _>(
+        match borsh::from_slice::<InboxInstruction>(
             &public_tx.message().instruction_data,
         ) {
             Ok(InboxInstruction::Dispatch(msg)) => Some(msg),

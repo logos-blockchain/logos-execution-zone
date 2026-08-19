@@ -13,7 +13,7 @@ use lee_core::{
     InputAccountIdentity, PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, AccountWithMetadata},
 };
-use risc0_zkvm::serde::to_vec;
+use borsh::to_vec;
 
 use super::PpeBenchResult;
 

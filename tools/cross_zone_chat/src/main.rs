@@ -514,9 +514,8 @@ async fn poll_finality(state: Arc<AppState>) {
 }
 
 /// Recovers the chat text from an inbox dispatch tx's instruction data.
-fn decode_inbox_text(instruction_data: &[u32]) -> Option<String> {
-    let instruction: Instruction =
-        risc0_zkvm::serde::from_slice::<Instruction, u32>(instruction_data).ok()?;
+fn decode_inbox_text(instruction_data: &[u8]) -> Option<String> {
+    let instruction: Instruction = borsh::from_slice::<Instruction>(instruction_data).ok()?;
     let Instruction::Dispatch(message) = instruction else {
         return None;
     };
@@ -524,26 +523,18 @@ fn decode_inbox_text(instruction_data: &[u32]) -> Option<String> {
 }
 
 /// Recovers the outbox ordinal from a `ping_sender::Send` tx's instruction data.
-fn decode_send_ordinal(instruction_data: &[u32]) -> Option<u32> {
+fn decode_send_ordinal(instruction_data: &[u8]) -> Option<u32> {
     let instruction: SenderInstruction =
-        risc0_zkvm::serde::from_slice::<SenderInstruction, u32>(instruction_data).ok()?;
+        borsh::from_slice::<SenderInstruction>(instruction_data).ok()?;
     let SenderInstruction::Send { ordinal, .. } = instruction else {
         return None;
     };
     Some(ordinal)
 }
 
-/// Decodes a `ping_receiver::Record` payload (risc0 words in LE bytes) to text.
+/// Decodes a `ping_receiver::Record` payload (borsh bytes) to text.
 fn decode_payload(payload: &[u8]) -> Option<String> {
-    let chunks = payload.chunks_exact(4);
-    if !chunks.remainder().is_empty() {
-        return None;
-    }
-    let words: Vec<u32> = chunks
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("chunks_exact(4) yields 4 bytes")))
-        .collect();
-    let instruction: ReceiverInstruction =
-        risc0_zkvm::serde::from_slice::<ReceiverInstruction, u32>(&words).ok()?;
+    let instruction: ReceiverInstruction = borsh::from_slice::<ReceiverInstruction>(payload).ok()?;
     let ReceiverInstruction::Record { payload: bytes } = instruction else {
         return None;
     };
@@ -556,7 +547,7 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
     let receiver_id = programs::ping_receiver().id();
     let outbox_id = programs::cross_zone_outbox().id();
 
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let words = borsh::to_vec(&ReceiverInstruction::Record {
         payload: text.as_bytes().to_vec(),
     })
     .expect("serialize record instruction");

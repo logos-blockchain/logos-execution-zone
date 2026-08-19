@@ -1271,6 +1271,7 @@ dependencies = [
 name = "bridge_lock_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "bridge_lock_core",
  "cross_zone_outbox_core",
  "lee_core",
@@ -2104,6 +2105,7 @@ checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 name = "cross_zone"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "bridge_lock_core",
  "common",
  "cross_zone_inbox_core",
@@ -2124,6 +2126,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
+ "borsh",
  "common",
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",
@@ -3180,6 +3183,7 @@ dependencies = [
 name = "example_program_deployment_programs"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "bytemuck",
  "hex",
  "lee_core",
@@ -4775,6 +4779,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "authenticated_transfer_core",
+ "borsh",
  "bridge_core",
  "bridge_lock_core",
  "bytesize",
@@ -9417,6 +9422,7 @@ dependencies = [
  "associated_token_account_core",
  "associated_token_account_program",
  "authenticated_transfer_core",
+ "borsh",
  "bridge_core",
  "bridge_lock_core",
  "build_utils",
@@ -12191,6 +12197,7 @@ dependencies = [
 name = "test_methods_guests"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
  "serde",
@@ -12201,6 +12208,7 @@ name = "test_program_guests"
 version = "0.1.0"
 dependencies = [
  "authenticated_transfer_core",
+ "borsh",
  "clock_core",
  "faucet_core",
  "lee_core",

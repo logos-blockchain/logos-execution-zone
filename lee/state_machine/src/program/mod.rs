@@ -7,8 +7,7 @@ use lee_core::{
     program::{InstructionData, LeeInputHeader, ProgramId, ProgramOutput},
     to_frame,
 };
-use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor, serde::to_vec};
-use serde::Serialize;
+use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor};
 
 use crate::error::LeeError;
 
@@ -48,10 +47,11 @@ impl Program {
         &self.elf
     }
 
-    pub fn serialize_instruction<T: Serialize>(
+    pub fn serialize_instruction<T: BorshSerialize>(
         instruction: T,
     ) -> Result<InstructionData, LeeError> {
-        to_vec(&instruction).map_err(|e| LeeError::InstructionSerializationError(e.to_string()))
+        borsh::to_vec(&instruction)
+            .map_err(|e| LeeError::InstructionSerializationError(e.to_string()))
     }
 
     pub(crate) fn execute(
@@ -90,7 +90,7 @@ impl Program {
         program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
         pre_states: &[AccountWithMetadata],
-        instruction_data: &[u32],
+        instruction_data: &[u8],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
         let header = LeeInputHeader {

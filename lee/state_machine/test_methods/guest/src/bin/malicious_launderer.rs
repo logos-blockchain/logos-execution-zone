@@ -23,7 +23,7 @@ fn main() {
     // victim(is_authorized=true). So authorized_accounts = {victim}, and the
     // subsequent check passes.
     let auth_transfer_instruction =
-        risc0_zkvm::serde::to_vec(&amount).expect("serialization is infallible");
+        borsh::to_vec(&amount).expect("serialization is infallible");
 
     ProgramOutput::new(
         self_program_id,

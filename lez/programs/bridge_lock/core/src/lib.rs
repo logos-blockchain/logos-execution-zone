@@ -134,7 +134,7 @@ mod tests {
             payload: vec![],
             ordinal: 0,
         };
-        let words = risc0_zkvm::serde::to_vec(&lock).expect("Lock serializes");
+        let words = borsh::to_vec(&lock).expect("Lock serializes");
         assert_eq!(words[0], 0);
     }
 }

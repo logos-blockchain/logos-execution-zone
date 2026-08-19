@@ -62,7 +62,7 @@ fn send(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
     target_zone: [u8; 32],
     target_program_id: ProgramId,
     target_accounts: Vec<[u8; 32]>,
@@ -114,7 +114,7 @@ fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
     outbox_program_id: ProgramId,
 ) {
     // pre_states: [config PDA].

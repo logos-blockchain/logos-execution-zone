@@ -68,7 +68,7 @@ fn dispatch(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
     msg: &CrossZoneMessage,
 ) {
     assert!(
@@ -139,16 +139,8 @@ fn dispatch(
             Claim::Pda(inbox_seen_shard_seed(&msg.src_zone, msg.src_block_id)),
         );
 
-        // The payload carries the target instruction as risc0 words, little-endian.
-        assert!(
-            msg.payload.len().is_multiple_of(4),
-            "payload must be u32-aligned instruction words"
-        );
-        let instruction_data = msg
-            .payload
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().unwrap_or_else(|_| unreachable!())))
-            .collect();
+        // The payload carries the target instruction as borsh bytes: its instruction_data verbatim.
+        let instruction_data = msg.payload.clone();
 
         // The marker leads, so a target reads its source at a fixed position
         // without knowing anything about the accounts that follow it.
@@ -185,7 +177,7 @@ fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
     config: &InboxConfig,
 ) {
     // pre_states: [config PDA].

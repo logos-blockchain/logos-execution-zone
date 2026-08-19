@@ -1,7 +1,7 @@
 use lee_core::program::{
     AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
-use risc0_zkvm::serde::to_vec;
+use borsh::to_vec;
 
 /// Proxy for spending from a private PDA via `auth_transfer`.
 ///

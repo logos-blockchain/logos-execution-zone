@@ -85,7 +85,7 @@ fn main() {
     };
 
     // Forward auth_transfer_id and amount to P2 so it can call authenticated_transfer.
-    let p2_instruction = risc0_zkvm::serde::to_vec(&(auth_transfer_id, amount))
+    let p2_instruction = borsh::to_vec(&(auth_transfer_id, amount))
         .expect("serialization is infallible");
 
     ProgramOutput::new(

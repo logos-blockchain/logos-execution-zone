@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
+use risc0_zkvm::guest::env;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -52,7 +52,7 @@ impl From<AccountId> for ProgramId {
     }
 }
 
-pub type InstructionData = Vec<u32>;
+pub type InstructionData = Vec<u8>;
 pub struct ProgramInput<T> {
     pub self_program_id: ProgramId,
     pub caller_program_id: Option<ProgramId>,
@@ -270,7 +270,7 @@ pub struct ChainedCall {
 
 impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
-    pub fn new<I: Serialize>(
+    pub fn new<I: BorshSerialize>(
         program_id: ProgramId,
         pre_states: Vec<AccountWithMetadata>,
         instruction: &I,
@@ -278,8 +278,8 @@ impl ChainedCall {
         Self {
             program_id,
             pre_states,
-            instruction_data: risc0_zkvm::serde::to_vec(instruction)
-                .expect("Serialization to Vec<u32> should not fail"),
+            instruction_data: borsh::to_vec(instruction)
+                .expect("borsh serialization is infallible"),
             pda_seeds: Vec::new(),
         }
     }
@@ -716,14 +716,15 @@ pub fn read_input_frame() -> Vec<u8> {
 
 /// Reads the LEE inputs from the guest environment.
 #[must_use]
-pub fn read_lee_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionData) {
+pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionData) {
     let LeeInputHeader {
         self_program_id,
         caller_program_id,
         pre_states,
         instruction_data,
     } = borsh::from_slice(&read_input_frame()).expect("guest input must be a valid borsh header");
-    let instruction = T::deserialize(&mut Deserializer::new(instruction_data.as_ref())).unwrap();
+    let instruction =
+        borsh::from_slice(&instruction_data).expect("instruction must decode from borsh");
     (
         ProgramInput {
             self_program_id,

@@ -12,6 +12,7 @@ workspace = true
 test-utils = []
 
 [dependencies]
+borsh.workspace = true
 lee.workspace = true
 lee_core.workspace = true
 programs.workspace = true

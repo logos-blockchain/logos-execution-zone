@@ -117,7 +117,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
 
     // The payload is the ping_receiver instruction, serialized as risc0 words in
     // little-endian bytes (the contract the inbox reverses when forwarding).
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let words = borsh::to_vec(&ReceiverInstruction::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping instruction");

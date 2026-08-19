@@ -42,7 +42,7 @@ use lee_core::program::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum FlashSwapInstruction {
     /// External entrypoint: initiate a flash swap.
     ///
@@ -57,7 +57,7 @@ pub enum FlashSwapInstruction {
         token_program_id: ProgramId,
         callback_program_id: ProgramId,
         amount_out: u128,
-        callback_instruction_data: Vec<u32>,
+        callback_instruction_data: Vec<u8>,
     },
     /// Internal: verify the vault invariant holds after callback execution.
     ///
@@ -122,7 +122,7 @@ fn main() {
             let mut vault_authorized = vault_pre.clone();
             vault_authorized.is_authorized = true;
             let transfer_instruction =
-                risc0_zkvm::serde::to_vec(&amount_out).expect("transfer instruction serialization");
+                borsh::to_vec(&amount_out).expect("transfer instruction serialization");
             let call_1 = ChainedCall {
                 program_id: token_program_id,
                 pre_states: vec![vault_authorized, receiver_pre.clone()],
@@ -147,7 +147,7 @@ fn main() {
             // min_vault_balance and this call will panic, rolling back the entire
             // transaction.
             let invariant_instruction =
-                risc0_zkvm::serde::to_vec(&FlashSwapInstruction::InvariantCheck {
+                borsh::to_vec(&FlashSwapInstruction::InvariantCheck {
                     min_vault_balance,
                 })
                 .expect("invariant instruction serialization");

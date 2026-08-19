@@ -224,7 +224,7 @@ fn tx_is_bridge_deposit(
     }
 
     let instruction: bridge_core::Instruction =
-        match risc0_zkvm::serde::from_slice(&public_tx.message.instruction_data) {
+        match borsh::from_slice(&public_tx.message.instruction_data) {
             Ok(instruction) => instruction,
             Err(_err) => return false,
         };
@@ -263,7 +263,7 @@ fn cross_zone_test_config() -> SequencerConfig {
 /// A `ping_receiver::Record` instruction as risc0 words, little-endian: the wire
 /// form an emitter on the peer zone puts in the message payload.
 fn ping_payload(payload: &[u8]) -> Vec<u8> {
-    risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    borsh::to_vec(&ReceiverInstruction::Record {
         payload: payload.to_vec(),
     })
     .expect("ping instruction serializes")

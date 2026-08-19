@@ -58,7 +58,7 @@ fn mint(
     self_program_id: lee_core::program::ProgramId,
     caller_program_id: Option<lee_core::program::ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
     recipient: [u8; 32],
     amount: u128,
 ) {
@@ -136,7 +136,7 @@ fn renounce_authority(
     self_program_id: lee_core::program::ProgramId,
     caller_program_id: Option<lee_core::program::ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
 ) {
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
@@ -207,7 +207,7 @@ fn update_sources(
     self_program_id: lee_core::program::ProgramId,
     caller_program_id: Option<lee_core::program::ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
     sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
 ) {
     // The config is read before the account list is validated, so who may call
@@ -279,7 +279,7 @@ fn init_config(
     self_program_id: lee_core::program::ProgramId,
     caller_program_id: Option<lee_core::program::ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
     config_value: &WrappedTokenConfig,
 ) {
     assert!(

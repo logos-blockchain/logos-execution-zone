@@ -8,6 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+borsh.workspace = true
 lee_core.workspace = true
 bridge_lock_core.workspace = true
 cross_zone_outbox_core.workspace = true

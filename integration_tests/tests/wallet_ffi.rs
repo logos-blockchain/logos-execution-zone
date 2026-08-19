@@ -235,7 +235,7 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         account_identities: *const FfiAccountIdentity,
         account_identities_size: usize,
-        instruction_words: *const u32,
+        instruction_words: *const u8,
         instruction_words_size: usize,
         program_id: FfiProgramId,
         out_result: *mut FfiTransactionResult,
@@ -251,7 +251,7 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         account_identities: *const FfiAccountIdentity,
         account_identities_size: usize,
-        instruction_words: *const u32,
+        instruction_words: *const u8,
         instruction_words_size: usize,
         program_with_dependencies: *const FfiProgramWithDependencies,
         out_result: *mut FfiTransactionResult,
@@ -1635,7 +1635,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
         })
         .unwrap();
     let instruction_words_size = instruction_data.len();
-    let instruction_words = Box::into_raw(instruction_data.into_boxed_slice()) as *const u32;
+    let instruction_words = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
     let program_id = programs::authenticated_transfer().id();
 
@@ -1731,7 +1731,7 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
         })
         .unwrap();
     let instruction_words_size = instruction_data.len();
-    let instruction_words = Box::into_raw(instruction_data.into_boxed_slice()) as *const u32;
+    let instruction_words = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
     let program: ProgramWithDependencies = programs::authenticated_transfer().into();
     let program_with_dependencies: FfiProgramWithDependencies = program.into();

@@ -57,7 +57,7 @@ fn record(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
     payload: Vec<u8>,
 ) {
     // pre_states: [source marker, config PDA, record PDA].
@@ -116,7 +116,7 @@ fn renounce_authority(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
 ) {
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
@@ -187,7 +187,7 @@ fn update_sources(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
     sources: Vec<([u8; 32], ProgramId)>,
 ) {
     // The config is read before the account list is validated, so who may call
@@ -259,7 +259,7 @@ fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_words: Vec<u8>,
     config_value: &ReceiverConfig,
 ) {
     assert!(

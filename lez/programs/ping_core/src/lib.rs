@@ -176,7 +176,7 @@ mod tests {
             payload: vec![],
             ordinal: 0,
         };
-        let words = risc0_zkvm::serde::to_vec(&send).expect("Send serializes");
+        let words = borsh::to_vec(&send).expect("Send serializes");
         assert_eq!(words[0], 0);
     }
 
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn record_is_the_first_variant() {
         let record = ReceiverInstruction::Record { payload: vec![] };
-        let words = risc0_zkvm::serde::to_vec(&record).expect("Record serializes");
+        let words = borsh::to_vec(&record).expect("Record serializes");
         assert_eq!(words[0], 0);
     }
 

@@ -26,12 +26,10 @@ use ping_core::{
     sender_config_account_id,
 };
 
-/// Serializes an instruction to the risc0 word form the guests read. A macro
-/// because the serde trait a generic fn would have to name is not a dependency
-/// of this crate.
+/// Serializes an instruction to the borsh bytes the guests read.
 macro_rules! words_of {
     ($instruction:expr) => {
-        risc0_zkvm::serde::to_vec($instruction).expect("serialize instruction")
+        borsh::to_vec($instruction).expect("serialize instruction")
     };
 }
 
@@ -216,7 +214,7 @@ fn signed_tx(
     program: lee_core::program::ProgramId,
     accounts: Vec<AccountId>,
     nonce: u128,
-    words: Vec<u32>,
+    words: Vec<u8>,
     key: &PrivateKey,
 ) -> PublicTransaction {
     let message = Message::new_preserialized(program, accounts, vec![nonce.into()], words);
@@ -232,7 +230,7 @@ fn via_proxy(
     config: AccountId,
     authority: AccountId,
     delegated: Option<lee_core::program::PdaSeed>,
-    words: Vec<u32>,
+    words: Vec<u8>,
 ) -> PublicTransaction {
     let message = Message::try_new(
         proxy_id,
@@ -250,7 +248,7 @@ fn chained_via_inbox(
     target: lee_core::program::ProgramId,
     config_id: AccountId,
     authority: AccountId,
-    words: Vec<u32>,
+    words: Vec<u8>,
 ) -> PublicTransaction {
     let inbox_id = programs::cross_zone_inbox().id();
     let msg = CrossZoneMessage {
@@ -260,7 +258,7 @@ fn chained_via_inbox(
         src_tx_index: 0,
         src_program_id: programs::bridge_lock().id(),
         target_program_id: target,
-        payload: words.into_iter().flat_map(u32::to_le_bytes).collect(),
+        payload: words,
         l1_inclusion_witness: None,
     };
     let message = Message::try_new(
@@ -277,7 +275,7 @@ fn chained_via_inbox(
 /// given rather than the correct ones, so tests can vary them.
 fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
     let receiver_id = programs::ping_receiver().id();
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let words = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"ping".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -307,7 +305,7 @@ fn mint_payload_of(amount: u128) -> Vec<u8> {
         recipient: RECIPIENT,
         amount,
     };
-    let words = risc0_zkvm::serde::to_vec(&mint).expect("serialize mint");
+    let words = borsh::to_vec(&mint).expect("serialize mint");
     words.iter().flat_map(|word| word.to_le_bytes()).collect()
 }
 
@@ -394,7 +392,7 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
     // The payload is the ping_receiver instruction, serialized as risc0 words in
     // little-endian bytes (the contract the inbox reverses when forwarding).
     let inner = b"hello-cross-zone".to_vec();
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let words = borsh::to_vec(&ReceiverInstruction::Record {
         payload: inner.clone(),
     })
     .expect("serialize ping instruction");
@@ -1145,7 +1143,7 @@ fn the_token_authority_path_holds() {
 
     // Substituting another account for the config is refused rather than read,
     // on both instructions.
-    let substituted = |words: Vec<u32>| {
+    let substituted = |words: Vec<u8>| {
         signed_tx(
             wrapped_token_id,
             vec![ping_record_pda(wrapped_token_id), authority],
@@ -1268,7 +1266,7 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
         vec![(src_zone, programs::bridge_lock().id())],
     );
 
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let words = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"ping".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -1322,7 +1320,7 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
     seed_inbox_config(&mut state, self_zone);
     seed_receiver_config(&mut state, None, vec![(src_zone, sender_id)]);
 
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let words = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"ping".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -2292,7 +2290,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         },
     )]);
 
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let words = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"from-the-other-block".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -2332,7 +2330,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
 
     // Control: the same delivery naming the bound block executes, so the refusal
     // above is the binding and not the transaction's shape.
-    let control_words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let control_words = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"from-the-bound-block".to_vec(),
     })
     .expect("serialize ping instruction");

@@ -177,7 +177,7 @@ mod tests {
             recipient: [3; 32],
             amount: 1,
         };
-        let words = risc0_zkvm::serde::to_vec(&mint).expect("Mint serializes");
+        let words = borsh::to_vec(&mint).expect("Mint serializes");
         assert_eq!(words[0], 0);
     }
 

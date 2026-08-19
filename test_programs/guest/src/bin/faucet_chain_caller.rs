@@ -4,7 +4,7 @@ use lee_core::{
         AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
-use risc0_zkvm::serde::to_vec;
+use borsh::to_vec;
 
 type Instruction = (ProgramId, ProgramId, AccountId, u128);
 // (faucet_program_id, vault_program_id, recipient_id, amount)

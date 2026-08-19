@@ -2,7 +2,7 @@ use lee_core::program::{
     AccountPostState, ChainedCall, Claim, InstructionData, PdaSeed, ProgramId, ProgramInput,
     ProgramOutput, read_lee_inputs,
 };
-use risc0_zkvm::serde::to_vec;
+use borsh::to_vec;
 
 type Instruction = (
     PdaSeed,

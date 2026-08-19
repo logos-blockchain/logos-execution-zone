@@ -8,6 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+borsh.workspace = true
 test_fixtures.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 programs.workspace = true

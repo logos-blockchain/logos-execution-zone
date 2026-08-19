@@ -179,7 +179,7 @@ struct Case {
 }
 
 impl Case {
-    fn new<I: Serialize>(
+    fn new<I: borsh::BorshSerialize>(
         program_name: &'static str,
         instruction_label: &'static str,
         program: Program,
@@ -191,7 +191,7 @@ impl Case {
             instruction_label,
             program,
             pre_states,
-            instruction_words: risc0_zkvm::serde::to_vec(instruction)?,
+            instruction_words: borsh::to_vec(instruction)?,
         })
     }
 

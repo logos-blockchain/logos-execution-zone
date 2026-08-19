@@ -2,7 +2,7 @@ use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use lee_core::program::{
     AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
-use risc0_zkvm::serde::to_vec;
+use borsh::to_vec;
 
 type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
 
