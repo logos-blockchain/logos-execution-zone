@@ -23,6 +23,10 @@ fn main() {
         },
         instruction_words,
     ) = read_lee_inputs::<Instruction>();
+    assert!(
+        caller_program_id.is_none(),
+        "Fee program is only invoked as a top-level sequencer transaction"
+    );
 
     let Ok([pre_state, pre_escrow, pre_inbox]) = <[_; 3]>::try_from(pre_states) else {
         panic!("Invalid number of input accounts");
