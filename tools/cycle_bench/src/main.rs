@@ -213,11 +213,13 @@ impl Case {
         let total = exec_iters.saturating_add(1).max(2);
         for iter in 0..total {
             let mut env_builder = ExecutorEnv::builder();
-            env_builder
-                .write(&program.id())?
-                .write(&caller_program_id)?
-                .write(&pre_states)?
-                .write(&instruction_words)?;
+            Program::write_inputs(
+                program.id(),
+                caller_program_id,
+                &pre_states,
+                &instruction_words,
+                &mut env_builder,
+            )?;
             let env = env_builder.build()?;
 
             let started = Instant::now();
@@ -239,11 +241,13 @@ impl Case {
         let mut prove_segments = None;
         if prove {
             let mut env_builder = ExecutorEnv::builder();
-            env_builder
-                .write(&program.id())?
-                .write(&caller_program_id)?
-                .write(&pre_states)?
-                .write(&instruction_words)?;
+            Program::write_inputs(
+                program.id(),
+                caller_program_id,
+                &pre_states,
+                &instruction_words,
+                &mut env_builder,
+            )?;
             let env = env_builder.build()?;
 
             let started = Instant::now();

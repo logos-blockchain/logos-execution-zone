@@ -86,7 +86,7 @@ impl Program {
     }
 
     /// Writes inputs to `env_builder` in the order expected by the programs.
-    pub(crate) fn write_inputs(
+    pub fn write_inputs(
         program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
         pre_states: &[AccountWithMetadata],
