@@ -3,7 +3,9 @@ use std::borrow::Cow;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::AccountWithMetadata,
-    program::{InstructionData, ProgramId, ProgramOutput},
+    from_frame,
+    program::{InstructionData, LeeInputHeader, ProgramId, ProgramOutput},
+    to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor, serde::to_vec};
 use serde::Serialize;
@@ -77,9 +79,7 @@ impl Program {
             .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
 
         // Get outputs
-        let program_output = session_info
-            .journal
-            .decode()
+        let program_output = borsh::from_slice(from_frame(&session_info.journal.bytes))
             .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
 
         Ok(program_output)
@@ -93,19 +93,15 @@ impl Program {
         instruction_data: &[u32],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
-        env_builder
-            .write(&program_id)
-            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
-        env_builder
-            .write(&caller_program_id)
-            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
-        let pre_states = pre_states.to_vec();
-        env_builder
-            .write(&pre_states)
-            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
-        env_builder
-            .write(&instruction_data)
-            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        let header = LeeInputHeader {
+            self_program_id: program_id,
+            caller_program_id,
+            pre_states: pre_states.to_vec(),
+            instruction_data: instruction_data.to_vec(),
+        };
+        let payload =
+            borsh::to_vec(&header).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder.write_slice(&to_frame(&payload));
         Ok(())
     }
 }

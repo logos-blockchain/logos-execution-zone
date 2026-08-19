@@ -703,7 +703,9 @@ pub fn compute_public_authorized_pdas(
 ///
 /// A 4-byte little-endian length followed by that many payload bytes: the host `to_frame` layout,
 /// read via the stable `read_slice` API rather than the `#[stability::unstable]` `env::read_frame`.
-fn read_input_frame() -> Vec<u8> {
+/// Shared by the program input read and the privacy circuit's own input read.
+#[must_use]
+pub fn read_input_frame() -> Vec<u8> {
     let mut len_bytes = [0; 4];
     env::read_slice(&mut len_bytes);
     let len = usize::try_from(u32::from_le_bytes(len_bytes)).expect("frame length fits in usize");

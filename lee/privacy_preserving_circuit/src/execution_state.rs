@@ -13,7 +13,7 @@ use lee_core::{
         TimestampValidityWindow, validate_execution,
     },
 };
-use risc0_zkvm::{guest::env, serde::to_vec};
+use risc0_zkvm::guest::env;
 
 /// State of the involved accounts before and after program execution.
 pub struct ExecutionState {
@@ -154,10 +154,12 @@ impl ExecutionState {
             );
 
             // Check that `program_output` is consistent with the execution of the corresponding
-            // program.
-            let program_output_words =
-                &to_vec(&program_output).expect("program_output must be serializable");
-            env::verify(chained_call.program_id, program_output_words).unwrap_or_else(
+            // program. The reconstructed journal frame must byte-match what the program guest
+            // committed via `ProgramOutput::write`, so the recursion assumption resolves.
+            let program_output_frame = lee_core::to_frame(
+                &borsh::to_vec(&program_output).expect("borsh serialization is infallible"),
+            );
+            env::verify(chained_call.program_id, &program_output_frame).unwrap_or_else(
                 |_: Infallible| unreachable!("Infallible error is never constructed"),
             );
 

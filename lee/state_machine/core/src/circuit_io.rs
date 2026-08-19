@@ -192,18 +192,19 @@ impl PrivacyPreservingCircuitOutput {
 
 #[cfg(feature = "host")]
 impl PrivacyPreservingCircuitOutput {
-    /// Serializes the circuit output to a byte vector.
+    /// Serializes the circuit output to the exact journal byte sequence the circuit guest commits.
+    ///
+    /// `Receipt::new(inner, to_bytes())` must reconstruct the committed journal for verification,
+    /// so this mirrors `main.rs`'s `commit_slice(to_frame(borsh))` byte-for-byte.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        bytemuck::cast_slice(&risc0_zkvm::serde::to_vec(&self).unwrap()).to_vec()
+        crate::to_frame(&borsh::to_vec(self).expect("borsh serialization is infallible"))
     }
 }
 
 #[cfg(feature = "host")]
 #[cfg(test)]
 mod tests {
-    use risc0_zkvm::serde::from_slice;
-
     use super::*;
     use crate::{
         Commitment, Nullifier,
@@ -212,7 +213,7 @@ mod tests {
     };
 
     #[test]
-    fn privacy_preserving_circuit_output_to_bytes_is_compatible_with_from_slice() {
+    fn privacy_preserving_circuit_output_to_bytes_round_trips_via_borsh_frame() {
         let output = PrivacyPreservingCircuitOutput {
             public_actions: vec![
                 PublicAction {
@@ -269,7 +270,8 @@ mod tests {
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         };
         let bytes = output.to_bytes();
-        let output_from_slice: PrivacyPreservingCircuitOutput = from_slice(&bytes).unwrap();
-        assert_eq!(output, output_from_slice);
+        let decoded: PrivacyPreservingCircuitOutput =
+            borsh::from_slice(crate::from_frame(&bytes)).unwrap();
+        assert_eq!(output, decoded);
     }
 }
