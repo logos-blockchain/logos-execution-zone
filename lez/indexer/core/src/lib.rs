@@ -585,7 +585,7 @@ impl IndexerCore {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{num::NonZeroU32, time::Duration};
 
     use common::{HashType, block::HashableBlockData};
     use logos_blockchain_zone_sdk::Slot;
@@ -656,6 +656,7 @@ mod tests {
             allow_chain_reset: false,
             cross_zone: None,
             cross_zone_accept_unverified,
+            peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
             bridge_lock_holdings: Vec::new(),
         };
         IndexerCore::open(config, dir).expect("open core")
