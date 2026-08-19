@@ -9,7 +9,7 @@ use crate::{
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
     /// Outputs of the program execution.
     pub program_outputs: Vec<ProgramOutput>,
@@ -23,7 +23,7 @@ pub struct PrivacyPreservingCircuitInput {
     pub dummy_inputs: Vec<DummyInput>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
 #[expect(
     clippy::large_enum_variant,
     reason = "Private carries the ML-KEM viewing key and dominates; boxing it would add a guest heap allocation per witness, and the footprint matches the pre-refactor enum"
@@ -35,7 +35,7 @@ pub enum InputAccountIdentity {
     Private(PrivateWitness),
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
 pub struct PrivateWitness {
     pub vpk: ViewingPublicKey,
     pub random_seed: [u8; 32],
@@ -44,7 +44,7 @@ pub struct PrivateWitness {
     pub nullifier: NullifierWitness,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
 pub enum WitnessKind {
     /// Standalone private account. The `account_id` is derived as
     /// `AccountId::for_regular_private_account(&npk, vpk, identifier)` and matched against
@@ -64,7 +64,7 @@ pub enum WitnessKind {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
 pub enum NullifierWitness {
     /// Init of a private account: no membership proof. The `pre_state` must be
     /// `Account::default()`. `npk` is supplied directly, so the caller need not own the account
@@ -84,7 +84,7 @@ pub enum NullifierWitness {
 
 /// A struct containing necessary data for dummy nullifier and
 /// commitment generation.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct DummyInput {
     /// The seed used for generating the dummy nullifier.
     pub nullifier_seed: [u8; 32],
@@ -155,14 +155,14 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedAccountData,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct PublicAction {
     pub pre: AccountWithMetadata,
     pub post: Account,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
 pub struct PrivacyPreservingCircuitOutput {
     pub public_actions: Vec<PublicAction>,

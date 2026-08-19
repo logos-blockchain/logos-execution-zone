@@ -242,7 +242,7 @@ pub struct CallerData {
     pub authorized_accounts: HashSet<AccountId>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ChainedCall {
     /// The program ID of the program to execute.
     pub program_id: ProgramId,
@@ -283,7 +283,7 @@ impl ChainedCall {
 /// A post state may optionally request that the executing program
 /// becomes the owner of the account (a "claim"). This is used to signal
 /// that the program intends to take ownership of the account.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
 pub struct AccountPostState {
     account: Account,
@@ -292,7 +292,9 @@ pub struct AccountPostState {
 
 /// A claim request for an account, indicating that the executing program intends to take ownership
 /// of the account.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 pub enum Claim {
     /// The program requests ownership of the account which was authorized by the signer.
     ///
@@ -368,11 +370,8 @@ impl AccountPostState {
 pub type BlockValidityWindow = ValidityWindow<BlockId>;
 pub type TimestampValidityWindow = ValidityWindow<Timestamp>;
 
-#[derive(Clone, Copy, Default, Serialize, Deserialize)]
-#[cfg_attr(
-    any(feature = "host", test),
-    derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)
-)]
+#[derive(Clone, Copy, Default, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct ValidityWindow<T> {
     from: Option<T>,
     to: Option<T>,
@@ -468,7 +467,7 @@ impl<T> From<std::ops::RangeFull> for ValidityWindow<T> {
 #[error("Invalid window")]
 pub struct InvalidWindow;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use = "ProgramOutput does nothing unless written"]
 pub struct ProgramOutput {
