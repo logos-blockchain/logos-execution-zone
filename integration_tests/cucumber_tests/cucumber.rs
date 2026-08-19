@@ -15,7 +15,7 @@ use cucumber::{
 use integration_tests::cucumber::{
     default::{
         ARTEFACTS, CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL, MAX_CUCUMBER_CONCURRENT_SCENARIOS,
-        create_scenario_output_dir, get_feature_path, get_retries,
+        RUST_LOG, TF_KEEP_LOGS, create_scenario_output_dir, get_feature_path, get_retries,
     },
     world::CucumberWorld,
 };
@@ -30,8 +30,8 @@ type ScenarioAttempts = Arc<Mutex<HashMap<String, u8>>>;
 
 fn main() -> anyhow::Result<()> {
     logos_blockchain_testing_framework::env::set_default_env(SUPPRESS_VERBOSE_PRINTS, "true");
-    logos_blockchain_testing_framework::env::set_default_env("RUST_LOG", "info");
-    logos_blockchain_testing_framework::env::set_default_env("TF_KEEP_LOGS", "true");
+    logos_blockchain_testing_framework::env::set_default_env(RUST_LOG, "info");
+    logos_blockchain_testing_framework::env::set_default_env(TF_KEEP_LOGS, "true");
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
