@@ -9,29 +9,45 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-common.workspace = true
-lee.workspace = true
-mempool.workspace = true
 sequencer_core = { workspace = true, features = ["testnet"] }
-sequencer_service_protocol.workspace = true
-sequencer_service_rpc = { workspace = true, features = ["server"] }
-sequencer_service_metrics = { workspace = true, features = ["record"] }
-programs.workspace = true
+sequencer_executor_actor.workspace = true
+sequencer_rpc_server_actor.workspace = true
+lee = { workspace = true, optional = true }
+programs = { workspace = true, optional = true }
+system_accounts = { workspace = true, optional = true }
+wallet = { workspace = true, optional = true }
+sequencer_stake_core = { workspace = true, optional = true }
+authenticated_transfer_core = { workspace = true, optional = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
 env_logger.workspace = true
+kameo.workspace = true
+kameo_actors.workspace = true
 hex.workspace = true
 log.workspace = true
 metrics-exporter-prometheus.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-jsonrpsee.workspace = true
 futures.workspace = true
-bytesize.workspace = true
-borsh.workspace = true
+
+[[bin]]
+name = "submit_stake"
+path = "src/bin/submit_stake.rs"
+required-features = ["submit_stake"]
 
 [features]
 default = []
 # Runs the sequencer in standalone mode without depending on Bedrock and Indexer services.
 standalone = ["sequencer_core/mock"]
+# Enable mDNS-based local peer discovery for gossip.
+mdns = ["sequencer_core/mdns"]
+# Needed only by the submit_stake bin.
+submit_stake = [
+  "dep:lee",
+  "programs",
+  "dep:system_accounts",
+  "dep:wallet",
+  "dep:sequencer_stake_core",
+  "dep:authenticated_transfer_core",
+]

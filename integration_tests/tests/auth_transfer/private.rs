@@ -17,7 +17,6 @@ use lee_core::{
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
 };
-use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -38,13 +37,13 @@ async fn private_transfer_to_owned_account() -> Result<()> {
 
     send(&mut ctx, private_mention(from), private_mention(to), 100).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     assert_private_commitment_in_state(&ctx, from, "sender").await?;
     assert_private_commitment_in_state(&ctx, to, "receiver").await?;
 
-    info!("Successfully transferred privately to owned account");
+    log::info!("Successfully transferred privately to owned account");
 
     Ok(())
 }
@@ -73,7 +72,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         anyhow::bail!("Expected TransactionExecuted return value");
     };
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let new_commitment1 = ctx
@@ -88,7 +87,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
-    info!("Successfully transferred privately to foreign account");
+    log::info!("Successfully transferred privately to foreign account");
 
     Ok(())
 }
@@ -109,7 +108,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
 
     send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let from_acc = ctx
@@ -123,7 +122,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
     assert_eq!(from_acc.balance, 9900);
     assert_eq!(acc_2_balance, 20100);
 
-    info!("Successfully deshielded transfer to public account");
+    log::info!("Successfully deshielded transfer to public account");
 
     Ok(())
 }
@@ -154,7 +153,7 @@ async fn deshielded_transfer_does_not_sign_with_recipient_key() -> Result<()> {
         anyhow::bail!("Expected TransactionExecuted return value");
     };
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
@@ -164,7 +163,7 @@ async fn deshielded_transfer_does_not_sign_with_recipient_key() -> Result<()> {
         "deshielded transfer must not carry any signature, in particular not the recipient's"
     );
 
-    info!("Deshielded transfer correctly did not sign with the recipient's key");
+    log::info!("Deshielded transfer correctly did not sign with the recipient's key");
 
     Ok(())
 }
@@ -223,7 +222,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         .context("Failed to get recipient's private account")?;
     assert_eq!(to_res_acc.balance, 100);
 
-    info!("Successfully transferred using claiming path");
+    log::info!("Successfully transferred using claiming path");
 
     Ok(())
 }
@@ -237,7 +236,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
 
     send(&mut ctx, public_mention(from), private_mention(to), 100).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let acc_to = ctx
@@ -251,7 +250,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
     assert_eq!(acc_from_balance, 9900);
     assert_eq!(acc_to.balance, 20100);
 
-    info!("Successfully shielded transfer to owned private account");
+    log::info!("Successfully shielded transfer to owned private account");
 
     Ok(())
 }
@@ -280,7 +279,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         anyhow::bail!("Expected TransactionExecuted return value");
     };
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
@@ -293,7 +292,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
 
     assert_eq!(acc_1_balance, 9900);
 
-    info!("Successfully shielded transfer to foreign account");
+    log::info!("Successfully shielded transfer to foreign account");
 
     Ok(())
 }
@@ -338,7 +337,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
-    info!("Waiting for next blocks to check if continuous run fetches account");
+    log::info!("Waiting for next blocks to check if continuous run fetches account");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
@@ -371,7 +370,7 @@ async fn initialize_private_account() -> Result<()> {
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    info!("Syncing private accounts");
+    log::info!("Syncing private accounts");
     sync_private(&mut ctx).await?;
 
     assert_private_commitment_in_state(&ctx, account_id, "account").await?;
@@ -383,12 +382,12 @@ async fn initialize_private_account() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(account.balance, 0);
     assert!(account.data.is_empty());
 
-    info!("Successfully initialized private account");
+    log::info!("Successfully initialized private account");
 
     Ok(())
 }
@@ -417,13 +416,13 @@ async fn private_transfer_using_from_label() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     assert_private_commitment_in_state(&ctx, from, "sender").await?;
     assert_private_commitment_in_state(&ctx, to, "receiver").await?;
 
-    info!("Successfully transferred privately using from_label");
+    log::info!("Successfully transferred privately using from_label");
 
     Ok(())
 }
@@ -462,10 +461,10 @@ async fn initialize_private_account_using_label() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
 
-    info!("Successfully initialized private account using label");
+    log::info!("Successfully initialized private account using label");
 
     Ok(())
 }
@@ -526,7 +525,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     sync_private(&mut ctx).await?;
@@ -569,7 +568,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
         "both accounts must resolve to the key node created at the start of the test"
     );
 
-    info!("Successfully transferred to two distinct identifiers under the same NPK");
+    log::info!("Successfully transferred to two distinct identifiers under the same NPK");
 
     Ok(())
 }
@@ -584,7 +583,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 
-    info!("Waiting for deploy block creation");
+    log::info!("Waiting for deploy block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let faucet_account_id = system_accounts::faucet_account_id();
@@ -592,7 +591,8 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let faucet_program_id = programs::faucet().id();
     let vault_program_id = programs::vault().id();
     let auth_transfer_program_id = programs::authenticated_transfer().id();
-    let nsk: lee_core::NullifierSecretKey = [3; 32];
+    let ask = lee_core::AuthorizationSecretKey([3; 32]);
+    let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let attacker_vault_id = {
@@ -661,7 +661,8 @@ async fn prove_init_with_commitment_root(
         sender_id,
     );
 
-    let nsk: lee_core::NullifierSecretKey = [7; 32];
+    let ask = lee_core::AuthorizationSecretKey([7; 32]);
+    let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
@@ -678,7 +679,7 @@ async fn prove_init_with_commitment_root(
                 vpk,
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular { ask: Some(ask) },
                 nullifier: NullifierWitness::Init {
                     npk,
                     commitment_root,
@@ -697,7 +698,8 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
 
     let (_, expected_digest) = ctx.sequencer_client().get_proofs_and_root(vec![]).await?;
 
-    let nsk: lee_core::NullifierSecretKey = [7; 32];
+    let ask = lee_core::AuthorizationSecretKey([7; 32]);
+    let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);

@@ -14,7 +14,6 @@ use integration_tests::{
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::AccountId;
-use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
@@ -83,7 +82,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .context("Failed to get recipient's private account")?;
     assert_eq!(to_res_acc.balance, 100);
 
-    info!("Successfully transferred using claiming path");
+    log::info!("Successfully transferred using claiming path");
 
     Ok(())
 }
@@ -125,7 +124,7 @@ async fn restore_keys_from_seed() -> Result<()> {
     send_claiming_new_account(&mut ctx, from, to_account_id3, 102).await?;
     send_claiming_new_account(&mut ctx, from, to_account_id4, 103).await?;
 
-    info!("Preparation complete, performing keys restoration");
+    log::info!("Preparation complete, performing keys restoration");
 
     // Restore keys from seed
     wallet::cli::execute_keys_restoration(ctx.wallet_mut(), 10).await?;
@@ -140,17 +139,17 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     assert_eq!(
         acc1.account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(
         acc2.account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
 
     assert_eq!(acc1.account.balance, 100);
     assert_eq!(acc2.account.balance, 101);
 
-    info!("Tree checks passed, testing restored accounts can transact");
+    log::info!("Tree checks passed, testing restored accounts can transact");
 
     // Test that restored accounts can send transactions
     send(
@@ -196,7 +195,7 @@ async fn restore_keys_from_seed() -> Result<()> {
     assert_eq!(acc3, 91); // 102 - 11
     assert_eq!(acc4, 114); // 103 + 11
 
-    info!("Successfully restored keys and verified transactions");
+    log::info!("Successfully restored keys and verified transactions");
 
     Ok(())
 }

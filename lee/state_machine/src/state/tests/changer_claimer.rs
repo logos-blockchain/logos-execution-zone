@@ -75,10 +75,12 @@ fn private_changer_claimer_no_data_change_no_claim_succeeds() {
             vpk: sender_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: WitnessKind::Regular,
+            kind: WitnessKind::Regular {
+                ask: Some(sender_keys.ask),
+            },
             nullifier: NullifierWitness::Update {
                 view_tag: 0,
-                nsk: sender_keys.nsk,
+                nsk: sender_keys.nsk(),
                 membership_proof: (0, vec![]),
             },
         })],
@@ -109,10 +111,12 @@ fn private_changer_claimer_data_change_no_claim_fails() {
             vpk: sender_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: WitnessKind::Regular,
+            kind: WitnessKind::Regular {
+                ask: Some(sender_keys.ask),
+            },
             nullifier: NullifierWitness::Update {
                 view_tag: 0,
-                nsk: sender_keys.nsk,
+                nsk: sender_keys.nsk(),
                 membership_proof: (0, vec![]),
             },
         })],

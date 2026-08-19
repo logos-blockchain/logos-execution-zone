@@ -66,9 +66,7 @@ impl Commitment {
         bytes.extend_from_slice(account_id.value());
         let account_bytes_with_hashed_data = {
             let mut this = Vec::new();
-            for word in &account.program_owner {
-                this.extend_from_slice(&word.to_le_bytes());
-            }
+            this.extend_from_slice(account.program_owner.as_ref());
             this.extend_from_slice(&account.balance.to_le_bytes());
             this.extend_from_slice(&account.nonce.0.to_le_bytes());
             let hashed_data: [u8; 32] = Impl::hash_bytes(&account.data)

@@ -18,7 +18,7 @@ fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<Acc
             (
                 account_id,
                 Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id(),
+                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
                     balance,
                     ..Account::default()
                 },
@@ -126,7 +126,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 
     // Build attacker's private account and its local commitment tree.
     let attacker_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id(),
+        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
         balance: 100,
         ..Account::default()
     };
@@ -146,7 +146,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         *victim_id.value(),
         victim_account.balance,
         victim_account.nonce.0,
-        victim_account.program_owner,
+        victim_account.program_owner.into(),
         *recipient_id.value(),
         victim_balance,
     );
@@ -168,10 +168,12 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
             vpk: attacker_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: WitnessKind::Regular,
+            kind: WitnessKind::Regular {
+                ask: Some(attacker_keys.ask),
+            },
             nullifier: NullifierWitness::Update {
                 view_tag: 0,
-                nsk: attacker_keys.nsk,
+                nsk: attacker_keys.nsk(),
                 membership_proof,
             },
         }),
@@ -282,7 +284,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
 
     // Build attacker's private account and its local commitment tree.
     let attacker_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id(),
+        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
         balance: 100,
         ..Account::default()
     };
@@ -330,10 +332,12 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
             vpk: attacker_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: WitnessKind::Regular,
+            kind: WitnessKind::Regular {
+                ask: Some(attacker_keys.ask),
+            },
             nullifier: NullifierWitness::Update {
                 view_tag: 0,
-                nsk: attacker_keys.nsk,
+                nsk: attacker_keys.nsk(),
                 membership_proof,
             },
         }),
@@ -435,7 +439,7 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
         *victim_id.value(),
         victim_account.balance,
         victim_account.nonce.0,
-        victim_account.program_owner,
+        victim_account.program_owner.into(),
         *recipient_id.value(),
         victim_balance,
     );

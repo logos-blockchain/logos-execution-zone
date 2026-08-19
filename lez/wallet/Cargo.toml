@@ -38,7 +38,6 @@ humantime-serde.workspace = true
 humantime.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 clap.workspace = true
-base58.workspace = true
 hex.workspace = true
 rand.workspace = true
 itertools.workspace = true

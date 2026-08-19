@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use clap::Parser;
-use log::{error, info};
+use log::error;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
@@ -49,12 +49,12 @@ async fn main() -> Result<()> {
     if let Some(metrics_address) = config.metrics_address {
         install_prometheus_recorder(metrics_address)?;
     }
-    let mut sequencer_handle =
+    let sequencer_handle =
         sequencer_service::run(config, SocketAddr::new(args.listen_address, args.port)).await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {
-            info!("Shutting down sequencer...");
+            log::info!("Shutting down sequencer...");
         }
         Err(err) = sequencer_handle.failed() => {
             error!("Sequencer failed unexpectedly: {err}");
@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
     // delivery and handing it over.
     sequencer_handle.shutdown().await;
 
-    info!("Sequencer shutdown complete");
+    log::info!("Sequencer shutdown complete");
 
     Ok(())
 }
@@ -135,13 +135,13 @@ fn listen_for_shutdown_signal() -> CancellationToken {
 
         tokio::select! {
             result = tokio::signal::ctrl_c() => match result {
-                Ok(()) => info!("Received Ctrl-C signal"),
+                Ok(()) => log::info!("Received Ctrl-C signal"),
                 Err(err) => {
                     error!("Failed to listen for Ctrl-C signal: {err}");
                     return;
                 }
             },
-            _ = terminate.recv() => info!("Received SIGTERM"),
+            _ = terminate.recv() => log::info!("Received SIGTERM"),
         }
 
         cancellation_token_clone.cancel();

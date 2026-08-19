@@ -16,6 +16,7 @@ use crate::names;
 pub enum TransactionOrigin {
     User,
     Sequencer,
+    Gossip,
 }
 
 #[derive(Debug, Clone, Copy, strum::IntoStaticStr, strum::EnumIter)]

@@ -249,7 +249,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
 //     let mut balance = bedrock_wallet_balance(bedrock_addr, bedrock_account_pk).await?;
 
-//     info!(
+//     log::info!(
 //         "Queried Bedrock balance for key {bedrock_account_pk}: {:?}",
 //         balance.balance
 //     );
@@ -291,7 +291,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 //             .await
 //             .context("Failed to decode Bedrock transfer-funds response")?;
 
-//         info!(
+//         log::info!(
 //             "Submitted transfer-funds to create exact deposit note, tx hash {:?}",
 //             transfer.hash
 //         );
@@ -343,7 +343,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 //         .text()
 //         .await
 //         .unwrap_or_else(|_| "<failed to decode>".to_owned());
-//     info!(
+//     log::info!(
 //         "Successfully submitted Bedrock deposit request for recipient {recipient_id} and amount
 // {amount}, response body: {body_text}",     );
 
@@ -585,7 +585,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 //             let mut stream = std::pin::pin!(stream);
 
 //             while let Some(message) = stream.next().await {
-//                 info!("Observed zone message {message:?}");
+//                 log::info!("Observed zone message {message:?}");
 
 //                 if let ZoneMessage::Withdraw(withdraw) = message {
 //                     released_notes.extend(withdraw.inputs.iter().copied());

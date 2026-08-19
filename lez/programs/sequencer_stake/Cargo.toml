@@ -1,0 +1,12 @@
+[package]
+name = "sequencer_stake_program"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sequencer_stake_core.workspace = true
+lee_core.workspace = true

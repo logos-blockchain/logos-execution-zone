@@ -9,6 +9,10 @@
 //! own block-reading, emission-extraction, delivery-building, and trust model; a
 //! shared trait is best lifted from that first real adapter, not from this one.
 
+pub use acceptance::{
+    Link, OffChain, STUCK_SLOT_ALERT_PASSES, ScreenRefusal, StallState, alerts_at,
+    equivocation_report, link_to_tip, screen_peer_block,
+};
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, ZoneId, inbox_config_account_id,
@@ -20,6 +24,10 @@ use lee_core::{
     program::ProgramId,
 };
 use serde::Serialize;
+
+pub mod acceptance;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
 
 /// The cross-zone emission fields a watcher or verifier reads off a source
 /// transaction, common to every emitter program.
@@ -194,7 +202,7 @@ pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
 #[must_use]
 pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, Account) {
     let account = Account {
-        program_owner: programs::bridge_lock().id(),
+        program_owner: programs::bridge_lock().id().into(),
         balance: amount,
         ..Default::default()
     };

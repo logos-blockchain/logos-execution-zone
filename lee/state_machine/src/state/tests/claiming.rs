@@ -18,7 +18,7 @@ fn claiming_mechanism() {
     assert_eq!(state.get_account_by_id(to), Account::default());
 
     let expected_recipient_post = Account {
-        program_owner: program.id(),
+        program_owner: program.id().into(),
         balance: amount,
         nonce: Nonce(1),
         ..Account::default()
@@ -86,7 +86,7 @@ fn authorized_public_account_claiming_succeeds() {
     assert_eq!(
         state.get_account_by_id(account_id),
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             nonce: Nonce(1),
             ..Account::default()
         }
@@ -114,7 +114,7 @@ fn public_chained_call() {
     );
 
     let expected_to_post = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id(),
+        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
         balance: amount * 2, // The `chain_caller` chains the program twice
         ..Account::default()
     };
@@ -197,7 +197,7 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
     );
 
     let expected_to_post = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id(),
+        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
         balance: amount, // The `chain_caller` chains the program twice
         ..Account::default()
     };
@@ -244,7 +244,7 @@ fn claiming_mechanism_within_chain_call() {
 
     let expected_to_post = Account {
         // The expected program owner is the authenticated transfer program
-        program_owner: simple_transfer.id(),
+        program_owner: simple_transfer.id().into(),
         balance: amount,
         nonce: Nonce(1),
         ..Account::default()
@@ -299,7 +299,7 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
     let program_id = program.id();
     let sender_keys = test_private_account_keys_1();
     let sender_private_account = Account {
-        program_owner: program_id,
+        program_owner: program_id.into(),
         balance: 100,
         ..Account::default()
     };
@@ -329,10 +329,12 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender's commitment must be in state"),
@@ -353,13 +355,13 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)
         .unwrap();
 
-    let nullifier = Nullifier::for_account_update(&sender_commitment, &sender_keys.nsk);
+    let nullifier = Nullifier::for_account_update(&sender_commitment, &sender_keys.nsk());
     assert!(state.private_state.1.contains(&nullifier));
 
     assert_eq!(
         state.get_account_by_id(recipient_account_id),
         Account {
-            program_owner: program_id,
+            program_owner: program_id.into(),
             balance,
             nonce: Nonce(1),
             ..Account::default()
@@ -378,7 +380,7 @@ fn private_chained_call(number_of_calls: u32) {
     let initial_balance = 100;
     let from_account = AccountWithMetadata::new(
         Account {
-            program_owner: simple_transfers.id(),
+            program_owner: simple_transfers.id().into(),
             balance: initial_balance,
             ..Account::default()
         },
@@ -387,7 +389,7 @@ fn private_chained_call(number_of_calls: u32) {
     );
     let to_account = AccountWithMetadata::new(
         Account {
-            program_owner: simple_transfers.id(),
+            program_owner: simple_transfers.id().into(),
             ..Account::default()
         },
         true,
@@ -420,8 +422,8 @@ fn private_chained_call(number_of_calls: u32) {
     dependencies.insert(simple_transfers.id(), simple_transfers);
     let program_with_deps = ProgramWithDependencies::new(chain_caller, dependencies);
 
-    let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk);
-    let to_new_nonce = Nonce::default().private_account_nonce_increment(&to_keys.nsk);
+    let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk());
+    let to_new_nonce = Nonce::default().private_account_nonce_increment(&to_keys.nsk());
 
     let from_expected_post = Account {
         balance: initial_balance - u128::from(number_of_calls) * amount,
@@ -446,10 +448,12 @@ fn private_chained_call(number_of_calls: u32) {
                 vpk: from_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(from_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: from_keys.nsk,
+                    nsk: from_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&from_commitment)
                         .expect("from's commitment must be in state"),
@@ -459,10 +463,12 @@ fn private_chained_call(number_of_calls: u32) {
                 vpk: to_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(to_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: to_keys.nsk,
+                    nsk: to_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&to_commitment)
                         .expect("to's commitment must be in state"),
@@ -504,7 +510,7 @@ fn claiming_mechanism_cannot_claim_initialied_accounts() {
     state.force_insert_account(
         account_id,
         Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
             ..Account::default()
         },
     );
@@ -543,7 +549,7 @@ fn malicious_program_cannot_break_balance_validation_if_not_in_genesis() {
             (
                 sender_id,
                 Account {
-                    program_owner: modified_transfer_id,
+                    program_owner: modified_transfer_id.into(),
                     balance: sender_init_balance,
                     ..Account::default()
                 },
@@ -551,7 +557,7 @@ fn malicious_program_cannot_break_balance_validation_if_not_in_genesis() {
             (
                 recipient_id,
                 Account {
-                    program_owner: modified_transfer_id,
+                    program_owner: modified_transfer_id.into(),
                     balance: recipient_init_balance,
                     ..Account::default()
                 },

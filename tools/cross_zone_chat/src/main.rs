@@ -184,7 +184,7 @@ impl AppState {
                 created: Instant::now(),
                 delivered_secs: None,
             });
-        info!("[stage] msg {id} submitted {source_label}->{dest_label}");
+        log::info!("[stage] msg {id} submitted {source_label}->{dest_label}");
         id
     }
 
@@ -195,7 +195,7 @@ impl AppState {
             m.source_label == source_label && m.ordinal == ordinal && m.source_block.is_none()
         }) {
             message.source_block = Some(block_id);
-            info!(
+            log::info!(
                 "[stage] msg {} in source block {source_label}#{block_id} (+{}s)",
                 message.id,
                 message.created.elapsed().as_secs()
@@ -219,7 +219,7 @@ impl AppState {
             message.delivered_block = Some(block_id);
             let secs = message.created.elapsed().as_secs();
             message.delivered_secs = Some(secs);
-            info!(
+            log::info!(
                 "[stage] msg {} delivered {dest_label}#{block_id} (+{secs}s total)",
                 message.id
             );
@@ -250,7 +250,7 @@ impl AppState {
                 && !message.finalized
             {
                 message.finalized = true;
-                info!(
+                log::info!(
                     "[stage] msg {} source block {source_label}#{block_id} finalized on Bedrock (+{}s)",
                     message.id,
                     message.created.elapsed().as_secs()

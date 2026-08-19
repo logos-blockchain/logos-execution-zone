@@ -8,7 +8,6 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::AccountId;
-use log::info;
 use sequencer_service_rpc::RpcClient as _;
 pub use test_fixtures::*;
 use wallet::{
@@ -93,7 +92,7 @@ pub async fn send_claiming_new_account(
             amount,
         )
         .await?;
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     Ok(())
 }
@@ -113,7 +112,7 @@ pub async fn create_token(
         total_supply,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     Ok(())
 }
@@ -135,7 +134,7 @@ pub async fn token_send(
         amount,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     Ok(())
 }
@@ -155,7 +154,7 @@ pub async fn token_send_claiming_new_account(
             amount,
         )
         .await?;
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     Ok(())
 }
@@ -198,6 +197,7 @@ pub async fn sync_private(ctx: &mut TestContext) -> Result<()> {
 }
 
 /// Look up a restored private account for `account_id`, panicking with `label` if absent.
+#[must_use]
 pub fn restored_private_account<'ctx>(
     ctx: &'ctx TestContext,
     account_id: AccountId,
@@ -240,7 +240,7 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> Result<u64> {
                 let last_seq =
                     sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client())
                         .await?;
-                info!(
+                log::info!(
                     "Indexer caught up. Indexer last block id: {ind}. Current sequencer last block id: {last_seq}"
                 );
                 return Ok(ind);

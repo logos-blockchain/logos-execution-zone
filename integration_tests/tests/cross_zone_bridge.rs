@@ -22,7 +22,6 @@ use cross_zone_outbox_core::outbox_pda;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
-    setup::{SequencerSetup, indexer_client, sequencer_client, setup_bedrock_node, setup_indexer},
 };
 use lee::{
     AccountId, PrivateKey, PublicKey, PublicTransaction,
@@ -30,6 +29,9 @@ use lee::{
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
@@ -39,11 +41,6 @@ const RECIPIENT: [u8; 32] = [9; 32];
 
 #[test]
 async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
-    // Declared first so it outlives both zones (drops run in reverse order).
-    let (_bedrock, bedrock_addr) = setup_bedrock_node()
-        .await
-        .context("Failed to set up shared Bedrock node")?;
-
     let partial = SequencerPartialConfig::default();
     let channel_a = config::bedrock_channel_id();
     let channel_b = config::bedrock_channel_id_b();
@@ -72,37 +69,48 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         holder: holder_id,
         amount: INITIAL_BALANCE,
     }];
-    let (seq_a, _seq_a_home) = SequencerSetup::new(partial, bedrock_addr)
-        .with_channel_id(channel_a)
-        .with_genesis(genesis_a)
-        .setup()
-        .await
-        .context("Failed to set up zone A sequencer")?;
-    let (_seq_b, _seq_b_home) = SequencerSetup::new(partial, bedrock_addr)
-        .with_channel_id(channel_b)
-        .with_genesis(vec![])
-        .with_cross_zone(cross_zone.clone())
-        .setup()
-        .await
-        .context("Failed to set up zone B sequencer")?;
-    let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, Some(cross_zone))
-        .await
-        .context("Failed to set up zone B indexer")?;
+
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_a,
+            })
+            .disable_wallet()
+            .disable_indexer()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(genesis_a),
+        )
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_b,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![])
+            .with_cross_zone(Some(cross_zone)),
+        )
+        .build()
+        .await?;
+
+    let seq_client_a = &ctx
+        .zone_default_sequencer_component(channel_a)
+        .sequencer_client;
+
+    let ind_client_b = ctx.indexer_client_zone(channel_b).unwrap();
 
     // Lock LOCK_AMOUNT on zone A, addressed to the recipient on zone B.
     let lock = build_lock_tx(&holder_key, holder_id, zone_b);
-    sequencer_client(seq_a.addr())?
+    seq_client_a
         .send_transaction(lock)
         .await
         .context("Failed to submit lock on zone A")?;
 
     // Wait until zone B's indexer reflects the verified mint.
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
-    let indexer = indexer_client(idx_b.addr())
-        .await
-        .context("Failed to build indexer client")?;
 
-    let minted = wait_for_mint(&indexer, holding_id).await?;
+    let minted = wait_for_mint(ind_client_b, holding_id).await?;
     assert_eq!(
         minted, LOCK_AMOUNT,
         "zone B must mint exactly the locked amount"
@@ -111,14 +119,13 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // Conservation: the mint on B must be backed by an equal lock on A. The lock
     // has already landed (it preceded delivery), so zone A reflects the debit and
     // escrow now.
-    let seq_a_client = sequencer_client(seq_a.addr())?;
     let escrow_id = bridge_lock_core::escrow_account_id(programs::bridge_lock().id());
-    let escrowed = seq_a_client.get_account(escrow_id).await?.balance;
+    let escrowed = seq_client_a.get_account(escrow_id).await?.balance;
     assert_eq!(
         escrowed, LOCK_AMOUNT,
         "zone A escrow must hold the locked amount"
     );
-    let remaining = seq_a_client.get_account(holder_id).await?.balance;
+    let remaining = seq_client_a.get_account(holder_id).await?.balance;
     assert_eq!(
         remaining,
         INITIAL_BALANCE - LOCK_AMOUNT,

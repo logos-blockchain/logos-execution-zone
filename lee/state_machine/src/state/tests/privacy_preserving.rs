@@ -8,7 +8,7 @@ fn transition_from_privacy_preserving_transaction_shielded() {
     let mut state = V03State::new().with_public_accounts([(
         sender_keys.account_id(),
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
             balance: 200,
             ..Account::default()
         },
@@ -49,7 +49,7 @@ fn transition_from_privacy_preserving_transaction_private() {
     let sender_nonce = Nonce(0xdead_beef);
 
     let sender_private_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id(),
+        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
         balance: 100,
         nonce: sender_nonce,
         data: Data::default(),
@@ -75,8 +75,8 @@ fn transition_from_privacy_preserving_transaction_private() {
     let expected_new_commitment_1 = Commitment::new(
         &sender_account_id,
         &Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id(),
-            nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk),
+            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+            nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk()),
             balance: sender_private_account.balance - balance_to_move,
             data: Data::default(),
         },
@@ -84,12 +84,12 @@ fn transition_from_privacy_preserving_transaction_private() {
 
     let sender_pre_commitment = Commitment::new(&sender_account_id, &sender_private_account);
     let expected_new_nullifier =
-        Nullifier::for_account_update(&sender_pre_commitment, &sender_keys.nsk);
+        Nullifier::for_account_update(&sender_pre_commitment, &sender_keys.nsk());
 
     let expected_new_commitment_2 = Commitment::new(
         &recipient_account_id,
         &Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
             nonce: Nonce::private_account_nonce_init(&recipient_account_id),
             balance: balance_to_move,
             ..Account::default()
@@ -171,7 +171,7 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
     let sender_nonce = Nonce(0xdead_beef);
 
     let sender_private_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id(),
+        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
         balance: 100,
         nonce: sender_nonce,
         data: Data::default(),
@@ -182,7 +182,7 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
         .with_public_accounts([(
             recipient_keys.account_id(),
             Account {
-                program_owner: crate::test_methods::simple_balance_transfer().id(),
+                program_owner: crate::test_methods::simple_balance_transfer().id().into(),
                 balance: recipient_initial_balance,
                 ..Account::default()
             },
@@ -210,8 +210,8 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
     let expected_new_commitment = Commitment::new(
         &sender_account_id,
         &Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id(),
-            nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk),
+            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+            nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk()),
             balance: sender_private_account.balance - balance_to_move,
             data: Data::default(),
         },
@@ -219,7 +219,7 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
 
     let sender_pre_commitment = Commitment::new(&sender_account_id, &sender_private_account);
     let expected_new_nullifier =
-        Nullifier::for_account_update(&sender_pre_commitment, &sender_keys.nsk);
+        Nullifier::for_account_update(&sender_pre_commitment, &sender_keys.nsk());
 
     assert!(state.private_state.0.contains(&sender_pre_commitment));
     assert!(!state.private_state.0.contains(&expected_new_commitment));
@@ -245,7 +245,7 @@ fn burner_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::burner();
     let public_account = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -268,7 +268,7 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::minter();
     let public_account = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 0,
             ..Account::default()
         },
@@ -291,7 +291,7 @@ fn nonce_changer_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::nonce_changer();
     let public_account = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 0,
             ..Account::default()
         },
@@ -314,7 +314,7 @@ fn data_changer_program_should_fail_for_non_owned_account_in_privacy_preserving_
     let program = crate::test_methods::data_changer();
     let public_account = AccountWithMetadata::new(
         Account {
-            program_owner: [0, 1, 2, 3, 4, 5, 6, 7],
+            program_owner: [0, 1, 2, 3, 4, 5, 6, 7].into(),
             balance: 0,
             ..Account::default()
         },
@@ -337,7 +337,7 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
     let program = crate::test_methods::data_changer();
     let public_account = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 0,
             ..Account::default()
         },
@@ -368,7 +368,7 @@ fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::extra_output();
     let public_account = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 0,
             ..Account::default()
         },
@@ -391,7 +391,7 @@ fn missing_output_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::missing_output();
     let public_account_1 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 0,
             ..Account::default()
         },
@@ -400,7 +400,7 @@ fn missing_output_program_should_fail_in_privacy_preserving_circuit() {
     );
     let public_account_2 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 0,
             ..Account::default()
         },
@@ -423,7 +423,7 @@ fn program_owner_changer_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::program_owner_changer();
     let public_account = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 0,
             ..Account::default()
         },
@@ -446,7 +446,7 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::simple_balance_transfer();
     let public_account_1 = AccountWithMetadata::new(
         Account {
-            program_owner: [0, 1, 2, 3, 4, 5, 6, 7],
+            program_owner: [0, 1, 2, 3, 4, 5, 6, 7].into(),
             balance: 100,
             ..Account::default()
         },
@@ -455,7 +455,7 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
     );
     let public_account_2 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 0,
             ..Account::default()
         },
@@ -483,7 +483,7 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
 
     let sender_account = AccountWithMetadata::new(
         Account {
-            program_owner: simple_transfers.id(),
+            program_owner: simple_transfers.id().into(),
             balance: 100,
             ..Default::default()
         },
@@ -525,10 +525,12 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: recipient_keys.nsk,
+                    nsk: recipient_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&recipient_commitment)
                         .expect("recipient's commitment must be in state"),

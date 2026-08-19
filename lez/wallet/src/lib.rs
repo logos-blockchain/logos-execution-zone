@@ -29,7 +29,7 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey, account::Nonce,
     program::InstructionData,
 };
-use log::{info, warn};
+use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
@@ -305,7 +305,7 @@ impl WalletCore {
         // Ensure data is flushed to disk before returning to prevent race conditions
         config_file.sync_all().await?;
 
-        info!("Stored data at {}", self.config_path.display());
+        log::info!("Stored data at {}", self.config_path.display());
 
         Ok(())
     }
@@ -373,23 +373,19 @@ impl WalletCore {
             .key_chain()
             .shared_private_account(account_id)?;
         let keys = self.storage.key_chain().derive_shared_account_keys(entry)?;
-        let nsk = keys.nullifier_secret_key;
-        let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
         let identifier = entry.identifier;
 
         if entry.pda_seed.is_some() {
             Some(AccountIdentity::PrivatePdaShared {
                 account_id,
-                nsk,
-                npk,
+                nsk: keys.nullifier_secret_key(),
                 vpk,
                 identifier,
             })
         } else {
             Some(AccountIdentity::PrivateShared {
-                nsk,
-                npk,
+                ask: keys.authorization_secret_key,
                 vpk,
                 identifier,
             })
@@ -444,7 +440,7 @@ impl WalletCore {
             return Ok(());
         }
 
-        info!("Scanning shared account {account_id:#?} from genesis to block {cursor}");
+        log::info!("Scanning shared account {account_id:#?} from genesis to block {cursor}");
 
         let mut index = NullifierIndex::default();
         index.track_initialization(account_id);
@@ -989,7 +985,7 @@ impl WalletCore {
                                 &key_chain.viewing_public_key,
                                 &kind,
                             );
-                            let nsk = key_chain.private_key_holder.nullifier_secret_key;
+                            let nsk = key_chain.private_key_holder.nullifier_secret_key();
                             (account_id, kind, res_acc, nsk)
                         })
                     })
@@ -998,7 +994,7 @@ impl WalletCore {
             .collect::<Vec<_>>();
 
         for (affected_account_id, kind, new_acc, nsk) in affected_accounts {
-            info!(
+            log::info!(
                 "Received new account for account_id {affected_account_id:#?} with account object {new_acc:#?}"
             );
             // Await the account's next update by its nullifier, so later updates
@@ -1028,7 +1024,7 @@ impl WalletCore {
                 let keys = self.storage.key_chain().derive_shared_account_keys(entry)?;
                 let npk = keys.generate_nullifier_public_key();
                 let vpk = keys.generate_viewing_public_key();
-                let nsk = keys.nullifier_secret_key;
+                let nsk = keys.nullifier_secret_key();
                 let vsk = keys.viewing_secret_key;
                 Some((account_id, npk, vpk, vsk, nsk))
             })
@@ -1049,7 +1045,7 @@ impl WalletCore {
                     continue;
                 };
                 if let Some((_kind, new_acc)) = decrypt_note_at(message, ciph_id, &shared_secret) {
-                    info!("Synced shared account {account_id:#?} with new state {new_acc:#?}");
+                    log::info!("Synced shared account {account_id:#?} with new state {new_acc:#?}");
                     index.track(account_id, &new_acc, &nsk);
                     self.storage
                         .key_chain_mut()

@@ -57,6 +57,14 @@ fn key_from_index(index: usize) -> [u8; 32] {
     key
 }
 
+/// `records` in message-key order, the order the store reports them in.
+fn sorted_dispatches(
+    mut records: Vec<PendingCrossZoneDispatchRecord>,
+) -> Vec<PendingCrossZoneDispatchRecord> {
+    records.sort_by_key(|record| record.message_key);
+    records
+}
+
 fn stored_balance(dbio: &RocksDBIO) -> u128 {
     dbio.get_lee_state()
         .unwrap()
@@ -510,10 +518,12 @@ fn dispatch_records_round_trip_and_dedupe_by_message_key() {
         "only the delivery not already held is newly recorded"
     );
 
+    // Set equality, not order: no insertion order survives the store.
     assert_eq!(
-        dbio.get_pending_cross_zone_dispatches().unwrap(),
-        vec![record, dispatch_record(2)]
+        sorted_dispatches(dbio.get_pending_cross_zone_dispatches().unwrap()),
+        sorted_dispatches(vec![record, dispatch_record(2)])
     );
+    assert_eq!(dbio.get_pending_cross_zone_dispatch_count().unwrap(), 2);
 }
 
 #[test]
@@ -544,7 +554,12 @@ fn recording_past_the_cap_writes_nothing() {
     assert_eq!(
         dbio.get_pending_cross_zone_dispatches().unwrap().len(),
         MAX_PENDING_CROSS_ZONE_DISPATCHES,
-        "a refused write must leave the list untouched"
+        "a refused write must leave the records untouched"
+    );
+    assert_eq!(
+        dbio.get_pending_cross_zone_dispatch_count().unwrap(),
+        u64::try_from(MAX_PENDING_CROSS_ZONE_DISPATCHES).unwrap(),
+        "and the count cell with them"
     );
 
     // Re-offering only what is already held is not growth, so it still succeeds.
@@ -556,6 +571,186 @@ fn recording_past_the_cap_writes_nothing() {
         .unwrap(),
         0
     );
+}
+
+#[test]
+fn dispatch_records_survive_a_reopen() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let first = dispatch_record(1);
+    let second = dispatch_record(2);
+    dbio.add_pending_cross_zone_dispatches(vec![first.clone(), second.clone()])
+        .unwrap();
+
+    // On disk, not in memory: the records are what stand between the watcher's
+    // durable read floor and a lost delivery across a restart.
+    drop(dbio);
+    let reopened = RocksDBIO::open(temp_dir.path()).unwrap();
+    assert_eq!(
+        sorted_dispatches(reopened.get_pending_cross_zone_dispatches().unwrap()),
+        sorted_dispatches(vec![first, second])
+    );
+    assert_eq!(reopened.get_pending_cross_zone_dispatch_count().unwrap(), 2);
+}
+
+#[test]
+fn a_legacy_dispatch_blob_is_migrated_into_per_message_entries_on_open() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    // A store written before the per-message layout: the whole set as one borsh
+    // blob under a single fixed key.
+    let records = vec![dispatch_record(1), dispatch_record(2), dispatch_record(3)];
+    let legacy_key = borsh::to_vec(&DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY).unwrap();
+    dbio.db
+        .put_cf(
+            &dbio.meta_column(),
+            &legacy_key,
+            borsh::to_vec(&records).unwrap(),
+        )
+        .unwrap();
+    drop(dbio);
+
+    let migrated = RocksDBIO::open(temp_dir.path()).unwrap();
+    assert_eq!(
+        sorted_dispatches(migrated.get_pending_cross_zone_dispatches().unwrap()),
+        sorted_dispatches(records.clone()),
+        "every record must come through the migration unchanged"
+    );
+    for record in &records {
+        assert_eq!(
+            migrated
+                .get_opt::<PendingCrossZoneDispatchCellOwned>(record.message_key)
+                .unwrap()
+                .map(|cell| cell.0),
+            Some(record.clone()),
+            "each record must be readable under its own message key"
+        );
+    }
+    assert_eq!(migrated.get_pending_cross_zone_dispatch_count().unwrap(), 3);
+    assert!(
+        migrated
+            .db
+            .get_cf(&migrated.meta_column(), &legacy_key)
+            .unwrap()
+            .is_none(),
+        "the blob must not survive the migration"
+    );
+
+    // An empty blob is deleted without touching the migrated entries or count.
+    let empty: Vec<PendingCrossZoneDispatchRecord> = Vec::new();
+    migrated
+        .db
+        .put_cf(
+            &migrated.meta_column(),
+            &legacy_key,
+            borsh::to_vec(&empty).unwrap(),
+        )
+        .unwrap();
+    drop(migrated);
+
+    let cleaned = RocksDBIO::open(temp_dir.path()).unwrap();
+    assert!(
+        cleaned
+            .db
+            .get_cf(&cleaned.meta_column(), &legacy_key)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        cleaned.get_pending_cross_zone_dispatches().unwrap().len(),
+        3
+    );
+    assert_eq!(cleaned.get_pending_cross_zone_dispatch_count().unwrap(), 3);
+}
+
+/// A blob restored over live per-message entries folds additively into the
+/// count.
+#[test]
+fn a_legacy_blob_over_live_entries_folds_additively() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    dbio.add_pending_cross_zone_dispatches(vec![dispatch_record(1), dispatch_record(2)])
+        .unwrap();
+
+    // The blob shares record 2 with the live entries and brings record 3.
+    let blob = vec![dispatch_record(2), dispatch_record(3)];
+    let legacy_key = borsh::to_vec(&DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY).unwrap();
+    dbio.db
+        .put_cf(
+            &dbio.meta_column(),
+            &legacy_key,
+            borsh::to_vec(&blob).unwrap(),
+        )
+        .unwrap();
+    drop(dbio);
+
+    let merged = RocksDBIO::open(temp_dir.path()).unwrap();
+    assert_eq!(
+        sorted_dispatches(merged.get_pending_cross_zone_dispatches().unwrap()),
+        sorted_dispatches(vec![
+            dispatch_record(1),
+            dispatch_record(2),
+            dispatch_record(3)
+        ]),
+        "the migration must keep the union of blob and live entries"
+    );
+    assert_eq!(
+        merged.get_pending_cross_zone_dispatch_count().unwrap(),
+        3,
+        "the count must be the union's size, not the blob's length"
+    );
+}
+
+#[test]
+fn the_dispatch_count_cell_tracks_the_stored_entries() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let count_and_entries_agree = |expected: u64| {
+        assert_eq!(
+            dbio.get_pending_cross_zone_dispatch_count().unwrap(),
+            expected
+        );
+        assert_eq!(
+            u64::try_from(dbio.get_pending_cross_zone_dispatches().unwrap().len()).unwrap(),
+            expected,
+            "the count cell and the scanned entries must never disagree"
+        );
+    };
+
+    dbio.add_pending_cross_zone_dispatches(vec![
+        dispatch_record(1),
+        dispatch_record(2),
+        dispatch_record(3),
+    ])
+    .unwrap();
+    count_and_entries_agree(3);
+
+    // A counted retry keeps the record, so the count stands still.
+    dbio.record_dispatch_failure([1; 32], 2, dispatch_origin(1))
+        .unwrap();
+    count_and_entries_agree(3);
+
+    // A retirement into the dead letter takes its record out.
+    dbio.record_dispatch_failure([1; 32], 2, dispatch_origin(1))
+        .unwrap();
+    count_and_entries_agree(2);
+
+    // As does a standalone settled drop, even repeated on a key already gone.
+    dbio.drop_settled_cross_zone_dispatches(&[[2; 32], [2; 32]])
+        .unwrap();
+    count_and_entries_agree(1);
+
+    // And the settlement path inside a store update.
+    dbio.store_update(&StoreUpdate {
+        remove_dispatch_records: &[[3; 32]],
+        ..StoreUpdate::new(&state_with_balance(100))
+    })
+    .unwrap();
+    count_and_entries_agree(0);
 }
 
 #[test]

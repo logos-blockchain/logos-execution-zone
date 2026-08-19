@@ -21,7 +21,6 @@ use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention, sync_private,
 };
-use log::info;
 use tokio::test;
 use wallet::{
     account::Label,
@@ -81,7 +80,7 @@ async fn group_create_and_shared_account_registration() -> Result<()> {
     assert_eq!(entry.group_label, Label::new("test-group"));
     assert!(entry.pda_seed.is_none());
 
-    info!("Shared account registered: {shared_account_id}");
+    log::info!("Shared account registered: {shared_account_id}");
     Ok(())
 }
 
@@ -156,7 +155,7 @@ async fn group_invite_join_key_agreement() -> Result<()> {
         "Key agreement: same GMS produces same keys"
     );
 
-    info!("Key agreement verified via invite/join");
+    log::info!("Key agreement verified via invite/join");
     Ok(())
 }
 
@@ -225,7 +224,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
         .shared_private_account(shared_id)
         .context("Shared account not found after sync")?;
 
-    info!(
+    log::info!(
         "Shared account balance after funding: {}",
         entry.account.balance
     );

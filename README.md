@@ -169,9 +169,9 @@ The sequencer and logos blockchain node can be run locally:
 
 After stopping services above you need to remove 3 folders to start cleanly:
  1. In the `logos-blockchain/logos-blockchain` folder `state` (not needed in case of docker setup)
- 2. In the `logos-execution-zone` folder `lez/sequencer/service/rocksdb`
+ 2. In the `logos-execution-zone` folder `lez/sequencer/service/rocksdb-<channel id>`
  3. In the `logos-execution-zone` file `lez/sequencer/service/bedrock_signing_key`
- 4. In the `logos-execution-zone` folder `lez/indexer/service/rocksdb`
+ 4. In the `logos-execution-zone` folder `lez/indexer/service/rocksdb-<channel id>`
 
 ### Normal mode (`just` commands)
 We provide a `Justfile` for developer and user needs, you can run the whole setup with it. The only difference will be that logos-blockchain (bedrock) will be started from docker.

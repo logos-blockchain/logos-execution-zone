@@ -2,7 +2,7 @@ use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountWithMetadata},
     program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_ID, ProgramId, ProgramInput, ProgramOutput,
+        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput, ProgramOutput,
         read_lee_inputs,
     },
 };
@@ -151,7 +151,7 @@ fn renounce_authority(
     // account untouched; an unowned account with history is refused for good.
     assert!(
         authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_ID,
+            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
         "the authority account must be untouched before its first use as one"
     );
     assert!(
@@ -223,7 +223,7 @@ fn update_sources(
     // account untouched; an unowned account with history is refused for good.
     assert!(
         authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_ID,
+            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
         "the authority account must be untouched before its first use as one"
     );
     assert!(
@@ -281,7 +281,8 @@ fn init_config(
     // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
     if config.account != Account::default() {
         assert_eq!(
-            config.account.program_owner, self_program_id,
+            config.account.program_owner,
+            self_program_id.into(),
             "receiver config PDA is owned by another program"
         );
         assert_eq!(

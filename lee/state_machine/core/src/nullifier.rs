@@ -48,16 +48,29 @@ impl AsRef<[u8]> for NullifierPublicKey {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Hash))]
+pub struct AuthorizationSecretKey(pub [u8; 32]);
+
+impl From<&AuthorizationSecretKey> for NullifierSecretKey {
+    fn from(value: &AuthorizationSecretKey) -> Self {
+        const DOMAIN: &[u8; 29] = b"/LEE-Keys/v1/Nullifier/Secret";
+        let mut bytes = [0_u8; 29 + 32];
+        bytes[..29].copy_from_slice(DOMAIN);
+        bytes[29..].copy_from_slice(&value.0);
+        Impl::hash_bytes(&bytes)
+            .as_bytes()
+            .try_into()
+            .expect("hash should be exactly 32 bytes long")
+    }
+}
+
 impl From<&NullifierSecretKey> for NullifierPublicKey {
     fn from(value: &NullifierSecretKey) -> Self {
-        const PREFIX: &[u8; 8] = b"LEE/keys";
-        const SUFFIX_1: &[u8; 1] = &[7];
-        const SUFFIX_2: &[u8; 23] = &[0; 23];
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(PREFIX);
-        bytes.extend_from_slice(value);
-        bytes.extend_from_slice(SUFFIX_1);
-        bytes.extend_from_slice(SUFFIX_2);
+        const DOMAIN: &[u8; 29] = b"/LEE-Keys/v1/Nullifier/Public";
+        let mut bytes = [0_u8; 29 + 32];
+        bytes[..29].copy_from_slice(DOMAIN);
+        bytes[29..].copy_from_slice(value);
         Self(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
@@ -155,14 +168,25 @@ mod tests {
     }
 
     #[test]
+    fn from_authorization_key() {
+        let ask = AuthorizationSecretKey([0; 32]);
+        let expected_nsk: NullifierSecretKey = [
+            135, 144, 25, 255, 27, 190, 82, 191, 49, 83, 55, 248, 251, 98, 149, 55, 143, 129, 2,
+            201, 237, 77, 248, 237, 15, 11, 188, 41, 219, 213, 10, 74,
+        ];
+        let nsk = NullifierSecretKey::from(&ask);
+        assert_eq!(nsk, expected_nsk);
+    }
+
+    #[test]
     fn from_secret_key() {
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
         ];
         let expected_npk = NullifierPublicKey([
-            78, 20, 20, 5, 177, 198, 233, 100, 175, 134, 174, 200, 24, 205, 68, 215, 130, 74, 35,
-            54, 154, 184, 219, 42, 168, 106, 126, 147, 133, 244, 18, 218,
+            44, 121, 113, 131, 34, 101, 53, 97, 87, 111, 83, 78, 157, 34, 59, 248, 105, 103, 194,
+            137, 127, 221, 25, 17, 105, 84, 114, 129, 183, 83, 168, 193,
         ]);
         let npk = NullifierPublicKey::from(&nsk);
         assert_eq!(npk, expected_npk);
@@ -177,8 +201,8 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            242, 239, 57, 244, 89, 109, 65, 201, 223, 100, 43, 87, 205, 83, 148, 161, 176, 22, 208,
-            220, 68, 135, 10, 171, 182, 80, 54, 74, 228, 244, 236, 7,
+            6, 35, 121, 102, 237, 184, 156, 247, 28, 185, 212, 214, 51, 229, 66, 170, 10, 75, 126,
+            12, 93, 139, 88, 61, 65, 246, 230, 184, 223, 232, 252, 124,
         ]);
 
         let account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
@@ -195,8 +219,8 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            149, 125, 157, 109, 119, 81, 9, 163, 231, 181, 214, 43, 57, 113, 221, 72, 180, 149,
-            189, 170, 32, 181, 255, 231, 19, 92, 235, 59, 153, 185, 172, 206,
+            56, 217, 214, 244, 51, 212, 184, 73, 217, 85, 4, 126, 54, 35, 135, 225, 75, 253, 183,
+            19, 96, 182, 189, 138, 62, 101, 131, 30, 2, 236, 157, 235,
         ]);
 
         let account_id = AccountId::for_regular_private_account(&npk, &vpk, 1);
@@ -214,8 +238,8 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            30, 232, 222, 201, 233, 125, 124, 194, 58, 39, 121, 96, 185, 84, 168, 109, 80, 111,
-            159, 112, 84, 100, 133, 244, 16, 34, 221, 35, 128, 131, 98, 159,
+            14, 231, 97, 140, 18, 163, 250, 222, 102, 223, 118, 160, 65, 228, 201, 232, 182, 198,
+            230, 213, 216, 143, 78, 95, 163, 95, 32, 1, 20, 240, 97, 95,
         ]);
 
         let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);

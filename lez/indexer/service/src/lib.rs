@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 pub use indexer_core::config::*;
 use indexer_service_rpc::RpcServer as _;
 use jsonrpsee::server::{Server, ServerHandle};
-use log::{error, info};
+use log::error;
 use tokio_util::sync::CancellationToken;
 
 pub mod service;
@@ -84,7 +84,7 @@ pub async fn run_server(
         .local_addr()
         .context("Failed to get local address of RPC server")?;
 
-    info!("Starting Indexer Service RPC server on {addr}");
+    log::info!("Starting Indexer Service RPC server on {addr}");
 
     #[cfg(not(feature = "mock-responses"))]
     let handle = {

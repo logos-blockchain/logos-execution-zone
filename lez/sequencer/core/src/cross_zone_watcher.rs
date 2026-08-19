@@ -2,12 +2,13 @@ use std::{sync::Arc, time::Duration};
 
 use common::{HashType, block::Block, transaction::LeeTransaction};
 use cross_zone::{
-    EmissionSource, build_dispatch_from_emission, extract_emission, is_sequencer_only_program,
+    EmissionSource, Link, StallState, alerts_at, build_dispatch_from_emission, equivocation_report,
+    extract_emission, is_sequencer_only_program, link_to_tip, screen_peer_block,
 };
 use cross_zone_inbox_core::message_key;
 use futures::{Stream, StreamExt as _};
-use lee::{GENESIS_BLOCK_ID, PublicKey};
-use log::{debug, error, info, warn};
+use lee::PublicKey;
+use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
@@ -25,15 +26,6 @@ use crate::{
     task_group::TaskGroup,
 };
 
-/// Consecutive passes a watcher spends stuck on one slot before it says so as
-/// something more than the per-pass failure.
-///
-/// One pass per poll interval, which is the block time, so this is minutes of
-/// retrying rather than seconds. A transient failure (a truncated read, a peer
-/// mid-upgrade) heals well inside that; anything still stuck after it wants
-/// someone to look.
-const STUCK_SLOT_ALERT_PASSES: u32 = 20;
-
 /// The per-peer settings one watcher pass needs.
 struct PeerContext {
     peer_zone: [u8; 32],
@@ -46,7 +38,7 @@ struct PeerContext {
 /// All of them hold the delivery floor at the last slot the watcher consumed
 /// whole, bar [`PassOutcome::Drained`] and [`PassOutcome::Stranded`], so the
 /// next pass re-reads from there. Only a block that will not deserialize ends a
-/// pass; [`link_against`] says why one that decodes never does.
+/// pass; [`link_to_tip`] says why one that decodes never does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PassOutcome {
     /// The stream drained, having delivered from at least one block or found
@@ -71,10 +63,7 @@ enum PassOutcome {
 /// The pass-to-pass state of one watcher.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct WatcherState {
-    /// The slot it is stuck on and how many consecutive passes it has spent
-    /// there. Keyed by slot so a failure at a new slot does not inherit an
-    /// older slot's count.
-    stalled: Option<(Slot, u32)>,
+    stall: StallState<Slot>,
     /// Consecutive passes that placed nothing while skipping blocks. Not keyed
     /// by slot: the peer keeps producing, so every such pass ends at a new slot
     /// and a slot-keyed count would reset to one for ever.
@@ -82,44 +71,19 @@ struct WatcherState {
 }
 
 impl WatcherState {
-    /// Folds one pass's outcome in, returning the slot the watcher is stuck on
-    /// and how long it has been stuck, so the caller can say so.
-    ///
-    /// `cursor` is the read position after the pass, and is what tells a stream
-    /// that truncated early apart from one that genuinely drained: the zone-sdk
-    /// ends a stream on a fetch failure exactly as it does on catching up, so
-    /// without it a flaky peer endpoint resets the count for ever and a watcher
-    /// stuck for hours never says so.
+    /// Folds one pass's outcome into the stall and stranded counts, returning
+    /// the slot the watcher is stuck on and how long it has been stuck.
     fn after_pass(&mut self, outcome: PassOutcome, cursor: Option<Slot>) -> Option<(Slot, u32)> {
-        let slot = match outcome {
-            PassOutcome::Drained | PassOutcome::Stranded => {
-                if self.passed_the_stall(cursor) {
-                    self.stalled = None;
-                }
-                self.stranded = match outcome {
-                    PassOutcome::Stranded => self.stranded.saturating_add(1),
-                    PassOutcome::Drained
-                    | PassOutcome::Undecodable(_)
-                    | PassOutcome::Undelivered(_) => 0,
-                };
-                return None;
-            }
-            PassOutcome::Undecodable(slot) | PassOutcome::Undelivered(slot) => slot,
+        match outcome {
+            PassOutcome::Stranded => self.stranded = self.stranded.saturating_add(1),
+            PassOutcome::Drained => self.stranded = 0,
+            PassOutcome::Undecodable(_) | PassOutcome::Undelivered(_) => {}
+        }
+        let stuck_on = match outcome {
+            PassOutcome::Undecodable(slot) | PassOutcome::Undelivered(slot) => Some(slot),
+            PassOutcome::Drained | PassOutcome::Stranded => None,
         };
-
-        let attempts = match self.stalled {
-            Some((stuck_on, attempts)) if stuck_on == slot => attempts.saturating_add(1),
-            _ => 1,
-        };
-        self.stalled = Some((slot, attempts));
-        self.stalled
-    }
-
-    /// Whether the read position is now past whatever the watcher was stuck on.
-    /// Vacuously true when it was not stuck.
-    fn passed_the_stall(self, cursor: Option<Slot>) -> bool {
-        self.stalled
-            .is_none_or(|(stuck_on, _)| cursor.is_some_and(|read_to| read_to >= stuck_on))
+        self.stall.after_pass(stuck_on, cursor)
     }
 }
 
@@ -130,96 +94,6 @@ struct Resume {
     cursor: Option<Slot>,
     /// Whether the stored floor has to be dropped before anything is read.
     clear_floor: bool,
-}
-
-/// Where a peer block sits relative to the chain this watcher has delivered
-/// from.
-#[derive(Debug, PartialEq, Eq)]
-enum Link {
-    /// The next block on the peer's chain, carrying its recomputed hash.
-    Next(HashType),
-    /// At or below the tip, so already delivered from. The ordinary shape of a
-    /// re-read slot, and how an equivocating second block at one id is refused.
-    AlreadySeen,
-    /// Not on the chain this watcher is following, so not deliverable. Read on:
-    /// the peer's own next block still links to the tip, and treating this as
-    /// terminal would hand the peer a way to stop its deliveries permanently.
-    OffChain(String),
-}
-
-/// Whether `block` continues the peer chain pinned by `tip`.
-///
-/// This is what closes the suppression. A delivered message's replay key covers
-/// `(src_zone, src_block_id, src_tx_index)` and nothing else, so a peer that can
-/// get a block delivered under an id of its choosing burns the key an honest
-/// block would later use, and the inbox then no-ops the real message as a
-/// replay. Off a hash link ids are only claimable in order, so the only id
-/// within reach is the one the peer is about to publish anyway.
-///
-/// Nothing but [`Link::Next`] is ever delivered from, and nothing but a block
-/// that will not decode stops the pass. A peer can inscribe anything it likes on
-/// its own channel, so a block this watcher cannot place is read past rather
-/// than treated as the end of the chain: the peer's own next honest block still
-/// links to the tip.
-fn link_against(
-    tip: Option<PeerChainTip>,
-    block: &Block,
-    expected_pubkey: Option<&PublicKey>,
-) -> Link {
-    // The channel authorizes who may write, not what they may claim, so the
-    // pinned key is what says this node's own sequencer produced the block.
-    if expected_pubkey.is_some_and(|key| !block.is_signed_by(key)) {
-        return Link::OffChain("block-signing key does not match the pinned key".to_owned());
-    }
-
-    let recomputed = block.recompute_hash();
-    if recomputed != block.header.hash {
-        // The signature does not cover this field, so a correctly signed block
-        // may still carry a bogus one, and the peer's own next block links
-        // against the recomputed value rather than this one.
-        return Link::OffChain(format!(
-            "block {} carries header hash {} but its contents hash to {recomputed}",
-            block.header.block_id, block.header.hash
-        ));
-    }
-
-    let Some(tip) = tip else {
-        return if block.header.block_id == GENESIS_BLOCK_ID {
-            Link::Next(recomputed)
-        } else {
-            Link::OffChain(format!(
-                "block {} is the first one read, but a watcher with no stored chain tip has to start at the peer's genesis block {GENESIS_BLOCK_ID}",
-                block.header.block_id
-            ))
-        };
-    };
-
-    if block.header.block_id <= tip.block_id {
-        return Link::AlreadySeen;
-    }
-    if block.header.block_id > tip.block_id.saturating_add(1) {
-        return Link::OffChain(format!(
-            "block {} skips past {}, which is either a hole in what this node read or an id claimed ahead of the peer's chain",
-            block.header.block_id,
-            tip.block_id.saturating_add(1)
-        ));
-    }
-    if block.header.prev_block_hash != tip.block_hash {
-        return Link::OffChain(format!(
-            "block {} does not follow block {} we delivered from: it links to {} rather than {}",
-            block.header.block_id, tip.block_id, block.header.prev_block_hash, tip.block_hash
-        ));
-    }
-    Link::Next(recomputed)
-}
-
-/// Whether a watcher stuck for `attempts` passes should say so on this one.
-///
-/// Every [`STUCK_SLOT_ALERT_PASSES`], not on the crossing alone: a stall that
-/// never clears would otherwise be reported once and then look resolved for as
-/// long as it lasts. Not every pass, since that is one line per block time.
-const fn alerts_at(attempts: u32) -> bool {
-    attempts > 0 && attempts.is_multiple_of(STUCK_SLOT_ALERT_PASSES)
 }
 
 /// Where a starting watcher resumes reading a peer's channel.
@@ -302,7 +176,7 @@ async fn watch_peer(
     dbio: Arc<RocksDBIO>,
 ) {
     let peer_zone = peer.peer_zone;
-    info!(
+    log::info!(
         "Cross-zone watcher started for peer {}",
         hex::encode(peer_zone)
     );
@@ -356,7 +230,7 @@ async fn watch_peer(
     }
     let mut cursor = resume.cursor;
     if let Some(slot) = cursor {
-        info!(
+        log::info!(
             "Resuming watcher for peer {} from slot {slot:?}",
             hex::encode(peer_zone)
         );
@@ -452,13 +326,42 @@ where
                     hex::encode(peer.peer_zone),
                     block.header.block_id
                 );
-                match link_against(*tip, &block, peer.expected_pubkey.as_ref()) {
-                    Link::AlreadySeen => {
-                        debug!(
-                            "Watcher ignoring peer {} block {}: at or below the block it has already delivered from",
-                            hex::encode(peer.peer_zone),
-                            block.header.block_id
+                // Nothing but [`Link::Next`] is ever delivered from, and
+                // nothing but a block that will not decode stops the pass. A
+                // peer can inscribe anything it likes on its own channel, so a
+                // block this watcher cannot place is read past rather than
+                // treated as the end of the chain: the peer's own next honest
+                // block still links to the tip.
+                let link = match screen_peer_block(&block, peer.expected_pubkey.as_ref()) {
+                    Ok(recomputed) => link_to_tip(tip.as_ref(), &block, recomputed),
+                    Err(refusal) => {
+                        skipped = skipped.saturating_add(1);
+                        warn!(
+                            "Watcher not delivering from peer {} block at slot {slot:?}: {refusal}. Reading on; the peer's next block that continues the chain still delivers.",
+                            hex::encode(peer.peer_zone)
                         );
+                        continue;
+                    }
+                };
+                match link {
+                    Link::AlreadySeen { equivocates } => {
+                        if equivocates && let Some(held) = *tip {
+                            error!(
+                                "{}",
+                                equivocation_report(
+                                    &peer.peer_zone,
+                                    block.header.block_id,
+                                    held.block_hash,
+                                    block.header.hash
+                                )
+                            );
+                        } else {
+                            debug!(
+                                "Watcher ignoring peer {} block {}: at or below the block it has already delivered from",
+                                hex::encode(peer.peer_zone),
+                                block.header.block_id
+                            );
+                        }
                     }
                     Link::OffChain(reason) => {
                         skipped = skipped.saturating_add(1);
@@ -546,8 +449,8 @@ fn advance_cursor(dbio: &RocksDBIO, peer_zone: [u8; 32], cursor: &mut Option<Slo
 /// into a stall: the record is the only thing standing between a durable read
 /// position and a lost message.
 ///
-/// `block_hash` is the value [`link_against`] recomputed from the block's own
-/// contents, not `block.header.hash`, which the signature does not cover.
+/// `block_hash` is the value [`screen_peer_block`] recomputed from the block's
+/// own contents, not `block.header.hash`, which the signature does not cover.
 fn record_block_deliveries(
     block: &Block,
     block_hash: HashType,
@@ -556,10 +459,8 @@ fn record_block_deliveries(
 ) -> bool {
     let peer_zone = peer.peer_zone;
     let self_zone = peer.self_zone;
-    // Collected and written once. The pending list is a single value, so a write
-    // per delivery would rewrite the whole list once per message, which is
-    // quadratic in a peer block that carries many of them, on a task holding the
-    // lock block production needs.
+    // Collected and written once, so recording a block is all-or-nothing; see
+    // RocksDBIO::add_pending_cross_zone_dispatches.
     let mut deliveries = Vec::new();
     for (index, tx) in block.body.transactions.iter().enumerate() {
         let LeeTransaction::Public(public_tx) = tx else {
@@ -627,7 +528,7 @@ fn record_block_deliveries(
         // the slot stays stuck.
         Ok(accepted) => {
             if accepted > 0 {
-                info!(
+                log::info!(
                     "Watcher recorded {accepted} of {offered} cross-zone deliveries from peer {} block {}",
                     hex::encode(peer_zone),
                     block.header.block_id
@@ -658,15 +559,11 @@ fn record_block_deliveries(
 #[cfg(test)]
 mod tests {
     use common::test_utils::produce_dummy_block;
+    use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
-    use lee::{
-        PublicTransaction,
-        public_transaction::{Message, WitnessSet},
-    };
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
-    use ping_core::{SenderInstruction, ping_record_pda, receiver_config_account_id};
-    use storage::sequencer::{DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY, RocksDBIO};
+    use storage::sequencer::{DB_META_PENDING_CROSS_ZONE_DISPATCH_COUNT_KEY, RocksDBIO};
     use tempfile::TempDir;
 
     use super::*;
@@ -695,27 +592,9 @@ mod tests {
         emission_to(programs::ping_receiver().id())
     }
 
-    /// A `ping_sender` emission aimed at `target_program_id`. The sender lets its
-    /// caller name any target, which is exactly why the route has to pin the
-    /// pair rather than the target alone.
+    /// A `ping_sender` emission aimed at `target_program_id`.
     fn emission_to(target_program_id: lee_core::program::ProgramId) -> LeeTransaction {
-        let receiver_id = programs::ping_receiver().id();
-        let send = SenderInstruction::Send {
-            target_zone: SELF_ZONE,
-            target_program_id,
-            target_accounts: vec![
-                receiver_config_account_id(receiver_id).into_value(),
-                ping_record_pda(receiver_id).into_value(),
-            ],
-            payload: b"hi".to_vec(),
-            ordinal: 0,
-        };
-        let message = Message::try_new(programs::ping_sender().id(), vec![], vec![], send)
-            .expect("emission serializes");
-        LeeTransaction::Public(PublicTransaction::new(
-            message,
-            WitnessSet::from_raw_parts(vec![]),
-        ))
+        ping_emission(SELF_ZONE, target_program_id, b"hi")
     }
 
     fn peer_msg(data: Vec<u8>, slot: u64) -> (ZoneMessage, Slot) {
@@ -730,14 +609,9 @@ mod tests {
 
     /// The peer's chain from its genesis up to and including `block_id`, each
     /// block linked to the one before it and carrying one emission for this
-    /// zone. Empty below [`GENESIS_BLOCK_ID`].
+    /// zone.
     fn chain_to(block_id: u64) -> Vec<Block> {
-        let mut blocks: Vec<Block> = Vec::new();
-        for id in GENESIS_BLOCK_ID..=block_id {
-            let prev = blocks.last().map(|block| block.header.hash);
-            blocks.push(produce_dummy_block(id, prev, vec![emission()]));
-        }
-        blocks
+        linked_chain_to(block_id, |_| vec![emission()])
     }
 
     /// The peer's block at `block_id`.
@@ -792,27 +666,31 @@ mod tests {
         peer_msg(b"not a block".to_vec(), slot)
     }
 
-    /// The message keys recorded so far, in insertion order.
+    /// The message keys recorded so far, sorted: the store keys each record by
+    /// its message key, so no insertion order survives.
     fn recorded_keys(dbio: &RocksDBIO) -> Vec<[u8; 32]> {
-        dbio.get_pending_cross_zone_dispatches()
+        let mut keys: Vec<[u8; 32]> = dbio
+            .get_pending_cross_zone_dispatches()
             .expect("pending dispatches readable")
             .into_iter()
             .map(|record| record.message_key)
-            .collect()
+            .collect();
+        keys.sort_unstable();
+        keys
     }
 
-    /// Makes every later pending-dispatch read fail, standing in for any store
-    /// failure between reading a peer block and the delivery being durable.
-    /// Recording reads the list before it writes it, so a value that will not
-    /// decode is enough.
+    /// Makes every later pending-dispatch write fail, standing in for any
+    /// store failure before a delivery is durable: recording reads the count
+    /// first, so a count that will not decode is enough.
     fn break_the_dispatch_store(dbio: &RocksDBIO) {
         let cf = dbio
             .db
             .cf_handle(storage::CF_META_NAME)
             .expect("meta column family");
-        let key = borsh::to_vec(&DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY).expect("key encodes");
+        let key =
+            borsh::to_vec(&DB_META_PENDING_CROSS_ZONE_DISPATCH_COUNT_KEY).expect("key encodes");
         dbio.db
-            .put_cf(&cf, key, b"not a pending dispatch list")
+            .put_cf(&cf, key, b"not a pending dispatch count")
             .expect("write");
     }
 
@@ -824,60 +702,6 @@ mod tests {
             state.after_pass(*outcome, cursor.map(Slot::from));
         }
         state
-    }
-
-    fn stall(slot: u64, cursor: Option<u64>) -> (PassOutcome, Option<u64>) {
-        (PassOutcome::Undecodable(Slot::from(slot)), cursor)
-    }
-
-    #[test]
-    fn a_stuck_slot_is_counted_but_never_read_past() {
-        // The watcher used to give up on a slot and read past it. Counting is
-        // now only how loud to be about one it is stuck on.
-        let passes = vec![stall(4, Some(3)); 3];
-        assert_eq!(run_passes(&passes).stalled, Some((Slot::from(4), 3)));
-
-        let long = vec![
-            stall(4, Some(3));
-            usize::try_from(STUCK_SLOT_ALERT_PASSES).expect("alert threshold fits") * 2
-        ];
-        assert_eq!(
-            run_passes(&long).stalled,
-            Some((Slot::from(4), STUCK_SLOT_ALERT_PASSES.saturating_mul(2))),
-            "a slot is retried for as long as it stays stuck"
-        );
-    }
-
-    #[test]
-    fn a_stream_that_ended_before_the_stalled_slot_does_not_reset_the_count() {
-        // The zone-sdk ends a stream on a fetch failure exactly as it does on
-        // catching up. Treating that as a clean pass would reset the count for
-        // ever, and a watcher stuck for hours would never say so.
-        let mut passes = vec![stall(4, Some(3)); 5];
-        passes.push((PassOutcome::Drained, Some(3)));
-        let state = run_passes(&passes);
-        assert_eq!(
-            state.stalled,
-            Some((Slot::from(4), 5)),
-            "the count survives a pass that never reached the stalled slot"
-        );
-
-        // Getting past it is what actually clears the stall.
-        let mut read_past = vec![stall(4, Some(3)); 5];
-        read_past.push((PassOutcome::Drained, Some(7)));
-        assert_eq!(run_passes(&read_past).stalled, None);
-    }
-
-    #[test]
-    fn a_stall_says_so_on_a_cadence_rather_than_once() {
-        // Reporting only on the crossing leaves a watcher that never recovers
-        // looking resolved, which is the failure this whole commit is about.
-        assert!(!alerts_at(0));
-        assert!(!alerts_at(1));
-        assert!(!alerts_at(STUCK_SLOT_ALERT_PASSES - 1));
-        assert!(alerts_at(STUCK_SLOT_ALERT_PASSES));
-        assert!(!alerts_at(STUCK_SLOT_ALERT_PASSES + 1));
-        assert!(alerts_at(STUCK_SLOT_ALERT_PASSES * 3));
     }
 
     #[test]
@@ -904,12 +728,6 @@ mod tests {
     }
 
     #[test]
-    fn a_stall_at_a_new_slot_starts_its_own_count() {
-        let passes = vec![stall(4, Some(3)), stall(4, Some(3)), stall(9, Some(8))];
-        assert_eq!(run_passes(&passes).stalled, Some((Slot::from(9), 1)));
-    }
-
-    #[test]
     fn every_way_of_ending_early_keeps_the_slot_coming_back() {
         // Undecodable and undelivered differ in whose problem they are, not in
         // what the watcher does about them: hold the floor and read the slot
@@ -918,104 +736,12 @@ mod tests {
             PassOutcome::Undecodable(Slot::from(4)),
             PassOutcome::Undelivered(Slot::from(4)),
         ] {
+            let mut state = WatcherState::default();
             assert_eq!(
-                run_passes(&[(outcome, Some(3))]).stalled,
+                state.after_pass(outcome, Some(Slot::from(3))),
                 Some((Slot::from(4), 1))
             );
         }
-    }
-
-    #[test]
-    fn only_the_next_block_off_the_tip_links() {
-        let tip = Some(tip_at(2));
-
-        assert_eq!(
-            link_against(tip, &chain_block(3), None),
-            Link::Next(chain_hash(3)),
-            "the block that continues the chain is the one delivered from"
-        );
-
-        // The #677 suppression. The peer's chain is public, so the version that
-        // matters is the block linking correctly and lying only about the id:
-        // one with no link at all is caught by the check below and proves
-        // nothing about this one.
-        assert!(matches!(
-            link_against(
-                tip,
-                &produce_dummy_block(5, Some(chain_hash(2)), vec![emission()]),
-                None
-            ),
-            Link::OffChain(_)
-        ));
-        assert!(matches!(
-            link_against(tip, &produce_dummy_block(5, None, vec![emission()]), None),
-            Link::OffChain(_)
-        ));
-
-        // Two blocks claiming one id collapse to one key on chain, so
-        // delivering from both delivers one message twice.
-        assert_eq!(link_against(tip, &chain_block(2), None), Link::AlreadySeen);
-        assert_eq!(
-            link_against(
-                tip,
-                &produce_dummy_block(2, Some(HashType([9; 32])), vec![emission()]),
-                None
-            ),
-            Link::AlreadySeen
-        );
-
-        // Right id, wrong ancestry: the peer forked at our tip, or reset it.
-        assert!(matches!(
-            link_against(
-                tip,
-                &produce_dummy_block(3, Some(HashType([9; 32])), vec![emission()]),
-                None
-            ),
-            Link::OffChain(_)
-        ));
-    }
-
-    #[test]
-    fn a_watcher_with_no_tip_starts_at_the_peers_genesis() {
-        assert_eq!(
-            link_against(None, &chain_block(GENESIS_BLOCK_ID), None),
-            Link::Next(chain_hash(GENESIS_BLOCK_ID))
-        );
-        // Anchoring on whatever arrived first is the whole attack: the peer
-        // would pick the id, and every key below it with one block.
-        assert!(matches!(
-            link_against(None, &chain_block(GENESIS_BLOCK_ID + 1), None),
-            Link::OffChain(_)
-        ));
-    }
-
-    #[test]
-    fn a_block_whose_header_hash_is_not_its_contents_is_off_chain() {
-        // A correctly signed block can still carry any value in `header.hash`.
-        let mut tampered = chain_block(3);
-        tampered.header.hash = HashType([9; 32]);
-        assert!(matches!(
-            link_against(Some(tip_at(2)), &tampered, None),
-            Link::OffChain(_)
-        ));
-    }
-
-    #[test]
-    fn a_block_not_signed_by_the_pinned_key_is_not_delivered_from() {
-        let signer = lee::PublicKey::new_from_private_key(
-            &lee::PrivateKey::try_new([37; 32]).expect("test key"),
-        );
-        assert_eq!(
-            link_against(None, &chain_block(GENESIS_BLOCK_ID), Some(&signer)),
-            Link::Next(chain_hash(GENESIS_BLOCK_ID)),
-            "produce_dummy_block signs with this key, so the pin must accept it"
-        );
-
-        let other = lee::PublicKey::try_new([42; 32]).expect("test key");
-        assert!(matches!(
-            link_against(None, &chain_block(GENESIS_BLOCK_ID), Some(&other)),
-            Link::OffChain(_)
-        ));
     }
 
     #[test]
@@ -1069,10 +795,9 @@ mod tests {
             Some(Slot::from(1)),
             "the cursor must be durable, not just in memory"
         );
-        assert_eq!(
-            recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)]
-        );
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
+        assert_eq!(recorded_keys(&dbio), expected);
     }
 
     #[tokio::test]
@@ -1287,13 +1012,15 @@ mod tests {
         )
         .await;
 
+        let mut expected = vec![
+            message_key(&PEER_ZONE, 1, 0),
+            message_key(&PEER_ZONE, 2, 0),
+            message_key(&PEER_ZONE, 3, 0),
+        ];
+        expected.sort_unstable();
         assert_eq!(
             recorded_keys(&dbio),
-            vec![
-                message_key(&PEER_ZONE, 1, 0),
-                message_key(&PEER_ZONE, 2, 0),
-                message_key(&PEER_ZONE, 3, 0)
-            ],
+            expected,
             "only the unread block is recorded on the second pass"
         );
         assert_eq!(
@@ -1427,13 +1154,15 @@ mod tests {
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
+        let mut expected = vec![
+            message_key(&PEER_ZONE, 1, 0),
+            message_key(&PEER_ZONE, 2, 0),
+            message_key(&PEER_ZONE, 3, 0),
+        ];
+        expected.sort_unstable();
         assert_eq!(
             recorded_keys(&dbio),
-            vec![
-                message_key(&PEER_ZONE, 1, 0),
-                message_key(&PEER_ZONE, 2, 0),
-                message_key(&PEER_ZONE, 3, 0)
-            ],
+            expected,
             "the key the peer aimed to burn is never recorded, and nothing else is held up"
         );
         assert_eq!(tip, Some(tip_at(3)));
@@ -1466,9 +1195,11 @@ mod tests {
             PassOutcome::Drained,
             "a peer equivocating about its own chain is not this node's failure"
         );
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
         assert_eq!(
             recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)],
+            expected,
             "one delivery per id, whatever the peer publishes under it"
         );
         assert_eq!(tip, Some(tip_at(2)));
@@ -1497,9 +1228,11 @@ mod tests {
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
         assert_eq!(
             recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)],
+            expected,
             "the fork is passed over and the peer's own chain continues"
         );
         assert_eq!(tip, Some(tip_at(2)));
@@ -1556,10 +1289,9 @@ mod tests {
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
-        assert_eq!(
-            recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)]
-        );
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
+        assert_eq!(recorded_keys(&dbio), expected);
         assert_eq!(tip, Some(tip_at(2)));
     }
 

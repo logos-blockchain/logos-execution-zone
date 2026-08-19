@@ -156,9 +156,9 @@ pub fn dashboard() -> Dashboard {
                             // `clamp_min` keeps an idle window (nothing submitted)
                             // reading as 0% instead of a division by zero.
                             "100 * (increase({before_mempool}[$__range]) + increase({in_mempool}[$__range])) / clamp_min(increase({submitted}[$__range]), 1)",
-                            before_mempool = sequencer_service_metrics::names::BEFORE_MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
+                            before_mempool = sequencer_rpc_server_actor_metrics::names::BEFORE_MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
                             in_mempool = sequencer_core_metrics::names::MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
-                            submitted = sequencer_service_metrics::names::SUBMITTED_TRANSACTIONS_TOTAL,
+                            submitted = sequencer_rpc_server_actor_metrics::names::SUBMITTED_TRANSACTIONS_TOTAL,
                         ))
                         .legend("failed"),
                     ),
@@ -169,11 +169,11 @@ pub fn dashboard() -> Dashboard {
                     .fill_opacity(35)
                     .gradient_mode(GradientMode::Opacity)
                     .target(rate_per_min(
-                        sequencer_service_metrics::names::SUBMITTED_TRANSACTIONS_TOTAL,
+                        sequencer_rpc_server_actor_metrics::names::SUBMITTED_TRANSACTIONS_TOTAL,
                         "submitted",
                     ))
                     .target(rate_per_min(
-                        sequencer_service_metrics::names::BEFORE_MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
+                        sequencer_rpc_server_actor_metrics::names::BEFORE_MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
                         "failed · before mempool",
                     ))
                     .target(rate_per_min(

@@ -16,6 +16,7 @@ lee.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 sequencer_core = { workspace = true, features = ["default", "testnet"] }
 sequencer_service.workspace = true
+sequencer_stake_core.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 wallet.workspace = true
 programs.workspace = true

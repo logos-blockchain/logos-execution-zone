@@ -11,7 +11,7 @@ pub fn transfer_from_associated_token_account(
     ata_program_id: ProgramId,
     amount: u128,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
-    let token_program_id = sender_ata.account.program_owner;
+    let token_program_id: lee_core::program::ProgramId = sender_ata.account.program_owner.into();
     assert!(owner.is_authorized, "Owner authorization is missing");
     let definition_id = TokenHolding::try_from(&sender_ata.account.data)
         .expect("Sender ATA must hold a valid token")

@@ -6,9 +6,13 @@ use indexer_service::{ChannelId, ClientConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
-use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
-use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, SequencerConfig};
+use sequencer_core::{
+    config::{BedrockConfig, CrossZoneConfig, GenesisAction, GossipConfig, SequencerConfig},
+    sign_genesis_stake,
+};
+use sequencer_stake_core::SequencerKey;
 use url::Url;
 use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
 
@@ -17,6 +21,13 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 
 /// Fixed sequencer signing key; exposed so the fixture generator can reopen the produced store.
 pub const SEQUENCER_SIGNING_KEY: [u8; 32] = [37; 32];
+
+/// Key of the account holding the sequencer's genesis stake. Separate from
+/// [`SEQUENCER_SIGNING_KEY`]: block signing and stake control are distinct roles.
+pub const SEQUENCER_STAKE_KEY: [u8; 32] = [55; 32];
+
+/// Bedrock signing key used by the prebuilt dump as first accredited key.
+pub const SEQUENCER_BEDROCK_SIGNING_KEY: [u8; 32] = [77; 32];
 
 // Fixed entropy seeds for the default accounts: deterministic so one prebuilt database is reusable,
 // and distinct from the `testnet_initial_state` accounts to avoid depending on / double-funding
@@ -77,6 +88,26 @@ impl std::fmt::Display for UrlProtocol {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+/// Config for test context in multi-node case.
+pub struct MultiNodeTestContextConfig {
+    pub num_nodes: usize,
+    pub bedrock_channel: ChannelId,
+}
+
+impl Default for MultiNodeTestContextConfig {
+    fn default() -> Self {
+        Self {
+            num_nodes: 1,
+            bedrock_channel: bedrock_channel_id(),
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "All fields are necessary and better to keep separate"
+)]
 pub fn sequencer_config(
     partial: SequencerPartialConfig,
     home: PathBuf,
@@ -85,6 +116,8 @@ pub fn sequencer_config(
     funding_key: ZkPublicKey,
     genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
+    signing_key: Option<[u8; 32]>,
+    gossip: Option<GossipConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
         max_num_tx_in_block,
@@ -101,7 +134,7 @@ pub fn sequencer_config(
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: genesis_transactions,
-        signing_key: SEQUENCER_SIGNING_KEY,
+        signing_key: signing_key.unwrap_or(SEQUENCER_SIGNING_KEY),
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
@@ -112,6 +145,7 @@ pub fn sequencer_config(
         },
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
+        gossip,
     })
 }
 
@@ -198,13 +232,19 @@ pub fn genesis_from_accounts(
         .collect()
 }
 
-pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
-    Ok(WalletConfig {
-        sequencers: vec![SequencerConnectionData {
-            sequencer_addr: addr_to_url(UrlProtocol::Http, sequencer_addr)
+pub fn wallet_config(sequencer_addrs: &[SocketAddr]) -> Result<WalletConfig> {
+    let mut sequencers = vec![];
+
+    for addr in sequencer_addrs {
+        sequencers.push(SequencerConnectionData {
+            sequencer_addr: addr_to_url(UrlProtocol::Http, *addr)
                 .context("Failed to convert sequencer addr to URL")?,
             basic_auth: None,
-        }],
+        });
+    }
+
+    Ok(WalletConfig {
+        sequencers,
         seq_poll_timeout: Duration::from_secs(30),
         seq_tx_poll_max_blocks: 15,
         seq_poll_max_retries: 10,
@@ -263,6 +303,62 @@ pub fn bedrock_channel_id() -> ChannelId {
 pub fn bedrock_channel_id_b() -> ChannelId {
     let channel_id: [u8; 32] = [0_u8, 2]
         .repeat(16)
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+    ChannelId::from(channel_id)
+}
+
+/// Generate sequencer signing key from `u32` number via repeating le bytes 8 times.
+#[must_use]
+pub fn sequencer_signing_key_from_seed(seed: u32) -> [u8; 32] {
+    seed.to_le_bytes()
+        .repeat(8)
+        .try_into()
+        .unwrap_or_else(|_| unreachable!())
+}
+
+/// Seed of the account owning sequencer `index`'s founding stake.
+fn founding_stake_owner_seed(index: usize) -> [u8; 32] {
+    if index == 0 {
+        return SEQUENCER_STAKE_KEY;
+    }
+    let mut seed = [0x70; 32];
+    seed[0] = u8::try_from(index).expect("Test contexts never run enough sequencers to overflow");
+    seed
+}
+
+/// Genesis entries staking every sequencer in `sequencer_signing_keys`, so the
+/// creator opens the channel already accrediting all of them.
+pub fn genesis_sequencer_stakes(sequencer_signing_keys: &[[u8; 32]]) -> Result<Vec<GenesisAction>> {
+    sequencer_signing_keys
+        .iter()
+        .enumerate()
+        .map(|(index, signing_key)| {
+            let public_key = Ed25519Key::from_bytes(signing_key).public_key();
+            let sequencer_key = SequencerKey::new(public_key.to_bytes())
+                .context("Sequencer signing key is not a valid Ed25519 point")?;
+            let owner = PrivateKey::try_new(founding_stake_owner_seed(index))
+                .context("Failed to build the founding stake ownership key")?;
+            Ok(GenesisAction::StakeSequencer {
+                sequencer_key,
+                ownership_public_key: PublicKey::new_from_private_key(&owner),
+                stake_signature: sign_genesis_stake(index, sequencer_key, &owner),
+            })
+        })
+        .collect()
+}
+
+/// Generate bedrock channel id from `u32` number via repeating le bytes 8 times.
+///
+/// Counting from the end of `u32` to guarantee, that it is different from
+/// `sequencer_signing_key_from_seed`.
+#[must_use]
+pub fn bedrock_channel_id_from_seed(seed: u32) -> ChannelId {
+    let channel_id: [u8; 32] =
+    // Useless in this case, but will make clippy happy
+    u32::MAX.saturating_sub(seed)
+        .to_le_bytes()
+        .repeat(8)
         .try_into()
         .unwrap_or_else(|_| unreachable!());
     ChannelId::from(channel_id)

@@ -12,7 +12,6 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, get_account, public_mention,
     send, wait_for_indexer_to_catch_up,
 };
-use log::info;
 use wallet::{
     account::Label,
     cli::{CliAccountMention, Command},
@@ -47,7 +46,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
@@ -56,7 +55,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
     assert_eq!(acc_1_balance, 9900);
     assert_eq!(acc_2_balance, 20100);
 
-    info!("Waiting for indexer to parse blocks");
+    log::info!("Waiting for indexer to parse blocks");
     wait_for_indexer_to_catch_up(&ctx).await?;
 
     let acc1_ind_state = ctx
@@ -68,7 +67,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
 
     assert_eq!(acc1_ind_state, acc1_seq_state.into());
 
-    info!("Indexer state is consistent after label-based transfer");
+    log::info!("Indexer state is consistent after label-based transfer");
 
     Ok(())
 }

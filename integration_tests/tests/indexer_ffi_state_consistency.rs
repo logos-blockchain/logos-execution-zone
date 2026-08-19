@@ -14,7 +14,6 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::AccountId;
-use log::info;
 use wallet::cli::{Command, programs::native_token_transfer::AuthTransferSubcommand};
 
 #[path = "indexer_ffi_helpers/mod.rs"]
@@ -36,10 +35,10 @@ fn indexer_ffi_state_consistency() -> Result<()> {
 
     ctx.block_on_mut(|ctx| wallet::cli::execute_subcommand(ctx.wallet_mut(), command))?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
-    info!("Checking correct balance move");
+    log::info!("Checking correct balance move");
     let acc_1_balance = ctx.block_on(|ctx| {
         sequencer_service_rpc::RpcClient::get_account_balance(
             ctx.sequencer_client(),
@@ -53,8 +52,8 @@ fn indexer_ffi_state_consistency() -> Result<()> {
         )
     })?;
 
-    info!("Balance of sender: {acc_1_balance:#?}");
-    info!("Balance of receiver: {acc_2_balance:#?}");
+    log::info!("Balance of sender: {acc_1_balance:#?}");
+    log::info!("Balance of receiver: {acc_2_balance:#?}");
 
     assert_eq!(acc_1_balance, 9900);
     assert_eq!(acc_2_balance, 20100);
@@ -74,7 +73,7 @@ fn indexer_ffi_state_consistency() -> Result<()> {
 
     ctx.block_on_mut(|ctx| wallet::cli::execute_subcommand(ctx.wallet_mut(), command))?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let new_commitment1 = ctx
@@ -95,10 +94,10 @@ fn indexer_ffi_state_consistency() -> Result<()> {
         ctx.block_on(|ctx| verify_commitment_is_in_state(new_commitment2, ctx.sequencer_client()));
     assert!(commitment_check2);
 
-    info!("Successfully transferred privately to owned account");
+    log::info!("Successfully transferred privately to owned account");
 
     // WAIT
-    info!("Waiting for indexer to parse blocks");
+    log::info!("Waiting for indexer to parse blocks");
     std::thread::sleep(L2_TO_L1_TIMEOUT);
 
     let acc1_ind_state_ffi = unsafe {
@@ -125,7 +124,7 @@ fn indexer_ffi_state_consistency() -> Result<()> {
     let acc2_ind_state_pre = unsafe { &*acc2_ind_state_ffi.value };
     let acc2_ind_state: Account = acc2_ind_state_pre.into();
 
-    info!("Checking correct state transition");
+    log::info!("Checking correct state transition");
     let acc1_seq_state = ctx.block_on(|ctx| {
         sequencer_service_rpc::RpcClient::get_account(
             ctx.sequencer_client(),

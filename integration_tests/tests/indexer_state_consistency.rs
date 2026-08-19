@@ -13,7 +13,6 @@ use integration_tests::{
     wait_for_indexer_to_catch_up,
 };
 use lee::AccountId;
-use log::info;
 
 #[tokio::test]
 async fn indexer_state_consistency() -> Result<()> {
@@ -25,15 +24,15 @@ async fn indexer_state_consistency() -> Result<()> {
     );
     send(&mut ctx, public_mention(acc0), public_mention(acc1), 100).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    info!("Checking correct balance move");
+    log::info!("Checking correct balance move");
     let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
     let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
 
-    info!("Balance of sender: {acc_1_balance:#?}");
-    info!("Balance of receiver: {acc_2_balance:#?}");
+    log::info!("Balance of sender: {acc_1_balance:#?}");
+    log::info!("Balance of receiver: {acc_2_balance:#?}");
 
     assert_eq!(acc_1_balance, 9900);
     assert_eq!(acc_2_balance, 20100);
@@ -43,15 +42,15 @@ async fn indexer_state_consistency() -> Result<()> {
 
     send(&mut ctx, private_mention(from), private_mention(to), 100).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     assert_private_commitment_in_state(&ctx, from, "sender").await?;
     assert_private_commitment_in_state(&ctx, to, "receiver").await?;
 
-    info!("Successfully transferred privately to owned account");
+    log::info!("Successfully transferred privately to owned account");
 
-    info!("Waiting for indexer to parse blocks");
+    log::info!("Waiting for indexer to parse blocks");
     wait_for_indexer_to_catch_up(&ctx).await?;
 
     let acc1_ind_state = ctx
@@ -65,7 +64,7 @@ async fn indexer_state_consistency() -> Result<()> {
         .await
         .unwrap();
 
-    info!("Checking correct state transition");
+    log::info!("Checking correct state transition");
     let acc1_seq_state = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
     let acc2_seq_state = get_account(&ctx, ctx.existing_public_accounts()[1]).await?;
 

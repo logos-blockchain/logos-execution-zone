@@ -7,9 +7,9 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    BlockId, Commitment, DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier,
-    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, Timestamp,
-    WitnessKind,
+    AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
+    InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
+    PrivateWitness, Timestamp, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
@@ -45,36 +45,36 @@ impl V03State {
     /// Include test programs in the builtin programs map.
     #[must_use]
     pub fn with_test_programs(mut self) -> Self {
-        self.insert_program(crate::test_methods::simple_balance_transfer());
-        self.insert_program(crate::test_methods::nonce_changer());
-        self.insert_program(crate::test_methods::extra_output());
-        self.insert_program(crate::test_methods::missing_output());
-        self.insert_program(crate::test_methods::dropped_account());
-        self.insert_program(crate::test_methods::program_owner_changer());
-        self.insert_program(crate::test_methods::data_changer());
-        self.insert_program(crate::test_methods::minter());
-        self.insert_program(crate::test_methods::burner());
-        self.insert_program(crate::test_methods::auth_asserting_noop());
-        self.insert_program(crate::test_methods::private_pda_delegator());
-        self.insert_program(crate::test_methods::pda_claimer());
-        self.insert_program(crate::test_methods::two_pda_claimer());
-        self.insert_program(crate::test_methods::noop());
-        self.insert_program(crate::test_methods::chain_caller());
-        self.insert_program(crate::test_methods::modified_transfer_program());
-        self.insert_program(crate::test_methods::malicious_authorization_changer());
-        self.insert_program(crate::test_methods::validity_window());
-        self.insert_program(crate::test_methods::flash_swap_initiator());
-        self.insert_program(crate::test_methods::flash_swap_callback());
-        self.insert_program(crate::test_methods::malicious_self_program_id());
-        self.insert_program(crate::test_methods::malicious_caller_program_id());
-        self.insert_program(crate::test_methods::pda_spend_proxy());
-        self.insert_program(crate::test_methods::claimer());
-        self.insert_program(crate::test_methods::changer_claimer());
-        self.insert_program(crate::test_methods::validity_window_chain_caller());
-        self.insert_program(crate::test_methods::simple_transfer_proxy());
-        self.insert_program(crate::test_methods::malicious_injector());
-        self.insert_program(crate::test_methods::malicious_launderer());
-        self.insert_program(crate::test_methods::modified_transfer_program());
+        self.insert_program(&crate::test_methods::simple_balance_transfer());
+        self.insert_program(&crate::test_methods::nonce_changer());
+        self.insert_program(&crate::test_methods::extra_output());
+        self.insert_program(&crate::test_methods::missing_output());
+        self.insert_program(&crate::test_methods::dropped_account());
+        self.insert_program(&crate::test_methods::program_owner_changer());
+        self.insert_program(&crate::test_methods::data_changer());
+        self.insert_program(&crate::test_methods::minter());
+        self.insert_program(&crate::test_methods::burner());
+        self.insert_program(&crate::test_methods::auth_asserting_noop());
+        self.insert_program(&crate::test_methods::private_pda_delegator());
+        self.insert_program(&crate::test_methods::pda_claimer());
+        self.insert_program(&crate::test_methods::two_pda_claimer());
+        self.insert_program(&crate::test_methods::noop());
+        self.insert_program(&crate::test_methods::chain_caller());
+        self.insert_program(&crate::test_methods::modified_transfer_program());
+        self.insert_program(&crate::test_methods::malicious_authorization_changer());
+        self.insert_program(&crate::test_methods::validity_window());
+        self.insert_program(&crate::test_methods::flash_swap_initiator());
+        self.insert_program(&crate::test_methods::flash_swap_callback());
+        self.insert_program(&crate::test_methods::malicious_self_program_id());
+        self.insert_program(&crate::test_methods::malicious_caller_program_id());
+        self.insert_program(&crate::test_methods::pda_spend_proxy());
+        self.insert_program(&crate::test_methods::claimer());
+        self.insert_program(&crate::test_methods::changer_claimer());
+        self.insert_program(&crate::test_methods::validity_window_chain_caller());
+        self.insert_program(&crate::test_methods::simple_transfer_proxy());
+        self.insert_program(&crate::test_methods::malicious_injector());
+        self.insert_program(&crate::test_methods::malicious_launderer());
+        self.insert_program(&crate::test_methods::modified_transfer_program());
         self
     }
 
@@ -110,7 +110,7 @@ impl V03State {
     #[must_use]
     pub fn with_account_owned_by_burner_program(mut self) -> Self {
         let account = Account {
-            program_owner: crate::test_methods::burner().id(),
+            program_owner: crate::test_methods::burner().id().into(),
             balance: 100,
             ..Default::default()
         };
@@ -138,14 +138,18 @@ impl TestPublicKeys {
 }
 
 pub struct TestPrivateKeys {
-    pub nsk: NullifierSecretKey,
+    pub ask: AuthorizationSecretKey,
     pub d: [u8; 32],
     pub z: [u8; 32],
 }
 
 impl TestPrivateKeys {
+    pub fn nsk(&self) -> NullifierSecretKey {
+        (&self.ask).into()
+    }
+
     pub fn npk(&self) -> NullifierPublicKey {
-        NullifierPublicKey::from(&self.nsk)
+        NullifierPublicKey::from(&self.nsk())
     }
 
     pub fn vpk(&self) -> ViewingPublicKey {
@@ -183,7 +187,7 @@ fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<Acc
             (
                 account_id,
                 Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id(),
+                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
                     balance,
                     ..Account::default()
                 },
@@ -241,7 +245,7 @@ fn test_public_account_keys_2() -> TestPublicKeys {
 
 pub fn test_private_account_keys_1() -> TestPrivateKeys {
     TestPrivateKeys {
-        nsk: [13; 32],
+        ask: AuthorizationSecretKey([13; 32]),
         d: [31; 32],
         z: [32; 32],
     }
@@ -249,10 +253,28 @@ pub fn test_private_account_keys_1() -> TestPrivateKeys {
 
 pub fn test_private_account_keys_2() -> TestPrivateKeys {
     TestPrivateKeys {
-        nsk: [38; 32],
+        ask: AuthorizationSecretKey([38; 32]),
         d: [83; 32],
         z: [84; 32],
     }
+}
+
+/// Init-lifecycle private-PDA witness for `keys`, the shape every PDA circuit test starts from.
+pub fn init_pda_witness(
+    keys: &TestPrivateKeys,
+    identifier: Identifier,
+    binding: Option<(ProgramId, PdaSeed)>,
+) -> InputAccountIdentity {
+    InputAccountIdentity::Private(PrivateWitness {
+        vpk: keys.vpk(),
+        random_seed: [0; 32],
+        identifier,
+        kind: WitnessKind::Pda { binding },
+        nullifier: NullifierWitness::Init {
+            npk: keys.npk(),
+            commitment_root: DUMMY_COMMITMENT_HASH,
+        },
+    })
 }
 
 fn shielded_balance_transfer_for_tests(
@@ -284,7 +306,9 @@ fn shielded_balance_transfer_for_tests(
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -331,10 +355,12 @@ fn private_balance_transfer_for_tests(
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender's commitment must be in state"),
@@ -344,7 +370,9 @@ fn private_balance_transfer_for_tests(
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -392,10 +420,12 @@ fn deshielded_balance_transfer_for_tests(
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender's commitment must be in state"),
@@ -417,7 +447,7 @@ fn deshielded_balance_transfer_for_tests(
 fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransaction) {
     let sender_keys = test_private_account_keys_1();
     let sender_private_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id(),
+        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
         balance: 100,
         nonce: Nonce(0xdead_beef),
         ..Account::default()

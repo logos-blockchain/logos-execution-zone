@@ -2,7 +2,8 @@ use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountWithMetadata},
     program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramInput, ProgramOutput,
+        read_lee_inputs,
     },
 };
 use wrapped_token_core::{
@@ -170,7 +171,7 @@ fn renounce_authority(
     // account untouched; an unowned account with history is refused for good.
     assert!(
         authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_ID,
+            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
         "the authority account must be untouched before its first use as one"
     );
     assert!(
@@ -242,7 +243,7 @@ fn update_sources(
     // account untouched; an unowned account with history is refused for good.
     assert!(
         authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_ID,
+            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
         "the authority account must be untouched before its first use as one"
     );
     assert!(
@@ -302,7 +303,8 @@ fn init_config(
     // rewriting its own config data on a later call.
     if config.account != Account::default() {
         assert_eq!(
-            config.account.program_owner, self_program_id,
+            config.account.program_owner,
+            self_program_id.into(),
             "wrapped-token config PDA is owned by another program"
         );
         assert_eq!(

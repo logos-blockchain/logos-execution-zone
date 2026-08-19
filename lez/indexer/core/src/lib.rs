@@ -7,7 +7,7 @@ use chain_state::{Anchor, ChainConsistency};
 use common::block::Block;
 // TODO: Remove after testnet
 use futures::StreamExt as _;
-use log::{error, info, warn};
+use log::{error, warn};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
@@ -270,9 +270,9 @@ impl IndexerCore {
             let mut retry_gate = ApplyRetryGate::new();
 
             if let Some(slot) = &cursor {
-                info!("Resuming indexer from cursor {slot:?}");
+                log::info!("Resuming indexer from cursor {slot:?}");
             } else {
-                info!("Starting indexer from beginning of channel");
+                log::info!("Starting indexer from beginning of channel");
             }
 
             loop {
@@ -372,12 +372,12 @@ impl IndexerCore {
                                 verifier.record_seen(verified_keys).await;
                             }
                             retry_gate.reset();
-                            info!("Indexed L2 block {}", block.header.block_id);
+                            log::info!("Indexed L2 block {} at channel {}", block.header.block_id, self.config.channel_id);
                             self.set_status(IndexerSyncStatus::syncing());
                             yield Ok(block);
                         }
                         Ok(AcceptOutcome::AlreadyApplied) => {
-                            info!(
+                            log::info!(
                                 "Skipping already-applied block {}",
                                 block.header.block_id
                             );

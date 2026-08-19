@@ -8,7 +8,6 @@ use common::{
 };
 use lee::V03State;
 use lee_core::BlockId;
-use log::info;
 use logos_blockchain_zone_sdk::{Slot, sequencer::SequencerCheckpoint};
 use storage::sequencer::{
     RocksDBIO,
@@ -75,7 +74,7 @@ impl SequencerStore {
         let mut tx_hash_to_block_map = HashMap::new();
 
         if let Some(last_id) = last_id {
-            info!("Preparing block cache");
+            log::info!("Preparing block cache");
             for i in genesis_id..=last_id {
                 let block = dbio
                     .get_block(i)?
@@ -83,7 +82,7 @@ impl SequencerStore {
 
                 tx_hash_to_block_map.extend(block_to_transactions_map(&block));
             }
-            info!(
+            log::info!(
                 "Block cache prepared. Total blocks in cache: {}",
                 tx_hash_to_block_map.len()
             );

@@ -1,50 +1,45 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
+use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use jsonrpsee::{
     core::async_trait,
     types::{ErrorCode, ErrorObjectOwned},
 };
-use lee;
+use kameo::actor::ActorRef;
 use log::{error, warn};
-use mempool::MemPoolHandle;
-use sequencer_core::{
-    DbError, SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
-};
+use sequencer_core::{block_publisher::BlockPublisherTrait, gossip::GossipTxPublisher};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, HashType, MembershipProof, Nonce, ProgramId,
 };
-use tokio::sync::Mutex;
 
-const NOT_FOUND_ERROR_CODE: i32 = -31999;
-
-pub struct SequencerService<BC: BlockPublisherTrait> {
-    sequencer: Arc<Mutex<SequencerCore<BC>>>,
-    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-    max_block_size: u64,
+pub struct Service<BP: BlockPublisherTrait + Send + 'static> {
+    executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
+    max_block_size: ByteSize,
+    gossip_tx_publisher: Option<GossipTxPublisher>,
 }
 
-impl<BC: BlockPublisherTrait> SequencerService<BC> {
-    pub const fn new(
-        sequencer: Arc<Mutex<SequencerCore<BC>>>,
-        mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-        max_block_size: u64,
+impl<BP: BlockPublisherTrait + Send + 'static> Service<BP> {
+    pub fn new(
+        executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
+        max_block_size: ByteSize,
+        gossip_tx_publisher: Option<GossipTxPublisher>,
     ) -> Self {
+        sequencer_rpc_server_actor_metrics::init();
+
         Self {
-            sequencer,
-            mempool_handle,
+            executor_ref,
             max_block_size,
+            gossip_tx_publisher,
         }
     }
 }
 
 #[async_trait]
-impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::RpcServer
-    for SequencerService<BC>
-{
+impl<BP: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer for Service<BP> {
     async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, ErrorObjectOwned> {
-        sequencer_service_metrics::increment_submitted_transactions_total();
+        sequencer_rpc_server_actor_metrics::increment_submitted_transactions_total();
 
         let tx_hash = tx.hash();
 
@@ -57,7 +52,10 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             let tx_size =
                 u64::try_from(encoded_tx.len()).expect("Transaction size should fit in u64");
 
-            let max_tx_size = self.max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
+            let max_tx_size = self
+                .max_block_size
+                .as_u64()
+                .saturating_sub(BLOCK_HEADER_OVERHEAD);
 
             if tx_size > max_tx_size {
                 return Err(ErrorObjectOwned::owned(
@@ -97,14 +95,23 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         };
 
         let authenticated_tx = res.await.inspect_err(|err| {
-            sequencer_service_metrics::increment_before_mempool_failed_transactions_total();
+            sequencer_rpc_server_actor_metrics::increment_before_mempool_failed_transactions_total(
+            );
             error!("Transaction failed before reaching mempool: {err:#?}");
         })?;
 
-        self.mempool_handle
-            .push((TransactionOrigin::User, authenticated_tx))
+        // Publish to the gossip mesh before the local mempool admission so a
+        // full mempool doesn't delay propagation.
+        if let Some(publisher) = &self.gossip_tx_publisher {
+            publisher.publish(authenticated_tx.clone());
+        }
+
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::Transaction {
+                transaction: authenticated_tx,
+            })
             .await
-            .expect("Mempool is closed, this is a bug");
+            .map_err(internal_error)?;
 
         Ok(tx_hash)
     }
@@ -114,11 +121,10 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
     }
 
     async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {
-        let sequencer = self.sequencer.lock().await;
-        sequencer
-            .block_store()
-            .get_block_at_id(block_id)
-            .map_err(|err| internal_error(&err))
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetBlock { block_id })
+            .await
+            .map_err(internal_error)
     }
 
     async fn get_block_range(
@@ -126,74 +132,64 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         start_block_id: BlockId,
         end_block_id: BlockId,
     ) -> Result<Vec<Block>, ErrorObjectOwned> {
-        let sequencer = self.sequencer.lock().await;
-        (start_block_id..=end_block_id)
-            .map(|block_id| {
-                let block = sequencer
-                    .block_store()
-                    .get_block_at_id(block_id)
-                    .map_err(|err| internal_error(&err))?;
-                block.ok_or_else(|| {
-                    ErrorObjectOwned::owned(
-                        NOT_FOUND_ERROR_CODE,
-                        format!("Block with id {block_id} not found"),
-                        None::<()>,
-                    )
-                })
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetBlockRange {
+                range: (start_block_id..=end_block_id),
             })
-            .collect::<Result<Vec<_>, _>>()
+            .await
+            .map_err(internal_error)
     }
 
     async fn get_last_block_id(&self) -> Result<BlockId, ErrorObjectOwned> {
-        let sequencer = self.sequencer.lock().await;
-        Ok(sequencer.chain_height())
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetLastBlockId)
+            .await
+            .map_err(internal_error)
     }
 
     async fn get_account_balance(&self, account_id: AccountId) -> Result<u128, ErrorObjectOwned> {
-        let sequencer = self.sequencer.lock().await;
-        let balance = sequencer.with_state(|state| state.get_account_by_id(account_id).balance);
-        Ok(balance)
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetAccountBalance { account_id })
+            .await
+            .map_err(internal_error)
     }
 
     async fn get_transaction(
         &self,
         tx_hash: HashType,
     ) -> Result<Option<(LeeTransaction, BlockId)>, ErrorObjectOwned> {
-        let sequencer = self.sequencer.lock().await;
-        Ok(sequencer.block_store().get_transaction_by_hash(tx_hash))
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetTransaction { tx_hash })
+            .await
+            .map_err(internal_error)
     }
 
     async fn get_accounts_nonces(
         &self,
         account_ids: Vec<AccountId>,
     ) -> Result<Vec<Nonce>, ErrorObjectOwned> {
-        let sequencer = self.sequencer.lock().await;
-        let nonces = sequencer.with_state(|state| {
-            account_ids
-                .into_iter()
-                .map(|account_id| state.get_account_by_id(account_id).nonce)
-                .collect()
-        });
-        Ok(nonces)
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetAccountNonces { account_ids })
+            .await
+            .map_err(internal_error)
     }
 
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
     ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest), ErrorObjectOwned> {
-        let sequencer = self.sequencer.lock().await;
-        Ok(sequencer.with_state(|state| {
-            let proofs = commitments
-                .iter()
-                .map(|commitment| state.get_proof_for_commitment(commitment))
-                .collect();
-            (proofs, state.commitment_root())
-        }))
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetProofsAndRoot { commitments })
+            .await
+            .map_err(internal_error)
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {
-        let sequencer = self.sequencer.lock().await;
-        Ok(sequencer.with_state(|state| state.get_account_by_id(account_id)))
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetAccount { account_id })
+            .await
+            .map(|reply| reply.account)
+            .map_err(internal_error)
     }
 
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned> {
@@ -214,23 +210,28 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
     }
 
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned> {
-        let channel_id = self.sequencer.lock().await.block_publisher().channel_id();
-        Ok(ChannelId(*channel_id.as_ref()))
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetChannelId)
+            .await
+            .map(|reply| ChannelId(reply.channel_id))
+            .map_err(internal_error)
     }
 
     async fn get_cross_zone_dead_letters(
         &self,
     ) -> Result<CrossZoneDeadLetterReport, ErrorObjectOwned> {
-        let (total_retired, records) = self
-            .sequencer
-            .lock()
+        let sequencer_executor_actor::protocol::GetCrossZoneDeadLettersReply {
+            total_retired,
+            retained,
+        } = self
+            .executor_ref
+            .ask(sequencer_executor_actor::protocol::GetCrossZoneDeadLetters)
             .await
-            .cross_zone_dead_letters()
-            .map_err(|err| internal_error(&err))?;
+            .map_err(internal_error)?;
 
         Ok(CrossZoneDeadLetterReport {
             total_retired,
-            retained: records
+            retained: retained
                 .into_iter()
                 .map(|record| CrossZoneDeadLetter {
                     message_key: HashType(record.message_key),
@@ -245,6 +246,6 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
     }
 }
 
-fn internal_error(err: &DbError) -> ErrorObjectOwned {
+fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
 }

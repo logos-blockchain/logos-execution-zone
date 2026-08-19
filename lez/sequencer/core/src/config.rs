@@ -11,7 +11,7 @@ use bytesize::ByteSize;
 use common::config::BasicAuth;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
-use lee::{AccountId, Balance};
+use lee::{AccountId, Balance, PublicKey, Signature};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
@@ -33,12 +33,31 @@ pub enum GenesisAction {
         holder: AccountId,
         amount: Balance,
     },
+    /// Stakes `sequencer_key` at genesis.
+    StakeSequencer {
+        sequencer_key: sequencer_stake_core::SequencerKey,
+        ownership_public_key: PublicKey,
+        stake_signature: Signature,
+    },
+}
+
+/// Sequencer p2p gossip configuration. Absent (`None`) disables gossip
+/// entirely: no sockets, no background tasks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GossipConfig {
+    /// Multiaddr to listen on.
+    #[serde(default = "default_gossip_listen_addr")]
+    pub listen_addr: libp2p::Multiaddr,
+    /// Peer multiaddrs to dial at startup, optionally with `/p2p/<peer_id>`.
+    #[serde(default)]
+    pub bootstrap_peers: Vec<libp2p::Multiaddr>,
 }
 
 // TODO: Provide default values
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConfig {
-    /// Home dir of sequencer storage.
+    /// Home dir of sequencer storage. Holds `bedrock_signing_key`, and
+    /// `sequencer_stake_signing_key` when a solo sequencer creates the channel.
     pub home: PathBuf,
     /// Maximum number of user transactions in a block (excludes the mandatory clock transaction).
     pub max_num_tx_in_block: usize,
@@ -67,9 +86,12 @@ pub struct SequencerConfig {
     /// Address the Prometheus metrics exporter binds to.
     #[serde(default = "default_metrics_address")]
     pub metrics_address: Option<SocketAddr>,
+    /// Sequencer p2p gossip configuration. `None` disables gossip.
+    #[serde(default)]
+    pub gossip: Option<GossipConfig>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BedrockConfig {
     /// Bedrock channel ID.
     pub channel_id: ChannelId,
@@ -93,10 +115,26 @@ impl SequencerConfig {
 
         Ok(serde_json::from_reader(reader)?)
     }
+
+    /// Where this sequencer's database lives, suffixed with the channel id like
+    /// the indexer's, so several sequencers can share a home directory. Only the
+    /// database is per-channel; `bedrock_signing_key` stays unsuffixed, so
+    /// sequencers sharing a home share one Bedrock identity.
+    #[must_use]
+    pub fn db_path(&self) -> PathBuf {
+        self.home
+            .join(format!("rocksdb-{}", self.bedrock_config.channel_id))
+    }
 }
 
 const fn default_max_block_size() -> ByteSize {
     ByteSize::mib(1)
+}
+
+fn default_gossip_listen_addr() -> libp2p::Multiaddr {
+    "/ip4/0.0.0.0/udp/0/quic-v1"
+        .parse()
+        .expect("hardcoded default gossip listen addr is a valid multiaddr")
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "Required by serde")]
@@ -104,7 +142,9 @@ const fn default_metrics_address() -> Option<SocketAddr> {
     Some(SequencerConfig::DEFAULT_METRICS_ADDRESS)
 }
 
+/// Extra fee added to every funded Bedrock transaction, covering a gas price
+/// rise before it is mined.
 #[must_use]
 pub const fn default_priority_fee() -> u64 {
-    logos_blockchain_zone_sdk::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE
+    10_000
 }

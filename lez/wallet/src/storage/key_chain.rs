@@ -365,7 +365,7 @@ impl UserKeyChain {
                 &found.key_chain.viewing_public_key,
                 found.kind,
             );
-            let nsk = found.key_chain.private_key_holder.nullifier_secret_key;
+            let nsk = found.key_chain.private_key_holder.nullifier_secret_key();
             index.track(account_id, found.account, &nsk);
         }
 
@@ -374,7 +374,7 @@ impl UserKeyChain {
             let Some(keys) = self.derive_shared_account_keys(entry) else {
                 continue;
             };
-            let nsk = keys.nullifier_secret_key;
+            let nsk = keys.nullifier_secret_key();
             index.track(account_id, &entry.account, &nsk);
         }
 
@@ -426,14 +426,14 @@ impl UserKeyChain {
                 &keys.viewing_secret_key.d,
                 &keys.viewing_secret_key.z,
             )?;
-            (keys.nullifier_secret_key, secret, true)
+            (keys.nullifier_secret_key(), secret, true)
         } else {
             let found = self.private_account(account_id)?;
             let secret = found
                 .key_chain
                 .calculate_shared_secret_receiver(&encrypted.epk)?;
             (
-                found.key_chain.private_key_holder.nullifier_secret_key,
+                found.key_chain.private_key_holder.nullifier_secret_key(),
                 secret,
                 false,
             )
@@ -459,14 +459,14 @@ impl UserKeyChain {
             return Some(NullifierIndex::next_update_nullifier(
                 account_id,
                 &entry.account,
-                &keys.nullifier_secret_key,
+                &keys.nullifier_secret_key(),
             ));
         }
         let acc = self.private_account(account_id)?;
         Some(NullifierIndex::next_update_nullifier(
             account_id,
             acc.account,
-            &acc.key_chain.private_key_holder.nullifier_secret_key,
+            &acc.key_chain.private_key_holder.nullifier_secret_key(),
         ))
     }
 
@@ -898,7 +898,7 @@ mod tests {
         let mut kc = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let nsk = key_chain.private_key_holder.nullifier_secret_key;
+        let nsk = key_chain.private_key_holder.nullifier_secret_key();
         let identifier = 0;
         let account_id = AccountId::for_private_account(
             &key_chain.nullifier_public_key,
@@ -966,7 +966,7 @@ mod tests {
         let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let nsk = keys.nullifier_secret_key;
+        let nsk = keys.nullifier_secret_key();
         let account_id = AccountId::from((&npk, &vpk, identifier));
 
         kc.insert_group_key_holder(label.clone(), holder);
@@ -1036,7 +1036,7 @@ mod tests {
         let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let nsk = keys.nullifier_secret_key;
+        let nsk = keys.nullifier_secret_key();
         let account_id = AccountId::from((&npk, &vpk, identifier));
 
         kc.insert_group_key_holder(label.clone(), holder);
