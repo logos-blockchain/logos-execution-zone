@@ -534,7 +534,8 @@ fn decode_send_ordinal(instruction_data: &[u8]) -> Option<u32> {
 
 /// Decodes a `ping_receiver::Record` payload (borsh bytes) to text.
 fn decode_payload(payload: &[u8]) -> Option<String> {
-    let instruction: ReceiverInstruction = borsh::from_slice::<ReceiverInstruction>(payload).ok()?;
+    let instruction: ReceiverInstruction =
+        borsh::from_slice::<ReceiverInstruction>(payload).ok()?;
     let ReceiverInstruction::Record { payload: bytes } = instruction else {
         return None;
     };

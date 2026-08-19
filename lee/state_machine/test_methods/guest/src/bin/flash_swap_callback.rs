@@ -61,8 +61,8 @@ fn main() {
         // Mark the receiver as authorized since it will be PDA-authorized in this chained call.
         let mut receiver_authorized = receiver_pre.clone();
         receiver_authorized.is_authorized = true;
-        let transfer_instruction = borsh::to_vec(&instruction.amount)
-            .expect("transfer instruction serialization");
+        let transfer_instruction =
+            borsh::to_vec(&instruction.amount).expect("transfer instruction serialization");
 
         chained_calls.push(ChainedCall {
             program_id: instruction.token_program_id,

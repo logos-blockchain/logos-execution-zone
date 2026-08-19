@@ -1,10 +1,10 @@
+use borsh::to_vec;
 use lee_core::{
     Timestamp,
     program::{
         AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
-use borsh::to_vec;
 
 type Instruction = (ProgramId, Timestamp); // (clock_program_id, timestamp)
 

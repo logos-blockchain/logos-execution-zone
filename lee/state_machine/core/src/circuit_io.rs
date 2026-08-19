@@ -270,9 +270,10 @@ mod tests {
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         };
         let bytes = output.to_bytes();
-        let decoded: PrivacyPreservingCircuitOutput =
-            borsh::from_slice(crate::from_frame(&bytes).expect("self-produced frame is well-formed"))
-                .unwrap();
+        let decoded: PrivacyPreservingCircuitOutput = borsh::from_slice(
+            crate::from_frame(&bytes).expect("self-produced frame is well-formed"),
+        )
+        .unwrap();
         assert_eq!(output, decoded);
     }
 }

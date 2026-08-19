@@ -117,14 +117,13 @@ pub fn execute_and_prove_with_padded_inputs(
             &chained_call.instruction_data,
         )?;
 
-        let program_output: ProgramOutput = borsh::from_slice(
-            from_frame(&inner_receipt.journal.bytes).ok_or_else(|| {
+        let program_output: ProgramOutput =
+            borsh::from_slice(from_frame(&inner_receipt.journal.bytes).ok_or_else(|| {
                 LeeError::ProgramOutputDeserializationError(
                     "malformed inner-receipt journal frame".to_owned(),
                 )
-            })?,
-        )
-        .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+            })?)
+            .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
 
         // TODO: remove clone
         program_outputs.push(program_output.clone());

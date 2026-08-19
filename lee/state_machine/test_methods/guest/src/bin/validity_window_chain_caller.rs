@@ -1,8 +1,8 @@
+use borsh::to_vec;
 use lee_core::program::{
     AccountPostState, BlockValidityWindow, ChainedCall, ProgramId, ProgramInput, ProgramOutput,
     TimestampValidityWindow, read_lee_inputs,
 };
-use borsh::to_vec;
 
 /// A program that sets a block validity window on its output and chains to another program with a
 /// potentially different block validity window.

@@ -22,8 +22,7 @@ fn main() {
     // chained_call.pre_states (this call's inputs, set by P1), which contains
     // victim(is_authorized=true). So authorized_accounts = {victim}, and the
     // subsequent check passes.
-    let auth_transfer_instruction =
-        borsh::to_vec(&amount).expect("serialization is infallible");
+    let auth_transfer_instruction = borsh::to_vec(&amount).expect("serialization is infallible");
 
     ProgramOutput::new(
         self_program_id,

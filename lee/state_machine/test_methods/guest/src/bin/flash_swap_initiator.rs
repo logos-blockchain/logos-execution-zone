@@ -146,10 +146,8 @@ fn main() {
             // min_vault_balance and this call will panic, rolling back the entire
             // transaction.
             let invariant_instruction =
-                borsh::to_vec(&FlashSwapInstruction::InvariantCheck {
-                    min_vault_balance,
-                })
-                .expect("invariant instruction serialization");
+                borsh::to_vec(&FlashSwapInstruction::InvariantCheck { min_vault_balance })
+                    .expect("invariant instruction serialization");
             let call_3 = ChainedCall {
                 program_id: self_program_id, // self-referential chained call
                 pre_states: vec![vault_after_callback],

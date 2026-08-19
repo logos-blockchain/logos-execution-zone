@@ -802,9 +802,7 @@ impl CrossZoneVerifier {
         if public_tx.message().program_id != programs::cross_zone_inbox().id() {
             return None;
         }
-        match borsh::from_slice::<InboxInstruction>(
-            &public_tx.message().instruction_data,
-        ) {
+        match borsh::from_slice::<InboxInstruction>(&public_tx.message().instruction_data) {
             Ok(InboxInstruction::Dispatch(msg)) => Some(msg),
             // Only a dispatch carries a cross-zone message to re-derive; a genesis
             // `InitConfig` is not verifier-relevant.

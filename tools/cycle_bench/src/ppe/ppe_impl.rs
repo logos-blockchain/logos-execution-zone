@@ -5,6 +5,7 @@
 
 use std::{collections::HashMap, time::Instant};
 
+use borsh::to_vec;
 use lee::{
     execute_and_prove,
     privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof},
@@ -13,7 +14,6 @@ use lee_core::{
     InputAccountIdentity, PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, AccountWithMetadata},
 };
-use borsh::to_vec;
 
 use super::PpeBenchResult;
 
