@@ -139,7 +139,7 @@ impl SimpleWritableCell for LastFinalizedBlockIdCell {
     }
 }
 
-/// The highest block id ever inscribed on the channel by this sequencer.
+/// The highest block id this sequencer must not inscribe on the channel again.
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
 pub struct PublishedHighWaterCell(pub u64);
 

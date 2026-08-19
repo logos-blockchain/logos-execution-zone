@@ -158,6 +158,7 @@ async fn replaced_block_leaves_no_stale_index_entries() {
             consumed_withdrawals: vec![],
             new_withdraw_intents: vec![],
             zone_anchor: None,
+            lower_published_high_water: None,
         })
         .await
         .expect("Failed to apply the update");

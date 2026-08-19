@@ -176,6 +176,9 @@ pub struct ApplyStoreUpdate {
 
     /// Advance the channel-read anchor.
     pub zone_anchor: Option<ZoneAnchorRecord>,
+
+    /// Lower the published high water mark to this height if it is above.
+    pub lower_published_high_water: Option<BlockId>,
 }
 
 /// Zone id of a cross-zone peer.

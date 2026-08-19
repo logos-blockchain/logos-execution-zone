@@ -451,6 +451,7 @@ impl Message<ApplyStoreUpdate> for StorageActor {
             consumed_withdrawals,
             new_withdraw_intents,
             zone_anchor,
+            lower_published_high_water,
         } = msg;
 
         let blocks = blocks
@@ -486,6 +487,7 @@ impl Message<ApplyStoreUpdate> for StorageActor {
             consumed_withdrawals: &consumed_withdrawals,
             new_withdraw_intents: &new_withdraw_intents,
             zone_anchor: zone_anchor.as_ref(),
+            lower_published_high_water,
         };
         let outcome = self.dbio().store_update(&update)?;
 
