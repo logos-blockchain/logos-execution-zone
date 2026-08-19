@@ -24,7 +24,7 @@
 #ifndef WALLET_FFI_H
 #define WALLET_FFI_H
 
-/* Generated with cbindgen:0.29.4 */
+/* Generated with cbindgen:0.29.3 */
 
 #include <stdarg.h>
 #include <stdbool.h>

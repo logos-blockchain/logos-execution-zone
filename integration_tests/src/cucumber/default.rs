@@ -11,7 +11,7 @@ pub const SCENARIO_OUTPUT_DIR_REL: &str = "cucumber_tests/temp";
 /// Directory name containing per-scenario artifacts.
 pub const ARTEFACTS: &str = "cucumber_artefacts";
 /// Environment variable controlling the number of retries for failed scenarios.
-pub const CUCUMBER_RETRIES: &str = "CUCUMBER_RETRIES";
+const CUCUMBER_RETRIES: &str = "CUCUMBER_RETRIES";
 /// Environment variable controlling whether to keep logs for successful scenarios.
 pub const TF_KEEP_LOGS: &str = "TF_KEEP_LOGS";
 /// Environment variable controlling the log level for Cucumber tests.
