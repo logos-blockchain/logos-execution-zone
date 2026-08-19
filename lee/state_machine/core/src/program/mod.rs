@@ -62,8 +62,8 @@ pub struct ProgramInput<T> {
 
 /// Borsh-encoded header written to the guest as a single length-prefixed frame.
 ///
-/// Carries the program identity and pre-states alongside the risc0-encoded `instruction_data`
-/// words; the instruction `T` is decoded from `instruction_data` via the risc0 codec, unchanged.
+/// Carries the program identity and pre-states alongside the borsh-encoded `instruction_data`
+/// bytes; the instruction `T` is decoded from `instruction_data` via `borsh::from_slice`.
 /// This is the wire form of [`ProgramInput`], which instead holds the already-decoded instruction.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct LeeInputHeader {
