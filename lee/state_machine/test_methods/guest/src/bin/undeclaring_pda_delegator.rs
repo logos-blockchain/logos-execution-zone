@@ -19,7 +19,7 @@ fn main() {
             mut pre_states,
             instruction: (seed, declare_authorized, callee_program_id, callee_instruction, sibling),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Some(first) = pre_states.first_mut() else {
@@ -50,7 +50,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         Vec::new(),
         Vec::new(),
     )

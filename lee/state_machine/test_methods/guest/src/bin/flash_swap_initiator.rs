@@ -75,7 +75,7 @@ fn main() {
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<FlashSwapInstruction>();
 
     match instruction {
@@ -162,7 +162,7 @@ fn main() {
             ProgramOutput::new(
                 self_program_id,
                 caller_program_id,
-                instruction_words,
+                instruction_data,
                 vec![vault_pre.clone(), receiver_pre.clone()],
                 vec![
                     AccountPostState::new(vault_pre.account),
@@ -204,7 +204,7 @@ fn main() {
             ProgramOutput::new(
                 self_program_id,
                 caller_program_id,
-                instruction_words,
+                instruction_data,
                 vec![vault.clone()],
                 vec![AccountPostState::new(vault.account)],
             )

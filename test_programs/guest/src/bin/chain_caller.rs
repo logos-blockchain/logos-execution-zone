@@ -18,14 +18,15 @@ fn main() {
             pre_states,
             instruction: (balance, auth_transfer_id, num_chain_calls, pda_seed),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Ok([recipient_pre, sender_pre]) = <[_; 2]>::try_from(pre_states) else {
         return;
     };
 
-    let instruction_data = to_vec(&AuthTransferInstruction::Transfer { amount: balance }).unwrap();
+    let call_instruction_data =
+        to_vec(&AuthTransferInstruction::Transfer { amount: balance }).unwrap();
 
     let mut running_recipient_pre = recipient_pre.clone();
     let mut running_sender_pre = sender_pre.clone();
@@ -38,7 +39,7 @@ fn main() {
     for _i in 0..num_chain_calls {
         let new_chained_call = ChainedCall {
             program_id: auth_transfer_id,
-            instruction_data: instruction_data.clone(),
+            instruction_data: call_instruction_data.clone(),
             pre_states: vec![running_sender_pre.clone(), running_recipient_pre.clone()], /* <- Account order permutation here */
             pda_seeds: pda_seed.iter().copied().collect(),
         };
@@ -59,7 +60,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![sender_pre.clone(), recipient_pre.clone()],
         vec![
             AccountPostState::new(sender_pre.account),

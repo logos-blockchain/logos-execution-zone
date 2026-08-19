@@ -45,7 +45,7 @@ fn main() {
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<CallbackInstruction>();
 
     // pre_states[0] = vault (after transfer out), pre_states[1] = receiver (after transfer out)
@@ -80,7 +80,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![vault_pre.clone(), receiver_pre.clone()],
         vec![
             AccountPostState::new(vault_pre.account),

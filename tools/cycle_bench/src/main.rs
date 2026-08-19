@@ -175,7 +175,7 @@ struct Case {
     instruction_label: &'static str,
     program: Program,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: InstructionData,
+    instruction_data: InstructionData,
 }
 
 impl Case {
@@ -191,7 +191,7 @@ impl Case {
             instruction_label,
             program,
             pre_states,
-            instruction_words: borsh::to_vec(instruction)?,
+            instruction_data: borsh::to_vec(instruction)?,
         })
     }
 
@@ -201,7 +201,7 @@ impl Case {
             instruction_label,
             program,
             pre_states,
-            instruction_words,
+            instruction_data,
         } = self;
         let caller_program_id: Option<ProgramId> = None;
 
@@ -216,7 +216,7 @@ impl Case {
             program.write_inputs(
                 caller_program_id,
                 &pre_states,
-                &instruction_words,
+                &instruction_data,
                 &mut env_builder,
             )?;
             let env = env_builder.build()?;
@@ -243,7 +243,7 @@ impl Case {
             program.write_inputs(
                 caller_program_id,
                 &pre_states,
-                &instruction_words,
+                &instruction_data,
                 &mut env_builder,
             )?;
             let env = env_builder.build()?;

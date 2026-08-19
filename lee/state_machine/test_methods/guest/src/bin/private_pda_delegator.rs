@@ -19,7 +19,7 @@ fn main() {
             pre_states,
             instruction: (claim_seed, delegated_seed, callee_program_id),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
@@ -42,7 +42,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![pre],
         vec![claimed],
     )
