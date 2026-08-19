@@ -1,6 +1,6 @@
 use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
 
-/// Instruction: (`auth_transfer_id`, `amount`) — both primitive, safe for `risc0_zkvm::serde`.
+/// Instruction: (`auth_transfer_id`, `amount`) — both primitive, borsh-encoded.
 type Instruction = (ProgramId, u128);
 
 fn main() {
