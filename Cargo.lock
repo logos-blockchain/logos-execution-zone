@@ -11203,6 +11203,7 @@ dependencies = [
  "lee",
  "log",
  "metrics-exporter-prometheus",
+ "program_loader_core",
  "programs",
  "sequencer_core",
  "sequencer_executor_actor",

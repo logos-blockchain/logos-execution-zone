@@ -19,6 +19,7 @@ system_accounts = { workspace = true, optional = true }
 wallet = { workspace = true, optional = true }
 sequencer_stake_core = { workspace = true, optional = true }
 authenticated_transfer_core = { workspace = true, optional = true }
+program_loader_core = { workspace = true, optional = true }
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
@@ -51,4 +52,5 @@ submit_stake = [
   "dep:wallet",
   "dep:sequencer_stake_core",
   "dep:authenticated_transfer_core",
+  "dep:program_loader_core",
 ]

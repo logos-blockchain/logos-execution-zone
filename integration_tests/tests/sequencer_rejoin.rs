@@ -92,6 +92,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
             AccountIdentity::PublicNoSign(config_id),
         ],
         &sequencer_stake_core::Instruction::UnstakeRequest {
+            self_program_id: programs::sequencer_stake().id(),
             amount: STAKE,
             destination: settlement,
         },
@@ -137,9 +138,12 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
             AccountIdentity::PublicNoSign(config_id),
         ],
         &sequencer_stake_core::Instruction::Stake {
+            self_program_id: programs::sequencer_stake().id(),
             sequencer_key: stake_key_b,
             amount: STAKE,
-            mover_program_id: programs::authenticated_transfer().id(),
+            mover_account_id: program_loader_core::immutable_deploy_account_id(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         },
     )

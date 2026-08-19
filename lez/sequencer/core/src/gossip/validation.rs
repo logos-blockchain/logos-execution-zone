@@ -39,7 +39,7 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     };
 
     if let LeeTransaction::Public(public_tx) = &authenticated
-        && crate::is_sequencer_only_program(public_tx.message().program_account_id.into())
+        && crate::is_sequencer_only_program(public_tx.message().program_account_id)
     {
         return TxEvaluation::Reject("sequencer-only program".to_owned());
     }

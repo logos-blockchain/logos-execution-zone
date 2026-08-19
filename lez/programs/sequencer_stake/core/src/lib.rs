@@ -76,9 +76,14 @@ pub enum Instruction {
     /// Locks `amount` into the ownership account for `sequencer_key`. First
     /// use claims the account; later calls top up the same account.
     Stake {
+        /// This program's own image id. The guest cannot learn this at runtime, so the trusted
+        /// caller supplies it to recompute the config PDA; a wrong value only fails the guest's
+        /// own self-consistency assertion, since real authorization is independently enforced by
+        /// the state layer against the account's `program_owner`.
+        self_program_id: ProgramId,
         sequencer_key: SequencerKey,
         amount: u128,
-        mover_program_id: ProgramId,
+        mover_account_id: AccountId,
         mover_instruction_data: InstructionData,
     },
 
@@ -88,18 +93,25 @@ pub enum Instruction {
     /// Records a request to release `amount` to `destination`; no balance
     /// moves yet. Must leave the account at zero or at/above the minimum.
     UnstakeRequest {
+        /// See [`Instruction::Stake::self_program_id`].
+        self_program_id: ProgramId,
         amount: u128,
         destination: AccountId,
     },
 
     /// Unsigned, permissionless: releases a pending `UnstakeRequest`.
     /// Block-inclusion validity is enforced outside this program.
-    FinalizeUnstake,
+    FinalizeUnstake {
+        /// See [`Instruction::Stake::self_program_id`].
+        self_program_id: ProgramId,
+    },
 
     /// Burns the key's whole stake to the sink and removes its entry.
     ///
     /// Only `approvals` authorize this. The reason for the offence is not checked.
     Slash {
+        /// See [`Instruction::Stake::self_program_id`].
+        self_program_id: ProgramId,
         sequencer_key: SequencerKey,
         /// `MsgId` of the offending inscription, raw to avoid Bedrock types.
         inscription: [u8; 32],
