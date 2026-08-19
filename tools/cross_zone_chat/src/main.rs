@@ -548,11 +548,10 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
     let receiver_id = programs::ping_receiver().id();
     let outbox_id = programs::cross_zone_outbox().id();
 
-    let words = borsh::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: text.as_bytes().to_vec(),
     })
     .expect("serialize record instruction");
-    let payload = words;
 
     let send = SenderInstruction::Send {
         target_zone: other_zone,

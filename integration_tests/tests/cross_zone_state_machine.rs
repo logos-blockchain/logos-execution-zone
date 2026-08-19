@@ -27,7 +27,7 @@ use ping_core::{
 };
 
 /// Serializes an instruction to the borsh bytes the guests read.
-macro_rules! words_of {
+macro_rules! bytes_of {
     ($instruction:expr) => {
         borsh::to_vec($instruction).expect("serialize instruction")
     };
@@ -208,16 +208,17 @@ fn rejects_at(state: &V03State, tx: &PublicTransaction, block: u64, expected: &s
     );
 }
 
-/// A top-level authority transaction: the instruction words over `accounts`,
+/// A top-level authority transaction: the instruction bytes over `accounts`,
 /// signed by `key` at `nonce`.
 fn signed_tx(
     program: lee_core::program::ProgramId,
     accounts: Vec<AccountId>,
     nonce: u128,
-    words: Vec<u8>,
+    instruction_data: Vec<u8>,
     key: &PrivateKey,
 ) -> PublicTransaction {
-    let message = Message::new_preserialized(program, accounts, vec![nonce.into()], words);
+    let message =
+        Message::new_preserialized(program, accounts, vec![nonce.into()], instruction_data);
     let witness = WitnessSet::for_message(&message, &[key]);
     PublicTransaction::new(message, witness)
 }
@@ -230,13 +231,13 @@ fn via_proxy(
     config: AccountId,
     authority: AccountId,
     delegated: Option<lee_core::program::PdaSeed>,
-    words: Vec<u8>,
+    instruction_data: Vec<u8>,
 ) -> PublicTransaction {
     let message = Message::try_new(
         proxy_id,
         vec![config, authority],
         vec![],
-        (target, words, delegated),
+        (target, instruction_data, delegated),
     )
     .expect("build proxy message");
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
@@ -248,7 +249,7 @@ fn chained_via_inbox(
     target: lee_core::program::ProgramId,
     config_id: AccountId,
     authority: AccountId,
-    words: Vec<u8>,
+    instruction_data: Vec<u8>,
 ) -> PublicTransaction {
     let inbox_id = programs::cross_zone_inbox().id();
     let msg = CrossZoneMessage {
@@ -258,7 +259,7 @@ fn chained_via_inbox(
         src_tx_index: 0,
         src_program_id: programs::bridge_lock().id(),
         target_program_id: target,
-        payload: words,
+        payload: instruction_data,
         l1_inclusion_witness: None,
     };
     let message = Message::try_new(
@@ -275,7 +276,7 @@ fn chained_via_inbox(
 /// given rather than the correct ones, so tests can vary them.
 fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
     let receiver_id = programs::ping_receiver().id();
-    let words = borsh::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"ping".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -286,7 +287,7 @@ fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> Pub
             receiver_config_account_id(receiver_id).into_value(),
             ping_record_pda(receiver_id).into_value(),
         ],
-        payload: words,
+        payload,
         ordinal,
     };
     let message = Message::try_new(programs::ping_sender().id(), accounts, vec![], send)
@@ -390,11 +391,10 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
 
     // The payload is the ping_receiver instruction, borsh-serialized into instruction_data bytes.
     let inner = b"hello-cross-zone".to_vec();
-    let words = borsh::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: inner.clone(),
     })
     .expect("serialize ping instruction");
-    let payload = words;
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -1079,7 +1079,7 @@ fn the_token_authority_path_holds() {
             wrapped_token_id,
             vec![config_id, account],
             nonce,
-            words_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
             signer,
         )
     };
@@ -1088,7 +1088,7 @@ fn the_token_authority_path_holds() {
             wrapped_token_id,
             vec![config_id, account],
             nonce,
-            words_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+            bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
             signer,
         )
     };
@@ -1141,18 +1141,18 @@ fn the_token_authority_path_holds() {
 
     // Substituting another account for the config is refused rather than read,
     // on both instructions.
-    let substituted = |words: Vec<u8>| {
+    let substituted = |instruction_data: Vec<u8>| {
         signed_tx(
             wrapped_token_id,
             vec![ping_record_pda(wrapped_token_id), authority],
             0,
-            words,
+            instruction_data,
             &key,
         )
     };
     rejects_at(
         &state,
-        &substituted(words_of!(&wrapped_token_core::Instruction::UpdateSources {
+        &substituted(bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
             sources: bridge_source.clone(),
         })),
         1,
@@ -1160,7 +1160,7 @@ fn the_token_authority_path_holds() {
     );
     rejects_at(
         &state,
-        &substituted(words_of!(
+        &substituted(bytes_of!(
             &wrapped_token_core::Instruction::RenounceAuthority
         )),
         1,
@@ -1264,7 +1264,7 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
         vec![(src_zone, programs::bridge_lock().id())],
     );
 
-    let words = borsh::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"ping".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -1275,7 +1275,7 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
         src_tx_index: 0,
         src_program_id: programs::ping_sender().id(),
         target_program_id: receiver_id,
-        payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        payload,
         l1_inclusion_witness: None,
     };
     let message = Message::try_new(
@@ -1318,7 +1318,7 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
     seed_inbox_config(&mut state, self_zone);
     seed_receiver_config(&mut state, None, vec![(src_zone, sender_id)]);
 
-    let words = borsh::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"ping".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -1329,7 +1329,7 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
         src_tx_index: 0,
         src_program_id: sender_id,
         target_program_id: receiver_id,
-        payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        payload,
         l1_inclusion_witness: None,
     };
 
@@ -1378,7 +1378,7 @@ fn the_receiver_authority_path_holds() {
             receiver_id,
             vec![config_id, account],
             nonce,
-            words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+            bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
                 sources: vec![(src_zone, sender_id)],
             }),
             signer,
@@ -1389,7 +1389,7 @@ fn the_receiver_authority_path_holds() {
             receiver_id,
             vec![config_id, account],
             nonce,
-            words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+            bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
             signer,
         )
     };
@@ -1479,7 +1479,7 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
             wrapped_token_id,
             config_id,
             authority,
-            words_of!(&wrapped_token_core::Instruction::UpdateSources {
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
                 sources: vec![(src_zone, programs::bridge_lock().id())],
             }),
         )
@@ -1530,7 +1530,7 @@ fn the_governance_path_holds() {
             config_id,
             authority,
             Some(seed),
-            words_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
         )
     };
     let renounce = || {
@@ -1540,7 +1540,7 @@ fn the_governance_path_holds() {
             config_id,
             authority,
             Some(seed),
-            words_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+            bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
         )
     };
 
@@ -1618,7 +1618,7 @@ fn the_governance_path_guards_hold() {
             config_id,
             authority,
             delegated,
-            words_of!(&wrapped_token_core::Instruction::UpdateSources {
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
                 sources: vec![(src_zone, programs::bridge_lock().id())],
             }),
         )
@@ -1653,28 +1653,35 @@ fn the_governance_path_guards_hold() {
     // The same pin guards the three sibling handlers, both renounces and the
     // receiver's update, each of which would otherwise accept the delegated
     // authority and succeed.
-    for (target, config, words) in [
+    for (target, config, instruction_data) in [
         (
             wrapped_token_id,
             config_id,
-            words_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+            bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
         ),
         (
             receiver_id,
             receiver_config_account_id(receiver_id),
-            words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+            bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
                 sources: vec![(src_zone, programs::ping_sender().id())],
             }),
         ),
         (
             receiver_id,
             receiver_config_account_id(receiver_id),
-            words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+            bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
         ),
     ] {
         rejects_at(
             &closed,
-            &via_proxy(proxy_id, target, config, authority, Some(seed), words),
+            &via_proxy(
+                proxy_id,
+                target,
+                config,
+                authority,
+                Some(seed),
+                instruction_data,
+            ),
             1,
             "through the configured governance program",
         );
@@ -1712,7 +1719,7 @@ fn the_receiver_governance_path_holds() {
         config_id,
         authority,
         Some(seed),
-        words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+        bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
             sources: vec![(src_zone, programs::ping_sender().id())],
         }),
     );
@@ -1757,7 +1764,7 @@ fn a_shared_authority_survives_the_first_claim() {
         token_config_id,
         authority,
         Some(seed),
-        words_of!(&wrapped_token_core::Instruction::UpdateSources {
+        bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
             sources: vec![(src_zone, programs::bridge_lock().id())],
         }),
     );
@@ -1776,7 +1783,7 @@ fn a_shared_authority_survives_the_first_claim() {
         receiver_config_id,
         authority,
         Some(seed),
-        words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+        bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
             sources: vec![(src_zone, programs::ping_sender().id())],
         }),
     );
@@ -1806,7 +1813,7 @@ fn a_shared_authority_survives_the_first_claim() {
         receiver_config_id,
         authority,
         Some(seed),
-        words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+        bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
     );
     let third = ValidatedStateDiff::from_public_transaction(&receiver_renounce, &state, 3, 0)
         .expect("the other target renounces on the token-owned authority");
@@ -1853,35 +1860,41 @@ fn an_authority_account_with_history_is_refused() {
         },
     )]);
 
-    for (program, config_id, words) in [
+    for (program, config_id, instruction_data) in [
         (
             wrapped_token_id,
             wrapped_token_core::config_account_id(wrapped_token_id),
-            words_of!(&wrapped_token_core::Instruction::UpdateSources {
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
                 sources: vec![(src_zone, programs::bridge_lock().id())],
             }),
         ),
         (
             wrapped_token_id,
             wrapped_token_core::config_account_id(wrapped_token_id),
-            words_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+            bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
         ),
         (
             receiver_id,
             receiver_config_account_id(receiver_id),
-            words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+            bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
                 sources: vec![(src_zone, programs::ping_sender().id())],
             }),
         ),
         (
             receiver_id,
             receiver_config_account_id(receiver_id),
-            words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+            bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
         ),
     ] {
         rejects_at(
             &state,
-            &signed_tx(program, vec![config_id, authority], 1, words, &key),
+            &signed_tx(
+                program,
+                vec![config_id, authority],
+                1,
+                instruction_data,
+                &key,
+            ),
             1,
             "must be untouched before its first use",
         );
@@ -1907,11 +1920,11 @@ fn the_remaining_authority_guards_hold() {
     seed_receiver_config(&mut state, Some(authority), vec![]);
 
     // Config address, on both receiver instructions.
-    for words in [
-        words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+    for instruction_data in [
+        bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
             sources: vec![(src_zone, programs::ping_sender().id())],
         }),
-        words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+        bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
     ] {
         rejects_at(
             &state,
@@ -1919,7 +1932,7 @@ fn the_remaining_authority_guards_hold() {
                 receiver_id,
                 vec![ping_record_pda(receiver_id), authority],
                 0,
-                words,
+                instruction_data,
                 &key,
             ),
             1,
@@ -1931,23 +1944,23 @@ fn the_remaining_authority_guards_hold() {
     // at index 0, so each call dies on the target's config-address check. The
     // caller pins themselves are exercised through the proxy in
     // the_governance_path_guards_hold, where the account list is well formed.
-    for (target, config_id, words, expected) in [
+    for (target, config_id, instruction_data, expected) in [
         (
             wrapped_token_id,
             wrapped_token_core::config_account_id(wrapped_token_id),
-            words_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+            bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
             "must be the wrapped-token config PDA",
         ),
         (
             receiver_id,
             receiver_config_account_id(receiver_id),
-            words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+            bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
             "must be the receiver config PDA",
         ),
         (
             receiver_id,
             receiver_config_account_id(receiver_id),
-            words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+            bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
                 sources: vec![(src_zone, programs::ping_sender().id())],
             }),
             "must be the receiver config PDA",
@@ -1955,7 +1968,7 @@ fn the_remaining_authority_guards_hold() {
     ] {
         rejects_at(
             &state,
-            &chained_via_inbox(target, config_id, authority, words),
+            &chained_via_inbox(target, config_id, authority, instruction_data),
             1,
             expected,
         );
@@ -2288,11 +2301,10 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         },
     )]);
 
-    let words = borsh::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"from-the-other-block".to_vec(),
     })
     .expect("serialize ping instruction");
-    let payload = words;
 
     // A different transaction index, so this is not a replay: only the source
     // block differs from what the shard is bound to.
