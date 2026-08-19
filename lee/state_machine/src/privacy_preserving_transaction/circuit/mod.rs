@@ -120,7 +120,7 @@ pub fn execute_and_prove_with_padded_inputs(
         let program_output: ProgramOutput = borsh::from_slice(
             from_frame(&inner_receipt.journal.bytes).ok_or_else(|| {
                 LeeError::ProgramOutputDeserializationError(
-                    "malformed inner-receipt journal frame".to_string(),
+                    "malformed inner-receipt journal frame".to_owned(),
                 )
             })?,
         )

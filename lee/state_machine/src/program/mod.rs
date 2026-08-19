@@ -79,7 +79,7 @@ impl Program {
 
         // Get outputs
         let framed = from_frame(&session_info.journal.bytes).ok_or_else(|| {
-            LeeError::ProgramExecutionFailed("malformed program journal frame".to_string())
+            LeeError::ProgramExecutionFailed("malformed program journal frame".to_owned())
         })?;
         let program_output =
             borsh::from_slice(framed).map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
