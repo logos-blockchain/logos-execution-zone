@@ -278,7 +278,7 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
 
     let result = execute_and_prove(
         vec![public_account],
-        Program::serialize_instruction(10_u128).unwrap(),
+        Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Public],
         &program.into(),
     );
@@ -324,7 +324,7 @@ fn data_changer_program_should_fail_for_non_owned_account_in_privacy_preserving_
 
     let result = execute_and_prove(
         vec![public_account],
-        Program::serialize_instruction(vec![0]).unwrap(),
+        Program::serialize_instruction(vec![0_u8]).unwrap(),
         vec![InputAccountIdentity::Public],
         &program.into(),
     );
