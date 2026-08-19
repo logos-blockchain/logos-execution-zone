@@ -117,9 +117,14 @@ pub fn execute_and_prove_with_padded_inputs(
             &chained_call.instruction_data,
         )?;
 
-        let program_output: ProgramOutput =
-            borsh::from_slice(from_frame(&inner_receipt.journal.bytes))
-                .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+        let program_output: ProgramOutput = borsh::from_slice(
+            from_frame(&inner_receipt.journal.bytes).ok_or_else(|| {
+                LeeError::ProgramOutputDeserializationError(
+                    "malformed inner-receipt journal frame".to_string(),
+                )
+            })?,
+        )
+        .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
 
         // TODO: remove clone
         program_outputs.push(program_output.clone());
@@ -159,9 +164,11 @@ pub fn execute_and_prove_with_padded_inputs(
 
     let proof = Proof(borsh::to_vec(&prove_info.receipt.inner)?);
 
-    let circuit_output: PrivacyPreservingCircuitOutput =
-        borsh::from_slice(from_frame(&prove_info.receipt.journal.bytes))
-            .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
+    let circuit_output: PrivacyPreservingCircuitOutput = borsh::from_slice(
+        from_frame(&prove_info.receipt.journal.bytes)
+            .expect("prover's own circuit journal is well-formed"),
+    )
+    .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
 
     Ok((circuit_output, proof))
 }

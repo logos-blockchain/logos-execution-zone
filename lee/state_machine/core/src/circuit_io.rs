@@ -271,7 +271,8 @@ mod tests {
         };
         let bytes = output.to_bytes();
         let decoded: PrivacyPreservingCircuitOutput =
-            borsh::from_slice(crate::from_frame(&bytes)).unwrap();
+            borsh::from_slice(crate::from_frame(&bytes).expect("self-produced frame is well-formed"))
+                .unwrap();
         assert_eq!(output, decoded);
     }
 }
