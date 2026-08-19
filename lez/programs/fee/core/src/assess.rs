@@ -65,6 +65,12 @@ impl FeeTxView {
 
 /// The amount held from the payer before execution, at the block's opening
 /// base fees: `gas_limit·base_fee_exec + gas_stor·base_fee_stor + tip`.
+///
+/// The caller must pass a cap-validated view (gas within `MAX_GAS_*`) and a
+/// well-formed `FeeState` whose base fees stay in `[MIN, BASE_FEE_*_MAX]` — the
+/// bounds `next_base_fee` maintains. Under those preconditions every product
+/// fits u64 and the u128 sum cannot overflow; on an unchecked view against a
+/// corrupt state it could wrap silently in release.
 #[must_use]
 pub fn fee_reserve(view: &FeeTxView, fee_state: &FeeState) -> u128 {
     u128::from(view.gas_limit()) * u128::from(fee_state.base_fee_exec)
@@ -75,12 +81,15 @@ pub fn fee_reserve(view: &FeeTxView, fee_state: &FeeState) -> u128 {
 /// The base fee actually owed after execution.
 ///
 /// `gas_exec·base_fee_exec + gas_stor·base_fee_stor`, where `gas_exec` is the
-/// charged (clamped) cycle count for public transactions and the fixed
-/// verification cost for private.
+/// executed cycle count clamped to the transaction's `gas_limit` for public
+/// transactions (a session may overshoot its budget by up to one instruction,
+/// but a transaction is never billed past the gas it declared) and the fixed
+/// verification cost for private. Clamping here keeps `actual + tip ≤ reserve`
+/// regardless of what the caller passes.
 #[must_use]
 pub fn fee_actual_base(charged_cycles: u64, view: &FeeTxView, fee_state: &FeeState) -> u128 {
     let gas_exec = match view {
-        FeeTxView::Public { .. } => charged_cycles,
+        FeeTxView::Public { gas_limit, .. } => charged_cycles.min(*gas_limit),
         FeeTxView::Private { .. } => market::PRIVATE_VERIFY_GAS,
     };
     u128::from(gas_exec) * u128::from(fee_state.base_fee_exec)
@@ -131,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn reserve_dominates_actual_within_the_limit() {
+    fn reserve_dominates_actual_even_past_the_limit() {
         let view = FeeTxView::Public {
             payer: payer(),
             gas_limit: 10_000,
@@ -141,7 +150,9 @@ mod tests {
         };
         let state = genesis();
         let reserve = fee_reserve(&view, &state);
-        for cycles in [0, 1, 5_000, 10_000] {
+        // Including cycle counts above the limit: the clamp keeps the actual fee
+        // bounded by the reserve, so the payer is never billed past gas_limit.
+        for cycles in [0, 1, 5_000, 10_000, 10_001, 1_000_000, u64::MAX] {
             assert!(fee_actual_base(cycles, &view, &state) + u128::from(view.tip()) <= reserve);
         }
     }

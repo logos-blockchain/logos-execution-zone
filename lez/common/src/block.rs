@@ -96,6 +96,11 @@ impl Block {
 
     /// Whether the header signature verifies against the embedded producer
     /// key. Every valid block must satisfy this.
+    ///
+    /// This attests only that the producer signed the *declared* `header.hash`,
+    /// not that the hash matches the block contents — so it is not an
+    /// authenticity check on its own. Pair it with a `recompute_hash` check (as
+    /// `validate_against_tip` does) before trusting it.
     #[must_use]
     pub fn has_valid_producer_signature(&self) -> bool {
         self.header
