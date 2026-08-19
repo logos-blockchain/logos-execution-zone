@@ -753,7 +753,8 @@ fn undeclaring_private_delegation(
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
+    let program_with_deps =
+        ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
 
     execute_and_prove(
         vec![pre_state],

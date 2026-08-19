@@ -112,9 +112,12 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .context("Failed to serialize mover instruction")?;
     let stake_instruction_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
+            self_program_id: programs::sequencer_stake().id(),
             sequencer_key: demo_stake_key,
             amount: FUNDING_BALANCE,
-            mover_program_id: programs::authenticated_transfer().id(),
+            mover_account_id: program_loader_core::immutable_deploy_account_id(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         })
         .context("Failed to serialize Stake instruction")?;
@@ -268,6 +271,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     let unstake_request_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
+            self_program_id: programs::sequencer_stake().id(),
             amount: FUNDING_BALANCE,
             destination: destination_id,
         })
