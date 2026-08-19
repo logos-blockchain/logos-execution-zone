@@ -3,7 +3,6 @@ use lee_core::{
     account::AccountId,
     program::{PdaSeed, ProgramId},
 };
-use serde::{Deserialize, Serialize};
 
 const PING_RECORD_SEED: [u8; 32] = *b"/LEZ/v0.3/PingRecord/0000000000/";
 const SENDER_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/PingSenderCfg/0000000/";
@@ -14,7 +13,7 @@ pub type ZoneId = [u8; 32];
 /// Instruction to `ping_receiver`.
 ///
 /// Variants are append-only, for the same reason `SenderInstruction`'s are.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum ReceiverInstruction {
     /// Record the payload, delivered by the inbox on behalf of a peer source
     /// this receiver authorizes.
@@ -51,7 +50,7 @@ pub enum ReceiverInstruction {
 /// about the record meaning something: without it any program on any configured
 /// peer can overwrite the record, and a delivery proves only that some peer sent
 /// it.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ReceiverConfig {
     /// The program allowed to call `Record`: the cross-zone inbox.
     pub deliverer: ProgramId,
@@ -80,9 +79,9 @@ impl ReceiverConfig {
 /// Instruction to `ping_sender`. `Send`'s emission fields are forwarded verbatim
 /// into `cross_zone_outbox::Instruction::Emit`.
 ///
-/// Variants are append-only. risc0 serde encodes the variant as a bare leading
-/// tag word, so inserting one ahead of `Send` shifts every existing encoding.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+/// Variants are append-only. Borsh encodes the variant as a leading tag byte,
+/// so inserting one ahead of `Send` shifts every existing encoding.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum SenderInstruction {
     /// Emit a cross-zone message through the pinned outbox.
     ///

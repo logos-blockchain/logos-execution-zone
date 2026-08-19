@@ -5,7 +5,7 @@ use lee_core::account::{AccountId, Data};
 use serde::{Deserialize, Serialize};
 
 /// Token Program Instruction.
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Transfer tokens from sender to recipient.
     ///
@@ -62,7 +62,7 @@ pub enum Instruction {
     PrintNft,
 }
 
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub enum NewTokenDefinition {
     Fungible {
         name: String,
@@ -192,7 +192,7 @@ impl From<&TokenHolding> for Data {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct NewTokenMetadata {
     /// Metadata standard.
     pub standard: MetadataStandard,

@@ -4,9 +4,8 @@ use lee_core::{
     account::{AccountId, AccountWithMetadata},
     program::ProgramId,
 };
-use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Create the Associated Token Account for (owner, definition).
     /// Idempotent: no-op if the account already exists.

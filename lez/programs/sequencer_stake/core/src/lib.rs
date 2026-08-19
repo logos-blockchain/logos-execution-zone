@@ -70,8 +70,6 @@ impl borsh::BorshDeserialize for SequencerKey {
     Debug,
     PartialEq,
     Eq,
-    Serialize,
-    Deserialize,
     borsh::BorshSerialize,
     borsh::BorshDeserialize,
 )]
