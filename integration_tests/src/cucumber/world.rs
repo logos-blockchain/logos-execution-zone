@@ -15,7 +15,7 @@ use crate::{
         default::CUCUMBER_NODE_CONFIG_OVERRIDE,
         error::{StepError, StepResult},
     },
-    tf::shutdown_lez_deployment,
+    testing_framework::shutdown_lez_deployment,
 };
 
 /// Classifies a successful transfer recorded by a Cucumber scenario.
@@ -299,8 +299,10 @@ impl CucumberWorld {
             }
             Err(error) => {
                 let message = error.to_string();
-                self.runtime_teardown = RuntimeTeardownState::Failed(message.clone());
-                Err(StepError::TeardownFailed { message })
+                self.runtime_teardown = RuntimeTeardownState::Failed(message);
+                Err(StepError::TeardownFailedSource {
+                    source: anyhow::Error::from_boxed(error),
+                })
             }
         }
     }

@@ -36,23 +36,17 @@ async fn transfer_between_configured_public_accounts(
         .sequencer_client()
         .get_account_balance(sender)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     let receiver_initial_balance = context
         .sequencer_client()
         .get_account_balance(receiver)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     let sender_initial_nonce = context
         .sequencer_client()
         .get_accounts_nonces(vec![sender])
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?
+        .map_err(StepError::query_failed)?
         .into_iter()
         .next()
         .ok_or_else(|| StepError::QueryFailed {
@@ -118,23 +112,17 @@ async fn transfer_between_labeled_public_accounts(
         .sequencer_client()
         .get_account_balance(sender)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     let receiver_initial_balance = context
         .sequencer_client()
         .get_account_balance(receiver)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     let sender_initial_nonce = context
         .sequencer_client()
         .get_accounts_nonces(vec![sender])
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?
+        .map_err(StepError::query_failed)?
         .into_iter()
         .next()
         .ok_or_else(|| StepError::QueryFailed {
@@ -194,17 +182,13 @@ async fn transfer_to_new_public_account(
         .sequencer_client()
         .get_account_balance(sender)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     let receiver_initial_balance = 0;
     let sender_initial_nonce = context
         .sequencer_client()
         .get_accounts_nonces(vec![sender])
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?
+        .map_err(StepError::query_failed)?
         .into_iter()
         .next()
         .ok_or_else(|| StepError::QueryFailed {
@@ -254,23 +238,17 @@ async fn attempt_insufficient_public_transfer(
         .sequencer_client()
         .get_account_balance(sender)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     let receiver_initial_balance = context
         .sequencer_client()
         .get_account_balance(receiver)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     let sender_initial_nonce = context
         .sequencer_client()
         .get_accounts_nonces(vec![sender])
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?
+        .map_err(StepError::query_failed)?
         .into_iter()
         .next()
         .ok_or_else(|| StepError::QueryFailed {

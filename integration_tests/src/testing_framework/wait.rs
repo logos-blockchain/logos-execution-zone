@@ -1,26 +1,32 @@
-use std::{error::Error, fmt, fmt::Display, time::Duration};
+use std::time::Duration;
 
 use common::HashType;
 use indexer_service_protocol::HashType as IndexerHashType;
 use indexer_service_rpc::RpcClient as _;
 use sequencer_service_rpc::RpcClient as _;
+use thiserror::Error;
 
 use super::{LezIndexerClient, LezSequencerClient};
 
 /// Failure modes while waiting for the indexer to reach the sequencer.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum IndexerCatchUpError {
     /// The sequencer height could not be queried.
+    #[error("failed to query sequencer while waiting for indexer: {message}")]
     SequencerQuery {
         /// Diagnostic returned by the sequencer RPC client.
         message: String,
     },
     /// The indexer height could not be queried.
+    #[error("failed to query indexer while waiting for catch-up: {message}")]
     IndexerQuery {
         /// Diagnostic returned by the indexer RPC client.
         message: String,
     },
     /// The indexer did not reach the target within the configured duration.
+    #[error(
+        "indexer failed to catch up to sequencer block {target}; last observed indexer block {last_observed} after {elapsed:?}"
+    )]
     Timeout {
         /// Sequencer block height the indexer was expected to reach.
         target: u64,
@@ -30,36 +36,6 @@ pub enum IndexerCatchUpError {
         elapsed: Duration,
     },
 }
-
-impl Display for IndexerCatchUpError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SequencerQuery { message } => {
-                write!(
-                    f,
-                    "failed to query sequencer while waiting for indexer: {message}"
-                )
-            }
-            Self::IndexerQuery { message } => {
-                write!(
-                    f,
-                    "failed to query indexer while waiting for catch-up: {message}"
-                )
-            }
-            Self::Timeout {
-                target,
-                last_observed,
-                elapsed,
-            } => write!(
-                f,
-                "indexer failed to catch up to sequencer block {target}; last observed indexer \
-                 block {last_observed} after {elapsed:?}"
-            ),
-        }
-    }
-}
-
-impl Error for IndexerCatchUpError {}
 
 /// Polls the indexer until it reaches the sequencer's current last block.
 pub async fn wait_for_indexer_to_catch_up(

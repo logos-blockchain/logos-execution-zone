@@ -26,9 +26,7 @@ async fn query_first_public_account_balance(world: &mut CucumberWorld, step: &St
         .sequencer_client()
         .get_account_balance(account)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
 
     let expected_balance =
         expected_public_balance(account).ok_or_else(|| StepError::QueryFailed {

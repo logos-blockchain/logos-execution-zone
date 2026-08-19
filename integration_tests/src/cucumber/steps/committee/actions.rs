@@ -38,9 +38,7 @@ async fn wait_for_height(
             if client
                 .get_last_block_id()
                 .await
-                .map_err(|error| StepError::QueryFailed {
-                    message: error.to_string(),
-                })?
+                .map_err(StepError::query_failed)?
                 >= target
             {
                 return Ok::<(), StepError>(());
@@ -134,11 +132,11 @@ async fn start_sequencer(world: &mut CucumberWorld, step: &Step, alias: String) 
         .registry()
         .start(&alias)
         .await
-        .map_err(|error| StepError::DeploymentFailed {
-            message: format!(
-                "step '{}' failed to start sequencer '{alias}': {error}",
-                step.value
-            ),
+        .map_err(|error| {
+            StepError::deployment_failed_boxed(
+                error,
+                format!("step '{}' failed to start sequencer '{alias}'", step.value),
+            )
         })
 }
 
@@ -176,14 +174,11 @@ async fn sequencer_synchronizes(
     log_step(step);
     let registry = world.sequencer_registry()?.registry();
     let source = require_sequencer(registry, &source_alias)?;
-    let join_height =
-        source
-            .client()
-            .get_last_block_id()
-            .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })?;
+    let join_height = source
+        .client()
+        .get_last_block_id()
+        .await
+        .map_err(StepError::query_failed)?;
     let joining = require_sequencer(registry, &joining_alias)?;
     wait_for_height(
         joining.client(),
@@ -241,9 +236,7 @@ async fn committee_is_active(
     let bedrock_config = BedrockConfig {
         channel_id: config::bedrock_channel_id(),
         node_url: config::addr_to_url(UrlProtocol::Http, context.bedrock().primary_api_addr())
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })?,
+            .map_err(|source| StepError::QueryFailedSource { source })?,
         funding_key: config::bedrock_funding_key(),
         auth: None,
         priority_fee: 10_000,
@@ -251,11 +244,9 @@ async fn committee_is_active(
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {
         loop {
-            let state = read_channel_state(&bedrock_config).await.map_err(|error| {
-                StepError::QueryFailed {
-                    message: error.to_string(),
-                }
-            })?;
+            let state = read_channel_state(&bedrock_config)
+                .await
+                .map_err(|source| StepError::QueryFailedSource { source })?;
             let active = state.is_some_and(|state| {
                 let mut actual_keys = state
                     .accredited_keys
@@ -307,9 +298,7 @@ async fn sequencer_becomes_posting_turn(
     let bedrock_config = BedrockConfig {
         channel_id: config::bedrock_channel_id(),
         node_url: config::addr_to_url(UrlProtocol::Http, context.bedrock().primary_api_addr())
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })?,
+            .map_err(|source| StepError::QueryFailedSource { source })?,
         funding_key: config::bedrock_funding_key(),
         auth: None,
         priority_fee: 10_000,
@@ -319,9 +308,7 @@ async fn sequencer_becomes_posting_turn(
         loop {
             let is_turn = read_channel_state(&bedrock_config)
                 .await
-                .map_err(|error| StepError::QueryFailed {
-                    message: error.to_string(),
-                })?
+                .map_err(|source| StepError::QueryFailedSource { source })?
                 .and_then(|state| {
                     state
                         .accredited_keys
@@ -440,9 +427,7 @@ async fn submit_committee_transfer(
         .client()
         .get_accounts_nonces(vec![sender])
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?
+        .map_err(StepError::query_failed)?
         .into_iter()
         .next()
         .ok_or_else(|| StepError::QueryFailed {
@@ -452,9 +437,7 @@ async fn submit_committee_transfer(
         .client()
         .get_account_balance(sender)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     let signing_key = initial_pub_accounts_private_keys()
         .get(sender_index)
         .ok_or_else(|| StepError::InvalidArgument {
@@ -473,9 +456,7 @@ async fn submit_committee_transfer(
         .client()
         .send_transaction(transaction)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     let submitted_observation = world
         .environment
         .transfers
@@ -522,9 +503,7 @@ async fn record_committee_balance_baseline(
         .client()
         .get_account_balance(account)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     world.environment.transfers.pending_observation =
         Some(crate::cucumber::world::PendingTransferObservation {
             receiver: account,

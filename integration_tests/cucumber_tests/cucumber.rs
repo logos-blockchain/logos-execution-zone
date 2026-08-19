@@ -7,6 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use anyhow::Context as _;
 use cucumber::{
     StatsWriter as _, World as _, WriterExt as _, event::ScenarioFinished, writer,
     writer::Verbosity,
@@ -27,24 +28,32 @@ use wallet::SUPPRESS_VERBOSE_PRINTS;
 pub const TARGET: &str = "cucumber_main";
 type ScenarioAttempts = Arc<Mutex<HashMap<String, u8>>>;
 
-#[tokio::main]
-#[expect(clippy::print_stdout, reason = "Cucumber logs test code")]
-async fn main() {
+fn main() -> anyhow::Result<()> {
     logos_blockchain_testing_framework::env::set_default_env(SUPPRESS_VERBOSE_PRINTS, "true");
+    logos_blockchain_testing_framework::env::set_default_env("RUST_LOG", "info");
+    logos_blockchain_testing_framework::env::set_default_env("TF_KEEP_LOGS", "true");
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to build Cucumber Tokio runtime")?;
+    runtime.block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     integration_tests::cucumber::default::init_tracing();
     reap_all_stale_port_blocks();
-    println!("args: {:?}", std::env::args());
+    info!(target: TARGET, "args: {:?}", std::env::args());
 
     let scenario_attempts: ScenarioAttempts = Arc::new(Mutex::new(HashMap::new()));
     let teardown_failed = Arc::new(AtomicBool::new(false));
 
-    let output_dir = create_scenario_output_dir();
+    let output_dir = create_scenario_output_dir()?;
     let junit_xml_file = OpenOptions::new()
         .append(true)
         .create(true)
         .open(output_dir.join("cucumber-output-junit.xml"))
-        .inspect_err(|err| warn!(target: TARGET, "Failed to open output file: {err}"))
-        .expect("should create or open output file");
+        .context("failed to create or open Cucumber JUnit output file")?;
     let mut world = CucumberWorld::cucumber()
         // Re-outputs Failed steps for easier navigation.
         .repeat_failed()
@@ -89,10 +98,7 @@ async fn main() {
             })
         });
 
-    if let Some(retries) = get_retries()
-        .inspect_err(|e| warn!(target: TARGET, "{e}"))
-        .expect("should parse retries")
-    {
+    if let Some(retries) = get_retries()? {
         // Makes failed Scenarios being retried the specified number of times.
         world = world.retries(retries);
     }
@@ -144,15 +150,17 @@ async fn main() {
         })
         // Runs Cucumber. Features sourced from a Parser are fed to a Runner, which
         // produces events handled by a Writer.
-        .run(get_feature_path())
+        .run(get_feature_path()?)
         .await;
 
     // Clean up manually reserved handshake port block files for this process
     release_reserved_port_block();
 
     if failed.execution_has_failed() || teardown_failed.load(std::sync::atomic::Ordering::Relaxed) {
-        std::process::exit(1);
+        anyhow::bail!("Cucumber scenarios failed");
     }
+
+    Ok(())
 }
 
 // Get the maximum number of concurrent scenarios from env var, defaults to 1
@@ -210,17 +218,19 @@ fn scenario_output_dir(
 // Increment and return the attempt count for the given scenario. Counts
 // are tracked per-scenario, and keyed by a combination of feature and
 // scenario name.
-#[expect(clippy::significant_drop_tightening, reason = "Compiler weirdness")]
 fn increment_attempts(
     scenario_attempts: &ScenarioAttempts,
     feature: &str,
     scenario: &str,
 ) -> String {
-    let mut guard = scenario_attempts
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let key = format!("{feature}::{scenario}");
-    let entry = guard.entry(key).or_insert(0);
-    *entry = entry.wrapping_add(1);
-    format!("attempt_{}", *entry)
+    let attempt = {
+        let mut guard = scenario_attempts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = guard.entry(key).or_insert(0);
+        *entry = entry.wrapping_add(1);
+        *entry
+    };
+    format!("attempt_{attempt}")
 }

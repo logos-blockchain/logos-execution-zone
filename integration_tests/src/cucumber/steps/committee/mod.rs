@@ -5,7 +5,7 @@ use logos_blockchain_key_management_system_service::keys::ED25519_SECRET_KEY_SIZ
 
 use crate::{
     cucumber::error::StepError,
-    tf::{LezSequencerClient, LezSequencerRegistryClient},
+    testing_framework::{LezSequencerClient, LezSequencerRegistryClient},
 };
 
 mod actions;

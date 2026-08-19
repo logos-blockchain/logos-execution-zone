@@ -11,7 +11,7 @@ use crate::{
         steps::transfers::helpers::transfer_artifact,
         world::{CucumberWorld, TransferArtifact},
     },
-    tf::{
+    testing_framework::{
         IndexerCatchUpError, LezIndexerClient, wait_for_indexer_to_catch_up_with_timeout,
         wait_for_indexer_to_index_transactions_with_timeout,
     },
@@ -71,15 +71,11 @@ async fn assert_transferred_public_account_states_match(
     for account in accounts {
         let sequencer_state = SequencerRpcClient::get_account(context.sequencer_client(), account)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })?;
+            .map_err(StepError::query_failed)?;
         let indexer_state =
             IndexerRpcClient::get_account(&**context.indexer_client(), account.into())
                 .await
-                .map_err(|error| StepError::QueryFailed {
-                    message: error.to_string(),
-                })?;
+                .map_err(StepError::query_failed)?;
         if indexer_state != sequencer_state.into() {
             return Err(StepError::AssertionFailed {
                 message: format!(

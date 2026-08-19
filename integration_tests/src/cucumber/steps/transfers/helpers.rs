@@ -116,9 +116,7 @@ pub(super) async fn assert_public_balance_delta(
         .sequencer_client()
         .get_account_balance(account)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     if observed_balance != expected_balance {
         return Err(StepError::AssertionFailed {
             message: format!(
@@ -224,9 +222,7 @@ pub async fn get_transfer_transaction(
     client
         .get_transaction(transfer_hash)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?
+        .map_err(StepError::query_failed)?
         .ok_or_else(|| StepError::QueryFailed {
             message: format!("transfer {transfer_hash} was not found in the sequencer"),
         })
@@ -246,9 +242,7 @@ pub async fn wait_for_transfer_inclusion(
             if let Some((transaction, block_id)) = client
                 .get_transaction(artifact.hash)
                 .await
-                .map_err(|error| StepError::QueryFailed {
-                    message: error.to_string(),
-                })?
+                .map_err(StepError::query_failed)?
             {
                 assert_transaction_kind(artifact, &transaction)?;
                 return Ok::<u64, StepError>(block_id);

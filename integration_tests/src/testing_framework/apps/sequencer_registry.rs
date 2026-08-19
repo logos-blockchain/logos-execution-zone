@@ -328,9 +328,11 @@ async fn deploy_registered_sequencer(
         .with_genesis(genesis)
         .with_bedrock_signing_key(signing_key);
     let (service, owned_state_dir) = if let Some(state_dir) = state_dir {
+        std::fs::create_dir_all(&state_dir)
+            .context("failed to create registered sequencer state directory")?;
         (
             setup
-                .setup_in_owned(state_dir)
+                .setup_at(&state_dir)
                 .await
                 .context("failed to set up registered sequencer")?,
             None,

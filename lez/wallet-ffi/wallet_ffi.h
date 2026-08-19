@@ -180,6 +180,13 @@ typedef struct FfiAccountList {
 } FfiAccountList;
 
 /**
+ * Program ID - 8 u32 values (32 bytes total).
+ */
+typedef struct FfiProgramId {
+  uint32_t data[8];
+} FfiProgramId;
+
+/**
  * U128 - 16 bytes little endian.
  */
 typedef struct FfiU128 {
@@ -193,7 +200,7 @@ typedef struct FfiU128 {
  * byte arrays since C doesn't have native u128 support.
  */
 typedef struct FfiAccount {
-  struct FfiBytes32 program_owner;
+  struct FfiProgramId program_owner;
   /**
    * Balance as little-endian [u8; 16].
    */
@@ -242,20 +249,12 @@ typedef struct FfiAccountIdentity {
    * C-compatible string.
    */
   char *key_path;
-  struct FfiBytes32 authorization_secret_key;
   struct FfiBytes32 nullifier_secret_key;
   struct FfiBytes32 nullifier_public_key;
   const uint8_t *viewing_public_key;
   uintptr_t viewing_public_key_len;
   struct FfiU128 identifier;
 } FfiAccountIdentity;
-
-/**
- * Program ID - 8 u32 values (32 bytes total).
- */
-typedef struct FfiProgramId {
-  uint32_t data[8];
-} FfiProgramId;
 
 /**
  * Result of a generic transaction operation.
@@ -668,24 +667,6 @@ enum WalletFfiError wallet_ffi_send_generic_private_transaction(struct WalletHan
                                                                 uintptr_t instruction_words_size,
                                                                 const struct FfiProgramWithDependencies *program_with_dependencies,
                                                                 struct FfiTransactionResult *out_result);
-
-/**
- * Poll transaction for its status.
- *
- * # Parameters
- * - `handle`: Valid pointer to wallet handle.
- * - `tx_hash`: Bytes of a transaction hash,
- * - `transaction_status`: Valid pointer into `bool`.
- *
- * # Returns
- * - `true` if seen included, `false` othervise.
- *
- * # Safety
- * - `handle` must be a valid pointer.
- */
-enum WalletFfiError wallet_ffi_poll_transaction_status(struct WalletHandle *handle,
-                                                       struct FfiBytes32 tx_hash,
-                                                       bool *transaction_status);
 
 /**
  * Free a transaction result returned by `wallet_ffi_send_generic_public_transaction` or

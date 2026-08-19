@@ -8,7 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait.workspace = true
+trait-variant.workspace = true
 lee.workspace = true
 lee_core.workspace = true
 chain_state.workspace = true

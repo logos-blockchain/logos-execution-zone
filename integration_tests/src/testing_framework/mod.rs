@@ -18,4 +18,4 @@ mod stack;
 /// Indexer convergence polling implementation.
 pub mod wait;
 
-pub const TARGET: &str = "tf";
+pub const TARGET: &str = "testing_framework";

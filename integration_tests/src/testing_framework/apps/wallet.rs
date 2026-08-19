@@ -666,11 +666,6 @@ impl AppDeployment<AppHostEnv> for WalletApp {
         // lifetime in its async API. Keep that implementation detail inside a
         // dedicated blocking thread/runtime; scenario operations use the
         // actor below and never create nested runtimes.
-        let setup_public_accounts = public_accounts.clone();
-        let setup_private_accounts = private_accounts.clone();
-        let setup_state_dir = configured_state_dir.clone();
-        let initialize_public_accounts = public_accounts.clone();
-        let private_accounts_to_initialize = private_accounts.clone();
         let (wallet, state_dir, password) = tokio::task::spawn_blocking(
             move || -> anyhow::Result<(WalletCore, Option<TempDir>, String)> {
                 let runtime = tokio::runtime::Builder::new_current_thread()
@@ -678,11 +673,11 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                     .build()
                     .context("failed to create LEZ wallet setup runtime")?;
                 runtime.block_on(async move {
-                    let (wallet, initialized_state_dir, password) = match setup_state_dir {
+                    let (wallet, initialized_state_dir, password) = match configured_state_dir {
                         Some(setup_home) => crate::setup::setup_wallet_at(
                             std::slice::from_ref(&sequencer_addr),
-                            &setup_public_accounts,
-                            &setup_private_accounts,
+                            &public_accounts,
+                            &private_accounts,
                             WalletConfigOverrides::default(),
                             &setup_home,
                         )
@@ -691,8 +686,8 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                         .map(|(wallet, _, password)| (wallet, None, password)),
                         None => setup_wallet(
                             std::slice::from_ref(&sequencer_addr),
-                            &setup_public_accounts,
-                            &setup_private_accounts,
+                            &public_accounts,
+                            &private_accounts,
                             WalletConfigOverrides::default(),
                         )
                         .await
@@ -702,14 +697,11 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                         }),
                     }?;
                     let mut wallet = wallet;
-                    setup_public_accounts_with_initial_supply(
-                        &mut wallet,
-                        &initialize_public_accounts,
-                    )
-                    .await
-                    .context("failed to initialize LEZ public wallet accounts")?;
+                    setup_public_accounts_with_initial_supply(&mut wallet, &public_accounts)
+                        .await
+                        .context("failed to initialize LEZ public wallet accounts")?;
                     if initialize_private_account_funding {
-                        for private_account in &private_accounts_to_initialize {
+                        for private_account in &private_accounts {
                             setup_private_accounts_with_initial_supply(
                                 &mut wallet,
                                 std::slice::from_ref(private_account),

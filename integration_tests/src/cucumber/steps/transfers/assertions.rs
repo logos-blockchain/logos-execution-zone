@@ -181,9 +181,7 @@ async fn assert_new_account_balance(
         .sequencer_client()
         .get_account_balance(account)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     if observed_balance != expected_balance {
         return Err(StepError::AssertionFailed {
             message: format!(
@@ -314,9 +312,7 @@ async fn assert_sender_balance_unchanged(world: &mut CucumberWorld, step: &Step)
         .sequencer_client()
         .get_account_balance(sender)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     if observed_balance != initial_balance {
         return Err(StepError::AssertionFailed {
             message: format!(
@@ -337,9 +333,7 @@ async fn assert_receiver_balance_unchanged(world: &mut CucumberWorld, step: &Ste
         .sequencer_client()
         .get_account_balance(receiver)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     if observed_balance != initial_balance {
         return Err(StepError::AssertionFailed {
             message: format!(
@@ -512,9 +506,7 @@ async fn assert_sender_nonce_advances(
         .sequencer_client()
         .get_accounts_nonces(vec![sender])
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?
+        .map_err(StepError::query_failed)?
         .into_iter()
         .next()
         .ok_or_else(|| StepError::QueryFailed {

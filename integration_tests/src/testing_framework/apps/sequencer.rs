@@ -135,8 +135,10 @@ impl SequencerApp {
             let setup = SequencerSetup::new(self.config, self.bedrock_addr).with_genesis(genesis);
             let (service, state_dir);
             if let Some(home) = self.state_dir {
+                std::fs::create_dir_all(&home)
+                    .context("failed to create LEZ sequencer state directory")?;
                 service = setup
-                    .setup_in_owned(home)
+                    .setup_at(&home)
                     .await
                     .context("failed to set up LEZ sequencer")?;
                 state_dir = None;

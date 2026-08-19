@@ -115,19 +115,9 @@ impl SequencerSetup {
         Ok((sequencer_handle, temp_sequencer_dir))
     }
 
-    /// Set up the sequencer in an explicit home directory owned by the caller.
-    pub async fn setup_in(self, home: &Path) -> Result<SequencerHandle> {
-        self.setup_owned(home.to_owned()).await
-    }
-
-    /// Set up the sequencer in an explicit owned home directory.
-    pub async fn setup_in_owned(self, home: PathBuf) -> Result<SequencerHandle> {
-        std::fs::create_dir_all(&home).context("Failed to create sequencer home")?;
-        self.setup_owned(home).await
-    }
-
     /// Set up the sequencer in an explicit `home` directory owned by the caller.
     ///
+    /// The caller is responsible for creating and retaining the directory.
     /// Useful for tests that restart the sequencer against the same on-disk store.
     pub async fn setup_at(self, home: &Path) -> Result<SequencerHandle> {
         self.setup_owned(home.to_owned()).await

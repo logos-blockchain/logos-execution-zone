@@ -11,7 +11,7 @@ use num_bigint::BigUint;
 use tempfile::TempDir;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext, LocalAppCluster};
 use testing_framework_core::scenario::DynError;
-use tokio::time::{Instant, sleep};
+use tokio::time::{sleep, timeout};
 
 /// A TF-managed Logos blockchain cluster used as LEZ's Bedrock layer.
 ///
@@ -179,19 +179,25 @@ impl BedrockCluster {
     pub async fn wait_for_first_block(&self) -> Result<(), DynError> {
         const TIMEOUT: Duration = Duration::from_secs(60);
         const POLL_INTERVAL: Duration = Duration::from_millis(250);
-        let started = Instant::now();
         let mut last_error = None;
 
-        while started.elapsed() < TIMEOUT {
-            match self.cluster.first_client() {
-                Some(client) => match client.consensus_info().await {
-                    Ok(info) if info.cryptarchia_info.height > 0 => return Ok(()),
-                    Ok(_) => {}
-                    Err(error) => last_error = Some(error.to_string()),
-                },
-                None => last_error = Some("Bedrock cluster has no node clients".to_owned()),
+        if timeout(TIMEOUT, async {
+            loop {
+                match self.cluster.first_client() {
+                    Some(client) => match client.consensus_info().await {
+                        Ok(info) if info.cryptarchia_info.height > 0 => return,
+                        Ok(_) => {}
+                        Err(error) => last_error = Some(error.to_string()),
+                    },
+                    None => last_error = Some("Bedrock cluster has no node clients".to_owned()),
+                }
+                sleep(POLL_INTERVAL).await;
             }
-            sleep(POLL_INTERVAL).await;
+        })
+        .await
+        .is_ok()
+        {
+            return Ok(());
         }
 
         Err(anyhow!(

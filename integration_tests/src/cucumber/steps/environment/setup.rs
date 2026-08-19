@@ -7,7 +7,7 @@ use crate::{
         steps::environment::helpers::{deploy_lez_sequencer_registry, deploy_lez_stack},
         world::CucumberWorld,
     },
-    tf::BedrockApp,
+    testing_framework::BedrockApp,
 };
 
 #[given("a LEZ smoke stack")]

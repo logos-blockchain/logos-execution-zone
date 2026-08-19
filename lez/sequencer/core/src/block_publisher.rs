@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, ensure};
-use async_trait::async_trait;
 use common::block::Block;
 use futures::Stream;
 use log::{info, warn};
@@ -121,8 +120,8 @@ enum Command {
 
 type CommandSender = mpsc::Sender<Command>;
 
-#[async_trait]
-pub trait BlockPublisherTrait: Sized + Sync {
+#[trait_variant::make(BlockPublisherTrait: Send)]
+pub trait LocalBlockPublisherTrait: Sized + Sync {
     async fn new(
         config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,
@@ -232,7 +231,6 @@ impl ZoneSdkPublisher {
     }
 }
 
-#[async_trait]
 impl BlockPublisherTrait for ZoneSdkPublisher {
     async fn channel_exists(config: &BedrockConfig) -> Result<bool> {
         Ok(read_channel_state(config).await?.is_some())

@@ -7,7 +7,6 @@ Feature: LEZ multi-sequencer committee convergence
 # shared genesis, A creates the channel, B joins later, and the scenario waits for B's
 # posting turn. Cucumber additionally uses parameterized aliases and explicit runtime
 # teardown.
-  @multi_sequencer
   Scenario: A multi-sequencer committee converges across sequencers and the indexer
     Given a LEZ multi-sequencer environment with 1 validator and 0 Blend nodes
     And the following LEZ sequencers are registered

@@ -135,6 +135,7 @@ tokio = { version = "1.50", features = [
 ] }
 tokio-util = "0.7.18"
 async-trait = "0.1"
+trait-variant = "0.1.2"
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
 risc0-build = "3.0.5"
 kameo = "0.22.2"

@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use common::block::Block;
 use futures::Stream;
 use logos_blockchain_core::{
@@ -52,7 +51,6 @@ impl MockBlockPublisher {
     }
 }
 
-#[async_trait]
 impl BlockPublisherTrait for MockBlockPublisher {
     // Tests assume this node is always the one bootstrapping the channel.
     async fn channel_exists(_config: &BedrockConfig) -> Result<bool> {

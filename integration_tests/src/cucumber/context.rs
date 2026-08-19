@@ -6,7 +6,7 @@ use testing_framework_app::{AppHostEnv, DeployContext};
 use crate::{
     cucumber::error::StepError,
     indexer_client::IndexerClient,
-    tf::{
+    testing_framework::{
         BedrockCluster, LezIndexerClient, LezRuntime, LezSequencerClient,
         LezSequencerRegistryClient, LezStackHandle,
     },
@@ -18,7 +18,7 @@ use crate::{
 /// Compose Bedrock deployment and the complete service lifecycle. The TF
 /// applications provide the same low-level setup and deterministic
 /// configuration, while this context mirrors only the useful `TestContext` API.
-/// Deployment ownership remains in `crate::tf`; Cucumber owns cloned handles
+/// Deployment ownership remains in `crate::testing_framework`; Cucumber owns cloned handles
 /// and scenario state only.
 pub struct LezScenarioContext {
     stack: LezStackHandle,
@@ -130,9 +130,7 @@ impl LezScenarioContext {
         self.wallet()
             .existing_public_accounts()
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 
     /// Returns the private account IDs currently imported into the wallet.
@@ -140,9 +138,7 @@ impl LezScenarioContext {
         self.wallet()
             .existing_private_accounts()
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 
     /// Returns the locally synchronized balance of an imported private account.
@@ -153,9 +149,7 @@ impl LezScenarioContext {
         self.wallet()
             .private_account_balance(account_id)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 
     /// Returns the current commitment for an imported private account.
@@ -166,9 +160,7 @@ impl LezScenarioContext {
         self.wallet()
             .private_account_commitment(account_id)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 
     /// Returns the public signing key for an imported public account.
@@ -179,9 +171,7 @@ impl LezScenarioContext {
         self.wallet()
             .public_account_signing_key(account_id)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 
     /// Executes an authenticated transfer between two owned public accounts.
@@ -194,9 +184,7 @@ impl LezScenarioContext {
         self.wallet()
             .public_transfer(from, to, amount)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 
     /// Executes an authenticated transfer between two owned private accounts.
@@ -209,9 +197,7 @@ impl LezScenarioContext {
         self.wallet()
             .private_transfer(from, to, amount)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 
     /// Synchronizes the wallet with the latest sequencer block.
@@ -219,9 +205,7 @@ impl LezScenarioContext {
         self.wallet()
             .sync_to_latest_block()
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 
     /// Creates a fresh public account in the scenario wallet.
@@ -229,9 +213,7 @@ impl LezScenarioContext {
         self.wallet()
             .new_public_account()
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 
     /// Executes an authenticated transfer that claims a fresh public account.
@@ -244,9 +226,7 @@ impl LezScenarioContext {
         self.wallet()
             .public_transfer_to_new_account(from, to, amount)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 
     /// Assigns a label to an imported public account through the wallet actor.
@@ -258,9 +238,7 @@ impl LezScenarioContext {
         self.wallet()
             .set_public_account_label(account_id, label)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 
     /// Executes an authenticated public transfer using wallet-resolved labels.
@@ -273,8 +251,6 @@ impl LezScenarioContext {
         self.wallet()
             .public_transfer_by_labels(from, to, amount)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })
+            .map_err(StepError::query_failed_boxed)
     }
 }

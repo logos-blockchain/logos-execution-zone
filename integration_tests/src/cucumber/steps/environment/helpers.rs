@@ -11,7 +11,7 @@ use crate::{
         error::{StepError, StepResult},
         world::CucumberWorld,
     },
-    tf::{BedrockApp, IndexerApp, LezLocalApp, LezSequencerRegistryApp},
+    testing_framework::{BedrockApp, IndexerApp, LezLocalApp, LezSequencerRegistryApp},
 };
 
 pub(crate) async fn deploy_lez_stack(
@@ -47,9 +47,7 @@ pub(crate) async fn deploy_lez_stack(
             "Cucumber step '{}' failed during deployment: {error:?}",
             step.value
         );
-        StepError::DeploymentFailed {
-            message: format!("{error:?}"),
-        }
+        StepError::deployment_failed_boxed(error, "Cucumber LEZ stack deployment failed")
     })?;
 
     world.set_lez(LezScenarioContext::from_stack(stack))
@@ -72,32 +70,38 @@ pub(crate) async fn deploy_lez_sequencer_registry(
         .deployment_mut()
         .deploy_and_expose(bedrock.with_scenario_base_dir(scenario_base_dir.join("node")))
         .await
-        .map_err(|error| StepError::DeploymentFailed {
-            message: format!(
-                "Cucumber step '{}' failed during Bedrock deployment: {error:?}",
+        .map_err(|error| {
+            StepError::deployment_failed_boxed(
+                error,
+                format!(
+                    "Cucumber step '{}' failed during Bedrock deployment",
+                    step.value
+                ),
+            )
+        })?;
+    bedrock.wait_for_first_block().await.map_err(|error| {
+        StepError::deployment_failed_boxed(
+            error,
+            format!(
+                "Cucumber step '{}' failed waiting for Bedrock funding readiness",
                 step.value
             ),
-        })?;
-    bedrock
-        .wait_for_first_block()
-        .await
-        .map_err(|error| StepError::DeploymentFailed {
-            message: format!(
-                "Cucumber step '{}' failed waiting for Bedrock funding readiness: {error:?}",
-                step.value
-            ),
-        })?;
+        )
+    })?;
     let indexer = IndexerApp::new(bedrock.primary_api_addr())
         .with_state_dir(scenario_base_dir.join("lez/indexer"));
     world
         .deployment_mut()
         .deploy_and_expose(indexer)
         .await
-        .map_err(|error| StepError::DeploymentFailed {
-            message: format!(
-                "Cucumber step '{}' failed during indexer deployment: {error:?}",
-                step.value
-            ),
+        .map_err(|error| {
+            StepError::deployment_failed_boxed(
+                error,
+                format!(
+                    "Cucumber step '{}' failed during indexer deployment",
+                    step.value
+                ),
+            )
         })?;
     let sequencer_config = SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(5),
@@ -110,11 +114,14 @@ pub(crate) async fn deploy_lez_sequencer_registry(
         .deployment_mut()
         .deploy_and_expose(registry)
         .await
-        .map_err(|error| StepError::DeploymentFailed {
-            message: format!(
-                "Cucumber step '{}' failed during sequencer registry deployment: {error:?}",
-                step.value
-            ),
+        .map_err(|error| {
+            StepError::deployment_failed_boxed(
+                error,
+                format!(
+                    "Cucumber step '{}' failed during sequencer registry deployment",
+                    step.value
+                ),
+            )
         })?;
     let context = crate::cucumber::context::LezSequencerRegistryScenarioContext::from_deployment(
         world.deployment(),

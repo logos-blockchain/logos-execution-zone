@@ -17,7 +17,7 @@ use crate::{
         steps::indexer::convergence::wait_for_named_transfer_indexed,
         world::CucumberWorld,
     },
-    tf::{IndexerCatchUpError, wait_for_indexer_to_reach_with_timeout},
+    testing_framework::{IndexerCatchUpError, wait_for_indexer_to_reach_with_timeout},
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -28,25 +28,17 @@ async fn common_hash_state(
 ) -> Result<(u64, u64, Option<u64>), StepError> {
     let first_height = SequencerRpcClient::get_last_block_id(first)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     let second_height = SequencerRpcClient::get_last_block_id(second)
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     for block_id in 1..=first_height.min(second_height) {
         let first_block = SequencerRpcClient::get_block(first, block_id)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })?;
+            .map_err(StepError::query_failed)?;
         let second_block = SequencerRpcClient::get_block(second, block_id)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })?;
+            .map_err(StepError::query_failed)?;
         if !matches!((&first_block, &second_block), (Some(a), Some(b)) if a.header.hash == b.header.hash)
         {
             return Ok((first_height, second_height, Some(block_id)));
@@ -132,9 +124,7 @@ async fn sequencer_observes_receiver_balance_increase(
                 .client()
                 .get_account_balance(receiver)
                 .await
-                .map_err(|error| StepError::QueryFailed {
-                    message: error.to_string(),
-                })?;
+                .map_err(StepError::query_failed)?;
             if observed == expected_balance {
                 return Ok::<(), StepError>(());
             }
@@ -153,9 +143,7 @@ async fn sequencer_observes_receiver_balance_increase(
             .client()
             .get_last_block_id()
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })?,
+            .map_err(StepError::query_failed)?,
     );
     Ok(())
 }
@@ -265,17 +253,13 @@ async fn finalized_indexer_blocks_match_sequencer(
         let indexer_block =
             IndexerRpcClient::get_block_by_id(&**context.indexer_client(), block_id)
                 .await
-                .map_err(|error| StepError::QueryFailed {
-                    message: error.to_string(),
-                })?
+                .map_err(StepError::query_failed)?
                 .ok_or_else(|| StepError::QueryFailed {
                     message: format!("indexer is missing finalized block {block_id}"),
                 })?;
         let sequencer_block = SequencerRpcClient::get_block(sequencer.client(), block_id)
             .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })?
+            .map_err(StepError::query_failed)?
             .ok_or_else(|| StepError::QueryFailed {
                 message: format!("sequencer '{sequencer_alias}' is missing block {block_id}"),
             })?;
@@ -302,9 +286,7 @@ async fn indexer_is_not_stalled(world: &mut CucumberWorld, step: &Step) -> StepR
     let context = world.sequencer_registry()?;
     let status = IndexerRpcClient::get_status(&**context.indexer_client())
         .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+        .map_err(StepError::query_failed)?;
     if let Some(reason) = status.stall_reason {
         return Err(StepError::AssertionFailed {
             message: format!("indexer is stalled: {reason:?}"),

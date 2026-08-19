@@ -35,6 +35,13 @@ pub struct LezStackHandle {
     wallet: super::LezRuntime,
 }
 
+#[cfg_attr(
+    not(feature = "cucumber"),
+    expect(
+        dead_code,
+        reason = "Cucumber consumes the component accessors when its module is enabled"
+    )
+)]
 impl LezStackHandle {
     pub(crate) const fn new(
         bedrock: BedrockCluster,

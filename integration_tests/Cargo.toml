@@ -8,8 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait.workspace = true
-cucumber = { features = ["macros", "output-junit"], workspace = true }
+# LEZ and workspace crates.
 test_fixtures.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 lee.workspace = true
@@ -45,22 +44,25 @@ logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-testing-framework.workspace = true
 logos-blockchain-zone-sdk.workspace = true
-anyhow.workspace = true
-log.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
-hex.workspace = true
-tempfile.workspace = true
-bytesize.workspace = true
-num-bigint.workspace = true
-
 testing-framework-app.workspace = true
 testing-framework-core.workspace = true
+
+# External dependencies.
+anyhow.workspace = true
+async-trait.workspace = true
+bytesize.workspace = true
+cucumber = { features = ["macros", "output-junit"], workspace = true, optional = true }
+hex.workspace = true
+log.workspace = true
+num-bigint.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [features]
-cucumber = []
+cucumber = ["dep:cucumber"]
 
 [[test]]
 harness = false                     # Cucumber has its own main() function to run tests.
