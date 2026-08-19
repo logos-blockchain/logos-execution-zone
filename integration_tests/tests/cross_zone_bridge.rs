@@ -62,6 +62,8 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
             }],
             expected_block_signing_pubkey: None,
         }],
+        source_authority: None,
+        source_governance: None,
     };
 
     // Zone A seeds the holder's bridgeable balance. Zone B runs the watcher on its

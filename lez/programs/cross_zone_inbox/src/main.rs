@@ -1,8 +1,8 @@
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, SeenShard, inbox_config_account_id,
     inbox_config_seed, inbox_seen_shard_account_id, inbox_seen_shard_seed,
-    inbox_source_marker_account_id,
 };
+use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountWithMetadata},
     program::{
@@ -50,6 +50,20 @@ fn main() {
 }
 
 /// Delivers a finalized peer message to its target program, no-op on replay.
+///
+/// The inbox does not decide who may deliver what. It authenticates transport
+/// and nothing else: any program this zone hosts can be named as a target, with
+/// instruction bytes and account ids the peer chose. So a program meant to be
+/// reachable across zones MUST check the marker at position 0 against sources it
+/// authorized itself, the way `wrapped_token` and `ping_receiver` do. A program
+/// not meant to be reachable has only whatever its own code happens to do. Today
+/// every other builtin refuses, but by three different accidents: four assert
+/// `caller_program_id` is none; several run to completion and are stopped by the
+/// host, either because they try to claim the marker without its authorization or
+/// because they chain into its zero program id; and the rest are saved by an
+/// address assert on a PDA. None of that was written with cross-zone delivery in
+/// mind. User-deployed programs are reachable too, and were written with no
+/// expectation of an inbox caller at all.
 fn dispatch(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
@@ -88,15 +102,13 @@ fn dispatch(
         "Third account must be the source marker PDA for this message"
     );
 
-    let cfg = InboxConfig::from_bytes(&config.account.data.clone().into_inner())
-        .expect("inbox config decodes");
+    let cfg = InboxConfig::from_bytes(&config.account.data).expect("inbox config decodes");
 
     assert!(
         msg.src_zone != cfg.self_zone,
         "Source zone must not be this zone"
     );
-    let mut shard =
-        SeenShard::from_bytes(&seen.account.data.clone().into_inner()).expect("seen shard decodes");
+    let mut shard = SeenShard::from_bytes(&seen.account.data).expect("seen shard decodes");
 
     // One block id, one delivering block. The address binds the zone and block
     // id but not which block claimed them, so an equivocating peer's two blocks
@@ -195,7 +207,7 @@ fn init_config(
             "inbox config PDA is owned by another program"
         );
         assert_eq!(
-            config_meta.account.data.clone().into_inner(),
+            *config_meta.account.data,
             config.to_bytes(),
             "inbox config already initialized differently"
         );

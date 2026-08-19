@@ -12,8 +12,9 @@
 
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction as InboxInstruction, SeenShard,
-    inbox_config_account_id, inbox_seen_shard_account_id, inbox_source_marker_account_id,
+    inbox_config_account_id, inbox_seen_shard_account_id,
 };
+use cross_zone_marker_core::inbox_source_marker_account_id;
 use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
 use lee::{
     AccountId, PrivateKey, PublicKey, PublicTransaction, V03State, ValidatedStateDiff,
@@ -24,6 +25,15 @@ use ping_core::{
     ReceiverInstruction, outbox_bytes, ping_record_pda, read_outbox, receiver_config_account_id,
     sender_config_account_id,
 };
+
+/// Serializes an instruction to the risc0 word form the guests read. A macro
+/// because the serde trait a generic fn would have to name is not a dependency
+/// of this crate.
+macro_rules! words_of {
+    ($instruction:expr) => {
+        risc0_zkvm::serde::to_vec($instruction).expect("serialize instruction")
+    };
+}
 
 const INITIAL_BALANCE: u128 = 100;
 const LOCK_AMOUNT: u128 = 30;
@@ -65,11 +75,24 @@ fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
 /// peer pairs it will mint for, matching what genesis seeds for a real zone.
 fn seed_wrapped_config(
     state: &mut V03State,
+    authority: Option<AccountId>,
+    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+) {
+    seed_wrapped_config_with_governance(state, None, authority, sources);
+}
+
+/// The same, naming a program allowed to act for the authority through a chain.
+fn seed_wrapped_config_with_governance(
+    state: &mut V03State,
+    governance: Option<lee_core::program::ProgramId>,
+    authority: Option<AccountId>,
     sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
 ) {
     let wrapped_token_id = programs::wrapped_token().id();
     let config = wrapped_token_core::WrappedTokenConfig {
         minter: programs::cross_zone_inbox().id(),
+        governance,
+        authority,
         sources,
     };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
@@ -89,11 +112,24 @@ fn seed_wrapped_config(
 /// the peer pairs it accepts a delivery from.
 fn seed_receiver_config(
     state: &mut V03State,
+    authority: Option<AccountId>,
+    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+) {
+    seed_receiver_config_with_governance(state, None, authority, sources);
+}
+
+/// The same, naming a program allowed to act for the authority through a chain.
+fn seed_receiver_config_with_governance(
+    state: &mut V03State,
+    governance: Option<lee_core::program::ProgramId>,
+    authority: Option<AccountId>,
     sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
 ) {
     let receiver_id = programs::ping_receiver().id();
     let config = ping_core::ReceiverConfig {
         deliverer: programs::cross_zone_inbox().id(),
+        governance,
+        authority,
         sources,
     };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
@@ -162,6 +198,81 @@ fn dispatch_accounts(
     ids
 }
 
+/// Asserts the transaction fails at `block` with an error mentioning `expected`,
+/// so a refusal for an unrelated reason cannot keep a guard test green.
+fn rejects_at(state: &V03State, tx: &PublicTransaction, block: u64, expected: &str) {
+    let Err(err) = ValidatedStateDiff::from_public_transaction(tx, state, block, 0) else {
+        panic!("expected a rejection mentioning {expected}");
+    };
+    assert!(
+        format!("{err:?}").contains(expected),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// A top-level authority transaction: the instruction words over `accounts`,
+/// signed by `key` at `nonce`.
+fn signed_tx(
+    program: lee_core::program::ProgramId,
+    accounts: Vec<AccountId>,
+    nonce: u128,
+    words: Vec<u32>,
+    key: &PrivateKey,
+) -> PublicTransaction {
+    let message = Message::new_preserialized(program, accounts, vec![nonce.into()], words);
+    let witness = WitnessSet::for_message(&message, &[key]);
+    PublicTransaction::new(message, witness)
+}
+
+/// An unsigned call through the governance proxy, delegating `delegated` (or
+/// nothing) on the chained call into `target`.
+fn via_proxy(
+    proxy_id: lee_core::program::ProgramId,
+    target: lee_core::program::ProgramId,
+    config: AccountId,
+    authority: AccountId,
+    delegated: Option<lee_core::program::PdaSeed>,
+    words: Vec<u32>,
+) -> PublicTransaction {
+    let message = Message::try_new(
+        proxy_id,
+        vec![config, authority],
+        vec![],
+        (target, words, delegated),
+    )
+    .expect("build proxy message");
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+}
+
+/// An authority instruction delivered through the inbox, as a peer would have to
+/// send it: the dispatch shape over the target's config and authority accounts.
+fn chained_via_inbox(
+    target: lee_core::program::ProgramId,
+    config_id: AccountId,
+    authority: AccountId,
+    words: Vec<u32>,
+) -> PublicTransaction {
+    let inbox_id = programs::cross_zone_inbox().id();
+    let msg = CrossZoneMessage {
+        src_zone: [2; 32],
+        src_block_id: 5,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_program_id: programs::bridge_lock().id(),
+        target_program_id: target,
+        payload: words.into_iter().flat_map(u32::to_le_bytes).collect(),
+        l1_inclusion_witness: None,
+    };
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(inbox_id, &msg, vec![config_id, authority]),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+}
+
 /// A `ping_sender::Send` carrying `payload` to `target_zone`, over the accounts
 /// given rather than the correct ones, so tests can vary them.
 fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
@@ -210,7 +321,7 @@ fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeErro
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, vec![(src_zone, [9_u32; 8])]);
+    seed_wrapped_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -278,7 +389,7 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_receiver_config(&mut state, vec![(src_zone, [9_u32; 8])]);
+    seed_receiver_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
 
     // The payload is the ping_receiver instruction, serialized as risc0 words in
     // little-endian bytes (the contract the inbox reverses when forwarding).
@@ -950,6 +1061,911 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     );
 }
 
+/// The token's authority path, end to end: each guard refuses for its own
+/// reason, the signed path works more than once through the claimed account, and
+/// renouncing is one-way. The receiver battery mirrors this one.
+#[test]
+fn the_token_authority_path_holds() {
+    let wrapped_token_id = programs::wrapped_token().id();
+    let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let src_zone = [2_u8; 32];
+
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let other_key = PrivateKey::try_new([8; 32]).expect("valid key");
+    let other = AccountId::from(&PublicKey::new_from_private_key(&other_key));
+
+    let update = |account: AccountId,
+                  signer: &PrivateKey,
+                  nonce: u128,
+                  sources: Vec<([u8; 32], lee_core::program::ProgramId)>| {
+        signed_tx(
+            wrapped_token_id,
+            vec![config_id, account],
+            nonce,
+            words_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
+            signer,
+        )
+    };
+    let renounce = |account: AccountId, signer: &PrivateKey, nonce: u128| {
+        signed_tx(
+            wrapped_token_id,
+            vec![config_id, account],
+            nonce,
+            words_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+            signer,
+        )
+    };
+    let bridge_source = vec![(src_zone, programs::bridge_lock().id())];
+
+    // With no authority configured, nothing moves in either direction.
+    let mut unset = base_state();
+    seed_wrapped_config(&mut unset, None, vec![]);
+    rejects_at(
+        &unset,
+        &update(authority, &key, 0, bridge_source.clone()),
+        1,
+        "fixed at genesis",
+    );
+    rejects_at(
+        &unset,
+        &renounce(authority, &key, 0),
+        1,
+        "already renounced",
+    );
+
+    // With one configured: the wrong account, and the right account without its
+    // own signature, are refused for their own reasons.
+    let mut state = base_state();
+    seed_wrapped_config(&mut state, Some(authority), vec![]);
+    rejects_at(
+        &state,
+        &update(other, &other_key, 0, bridge_source.clone()),
+        1,
+        "second account must be the configured authority",
+    );
+    rejects_at(
+        &state,
+        &renounce(other, &other_key, 0),
+        1,
+        "second account must be the configured authority",
+    );
+    rejects_at(
+        &state,
+        &update(authority, &other_key, 0, bridge_source.clone()),
+        1,
+        "must authorize a source change",
+    );
+    rejects_at(
+        &state,
+        &renounce(authority, &other_key, 0),
+        1,
+        "must authorize renouncing it",
+    );
+
+    // Substituting another account for the config is refused rather than read,
+    // on both instructions.
+    let substituted = |words: Vec<u32>| {
+        signed_tx(
+            wrapped_token_id,
+            vec![ping_record_pda(wrapped_token_id), authority],
+            0,
+            words,
+            &key,
+        )
+    };
+    rejects_at(
+        &state,
+        &substituted(words_of!(&wrapped_token_core::Instruction::UpdateSources {
+            sources: bridge_source.clone(),
+        })),
+        1,
+        "must be the wrapped-token config PDA",
+    );
+    rejects_at(
+        &state,
+        &substituted(words_of!(
+            &wrapped_token_core::Instruction::RenounceAuthority
+        )),
+        1,
+        "must be the wrapped-token config PDA",
+    );
+
+    // The authority itself works, and more than once: the first use claims the
+    // account for the target, and the second runs on the claimed path.
+    let diff = ValidatedStateDiff::from_public_transaction(
+        &update(authority, &key, 0, bridge_source.clone()),
+        &state,
+        1,
+        0,
+    )
+    .expect("the configured authority changes sources");
+    state.apply_state_diff(diff);
+    let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(cfg.sources, bridge_source, "the new source is authorized");
+    assert_eq!(
+        state.get_account_by_id(authority).program_owner,
+        wrapped_token_id,
+        "the first use claims the authority account for the target"
+    );
+
+    let sender_source = vec![(src_zone, programs::ping_sender().id())];
+    let second = ValidatedStateDiff::from_public_transaction(
+        &update(authority, &key, 1, sender_source.clone()),
+        &state,
+        2,
+        0,
+    )
+    .expect("the authority acts again");
+    state.apply_state_diff(second);
+    let updated_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(
+        updated_cfg.sources, sender_source,
+        "the second change took effect"
+    );
+    assert_eq!(
+        updated_cfg.authority,
+        Some(authority),
+        "the authority is unchanged"
+    );
+
+    // Renouncing is one-way: the sources freeze at their last value and nothing
+    // moves afterwards, in either direction.
+    let renounced =
+        ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 2), &state, 3, 0)
+            .expect("the authority renounces itself");
+    state.apply_state_diff(renounced);
+    let renounced_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(renounced_cfg.authority, None, "the authority is gone");
+    assert_eq!(
+        renounced_cfg.sources, sender_source,
+        "renouncing leaves the sources it froze"
+    );
+    assert_eq!(
+        renounced_cfg.minter,
+        programs::cross_zone_inbox().id(),
+        "the minter is unchanged"
+    );
+    rejects_at(
+        &state,
+        &update(authority, &key, 3, bridge_source),
+        4,
+        "fixed at genesis",
+    );
+    rejects_at(
+        &state,
+        &renounce(authority, &key, 3),
+        4,
+        "already renounced",
+    );
+}
+
+/// `ping_receiver` authorizes its own sources too. It holds nothing worth
+/// stealing, but without this any program on any configured peer could overwrite
+/// the record, and a delivery would prove only that some peer sent it.
+#[test]
+fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
+    let inbox_id = programs::cross_zone_inbox().id();
+    let receiver_id = programs::ping_receiver().id();
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    // Authorizes one source; the delivery comes from another.
+    seed_receiver_config(
+        &mut state,
+        None,
+        vec![(src_zone, programs::bridge_lock().id())],
+    );
+
+    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        payload: b"ping".to_vec(),
+    })
+    .expect("serialize ping instruction");
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id: 5,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_program_id: programs::ping_sender().id(),
+        target_program_id: receiver_id,
+        payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        l1_inclusion_witness: None,
+    };
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                receiver_config_account_id(receiver_id),
+                ping_record_pda(receiver_id),
+            ],
+        ),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("an unauthorized source must not reach the receiver");
+    };
+    assert!(
+        format!("{err:?}").contains("peer source this receiver authorizes"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The inbox binds the marker to the message it is delivering. Without that the
+/// marker would be a field the dispatch could set freely, and a target checking it
+/// would be checking nothing.
+#[test]
+fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
+    let inbox_id = programs::cross_zone_inbox().id();
+    let receiver_id = programs::ping_receiver().id();
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+    let sender_id = programs::ping_sender().id();
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_receiver_config(&mut state, None, vec![(src_zone, sender_id)]);
+
+    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        payload: b"ping".to_vec(),
+    })
+    .expect("serialize ping instruction");
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id: 5,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_program_id: sender_id,
+        target_program_id: receiver_id,
+        payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        l1_inclusion_witness: None,
+    };
+
+    // The message says ping_sender; the marker names bridge_lock, which the
+    // receiver also would not accept. The inbox must refuse it first.
+    let message = Message::try_new(
+        inbox_id,
+        vec![
+            inbox_config_account_id(inbox_id),
+            inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
+            inbox_source_marker_account_id(inbox_id, &src_zone, programs::bridge_lock().id()),
+            receiver_config_account_id(receiver_id),
+            ping_record_pda(receiver_id),
+        ],
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a marker that does not match the message must not be delivered");
+    };
+    assert!(
+        format!("{err:?}").contains("must be the source marker PDA for this message"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The receiver's authority path is a mirror of the token's, and a mirror is
+/// exactly where a copy-paste slip hides. Same battery, run against it.
+#[test]
+fn the_receiver_authority_path_holds() {
+    let receiver_id = programs::ping_receiver().id();
+    let config_id = receiver_config_account_id(receiver_id);
+    let src_zone = [2_u8; 32];
+    let sender_id = programs::ping_sender().id();
+
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let other_key = PrivateKey::try_new([8; 32]).expect("valid key");
+    let other = AccountId::from(&PublicKey::new_from_private_key(&other_key));
+
+    let update = |account: AccountId, signer: &PrivateKey, nonce: u128| {
+        signed_tx(
+            receiver_id,
+            vec![config_id, account],
+            nonce,
+            words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+                sources: vec![(src_zone, sender_id)],
+            }),
+            signer,
+        )
+    };
+    let renounce = |account: AccountId, signer: &PrivateKey, nonce: u128| {
+        signed_tx(
+            receiver_id,
+            vec![config_id, account],
+            nonce,
+            words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+            signer,
+        )
+    };
+
+    // The wrong account, and the right account without its own signature, are
+    // both refused for their own reasons.
+    let mut state = base_state();
+    seed_receiver_config(&mut state, Some(authority), vec![]);
+    rejects_at(
+        &state,
+        &update(other, &other_key, 0),
+        1,
+        "must be the configured authority",
+    );
+    rejects_at(
+        &state,
+        &renounce(other, &other_key, 0),
+        1,
+        "must be the configured authority",
+    );
+    rejects_at(
+        &state,
+        &update(authority, &other_key, 0),
+        1,
+        "must authorize a source change",
+    );
+    rejects_at(
+        &state,
+        &renounce(authority, &other_key, 0),
+        1,
+        "must authorize renouncing it",
+    );
+
+    // The authority itself works, and renouncing is one-way.
+    let diff =
+        ValidatedStateDiff::from_public_transaction(&update(authority, &key, 0), &state, 1, 0)
+            .expect("the configured authority changes sources");
+    state.apply_state_diff(diff);
+    let cfg = ping_core::ReceiverConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(cfg.sources, vec![(src_zone, sender_id)]);
+    assert_eq!(cfg.deliverer, programs::cross_zone_inbox().id());
+
+    let renounce_diff =
+        ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 1), &state, 2, 0)
+            .expect("the authority renounces itself");
+    state.apply_state_diff(renounce_diff);
+    let renounced_cfg = ping_core::ReceiverConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(renounced_cfg.authority, None, "the authority is gone");
+    assert_eq!(
+        renounced_cfg.sources,
+        vec![(src_zone, sender_id)],
+        "renouncing freezes the list it had"
+    );
+    rejects_at(&state, &update(authority, &key, 2), 3, "fixed at genesis");
+    rejects_at(
+        &state,
+        &renounce(authority, &key, 2),
+        3,
+        "already renounced",
+    );
+}
+
+/// The inbox cannot reach the authority instructions, named as governance or not:
+/// it prepends the source marker to every chained call, so the config never lands
+/// where these instructions read it. Worth pinning, because the inbox is the only
+/// program that chain-calls a target today, so this is what actually keeps a peer
+/// away from the source list.
+#[test]
+fn the_inbox_cannot_reach_the_authority_instructions() {
+    let wrapped_token_id = programs::wrapped_token().id();
+    let inbox_id = programs::cross_zone_inbox().id();
+    let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    let update = || {
+        chained_via_inbox(
+            wrapped_token_id,
+            config_id,
+            authority,
+            words_of!(&wrapped_token_core::Instruction::UpdateSources {
+                sources: vec![(src_zone, programs::bridge_lock().id())],
+            }),
+        )
+    };
+
+    // No governance named: the chained call is refused.
+    let mut closed = base_state();
+    seed_inbox_config(&mut closed, self_zone);
+    seed_wrapped_config(&mut closed, Some(authority), vec![]);
+    rejects_at(
+        &closed,
+        &update(),
+        1,
+        "must be the wrapped-token config PDA",
+    );
+
+    // Naming the inbox as governance changes nothing: the obstacle is structural,
+    // not the caller check. The prepended marker sits at index 0, so with or
+    // without the inbox named as governance the call dies on the config-address
+    // check, before the caller check is even reached.
+    let mut open = base_state();
+    seed_inbox_config(&mut open, self_zone);
+    seed_wrapped_config_with_governance(&mut open, Some(inbox_id), Some(authority), vec![]);
+    rejects_at(&open, &update(), 1, "must be the wrapped-token config PDA");
+}
+
+/// A program-held authority acts through the governance program delegating its
+/// PDA on the chained call: the first use has the target claim the account, the
+/// second runs on the claimed path, and renouncing through it is as total as
+/// renouncing top-level.
+#[test]
+fn the_governance_path_holds() {
+    let wrapped_token_id = programs::wrapped_token().id();
+    let proxy_id = test_programs::authority_proxy().id();
+    let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let src_zone = [2_u8; 32];
+
+    let seed = lee_core::program::PdaSeed::new([3; 32]);
+    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+
+    let mut state = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
+
+    let update = |sources: Vec<([u8; 32], lee_core::program::ProgramId)>| {
+        via_proxy(
+            proxy_id,
+            wrapped_token_id,
+            config_id,
+            authority,
+            Some(seed),
+            words_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
+        )
+    };
+    let renounce = || {
+        via_proxy(
+            proxy_id,
+            wrapped_token_id,
+            config_id,
+            authority,
+            Some(seed),
+            words_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+        )
+    };
+
+    let first = ValidatedStateDiff::from_public_transaction(
+        &update(vec![(src_zone, programs::bridge_lock().id())]),
+        &state,
+        1,
+        0,
+    )
+    .expect("the governance path changes sources");
+    state.apply_state_diff(first);
+
+    let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(cfg.sources, vec![(src_zone, programs::bridge_lock().id())]);
+    assert_eq!(
+        state.get_account_by_id(authority).program_owner,
+        wrapped_token_id,
+        "the first use claims the delegated PDA for the target"
+    );
+
+    let second = ValidatedStateDiff::from_public_transaction(&update(vec![]), &state, 2, 0)
+        .expect("the governance path acts again");
+    state.apply_state_diff(second);
+    let cleared_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert!(
+        cleared_cfg.sources.is_empty(),
+        "the second change took effect"
+    );
+    assert_eq!(cleared_cfg.authority, Some(authority));
+
+    let renounced = ValidatedStateDiff::from_public_transaction(&renounce(), &state, 3, 0)
+        .expect("the governance path renounces");
+    state.apply_state_diff(renounced);
+    let renounced_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(renounced_cfg.authority, None, "the authority is gone");
+
+    rejects_at(
+        &state,
+        &update(vec![(src_zone, programs::bridge_lock().id())]),
+        4,
+        "fixed at genesis",
+    );
+    rejects_at(&state, &renounce(), 4, "already renounced");
+}
+
+/// Each governance-path guard fails on its own: a caller other than the
+/// configured governance program is refused with the delegation in order, no
+/// configured governance refuses every chained caller (on the token's update
+/// and on its three sibling handlers), and the governance program without
+/// delegating finds the authority unauthorized.
+#[test]
+fn the_governance_path_guards_hold() {
+    let wrapped_token_id = programs::wrapped_token().id();
+    let receiver_id = programs::ping_receiver().id();
+    let proxy_id = test_programs::authority_proxy().id();
+    let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let src_zone = [2_u8; 32];
+
+    let seed = lee_core::program::PdaSeed::new([3; 32]);
+    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+
+    let call = |delegated: Option<lee_core::program::PdaSeed>| {
+        via_proxy(
+            proxy_id,
+            wrapped_token_id,
+            config_id,
+            authority,
+            delegated,
+            words_of!(&wrapped_token_core::Instruction::UpdateSources {
+                sources: vec![(src_zone, programs::bridge_lock().id())],
+            }),
+        )
+    };
+
+    // A perfect call shape from a program that is not the configured governance.
+    let mut other = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_wrapped_config_with_governance(
+        &mut other,
+        Some(programs::ping_sender().id()),
+        Some(authority),
+        vec![],
+    );
+    rejects_at(
+        &other,
+        &call(Some(seed)),
+        1,
+        "through the configured governance program",
+    );
+
+    // No governance configured: every chained caller is refused.
+    let mut closed = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_wrapped_config(&mut closed, Some(authority), vec![]);
+    seed_receiver_config(&mut closed, Some(authority), vec![]);
+    rejects_at(
+        &closed,
+        &call(Some(seed)),
+        1,
+        "through the configured governance program",
+    );
+
+    // The same pin guards the three sibling handlers, both renounces and the
+    // receiver's update, each of which would otherwise accept the delegated
+    // authority and succeed.
+    for (target, config, words) in [
+        (
+            wrapped_token_id,
+            config_id,
+            words_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+                sources: vec![(src_zone, programs::ping_sender().id())],
+            }),
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+        ),
+    ] {
+        rejects_at(
+            &closed,
+            &via_proxy(proxy_id, target, config, authority, Some(seed), words),
+            1,
+            "through the configured governance program",
+        );
+    }
+
+    // The configured governance itself, but not delegating the authority.
+    let mut undelegated = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_wrapped_config_with_governance(&mut undelegated, Some(proxy_id), Some(authority), vec![]);
+    rejects_at(
+        &undelegated,
+        &call(None),
+        1,
+        "must authorize a source change",
+    );
+}
+
+/// The receiver's governance path works the same way; without this its config
+/// never carries a governance in any test.
+#[test]
+fn the_receiver_governance_path_holds() {
+    let receiver_id = programs::ping_receiver().id();
+    let proxy_id = test_programs::authority_proxy().id();
+    let config_id = receiver_config_account_id(receiver_id);
+    let src_zone = [2_u8; 32];
+
+    let seed = lee_core::program::PdaSeed::new([3; 32]);
+    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+
+    let mut state = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_receiver_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
+
+    let tx = via_proxy(
+        proxy_id,
+        receiver_id,
+        config_id,
+        authority,
+        Some(seed),
+        words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+            sources: vec![(src_zone, programs::ping_sender().id())],
+        }),
+    );
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .expect("the receiver governance path changes sources");
+    state.apply_state_diff(diff);
+    let cfg = ping_core::ReceiverConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(cfg.sources, vec![(src_zone, programs::ping_sender().id())]);
+    assert_eq!(
+        state.get_account_by_id(authority).program_owner,
+        receiver_id,
+        "the first use claims the delegated PDA for the receiver"
+    );
+}
+
+/// One authority seeds both targets at genesis, and the config doc promises that
+/// whichever target is used first owns the account while the other keeps
+/// working. Claim through the token, then act and renounce on the receiver.
+#[test]
+fn a_shared_authority_survives_the_first_claim() {
+    let wrapped_token_id = programs::wrapped_token().id();
+    let receiver_id = programs::ping_receiver().id();
+    let proxy_id = test_programs::authority_proxy().id();
+    let token_config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let receiver_config_id = receiver_config_account_id(receiver_id);
+    let src_zone = [2_u8; 32];
+
+    let seed = lee_core::program::PdaSeed::new([3; 32]);
+    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+
+    let mut state = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
+    seed_receiver_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
+
+    let token_update = via_proxy(
+        proxy_id,
+        wrapped_token_id,
+        token_config_id,
+        authority,
+        Some(seed),
+        words_of!(&wrapped_token_core::Instruction::UpdateSources {
+            sources: vec![(src_zone, programs::bridge_lock().id())],
+        }),
+    );
+    let first = ValidatedStateDiff::from_public_transaction(&token_update, &state, 1, 0)
+        .expect("the token claims the shared authority");
+    state.apply_state_diff(first);
+    assert_eq!(
+        state.get_account_by_id(authority).program_owner,
+        wrapped_token_id,
+        "the first target to be used owns the account"
+    );
+
+    let receiver_update = via_proxy(
+        proxy_id,
+        receiver_id,
+        receiver_config_id,
+        authority,
+        Some(seed),
+        words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+            sources: vec![(src_zone, programs::ping_sender().id())],
+        }),
+    );
+    let second = ValidatedStateDiff::from_public_transaction(&receiver_update, &state, 2, 0)
+        .expect("the other target still acts on the token-owned authority");
+    state.apply_state_diff(second);
+    let receiver_cfg = ping_core::ReceiverConfig::from_bytes(
+        &state
+            .get_account_by_id(receiver_config_id)
+            .data
+            .into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(
+        receiver_cfg.sources,
+        vec![(src_zone, programs::ping_sender().id())]
+    );
+    assert_eq!(
+        state.get_account_by_id(authority).program_owner,
+        wrapped_token_id,
+        "the receiver never takes the account over"
+    );
+
+    let receiver_renounce = via_proxy(
+        proxy_id,
+        receiver_id,
+        receiver_config_id,
+        authority,
+        Some(seed),
+        words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+    );
+    let third = ValidatedStateDiff::from_public_transaction(&receiver_renounce, &state, 3, 0)
+        .expect("the other target renounces on the token-owned authority");
+    state.apply_state_diff(third);
+    let renounced_cfg = ping_core::ReceiverConfig::from_bytes(
+        &state
+            .get_account_by_id(receiver_config_id)
+            .data
+            .into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(renounced_cfg.authority, None, "the receiver side is gone");
+    let token_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(token_config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(
+        token_cfg.authority,
+        Some(authority),
+        "renouncing one target leaves the other's grant alone"
+    );
+}
+
+/// An authority account with any history can never be claimed, so all four
+/// authority handlers refuse it, and say why rather than surfacing a rule number.
+#[test]
+fn an_authority_account_with_history_is_refused() {
+    let wrapped_token_id = programs::wrapped_token().id();
+    let receiver_id = programs::ping_receiver().id();
+    let src_zone = [2_u8; 32];
+
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    let mut state = base_state();
+    seed_wrapped_config(&mut state, Some(authority), vec![]);
+    seed_receiver_config(&mut state, Some(authority), vec![]);
+    // Unowned but already used: exactly what one prior signature leaves behind.
+    state = state.with_public_accounts([(
+        authority,
+        Account {
+            nonce: 1_u128.into(),
+            ..Default::default()
+        },
+    )]);
+
+    for (program, config_id, words) in [
+        (
+            wrapped_token_id,
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            words_of!(&wrapped_token_core::Instruction::UpdateSources {
+                sources: vec![(src_zone, programs::bridge_lock().id())],
+            }),
+        ),
+        (
+            wrapped_token_id,
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            words_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+                sources: vec![(src_zone, programs::ping_sender().id())],
+            }),
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+        ),
+    ] {
+        rejects_at(
+            &state,
+            &signed_tx(program, vec![config_id, authority], 1, words, &key),
+            1,
+            "must be untouched before its first use",
+        );
+    }
+}
+
+/// The guards that survive a deletion otherwise: the receiver's config-address
+/// checks its substitution cases miss, and the three caller pins that are only
+/// reachable through the inbox.
+#[test]
+fn the_remaining_authority_guards_hold() {
+    let wrapped_token_id = programs::wrapped_token().id();
+    let receiver_id = programs::ping_receiver().id();
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(&mut state, Some(authority), vec![]);
+    seed_receiver_config(&mut state, Some(authority), vec![]);
+
+    // Config address, on both receiver instructions.
+    for words in [
+        words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+            sources: vec![(src_zone, programs::ping_sender().id())],
+        }),
+        words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+    ] {
+        rejects_at(
+            &state,
+            &signed_tx(
+                receiver_id,
+                vec![ping_record_pda(receiver_id), authority],
+                0,
+                words,
+                &key,
+            ),
+            1,
+            "must be the receiver config PDA",
+        );
+    }
+
+    // Reached through the inbox rather than top-level: the prepended marker sits
+    // at index 0, so each call dies on the target's config-address check. The
+    // caller pins themselves are exercised through the proxy in
+    // the_governance_path_guards_hold, where the account list is well formed.
+    for (target, config_id, words, expected) in [
+        (
+            wrapped_token_id,
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            words_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+            "must be the wrapped-token config PDA",
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            words_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+            "must be the receiver config PDA",
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            words_of!(&ping_core::ReceiverInstruction::UpdateSources {
+                sources: vec![(src_zone, programs::ping_sender().id())],
+            }),
+            "must be the receiver config PDA",
+        ),
+    ] {
+        rejects_at(
+            &state,
+            &chained_via_inbox(target, config_id, authority, words),
+            1,
+            expected,
+        );
+    }
+}
+
 /// A token that authorizes nothing mints for nobody. The state a zone reaches with
 /// no peers configured, where the config is still seeded so its PDA cannot be
 /// claimed by a first initializer.
@@ -962,7 +1978,7 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, vec![]);
+    seed_wrapped_config(&mut state, None, vec![]);
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -1010,7 +2026,7 @@ fn a_top_level_mint_is_refused() {
     let src_program_id = programs::bridge_lock().id();
 
     let mut state = base_state();
-    seed_wrapped_config(&mut state, vec![(src_zone, src_program_id)]);
+    seed_wrapped_config(&mut state, None, vec![(src_zone, src_program_id)]);
 
     let marker_id = inbox_source_marker_account_id(inbox_id, &src_zone, src_program_id);
     let message = Message::try_new(
@@ -1071,7 +2087,11 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     let mut state = base_state();
     // The config a bridging zone writes: the lock program may mint, nothing else.
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, vec![(src_zone, programs::bridge_lock().id())]);
+    seed_wrapped_config(
+        &mut state,
+        None,
+        vec![(src_zone, programs::bridge_lock().id())],
+    );
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -1121,7 +2141,11 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, vec![(src_zone, programs::bridge_lock().id())]);
+    seed_wrapped_config(
+        &mut state,
+        None,
+        vec![(src_zone, programs::bridge_lock().id())],
+    );
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -1169,7 +2193,7 @@ fn mint_replay_rejected() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, vec![(src_zone, [9_u32; 8])]);
+    seed_wrapped_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
 
     // Seed the seen-shard as already holding this delivery, so the inbox takes
     // the replay no-op branch. The shard is inbox-owned (claimed on a prior
@@ -1249,7 +2273,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_receiver_config(&mut state, vec![(src_zone, [9_u32; 8])]);
+    seed_receiver_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
 
     // The shard as the first delivery left it: bound, holding transaction 0.
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);

@@ -8,6 +8,6 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-cross_zone_inbox_core.workspace = true
+cross_zone_marker_core.workspace = true
 lee_core.workspace = true
 ping_core.workspace = true

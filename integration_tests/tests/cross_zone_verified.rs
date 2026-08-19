@@ -55,6 +55,8 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
             }],
             expected_block_signing_pubkey: None,
         }],
+        source_authority: None,
+        source_governance: None,
     };
 
     // Zone A: source. Zone B: destination, with the watcher on its sequencer and
