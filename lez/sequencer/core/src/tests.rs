@@ -260,16 +260,13 @@ fn cross_zone_test_config() -> SequencerConfig {
     }
 }
 
-/// A `ping_receiver::Record` instruction as risc0 words, little-endian: the wire
-/// form an emitter on the peer zone puts in the message payload.
+/// A `ping_receiver::Record` instruction: the wire form an emitter on the peer
+/// zone puts in the message payload.
 fn ping_payload(payload: &[u8]) -> Vec<u8> {
     borsh::to_vec(&ReceiverInstruction::Record {
         payload: payload.to_vec(),
     })
     .expect("ping instruction serializes")
-    .iter()
-    .flat_map(|word| word.to_le_bytes())
-    .collect()
 }
 
 /// The dispatch transaction for a message at index 0 of [`PEER_ZONE`] block
