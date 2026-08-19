@@ -524,7 +524,8 @@ impl ProgramOutput {
     }
 
     pub fn write(self) {
-        env::commit(&self);
+        let payload = borsh::to_vec(&self).expect("borsh serialization is infallible");
+        env::commit_slice(&crate::to_frame(&payload));
     }
 
     pub fn with_chained_calls(mut self, chained_calls: Vec<ChainedCall>) -> Self {
