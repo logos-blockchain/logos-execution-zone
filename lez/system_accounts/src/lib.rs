@@ -86,7 +86,7 @@ pub fn sequencer_stake_config_account_id() -> AccountId {
 #[must_use]
 pub fn sequencer_stake_config_account() -> Account {
     Account {
-        program_owner: programs::sequencer_stake().id().into(),
+        program_owner: loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         data: sequencer_stake_core::SequencerStakeConfig {
             minimum_sequencer_stake: DEFAULT_MINIMUM_SEQUENCER_STAKE,
             entries: BTreeMap::new(),

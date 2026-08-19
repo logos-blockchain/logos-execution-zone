@@ -88,9 +88,12 @@ async fn main() -> Result<()> {
             .context("Failed to serialize mover instruction")?;
             let instruction_data =
                 Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
+                    self_program_id: programs::sequencer_stake().id(),
                     sequencer_key,
                     amount,
-                    mover_program_id: programs::authenticated_transfer().id(),
+                    mover_account_id: loader_core::immutable_deploy_account_id(
+                        programs::authenticated_transfer().id(),
+                    ),
                     mover_instruction_data,
                 })
                 .context("Failed to serialize Stake instruction")?;
@@ -115,6 +118,7 @@ async fn main() -> Result<()> {
         } => {
             let instruction_data =
                 Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
+                    self_program_id: programs::sequencer_stake().id(),
                     amount,
                     destination,
                 })

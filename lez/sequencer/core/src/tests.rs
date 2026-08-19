@@ -3188,13 +3188,16 @@ fn diag_sequencer_stake_claims_ownership_account() {
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id().into(),
+        loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![funding_id, ownership_id, config_id],
         vec![Nonce(0), Nonce(0)],
         sequencer_stake_core::Instruction::Stake {
+            self_program_id: programs::sequencer_stake().id(),
             sequencer_key,
             amount,
-            mover_program_id: programs::authenticated_transfer().id(),
+            mover_account_id: loader_core::immutable_deploy_account_id(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         },
     )
@@ -3210,7 +3213,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
     let ownership_account = state.get_account_by_id(ownership_id);
     assert_eq!(
         ownership_account.program_owner,
-        programs::sequencer_stake().id().into(),
+        loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         "ownership account should be claimed by sequencer_stake"
     );
     assert_eq!(ownership_account.balance, amount);
@@ -3234,7 +3237,7 @@ fn stake_transaction(
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id().into(),
+        loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![
             funding_id,
             ownership_id,
@@ -3245,9 +3248,12 @@ fn stake_transaction(
             state.get_account_by_id(ownership_id).nonce,
         ],
         sequencer_stake_core::Instruction::Stake {
+            self_program_id: programs::sequencer_stake().id(),
             sequencer_key,
             amount,
-            mover_program_id: programs::authenticated_transfer().id(),
+            mover_account_id: loader_core::immutable_deploy_account_id(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         },
     )
@@ -3308,10 +3314,11 @@ fn unstake_request_transaction(
 ) -> PublicTransaction {
     let (ownership_id, ownership_key) = ownership;
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id().into(),
+        loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![ownership_id, config_slot],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
+            self_program_id: programs::sequencer_stake().id(),
             amount,
             destination,
         },
@@ -3481,7 +3488,7 @@ fn an_ownership_account_cannot_stand_in_for_the_config_account() {
 
     assert_eq!(
         state.get_account_by_id(other_ownership_id).program_owner,
-        programs::sequencer_stake().id().into(),
+        loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         "the stand-in is owned by sequencer_stake, so ownership alone would not catch it"
     );
 
@@ -3546,13 +3553,14 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 
     // Full exit, releasing back to the (now drained) funding account.
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id().into(),
+        loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![
             ownership_id,
             system_accounts::sequencer_stake_config_account_id(),
         ],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
+            self_program_id: programs::sequencer_stake().id(),
             amount,
             destination: funding_id,
         },
@@ -3582,7 +3590,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
     assert_eq!(
         state.get_account_by_id(ownership_id).program_owner,
-        programs::sequencer_stake().id().into(),
+        loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         "the ownership account stays claimed after a full exit"
     );
 
@@ -3615,7 +3623,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
     assert_eq!(
         stake_account.program_owner,
-        programs::sequencer_stake().id().into()
+        loader_core::immutable_deploy_account_id(programs::sequencer_stake().id())
     );
     assert_eq!(
         stake_account.balance,
@@ -3649,7 +3657,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     ));
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id().into(),
+        loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![
             stake_id,
             system_accounts::sequencer_stake_config_account_id(),
@@ -3657,6 +3665,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         // The genesis Stake transaction already signed once with this account.
         vec![Nonce(1)],
         sequencer_stake_core::Instruction::UnstakeRequest {
+            self_program_id: programs::sequencer_stake().id(),
             amount: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
             destination,
         },
