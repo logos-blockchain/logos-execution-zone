@@ -12,4 +12,6 @@ borsh.workspace = true
 lee_core.workspace = true
 
 risc0-zkvm.workspace = true
-serde.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["risc0-zkvm"]

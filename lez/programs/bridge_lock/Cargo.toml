@@ -14,3 +14,6 @@ bridge_lock_core.workspace = true
 cross_zone_outbox_core.workspace = true
 wrapped_token_core.workspace = true
 risc0-zkvm.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["risc0-zkvm"]

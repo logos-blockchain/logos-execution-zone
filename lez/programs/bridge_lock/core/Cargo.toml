@@ -10,7 +10,6 @@ workspace = true
 [dependencies]
 borsh.workspace = true
 lee_core.workspace = true
-serde = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 risc0-zkvm.workspace = true

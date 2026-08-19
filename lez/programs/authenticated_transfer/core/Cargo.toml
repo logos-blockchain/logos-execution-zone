@@ -9,4 +9,3 @@ workspace = true
 
 [dependencies]
 borsh.workspace = true
-serde.workspace = true

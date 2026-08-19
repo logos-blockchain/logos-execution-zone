@@ -17,7 +17,6 @@ cross_zone_outbox_core.workspace = true
 cross_zone_inbox_core.workspace = true
 lee.workspace = true
 common.workspace = true
-risc0-zkvm.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
