@@ -700,7 +700,7 @@ pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
     UpdateFromDiff {
         pre_state: Account,
-        diff_data: Vec<u8>,
+        diff_data: Data,
     },
 }
 
@@ -716,7 +716,7 @@ pub enum ProgramCall<T> {
 #[derive(Serialize, Deserialize)]
 pub struct UpdateFromDiffOutput {
     pub pre_state: Account,
-    pub diff_data: Vec<u8>,
+    pub diff_data: Data,
     pub data: Data,
 }
 
@@ -766,7 +766,7 @@ pub fn read_lee_call<T: DeserializeOwned>() -> ProgramCall<T> {
         }
         CallKind::UpdateFromDiff => {
             let pre_state: Account = env::read();
-            let diff_data: Vec<u8> = env::read();
+            let diff_data: Data = env::read();
             ProgramCall::UpdateFromDiff {
                 pre_state,
                 diff_data,
@@ -906,10 +906,10 @@ fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> boo
 }
 
 /// Commits an `update_from_diff` result to the journal, bound to the inputs that produced it.
-pub fn write_update_from_diff_output(pre_state: &Account, diff_data: &[u8], data: &Data) {
+pub fn write_update_from_diff_output(pre_state: &Account, diff_data: &Data, data: &Data) {
     env::commit(&UpdateFromDiffOutput {
         pre_state: pre_state.clone(),
-        diff_data: diff_data.to_vec(),
+        diff_data: diff_data.clone(),
         data: data.clone(),
     });
 }

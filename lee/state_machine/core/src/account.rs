@@ -112,7 +112,7 @@ pub enum BalanceDiffError {
 pub struct AccountDiff {
     pub id: AccountId,
     pub diff_balance: BalanceDiff,
-    pub diff_data: Option<Vec<u8>>,
+    pub diff_data: Option<Data>,
 }
 
 /// Account to be used both in public and private contexts.
