@@ -14,7 +14,6 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    /// See `PrivacyPreservingCircuitOutput::public_pre_states`.
     pub public_pre_states: Vec<AccountWithMetadata>,
     /// Raw, per-call, unaggregated diffs for public accounts. See
     /// `PrivacyPreservingCircuitOutput::public_diffs`.
