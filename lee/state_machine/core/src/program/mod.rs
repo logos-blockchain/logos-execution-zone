@@ -53,20 +53,15 @@ impl From<AccountId> for ProgramId {
 }
 
 pub type InstructionData = Vec<u8>;
+
+/// Struct encoding the input to an LEE program. Crosses the guest boundary as
+/// `ProgramInput<InstructionData>` with the instruction still borsh-encoded.
+#[derive(BorshSerialize, BorshDeserialize)]
 pub struct ProgramInput<T> {
     pub self_program_id: ProgramId,
     pub caller_program_id: Option<ProgramId>,
     pub pre_states: Vec<AccountWithMetadata>,
     pub instruction: T,
-}
-
-/// Struct encoding the input to an LEE program.
-#[derive(BorshSerialize, BorshDeserialize)]
-pub struct LeeInputHeader {
-    pub self_program_id: ProgramId,
-    pub caller_program_id: Option<ProgramId>,
-    pub pre_states: Vec<AccountWithMetadata>,
-    pub instruction_data: InstructionData,
 }
 
 /// A 32-byte seed used to compute a *Program-Derived `AccountId`* (PDA).
@@ -710,12 +705,13 @@ pub fn read_input_frame() -> Vec<u8> {
 /// Reads the LEE inputs from the guest environment.
 #[must_use]
 pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionData) {
-    let LeeInputHeader {
+    let ProgramInput {
         self_program_id,
         caller_program_id,
         pre_states,
-        instruction_data,
-    } = borsh::from_slice(&read_input_frame()).expect("guest input must be a valid borsh header");
+        instruction: instruction_data,
+    } = borsh::from_slice::<ProgramInput<InstructionData>>(&read_input_frame())
+        .expect("guest input must be valid borsh");
     let instruction =
         borsh::from_slice(&instruction_data).expect("instruction must decode from borsh");
     (

@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::AccountWithMetadata,
     from_frame,
-    program::{InstructionData, LeeInputHeader, ProgramId, ProgramOutput},
+    program::{InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor};
@@ -95,14 +95,14 @@ impl Program {
         instruction_data: &[u8],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
-        let header = LeeInputHeader {
+        let input = ProgramInput {
             self_program_id: self.id,
             caller_program_id,
             pre_states: pre_states.to_vec(),
-            instruction_data: instruction_data.to_vec(),
+            instruction: instruction_data.to_vec(),
         };
         let payload =
-            borsh::to_vec(&header).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+            borsh::to_vec(&input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         env_builder.write_slice(&to_frame(&payload));
         Ok(())
     }
