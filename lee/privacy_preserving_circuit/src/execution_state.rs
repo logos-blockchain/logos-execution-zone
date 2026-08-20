@@ -481,6 +481,16 @@ impl ExecutionState {
             // journal we can't derive locally — the resulting `data` — in the same order the host
             // proved these receipts, matching this function's own traversal.
             let data = if let Some(diff_data) = diff.diff_data.clone() {
+                // The diff's materialization logic belongs to the account's *owner* program, not
+                // necessarily the calling program — falling back to the caller only when the
+                // account is still unclaimed (default owner). Must match the host's own
+                // resolution in `circuit::execute_and_prove`, since that's the program whose ELF
+                // actually produced the receipt being checked below.
+                let owner_id: ProgramId = if pre_account.program_owner == DEFAULT_PROGRAM_OWNER {
+                    program_id
+                } else {
+                    pre_account.program_owner.into()
+                };
                 let data = update_from_diff_results
                     .pop_front()
                     .expect("one update_from_diff_results entry per diff with diff_data");
@@ -491,7 +501,7 @@ impl ExecutionState {
                 };
                 let journal_words =
                     to_vec(&expected_output).expect("UpdateFromDiffOutput must be serializable");
-                env::verify(program_id, &journal_words).unwrap_or_else(|_: Infallible| {
+                env::verify(owner_id, &journal_words).unwrap_or_else(|_: Infallible| {
                     unreachable!("Infallible error is never constructed")
                 });
                 data

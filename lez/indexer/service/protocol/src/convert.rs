@@ -371,7 +371,7 @@ impl From<lee_core::account::AccountDiff> for AccountDiff {
         Self {
             id: id.into(),
             diff_balance: diff_balance.into(),
-            diff_data,
+            diff_data: diff_data.map(|data| data.into_inner()),
         }
     }
 }
@@ -386,7 +386,10 @@ impl From<AccountDiff> for lee_core::account::AccountDiff {
         Self {
             id: id.into(),
             diff_balance: diff_balance.into(),
-            diff_data,
+            diff_data: diff_data.map(|data| {
+                data.try_into()
+                    .expect("diff_data was already validated to fit under DATA_MAX_LENGTH")
+            }),
         }
     }
 }
