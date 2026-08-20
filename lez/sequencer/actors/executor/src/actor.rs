@@ -22,21 +22,25 @@ use sequencer_core::{
     config::SequencerConfig,
     task_group::TaskGroup,
 };
-use sequencer_storage_actor::{StorageActor, StorageActorTrait};
+use sequencer_storage_actor::StorageActorTrait;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    Result,
+    ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock, GetBlockRange,
-        GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
-        GetFeeQuote, GetFeeQuoteReply, GetLastBlockId, GetProofsAndRoot, GetTransaction,
-        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitOutcome,
+        FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock,
+        GetBlockRange, GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters,
+        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
+        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
         Transaction,
     },
 };
+
+mod fees;
+#[cfg(test)]
+mod tests;
 
 /// How many block lookups a single [`GetBlockRange`] keeps in flight.
 const BLOCK_RANGE_CONCURRENCY: usize = 16;
@@ -45,9 +49,9 @@ const BLOCK_RANGE_CONCURRENCY: usize = 16;
 const BLOCKED_ATTEMPTS_BEFORE_WEDGED: u32 = 4;
 
 // TODO: Remove `BP` once this part is moved to a separate actor
-pub struct ExecutorActor<BP: BlockPublisherTrait, S: StorageActorTrait = StorageActor> {
+pub struct ExecutorActor<S: StorageActorTrait, BP: BlockPublisherTrait> {
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-    sequencer: SequencerCore<BP, S>,
+    sequencer: SequencerCore<S, BP>,
     storage_ref: ActorRef<S>,
 
     // --- TODO: Remove these fields below ---
@@ -93,7 +97,7 @@ impl BlockedAttempts {
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static, S: StorageActorTrait> ExecutorActor<BP, S> {
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + 'static> ExecutorActor<S, BP> {
     #[expect(
         clippy::manual_async_fn,
         reason = "Explicit Send future works around rust-lang/rust#100013"
@@ -106,7 +110,7 @@ impl<BP: BlockPublisherTrait + Send + 'static, S: StorageActorTrait> ExecutorAct
             // TODO: Leave storage_ref as a top-level field only in `ExecutorActor`,
             // while moving `SequencerCore` code into this actor.
             let (sequencer, mempool_handle) =
-                SequencerCore::<BP, S>::start_from_config(config, storage_ref.clone()).await;
+                SequencerCore::<S, BP>::start_from_config(config, storage_ref.clone()).await;
 
             let driver_cancellation = sequencer.block_publisher().driver_cancellation();
             let background_tasks = sequencer.background_tasks();
@@ -124,8 +128,13 @@ impl<BP: BlockPublisherTrait + Send + 'static, S: StorageActorTrait> ExecutorAct
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Actor
-    for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> ExecutorActorTrait
+    for ExecutorActor<S, BP>
+{
+}
+
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Actor
+    for ExecutorActor<S, BP>
 {
     type Args = Self;
     type Error = Error;
@@ -182,8 +191,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> ExecutorActor<BP, S> {
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<ProduceBlock>
-    for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<ProduceBlock>
+    for ExecutorActor<S, BP>
 {
     type Reply = Result<()>;
 
@@ -266,10 +275,10 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<Transaction>
-    for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<Transaction>
+    for ExecutorActor<S, BP>
 {
-    type Reply = Result<SubmitOutcome>;
+    type Reply = Result<()>;
 
     async fn handle(
         &mut self,
@@ -282,23 +291,20 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
         // Fee admission against the head state, before the mempool sees it.
         // Advisory (base fees and balances move), but everything it turns
         // away would have been refused by the block builder anyway.
-        if let Err(rejection) = self
-            .sequencer
-            .with_state(|state| sequencer_core::fees::screen(&transaction, state))
+        self.sequencer
+            .with_state(|state| fees::screen(&transaction, state))
             .await
-        {
-            return Ok(SubmitOutcome::Rejected(rejection));
-        }
+            .map_err(|err| Error::IncorrectFee(err.into()))?;
 
         self.mempool_handle
             .try_push((origin, transaction))
             .map_err(|_err| Error::MempoolIsFull)?;
-        Ok(SubmitOutcome::Admitted)
+        Ok(())
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetBlock>
-    for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetBlock>
+    for ExecutorActor<S, BP>
 {
     type Reply = Result<Option<Block>>;
 
@@ -314,8 +320,8 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetBlockRange>
-    for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetBlockRange>
+    for ExecutorActor<S, BP>
 {
     type Reply = DelegatedReply<Result<Vec<Block>>>;
 
@@ -343,8 +349,8 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetLastBlockId>
-    for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetLastBlockId>
+    for ExecutorActor<S, BP>
 {
     type Reply = Result<BlockId>;
 
@@ -357,8 +363,8 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
-    Message<GetAccountBalance> for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
+    Message<GetAccountBalance> for ExecutorActor<S, BP>
 {
     type Reply = Balance;
 
@@ -373,27 +379,22 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetFeeQuote>
-    for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetFeeQuote>
+    for ExecutorActor<S, BP>
 {
-    type Reply = GetFeeQuoteReply;
+    type Reply = FeeStateQuote;
 
     async fn handle(
         &mut self,
         GetFeeQuote: GetFeeQuote,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        GetFeeQuoteReply {
-            quote: self
-                .sequencer
-                .with_state(sequencer_core::fees::fee_quote)
-                .await,
-        }
+        self.sequencer.with_state(fees::fee_quote).await
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetTransaction>
-    for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetTransaction>
+    for ExecutorActor<S, BP>
 {
     type Reply = Result<Option<(LeeTransaction, BlockId)>>;
 
@@ -409,8 +410,8 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
-    Message<GetAccountNonces> for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
+    Message<GetAccountNonces> for ExecutorActor<S, BP>
 {
     type Reply = Vec<Nonce>;
 
@@ -430,8 +431,8 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
-    Message<GetProofsAndRoot> for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
+    Message<GetProofsAndRoot> for ExecutorActor<S, BP>
 {
     type Reply = (
         Vec<Option<lee_core::MembershipProof>>,
@@ -455,8 +456,8 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetAccount>
-    for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetAccount>
+    for ExecutorActor<S, BP>
 {
     type Reply = GetAccountReply;
 
@@ -474,8 +475,8 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetChannelId>
-    for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetChannelId>
+    for ExecutorActor<S, BP>
 {
     type Reply = GetChannelIdReply;
 
@@ -490,8 +491,8 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
-    Message<GetCrossZoneDeadLetters> for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
+    Message<GetCrossZoneDeadLetters> for ExecutorActor<S, BP>
 {
     type Reply = Result<GetCrossZoneDeadLettersReply>;
 
@@ -512,8 +513,8 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
-    Message<RequeueCrossZoneDeadLetter> for ExecutorActor<BP, S>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
+    Message<RequeueCrossZoneDeadLetter> for ExecutorActor<S, BP>
 {
     type Reply = Result<RequeueCrossZoneDeadLetterReply>;
 

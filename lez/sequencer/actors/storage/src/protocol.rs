@@ -10,9 +10,8 @@ use common::{
 };
 use lee::V03State;
 use lee_core::BlockId;
+#[cfg(feature = "actor")]
 use storage::sequencer::{self as db, sequencer_cells as db_cells};
-
-use crate::Result;
 
 /// Persists `block` with the effects it covers.
 pub struct RecordNewBlock {
@@ -207,12 +206,14 @@ pub struct WithdrawalReconciliationKey {
     pub released_note_id: [u8; 32],
 }
 
+#[cfg(feature = "actor")]
 impl From<WithdrawalReconciliationKey> for db_cells::WithdrawalReconciliationKey {
     fn from(WithdrawalReconciliationKey { released_note_id }: WithdrawalReconciliationKey) -> Self {
         Self { released_note_id }
     }
 }
 
+#[cfg(feature = "actor")]
 impl From<db_cells::WithdrawalReconciliationKey> for WithdrawalReconciliationKey {
     fn from(
         db_cells::WithdrawalReconciliationKey { released_note_id }: db_cells::WithdrawalReconciliationKey,
@@ -233,6 +234,7 @@ pub struct ZoneAnchorRecord {
     pub hash: HashType,
 }
 
+#[cfg(feature = "actor")]
 impl From<ZoneAnchorRecord> for db_cells::ZoneAnchorRecord {
     fn from(
         ZoneAnchorRecord {
@@ -249,6 +251,7 @@ impl From<ZoneAnchorRecord> for db_cells::ZoneAnchorRecord {
     }
 }
 
+#[cfg(feature = "actor")]
 impl From<db_cells::ZoneAnchorRecord> for ZoneAnchorRecord {
     fn from(
         db_cells::ZoneAnchorRecord {
@@ -277,6 +280,7 @@ pub struct PendingDepositEventRecord {
     pub metadata: Vec<u8>,
 }
 
+#[cfg(feature = "actor")]
 impl From<PendingDepositEventRecord> for db_cells::PendingDepositEventRecord {
     fn from(
         PendingDepositEventRecord {
@@ -295,6 +299,7 @@ impl From<PendingDepositEventRecord> for db_cells::PendingDepositEventRecord {
     }
 }
 
+#[cfg(feature = "actor")]
 impl From<db_cells::PendingDepositEventRecord> for PendingDepositEventRecord {
     fn from(
         db_cells::PendingDepositEventRecord {
@@ -346,6 +351,7 @@ impl PendingCrossZoneDispatchRecord {
     }
 }
 
+#[cfg(feature = "actor")]
 impl From<PendingCrossZoneDispatchRecord> for db_cells::PendingCrossZoneDispatchRecord {
     fn from(
         PendingCrossZoneDispatchRecord {
@@ -362,6 +368,7 @@ impl From<PendingCrossZoneDispatchRecord> for db_cells::PendingCrossZoneDispatch
     }
 }
 
+#[cfg(feature = "actor")]
 impl From<db_cells::PendingCrossZoneDispatchRecord> for PendingCrossZoneDispatchRecord {
     fn from(
         db_cells::PendingCrossZoneDispatchRecord {
@@ -387,6 +394,7 @@ pub struct DispatchOrigin {
     pub src_tx_index: u32,
 }
 
+#[cfg(feature = "actor")]
 impl From<DispatchOrigin> for db_cells::DispatchOrigin {
     fn from(
         DispatchOrigin {
@@ -403,6 +411,7 @@ impl From<DispatchOrigin> for db_cells::DispatchOrigin {
     }
 }
 
+#[cfg(feature = "actor")]
 impl From<db_cells::DispatchOrigin> for DispatchOrigin {
     fn from(
         db_cells::DispatchOrigin {
@@ -437,6 +446,7 @@ pub struct DeadLetterDispatchRecord {
     pub transaction: Vec<u8>,
 }
 
+#[cfg(feature = "actor")]
 impl From<db_cells::DeadLetterDispatchRecord> for DeadLetterDispatchRecord {
     fn from(
         db_cells::DeadLetterDispatchRecord {
@@ -470,6 +480,7 @@ pub enum DeadLetterRequeue {
     NotRetained,
 }
 
+#[cfg(feature = "actor")]
 impl From<db::DeadLetterRequeue> for DeadLetterRequeue {
     fn from(value: db::DeadLetterRequeue) -> Self {
         match value {
@@ -496,6 +507,7 @@ pub enum DispatchFailure {
     Absent,
 }
 
+#[cfg(feature = "actor")]
 impl From<db::DispatchFailure> for DispatchFailure {
     fn from(value: db::DispatchFailure) -> Self {
         match value {
@@ -518,6 +530,7 @@ pub struct StoreUpdateOutcome {
     pub unmatched_withdrawals: Vec<WithdrawalReconciliationKey>,
 }
 
+#[cfg(feature = "actor")]
 impl From<db::StoreUpdateOutcome> for StoreUpdateOutcome {
     fn from(
         db::StoreUpdateOutcome {
@@ -533,27 +546,26 @@ impl From<db::StoreUpdateOutcome> for StoreUpdateOutcome {
 }
 
 /// Schema-agnostic snapshot of a whole store, opaque by design.
-pub struct DbDump(db::DbDump);
+pub struct DbDump {
+    pub bytes: Vec<u8>,
+}
 
-impl DbDump {
-    /// Serializes the dump to a compressed blob.
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        self.0.to_bytes().map_err(Into::into)
-    }
+#[cfg(feature = "actor")]
+impl TryFrom<db::DbDump> for DbDump {
+    type Error = crate::error::Error;
 
-    /// Reads back a dump produced by [`Self::to_bytes`].
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        db::DbDump::from_bytes(bytes).map(Self).map_err(Into::into)
-    }
-
-    /// The wrapped dump, for the restore path.
-    pub(crate) const fn as_db_dump(&self) -> &db::DbDump {
-        &self.0
+    fn try_from(value: db::DbDump) -> Result<Self, Self::Error> {
+        Ok(Self {
+            bytes: value.to_bytes()?,
+        })
     }
 }
 
-impl From<db::DbDump> for DbDump {
-    fn from(value: db::DbDump) -> Self {
-        Self(value)
+#[cfg(feature = "actor")]
+impl TryFrom<&DbDump> for db::DbDump {
+    type Error = crate::error::Error;
+
+    fn try_from(value: &DbDump) -> Result<Self, Self::Error> {
+        Self::from_bytes(&value.bytes).map_err(Into::into)
     }
 }

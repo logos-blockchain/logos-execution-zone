@@ -11106,7 +11106,6 @@ dependencies = [
  "programs",
  "rand 0.8.6",
  "sequencer_core_metrics",
- "sequencer_service_protocol",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "serde",
@@ -11138,10 +11137,14 @@ name = "sequencer_executor_actor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "borsh",
  "bytesize",
+ "chain_state",
  "common",
  "env_logger",
+ "fee_core",
  "futures",
+ "hex",
  "kameo",
  "lee",
  "lee_core",
@@ -11150,9 +11153,8 @@ dependencies = [
  "mockall",
  "num-bigint 0.4.6",
  "num-traits",
+ "programs",
  "sequencer_core",
- "sequencer_core_metrics",
- "sequencer_service_protocol",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "system_accounts",
@@ -11230,7 +11232,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "thiserror 2.0.18",
 ]
 
 [[package]]

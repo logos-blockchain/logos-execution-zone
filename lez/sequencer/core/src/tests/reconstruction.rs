@@ -32,7 +32,7 @@ async fn fresh_store_and_chain(
     // because these cases drive `verify_and_reconstruct` directly.
     let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
     let bootstrap_sequencer_key = Some(test_bootstrap_sequencer_key(config));
-    SequencerCore::<MockBlockPublisher>::seed_genesis_if_absent(
+    SequencerCore::<StorageActor, MockBlockPublisher>::seed_genesis_if_absent(
         &storage_ref,
         &signing_key,
         bootstrap_sequencer_key,
@@ -48,7 +48,10 @@ async fn fresh_store_and_chain(
         .expect("read state")
         .expect("seeded store holds a state");
     let chain = Mutex::new(
-        SequencerCore::<MockBlockPublisher>::restore_chain_state(config, &store, &state).await,
+        SequencerCore::<StorageActor, MockBlockPublisher>::restore_chain_state(
+            config, &store, &state,
+        )
+        .await,
     );
     (store, chain)
 }
@@ -152,11 +155,12 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     let (store_b, chain_b) = fresh_store_and_chain(&config_b).await;
     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
 
-    let channel_was_empty = SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
-        &mock_b, &store_b, &chain_b, true,
-    )
-    .await
-    .expect("reconstruct");
+    let channel_was_empty =
+        SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+            &mock_b, &store_b, &chain_b, true,
+        )
+        .await
+        .expect("reconstruct");
     assert!(!channel_was_empty);
 
     let tip_b = store_b.latest_block_meta().await.unwrap().unwrap();
@@ -182,11 +186,12 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     assert_eq!(anchor.slot, tip_slot.into_inner());
 
     // Re-running is idempotent: everything is already applied, no error.
-    let channel_was_empty = SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
-        &mock_b, &store_b, &chain_b, true,
-    )
-    .await
-    .expect("reconstruct idempotent");
+    let channel_was_empty =
+        SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+            &mock_b, &store_b, &chain_b, true,
+        )
+        .await
+        .expect("reconstruct idempotent");
     assert!(!channel_was_empty);
     assert_eq!(
         store_b.latest_block_meta().await.unwrap().unwrap().id,
@@ -222,9 +227,10 @@ async fn fails_when_channel_serves_a_divergent_block() {
         messages,
     );
 
-    let result =
-        SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock, &store, &chain, true)
-            .await;
+    let result = SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+        &mock, &store, &chain, true,
+    )
+    .await;
     assert!(result.is_err(), "divergent channel must abort startup");
 }
 
@@ -246,9 +252,10 @@ async fn fails_when_channel_is_missing() {
     // Anchor present, but the channel does not exist on the connected chain.
     let mock =
         MockBlockPublisher::with_canned_channel(config.bedrock_config.channel_id, None, vec![]);
-    let result =
-        SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock, &store, &chain, true)
-            .await;
+    let result = SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+        &mock, &store, &chain, true,
+    )
+    .await;
     assert!(result.is_err(), "missing channel must abort startup");
 }
 
@@ -276,9 +283,10 @@ async fn fails_when_channel_reinscribes_genesis_with_a_different_hash() {
         Some(Slot::from(10)),
         messages,
     );
-    let result =
-        SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock, &store, &chain, true)
-            .await;
+    let result = SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+        &mock, &store, &chain, true,
+    )
+    .await;
     assert!(
         result.is_err(),
         "a reinscribed genesis with a different hash must abort startup"
@@ -312,7 +320,7 @@ async fn fails_when_a_below_tip_channel_block_does_not_validate() {
         Some(Slot::from(10)),
         messages,
     );
-    let result = SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+    let result = SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
         &mock, &seq.store, &seq.chain, true,
     )
     .await;
@@ -343,9 +351,10 @@ async fn fails_when_a_channel_block_is_numbered_below_genesis() {
         Some(Slot::from(10)),
         messages,
     );
-    let result =
-        SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock, &store, &chain, true)
-            .await;
+    let result = SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+        &mock, &store, &chain, true,
+    )
+    .await;
     assert!(
         result.is_err(),
         "a channel block below the local range must abort startup"
@@ -371,9 +380,10 @@ async fn fails_when_a_channel_block_does_not_extend_the_tip() {
         Some(Slot::from(10)),
         messages,
     );
-    let result =
-        SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock, &store, &chain, true)
-            .await;
+    let result = SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+        &mock, &store, &chain, true,
+    )
+    .await;
     assert!(
         result.is_err(),
         "a non-contiguous channel block must abort startup"
@@ -448,7 +458,7 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
         Some(Slot::from(999)),
         messages,
     );
-    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+    SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
         &mock_b,
         &seq_b.store,
         &seq_b.chain,
@@ -531,7 +541,7 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
         Some(tip_slot),
         messages,
     );
-    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+    SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
         &mock_b,
         &seq_b.store,
         &seq_b.chain,
@@ -677,7 +687,7 @@ fn deposit_event_record(
 //     );
 
 //     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
-//     SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+//     SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
 //         &mock_b,
 //         &seq_b.store,
 //         &seq_b.chain,
@@ -797,8 +807,8 @@ fn deposit_event_record(
 //     let config_b = bridge_funded_config();
 //     let (store_b, chain_b) = fresh_store_and_chain(&config_b).await;
 //     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
-//     SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock_b, &store_b, &chain_b,
-// true)         .await
+//     SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(&mock_b, &store_b,
+// &chain_b, true)         .await
 //         .expect("reconstruct");
 
 //     assert!(
@@ -850,9 +860,11 @@ async fn reconstruction_reconciles_already_finished_deposit() {
     );
 
     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
-    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock_b, &store_b, &chain_b, true)
-        .await
-        .expect("reconstruct");
+    SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+        &mock_b, &store_b, &chain_b, true,
+    )
+    .await
+    .expect("reconstruct");
 
     // The mint was applied exactly once, on top of the recipient's genesis supply.
     assert_eq!(
@@ -941,7 +953,7 @@ async fn reconstructed_delivery_settles_its_pending_record() {
     );
 
     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
-    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+    SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
         &mock_b,
         &seq_b.store,
         &seq_b.chain,
@@ -1035,7 +1047,7 @@ async fn a_verified_own_block_settles_its_delivery_records() {
         Some(tip_slot),
         messages,
     );
-    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+    SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
         &mock, &seq.store, &seq.chain, true,
     )
     .await
@@ -1084,9 +1096,10 @@ async fn committed_local_against_missing_channel_fails_without_anchor() {
     // The channel is gone: no tip, no messages.
     let mock =
         MockBlockPublisher::with_canned_channel(config.bedrock_config.channel_id, None, vec![]);
-    let result =
-        SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock, &store, &chain, false)
-            .await;
+    let result = SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+        &mock, &store, &chain, false,
+    )
+    .await;
     assert!(
         result.is_err(),
         "committed blocks against a missing channel must abort startup"

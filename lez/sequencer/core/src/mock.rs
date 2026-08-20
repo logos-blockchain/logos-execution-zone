@@ -28,7 +28,7 @@ use crate::{
 /// Channel id a test uses to make the mock report that no channel exists.
 pub const ABSENT_CHANNEL_ID: [u8; 32] = [0xAB_u8; 32];
 
-pub type SequencerCoreWithMockClients = crate::SequencerCore<MockBlockPublisher>;
+pub type SequencerCoreWithMockClients<S> = crate::SequencerCore<S, MockBlockPublisher>;
 
 #[derive(Clone)]
 pub struct MockBlockPublisher {

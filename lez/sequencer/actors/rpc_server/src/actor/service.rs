@@ -6,24 +6,28 @@ use jsonrpsee::{
     core::async_trait,
     types::{ErrorCode, ErrorObjectOwned},
 };
-use kameo::actor::ActorRef;
+use kameo::{
+    actor::ActorRef,
+    error::{Infallible, SendError},
+};
 use log::{error, warn};
-use sequencer_core::{block_publisher::BlockPublisherTrait, gossip::GossipTxPublisher};
+use sequencer_core::gossip::GossipTxPublisher;
+use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_service_protocol::{
-    Account, AccountId, AdmissionRejection, Block, BlockId, ChannelId, Commitment,
-    CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
-    CrossZoneDeadLetterRequeue, FeeStateQuote, HashType, MembershipProof, Nonce, ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
+    CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,
+    HashType, MembershipProof, Nonce, ProgramId,
 };
 
-pub struct Service<BP: BlockPublisherTrait + Send + Sync + 'static> {
-    executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
+pub struct Service<E: ExecutorActorTrait> {
+    executor_ref: ActorRef<E>,
     max_block_size: ByteSize,
     gossip_tx_publisher: Option<GossipTxPublisher>,
 }
 
-impl<BP: BlockPublisherTrait + Send + Sync + 'static> Service<BP> {
+impl<E: ExecutorActorTrait> Service<E> {
     pub fn new(
-        executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
+        executor_ref: ActorRef<E>,
         max_block_size: ByteSize,
         gossip_tx_publisher: Option<GossipTxPublisher>,
     ) -> Self {
@@ -38,9 +42,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> Service<BP> {
 }
 
 #[async_trait]
-impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::RpcServer
-    for Service<BP>
-{
+impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
     async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, ErrorObjectOwned> {
         sequencer_rpc_server_actor_metrics::increment_submitted_transactions_total();
 
@@ -100,23 +102,17 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             error!("Transaction failed before reaching mempool: {err:#?}");
         })?;
 
-        // The executor screens the transaction against the head state (fee
-        // admission) before pushing it to the mempool; a rejection comes back
-        // as a verdict, not an actor failure.
-        let outcome = self
+        self
             .executor_ref
             .ask(sequencer_executor_actor::protocol::Transaction {
                 transaction: authenticated_tx.clone(),
                 origin: sequencer_core::TransactionOrigin::User,
             })
             .await
-            .map_err(internal_error)?;
-        if let sequencer_executor_actor::protocol::SubmitOutcome::Rejected(rejection) = outcome {
-            sequencer_rpc_server_actor_metrics::increment_before_mempool_failed_transactions_total(
-            );
-            warn!("Transaction refused at fee admission: {rejection}");
-            return Err(rejection_error(&rejection));
-        }
+            .map_err(map_executor_error)
+            .inspect_err(|_| {
+                sequencer_rpc_server_actor_metrics::increment_before_mempool_failed_transactions_total();
+            })?;
 
         // Published only once admitted, so peers are not fed what the door
         // refused. (A full local mempool has already errored above, so a
@@ -132,8 +128,8 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetFeeQuote)
             .await
-            .map(|reply| reply.quote)
-            .map_err(internal_error)
+            .map(map_fee_state_quote)
+            .map_err(map_infallible_error)
     }
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
@@ -144,7 +140,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetBlock { block_id })
             .await
-            .map_err(internal_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_block_range(
@@ -163,21 +159,21 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetBlockRange { range })
             .await
-            .map_err(internal_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_last_block_id(&self) -> Result<BlockId, ErrorObjectOwned> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetLastBlockId)
             .await
-            .map_err(internal_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_account_balance(&self, account_id: AccountId) -> Result<u128, ErrorObjectOwned> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccountBalance { account_id })
             .await
-            .map_err(internal_error)
+            .map_err(map_infallible_error)
     }
 
     async fn get_transaction(
@@ -187,7 +183,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetTransaction { tx_hash })
             .await
-            .map_err(internal_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_accounts_nonces(
@@ -197,7 +193,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccountNonces { account_ids })
             .await
-            .map_err(internal_error)
+            .map_err(map_infallible_error)
     }
 
     async fn get_proofs_and_root(
@@ -207,7 +203,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetProofsAndRoot { commitments })
             .await
-            .map_err(internal_error)
+            .map_err(map_infallible_error)
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {
@@ -215,7 +211,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             .ask(sequencer_executor_actor::protocol::GetAccount { account_id })
             .await
             .map(|reply| reply.account)
-            .map_err(internal_error)
+            .map_err(map_infallible_error)
     }
 
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned> {
@@ -239,7 +235,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             .ask(sequencer_executor_actor::protocol::GetChannelId)
             .await
             .map(|reply| ChannelId(reply.channel_id))
-            .map_err(internal_error)
+            .map_err(map_infallible_error)
     }
 
     async fn get_cross_zone_dead_letters(
@@ -252,7 +248,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             .executor_ref
             .ask(sequencer_executor_actor::protocol::GetCrossZoneDeadLetters)
             .await
-            .map_err(internal_error)?;
+            .map_err(map_executor_error)?;
 
         Ok(CrossZoneDeadLetterReport {
             total_retired,
@@ -284,7 +280,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
                 },
             )
             .await
-            .map_err(internal_error)?;
+            .map_err(map_executor_error)?;
 
         Ok(match reply.outcome {
             DeadLetterRequeue::Requeued => CrossZoneDeadLetterRequeue::Requeued,
@@ -295,13 +291,63 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
     }
 }
 
-fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
-    ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+#[expect(clippy::needless_pass_by_value, reason = "More convenient mapping")]
+const fn map_fee_state_quote(
+    quote: sequencer_executor_actor::protocol::FeeStateQuote,
+) -> FeeStateQuote {
+    FeeStateQuote {
+        height: quote.height,
+        base_fee_exec: quote.base_fee_exec,
+        base_fee_stor: quote.base_fee_stor,
+        next_base_fee_exec_floor: quote.next_base_fee_exec_floor,
+        next_base_fee_exec_ceiling: quote.next_base_fee_exec_ceiling,
+        next_base_fee_stor_floor: quote.next_base_fee_stor_floor,
+        next_base_fee_stor_ceiling: quote.next_base_fee_stor_ceiling,
+        max_gas_exec: quote.max_gas_exec,
+        max_gas_stor: quote.max_gas_stor,
+    }
 }
 
-/// The JSON-RPC error a fee-admission rejection is returned as: its own code,
-/// the rendered reason, and the structured rejection in `data` for a client
-/// that would rather not parse prose.
-fn rejection_error(rejection: &AdmissionRejection) -> ErrorObjectOwned {
-    ErrorObjectOwned::owned(rejection.code(), rejection.to_string(), Some(rejection))
+fn map_executor_error<M>(
+    err: SendError<M, sequencer_executor_actor::error::Error>,
+) -> ErrorObjectOwned {
+    const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
+
+    match err {
+        SendError::HandlerError(handle_err) => match handle_err {
+            incorrect_fee @ sequencer_executor_actor::error::Error::IncorrectFee(_) => {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("{incorrect_fee:#}"),
+                    None::<()>,
+                )
+            }
+            sequencer_executor_actor::error::Error::MempoolIsFull => ErrorObjectOwned::owned(
+                MEMPOOL_IS_FULL_ERROR_CODE,
+                "Mempool is full".to_owned(),
+                None::<()>,
+            ),
+            handle_err @ (sequencer_executor_actor::error::Error::BackgroundTaskFinishedUnexpectedly
+            | sequencer_executor_actor::error::Error::BlockPublisherFinishedUnexpectedly
+            | sequencer_executor_actor::error::Error::StorageRequestFailed(_)
+            | sequencer_executor_actor::error::Error::BlockProductionFailed(_)
+            | sequencer_executor_actor::error::Error::CrossZoneDeadLettersUnavailable(_)
+            | sequencer_executor_actor::error::Error::CrossZoneDeadLetterRequeueFailed(_)) => {
+                internal_error(handle_err)
+            }
+        },
+        err @ (SendError::ActorNotRunning(_)
+        | SendError::ActorStopped
+        | SendError::ActorRestarting(_)
+        | SendError::MailboxFull(_)
+        | SendError::Timeout(_)) => internal_error(err),
+    }
+}
+
+fn map_infallible_error<M>(err: SendError<M, Infallible>) -> ErrorObjectOwned {
+    internal_error(err)
+}
+
+fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
 }

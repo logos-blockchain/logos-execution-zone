@@ -29,7 +29,7 @@ pub struct SequencerHandle {
     // NOTE: Order of fields matters as it affects drop order.
     scheduler: ActorHandle<Scheduler>,
     rpc_server: ActorHandle<RpcServerActor>,
-    executor: ActorHandle<ExecutorActor<BlockPublisher>>,
+    executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
     storage: ActorHandle<StorageActor>,
     addr: SocketAddr,
     /// Held for its lifetime: dropping it stops the gossip drive task.
@@ -41,7 +41,7 @@ impl SequencerHandle {
     const fn new(
         scheduler: ActorHandle<Scheduler>,
         rpc_server: ActorHandle<RpcServerActor>,
-        executor: ActorHandle<ExecutorActor<BlockPublisher>>,
+        executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
         storage: ActorHandle<StorageActor>,
         addr: SocketAddr,
         gossip: Option<sequencer_core::gossip::GossipNetwork>,

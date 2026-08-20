@@ -196,7 +196,7 @@ fn load_prebuilt_dump() -> Result<DbDump> {
     let path = prebuilt_sequencer_db_dump_path();
     let bytes = std::fs::read(&path)
         .with_context(|| format!("Failed to read prebuilt db dump at {}", path.display()))?;
-    DbDump::from_bytes(&bytes).context("Failed to deserialize prebuilt db dump")
+    Ok(DbDump { bytes })
 }
 
 /// Builds an HTTP RPC client for the sequencer at `addr`.

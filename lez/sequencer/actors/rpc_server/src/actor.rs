@@ -4,7 +4,8 @@ use bytesize::ByteSize;
 use jsonrpsee::server::ServerHandle;
 use kameo::{Actor, actor::ActorRef, mailbox::Signal};
 use log::info;
-use sequencer_core::{block_publisher::BlockPublisherTrait, gossip::GossipTxPublisher};
+use sequencer_core::gossip::GossipTxPublisher;
+use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_service_rpc::RpcServer as _;
 use tokio::select;
 
@@ -20,10 +21,10 @@ pub struct RpcServerActor {
 }
 
 impl RpcServerActor {
-    pub async fn new<BP: BlockPublisherTrait + Send + Sync + 'static>(
+    pub async fn new<E: ExecutorActorTrait>(
         listen_addr: SocketAddr,
         max_block_size: ByteSize,
-        executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
+        executor_ref: ActorRef<E>,
         gossip_tx_publisher: Option<GossipTxPublisher>,
     ) -> Result<Self> {
         let server = jsonrpsee::server::ServerBuilder::with_config(

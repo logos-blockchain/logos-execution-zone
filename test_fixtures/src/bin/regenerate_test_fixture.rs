@@ -150,10 +150,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create fixture directory {}", parent.display()))?;
     }
-    let bytes = dump
-        .to_bytes()
-        .context("Failed to serialize fixture dump")?;
-    std::fs::write(dest, bytes)
+    std::fs::write(dest, dump.bytes)
         .with_context(|| format!("Failed to write fixture dump to {}", dest.display()))?;
 
     Ok(())

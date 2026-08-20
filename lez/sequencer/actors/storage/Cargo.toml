@@ -8,19 +8,22 @@ license.workspace = true
 workspace = true
 
 [features]
+# Adds actor implementation.
+actor = ["dep:storage", "dep:log", "dep:itertools"]
+# Adds mock actor implementation.
 mock = ["dep:mockall"]
 
 [dependencies]
 lee_core.workspace = true
 lee.workspace = true
 common.workspace = true
-storage.workspace = true
+storage = { workspace = true, optional = true }
 
 kameo.workspace = true
 thiserror.workspace = true
-log.workspace = true
+log = { workspace = true, optional = true }
+itertools = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
-itertools.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

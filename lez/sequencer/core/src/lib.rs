@@ -30,11 +30,9 @@ use logos_blockchain_zone_sdk::{
     sequencer::{DepositInfo, WithdrawArg},
 };
 use mempool::{MemPool, MemPoolHandle};
-#[cfg(feature = "mock")]
-pub use mock::SequencerCoreWithMockClients;
 use num_bigint::BigUint;
 use sequencer_storage_actor::{
-    StorageActor, StorageActorTrait,
+    StorageActorTrait,
     protocol::{
         ApplyStoreUpdate, DeadLetterDispatchRecord, DeadLetterRequeue, DispatchFailure,
         DispatchOrigin, DropSettledCrossZoneDispatches, GetBlock, GetDeadLetterDispatches,
@@ -57,7 +55,6 @@ pub mod block_store;
 pub mod committee_discovery;
 pub mod config;
 pub mod cross_zone_watcher;
-pub mod fees;
 pub mod gossip;
 
 #[cfg(feature = "mock")]
@@ -162,10 +159,7 @@ struct DepositMetadata {
     recipient_id: lee::AccountId,
 }
 
-pub struct SequencerCore<
-    BP: BlockPublisherTrait = ZoneSdkPublisher,
-    S: StorageActorTrait = StorageActor,
-> {
+pub struct SequencerCore<S: StorageActorTrait, BP: BlockPublisherTrait = ZoneSdkPublisher> {
     /// Two-tier chain state: production builds on its head; the publisher's
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
@@ -185,7 +179,7 @@ pub struct SequencerCore<
     bedrock_signing_key: block_publisher::Ed25519Key,
 }
 
-impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
+impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
     const CHANNEL_PROBE_RETRIES: usize = 29;
     const CHANNEL_PROBE_RETRY_DELAY: Duration = Duration::from_secs(2);
     /// Channel slots between committee-config submissions; a margin over

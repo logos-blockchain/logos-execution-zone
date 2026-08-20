@@ -90,7 +90,7 @@ fn test_sequencer_key(seed: u8) -> sequencer_stake_core::SequencerKey {
 async fn start_sequencer(
     config: SequencerConfig,
 ) -> (
-    SequencerCoreWithMockClients,
+    SequencerCoreWithMockClients<StorageActor>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     let storage = StorageActor::new(&config.db_path()).expect("Failed to open database");
@@ -172,7 +172,7 @@ fn only_the_cross_zone_inbox_and_fee_are_sequencer_only() {
 
 #[test]
 fn committee_cooldown_needs_the_channel_to_advance() {
-    type Core = SequencerCoreWithMockClients;
+    type Core = SequencerCoreWithMockClients<StorageActor>;
     let cooldown = Core::COMMITTEE_SUBMISSION_COOLDOWN;
     let submitted_at = Slot::new(100);
 
@@ -241,7 +241,7 @@ fn create_signing_key_for_account2() -> lee::PrivateKey {
 }
 
 async fn common_setup() -> (
-    SequencerCoreWithMockClients,
+    SequencerCoreWithMockClients<StorageActor>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     let config = setup_sequencer_config();
@@ -251,7 +251,7 @@ async fn common_setup() -> (
 async fn common_setup_with_config(
     config: SequencerConfig,
 ) -> (
-    SequencerCoreWithMockClients,
+    SequencerCoreWithMockClients<StorageActor>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
@@ -512,7 +512,7 @@ fn dispatches_in(block: &Block) -> Vec<[u8; 32]> {
 
 /// The pending dispatch records a sequencer still holds.
 async fn pending_dispatches(
-    sequencer: &SequencerCoreWithMockClients,
+    sequencer: &SequencerCoreWithMockClients<StorageActor>,
 ) -> Vec<PendingCrossZoneDispatchRecord> {
     sequencer
         .block_store()

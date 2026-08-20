@@ -37,6 +37,8 @@ use crate::{
     },
 };
 
+#[cfg(test)]
+mod tests;
 mod tx_index;
 
 pub struct StorageActor {
@@ -55,7 +57,7 @@ impl StorageActor {
 
     /// Creates a fresh database at `location` from `dump`.
     pub fn restore_from_dump(location: &Path, dump: &DbDump) -> Result<Self> {
-        let dbio = RocksDBIO::restore_from_dump(location, dump.as_db_dump())?;
+        let dbio = RocksDBIO::restore_from_dump(location, &dump.try_into()?)?;
         Self::new_inner(dbio)
     }
 
@@ -445,7 +447,7 @@ impl Message<DumpDb> for StorageActor {
         DumpDb: DumpDb,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.dbio().dump_all().map(Into::into).map_err(Into::into)
+        self.dbio().dump_all()?.try_into()
     }
 }
 
