@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
@@ -266,6 +266,7 @@ pub fn indexer_config(
 ) -> Result<IndexerConfig> {
     Ok(IndexerConfig {
         consensus_info_polling_interval: Duration::from_secs(1),
+        cross_zone_accept_unverified: Vec::new(),
         bedrock_config: ClientConfig {
             addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
@@ -273,6 +274,7 @@ pub fn indexer_config(
         },
         channel_id,
         cross_zone,
+        peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
         bridge_lock_holdings: Vec::new(),
         allow_chain_reset: false,
     })

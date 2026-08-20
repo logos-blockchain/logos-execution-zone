@@ -57,7 +57,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
                 src_program_id: programs::bridge_lock().id(),
                 target_program_id: wrapped_token_id,
             }],
-            expected_block_signing_pubkey: None,
+            expected_block_signing_pubkeys: Vec::new(),
         }],
         source_authority: None,
         source_governance: None,

@@ -11,7 +11,7 @@
 
 pub use acceptance::{
     Link, OffChain, STUCK_SLOT_ALERT_PASSES, ScreenRefusal, StallState, alerts_at,
-    equivocation_report, link_to_tip, screen_peer_block,
+    equivocation_report, link_to_tip, pinned_keys, screen_peer_block, signed_by_any,
 };
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use cross_zone_inbox_core::{
@@ -362,7 +362,7 @@ mod tests {
                     src_program_id: programs::bridge_lock().id(),
                     target_program_id: programs::amm().id(),
                 }],
-                expected_block_signing_pubkey: None,
+                expected_block_signing_pubkeys: Vec::new(),
             }],
             source_authority: None,
             source_governance: None,

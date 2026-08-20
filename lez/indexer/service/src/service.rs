@@ -226,6 +226,14 @@ impl SubscriptionService {
                 .ok()
                 .is_some_and(|handle| handle.as_ref().is_some_and(JoinHandle::is_finished));
             if loop_finished && !self.shutdown.is_cancelled() {
+                // A halt outside the accept-list would only re-derive the same
+                // verdict, so respawning would churn: verify, halt, die, respawn.
+                if self.halted_outside_accept_list() {
+                    error!(
+                        "Not respawning block ingestion: a cross-zone halt record is persisted and its hash is not in cross_zone_accept_unverified."
+                    );
+                    bail!(send_err)
+                }
                 drop(guard);
                 let new_parts = Self::spawn_respond_subscribers_loop(
                     self.indexer.clone(),
@@ -259,6 +267,24 @@ impl SubscriptionService {
         }
 
         Ok(())
+    }
+
+    /// Whether a persisted cross-zone halt record names a hash the operator
+    /// has not accept-listed. Ingestion respawned in that state re-derives the
+    /// same verdict and dies again.
+    fn halted_outside_accept_list(&self) -> bool {
+        match self.indexer.store.get_cross_zone_halt() {
+            Ok(Some(halt)) => !self
+                .indexer
+                .config
+                .cross_zone_accept_unverified
+                .contains(&halt.block_hash),
+            Ok(None) => false,
+            Err(err) => {
+                warn!("Failed to read cross-zone halt record before respawn: {err:#}");
+                false
+            }
+        }
     }
 
     fn spawn_respond_subscribers_loop(
