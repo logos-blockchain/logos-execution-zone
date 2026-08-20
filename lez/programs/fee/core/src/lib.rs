@@ -1,7 +1,7 @@
 //! Core data structures and constants for the Fee Program.
 
 use lee_core::{
-    account::AccountId,
+    account::{AccountId, Balance},
     program::{PdaSeed, ProgramId},
 };
 use serde::{Deserialize, Serialize};
@@ -17,8 +17,8 @@ const FEE_INBOX_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Inbox/0000000/";
 pub struct BlockFeeSummary {
     pub gas_used_exec: u64,
     pub gas_used_stor: u64,
-    pub revenue_base: u128,
-    pub revenue_tip: u128,
+    pub revenue_base: Balance,
+    pub revenue_tip: Balance,
 }
 
 /// The instruction type for the Fee Program.
