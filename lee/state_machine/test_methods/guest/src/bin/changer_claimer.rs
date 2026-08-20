@@ -64,8 +64,6 @@ fn main() {
     .write();
 }
 
-/// The new data value, when written, is always a fully-computed byte blob assigned directly, so
-/// materializing it from `diff_data` is a passthrough.
 fn update_from_diff(
     _pre_state: Account,
     diff_data: Data,

@@ -34,9 +34,6 @@ pub fn unchanged(account_id: AccountId) -> AccountDiffOutput {
     })
 }
 
-/// Every data write in this program (always the pool account) replaces its data wholesale with
-/// an already-fully-computed `PoolDefinition` encoding, so `diff_data` already *is* the new data
-/// verbatim — materializing it is a passthrough.
 pub fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
     Ok(diff_data)
 }
