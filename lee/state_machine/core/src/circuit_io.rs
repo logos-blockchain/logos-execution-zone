@@ -193,9 +193,6 @@ impl PrivacyPreservingCircuitOutput {
 #[cfg(feature = "host")]
 impl PrivacyPreservingCircuitOutput {
     /// Serializes the circuit output to the exact journal byte sequence the circuit guest commits.
-    ///
-    /// `Receipt::new(inner, to_bytes())` must reconstruct the committed journal for verification,
-    /// so this mirrors `main.rs`'s `commit_slice(to_frame(borsh))` byte-for-byte.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         crate::to_frame(&borsh::to_vec(self).expect("borsh serialization is infallible"))

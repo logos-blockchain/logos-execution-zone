@@ -60,11 +60,7 @@ pub struct ProgramInput<T> {
     pub instruction: T,
 }
 
-/// Borsh-encoded header written to the guest as a single length-prefixed frame.
-///
-/// Carries the program identity and pre-states alongside the borsh-encoded `instruction_data`
-/// bytes; the instruction `T` is decoded from `instruction_data` via `borsh::from_slice`.
-/// This is the wire form of [`ProgramInput`], which instead holds the already-decoded instruction.
+/// Struct encoding the input to an LEE program.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct LeeInputHeader {
     pub self_program_id: ProgramId,
@@ -699,11 +695,8 @@ pub fn compute_public_authorized_pdas(
         .collect()
 }
 
-/// Reads a length-prefixed frame from the guest's stdin.
-///
-/// A 4-byte little-endian length followed by that many payload bytes: the host `to_frame` layout,
-/// read via the stable `read_slice` API rather than the `#[stability::unstable]` `env::read_frame`.
-/// Shared by the program input read and the privacy circuit's own input read.
+/// Reads first 4 bytes indicating the length in bytes of the program input bytes.
+/// Afterwards, reads the exact number of frames in the header.
 #[must_use]
 pub fn read_input_frame() -> Vec<u8> {
     let mut len_bytes = [0; 4];

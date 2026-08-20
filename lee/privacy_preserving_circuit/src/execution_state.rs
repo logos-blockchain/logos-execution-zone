@@ -154,8 +154,7 @@ impl ExecutionState {
             );
 
             // Check that `program_output` is consistent with the execution of the corresponding
-            // program. The reconstructed journal frame must byte-match what the program guest
-            // committed via `ProgramOutput::write`, so the recursion assumption resolves.
+            // program.
             let program_output_frame = lee_core::to_frame(
                 &borsh::to_vec(&program_output).expect("borsh serialization is infallible"),
             );
