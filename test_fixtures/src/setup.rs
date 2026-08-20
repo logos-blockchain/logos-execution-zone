@@ -412,20 +412,13 @@ pub async fn setup_public_accounts_with_initial_supply(
     wallet: &mut WalletCore,
     initial_public_accounts: &[(PrivateKey, u128)],
 ) -> Result<()> {
-    setup_public_accounts_with_initial_supply_owned(wallet, initial_public_accounts.to_vec()).await
-}
-
-async fn setup_public_accounts_with_initial_supply_owned(
-    wallet: &mut WalletCore,
-    initial_public_accounts: Vec<(PrivateKey, u128)>,
-) -> Result<()> {
     for (private_key, amount) in initial_public_accounts {
-        let account_id = AccountId::from(&PublicKey::new_from_private_key(&private_key));
+        let account_id = AccountId::from(&PublicKey::new_from_private_key(private_key));
         wallet::cli::execute_subcommand(
             wallet,
             Command::Vault(VaultSubcommand::Claim {
                 account_id: public_mention(account_id),
-                amount,
+                amount: *amount,
             }),
         )
         .await
@@ -450,22 +443,6 @@ pub async fn setup_private_accounts_with_initial_supply(
     }
 
     Ok(())
-}
-
-pub fn initialize_wallet_public_accounts(
-    mut wallet: WalletCore,
-    initial_public_accounts: Vec<(PrivateKey, u128)>,
-) -> Result<WalletCore> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("Failed to create wallet initialization runtime")?;
-
-    runtime.block_on(async move {
-        setup_public_accounts_with_initial_supply_owned(&mut wallet, initial_public_accounts)
-            .await?;
-        Ok(wallet)
-    })
 }
 
 pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {

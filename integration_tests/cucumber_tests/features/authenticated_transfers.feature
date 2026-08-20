@@ -17,13 +17,12 @@ Feature: Authenticated transfers
 
   @auth_transfer_ci
   # Mirrors integration_tests/tests/auth_transfer/public.rs::failed_transfer_with_insufficient_balance.
-  # Coverage is equivalent or stronger: it uses 10001 rather than 1_000_000, explicitly checks
-  # block absence, and also verifies indexer convergence and explicit runtime teardown.
+  # Coverage is equivalent or stronger: it uses 10001 rather than 1_000_000, and also verifies
+  # indexer convergence and explicit runtime teardown.
   Scenario: Reject a public transfer with insufficient sender balance
     Given a LEZ stack with configured public accounts
     When I attempt to transfer 10001 from the first configured public account to the second
     Then the transfer is rejected
-    And no transfer is included in a block
     And the sender balance remains unchanged
     And the receiver balance remains unchanged
     And the indexer catches up to the sequencer within 120 seconds

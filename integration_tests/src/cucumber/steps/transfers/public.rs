@@ -1,10 +1,12 @@
 use cucumber::{gherkin::Step, when};
-use sequencer_service_rpc::RpcClient as _;
 use wallet::account::Label;
 
 use super::{
     super::log_step,
-    helpers::{ensure_transfer_name_available, insert_transfer_artifact},
+    helpers::{
+        ensure_transfer_name_available, insert_transfer_artifact, snapshot_public_sender,
+        snapshot_public_transfer,
+    },
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
@@ -32,26 +34,8 @@ async fn transfer_between_configured_public_accounts(
         .get(1)
         .copied()
         .ok_or(StepError::MissingSelectedAccount)?;
-    let sender_initial_balance = context
-        .sequencer_client()
-        .get_account_balance(sender)
-        .await
-        .map_err(StepError::query_failed)?;
-    let receiver_initial_balance = context
-        .sequencer_client()
-        .get_account_balance(receiver)
-        .await
-        .map_err(StepError::query_failed)?;
-    let sender_initial_nonce = context
-        .sequencer_client()
-        .get_accounts_nonces(vec![sender])
-        .await
-        .map_err(StepError::query_failed)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| StepError::QueryFailed {
-            message: format!("no nonce returned for sender {sender:?}"),
-        })?;
+    let (sender_initial_balance, receiver_initial_balance, sender_initial_nonce) =
+        snapshot_public_transfer(context.sequencer_client(), sender, receiver).await?;
     let transfer_hash = context.public_transfer(sender, receiver, amount).await?;
 
     insert_transfer_artifact(
@@ -108,26 +92,8 @@ async fn transfer_between_labeled_public_accounts(
         .get(1)
         .copied()
         .ok_or(StepError::MissingSelectedAccount)?;
-    let sender_initial_balance = context
-        .sequencer_client()
-        .get_account_balance(sender)
-        .await
-        .map_err(StepError::query_failed)?;
-    let receiver_initial_balance = context
-        .sequencer_client()
-        .get_account_balance(receiver)
-        .await
-        .map_err(StepError::query_failed)?;
-    let sender_initial_nonce = context
-        .sequencer_client()
-        .get_accounts_nonces(vec![sender])
-        .await
-        .map_err(StepError::query_failed)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| StepError::QueryFailed {
-            message: format!("no nonce returned for sender {sender:?}"),
-        })?;
+    let (sender_initial_balance, receiver_initial_balance, sender_initial_nonce) =
+        snapshot_public_transfer(context.sequencer_client(), sender, receiver).await?;
     let transfer_hash = context
         .public_transfer_by_labels(
             Label::new(&sender_label),
@@ -178,22 +144,9 @@ async fn transfer_to_new_public_account(
         .accounts
         .new_public_account
         .ok_or(StepError::MissingSelectedAccount)?;
-    let sender_initial_balance = context
-        .sequencer_client()
-        .get_account_balance(sender)
-        .await
-        .map_err(StepError::query_failed)?;
+    let (sender_initial_balance, sender_initial_nonce) =
+        snapshot_public_sender(context.sequencer_client(), sender).await?;
     let receiver_initial_balance = 0;
-    let sender_initial_nonce = context
-        .sequencer_client()
-        .get_accounts_nonces(vec![sender])
-        .await
-        .map_err(StepError::query_failed)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| StepError::QueryFailed {
-            message: format!("no nonce returned for sender {sender:?}"),
-        })?;
     let transfer_hash = context
         .public_transfer_to_new_account(sender, receiver, amount)
         .await?;
@@ -234,26 +187,8 @@ async fn attempt_insufficient_public_transfer(
         .get(1)
         .copied()
         .ok_or(StepError::MissingSelectedAccount)?;
-    let sender_initial_balance = context
-        .sequencer_client()
-        .get_account_balance(sender)
-        .await
-        .map_err(StepError::query_failed)?;
-    let receiver_initial_balance = context
-        .sequencer_client()
-        .get_account_balance(receiver)
-        .await
-        .map_err(StepError::query_failed)?;
-    let sender_initial_nonce = context
-        .sequencer_client()
-        .get_accounts_nonces(vec![sender])
-        .await
-        .map_err(StepError::query_failed)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| StepError::QueryFailed {
-            message: format!("no nonce returned for sender {sender:?}"),
-        })?;
+    let (sender_initial_balance, receiver_initial_balance, sender_initial_nonce) =
+        snapshot_public_transfer(context.sequencer_client(), sender, receiver).await?;
 
     let rejection = match context.public_transfer(sender, receiver, amount).await {
         Ok(transfer_hash) => {

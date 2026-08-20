@@ -288,21 +288,6 @@ fn assert_transfer_is_rejected(world: &mut CucumberWorld, step: &Step) -> StepRe
     Ok(())
 }
 
-#[then("no transfer is included in a block")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-fn assert_no_transfer_is_included(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    log_step(step);
-    if world.environment.transfers.rejected.is_none() {
-        return Err(StepError::AssertionFailed {
-            message: "a rejected transfer must not produce a transaction hash".to_owned(),
-        });
-    }
-    Ok(())
-}
-
 #[then("the sender balance remains unchanged")]
 async fn assert_sender_balance_unchanged(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);

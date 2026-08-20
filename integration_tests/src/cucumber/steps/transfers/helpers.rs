@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use common::transaction::LeeTransaction;
 use lee::{AccountId, PublicKey};
+use lee_core::account::Nonce;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 
 use crate::{
@@ -167,6 +168,39 @@ pub(super) fn expected_public_signing_key(account: AccountId) -> Option<PublicKe
             let public_key = PublicKey::new_from_private_key(&private_key);
             (AccountId::from(&public_key) == account).then_some(public_key)
         })
+}
+
+pub(super) async fn snapshot_public_sender(
+    client: &SequencerClient,
+    sender: AccountId,
+) -> Result<(u128, Nonce), StepError> {
+    let sender_balance = client
+        .get_account_balance(sender)
+        .await
+        .map_err(StepError::query_failed)?;
+    let sender_nonce = client
+        .get_accounts_nonces(vec![sender])
+        .await
+        .map_err(StepError::query_failed)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| StepError::QueryFailed {
+            message: format!("no nonce returned for sender {sender:?}"),
+        })?;
+    Ok((sender_balance, sender_nonce))
+}
+
+pub(super) async fn snapshot_public_transfer(
+    client: &SequencerClient,
+    sender: AccountId,
+    receiver: AccountId,
+) -> Result<(u128, u128, Nonce), StepError> {
+    let (sender_balance, sender_nonce) = snapshot_public_sender(client, sender).await?;
+    let receiver_balance = client
+        .get_account_balance(receiver)
+        .await
+        .map_err(StepError::query_failed)?;
+    Ok((sender_balance, receiver_balance, sender_nonce))
 }
 
 pub(super) fn transfer_details(
