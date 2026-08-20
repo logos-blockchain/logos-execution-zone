@@ -20,13 +20,12 @@ use logos_blockchain_core::mantle::{
     gas::GasCost,
     ops::{
         Op, OpProof,
-        channel::{
-            ChannelId, MsgId,
-            inscribe::{Inscription, InscriptionOp},
-        },
+        channel::{ChannelId, MsgId},
     },
     traits::Hashable as _,
-    transactions::{MantleTx, MantleTxBuilder, OpsProofs, states::Unverified},
+    transactions::{
+        MantleTxBuilder, OpsProofs, RawMantleTx, mantle_tx::MantleTx as _, states::Unverified,
+    },
 };
 use logos_blockchain_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkSignature};
@@ -37,8 +36,8 @@ use logos_blockchain_zone_sdk::{
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
-    TestContext,
-    config::{self, SequencerPartialConfig},
+    MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
+    config::{self, MultiNodeTestContextConfig, SequencerPartialConfig},
     setup::{SequencerSetup, sequencer_client},
 };
 
@@ -87,15 +86,19 @@ async fn main() -> Result<()> {
 
 impl LiveNetwork {
     async fn start() -> Result<Self> {
-        let bond = TestContext::builder()
-            .disable_indexer()
-            .from_scratch()
-            .with_sequencer_partial_config(SequencerPartialConfig {
-                // Live wallet initialization proves several transactions. A moderate interval
-                // preserves the shared Bedrock fee fixture before participant zones start.
-                block_create_timeout: Duration::from_secs(5),
-                ..SequencerPartialConfig::default()
-            })
+        let bond = MultiZoneTestContextBuilder::default()
+            .with_zone(
+                ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                    .disable_indexer()
+                    .from_scratch()
+                    .with_sequencer_partial_config(SequencerPartialConfig {
+                        // Live wallet initialization proves several transactions. A moderate
+                        // interval preserves the shared Bedrock fee fixture before participant
+                        // zones start.
+                        block_create_timeout: Duration::from_secs(5),
+                        ..SequencerPartialConfig::default()
+                    }),
+            )
             .build()
             .await
             .context("starting Bedrock and the neutral bond zone")?;
@@ -327,7 +330,20 @@ async fn stale_parent_rejection(network: &LiveNetwork, nonce: u64) -> Result<()>
         .context("missing signed stale candidate")?
         .clone();
     let stale_expected = inscription_tips(&stale_tx)?;
-    post_single_inscription(network, channel_a(), &network.key_a, b"advance A parent").await?;
+
+    // Advance the live channel tips with another fully signed CACP transaction. This keeps the
+    // setup valid for the current sequencer block format instead of injecting an arbitrary
+    // inscription payload that the participant services cannot decode.
+    let fresh_nonce = nonce.checked_add(10_000).context("fresh nonce overflow")?;
+    let (fresh_a, _fresh_b) = funded_phase_three(network, fresh_nonce).await?;
+    let fresh_tx = fresh_a
+        .signed_tx()
+        .context("missing signed fresh candidate")?
+        .clone();
+    let fresh_expected = inscription_tips(&fresh_tx)?;
+    network.node.post_transaction(fresh_tx).await?;
+    wait_for_tips(&network.node, fresh_expected).await?;
+
     let before_submit = network.parents().await?;
     network.node.post_transaction(stale_tx).await?;
     tokio::time::sleep(Duration::from_secs(4)).await;
@@ -338,7 +354,7 @@ async fn stale_parent_rejection(network: &LiveNetwork, nonce: u64) -> Result<()>
     );
     ensure!(after[0].parent != stale_expected[0].1);
     ensure!(after[1].parent != stale_expected[1].1);
-    println!("  PASS: after A's parent changed, the old joint tx advanced neither A nor B");
+    println!("  PASS: after the parents changed, the old joint tx advanced neither A nor B");
     Ok(())
 }
 
@@ -622,7 +638,10 @@ async fn wait_for_lee_tx(client: &SequencerClient, hash: common::HashType) -> Re
         .context("waiting for bond transaction inclusion")?
 }
 
-async fn fund_ops(node: &NodeHttpClient, tx: MantleTx) -> Result<(MantleTx, Option<OpProof>)> {
+async fn fund_ops(
+    node: &NodeHttpClient,
+    tx: RawMantleTx,
+) -> Result<(RawMantleTx, Option<OpProof>)> {
     let tx_builder = MantleTxBuilder::new().extend_ops(tx.ops().iter().cloned())?;
     let funded = node
         .fund_tx(WalletFundRequestBody {
@@ -635,40 +654,6 @@ async fn fund_ops(node: &NodeHttpClient, tx: MantleTx) -> Result<(MantleTx, Opti
         })
         .await?;
     Ok((funded.funded_tx, funded.transfer_proof))
-}
-
-async fn post_single_inscription(
-    network: &LiveNetwork,
-    channel: ChannelId,
-    key: &Ed25519Key,
-    payload: &[u8],
-) -> Result<()> {
-    let parent = channel_tip(&network.node, channel).await?;
-    let inscription = Inscription::try_from(payload.to_vec())?;
-    let raw = MantleTxBuilder::new()
-        .extend_ops([Op::ChannelInscribe(InscriptionOp {
-            channel_id: channel,
-            inscription,
-            parent,
-            signer: key.public_key(),
-        })])?
-        .build()?;
-    let (tx, transfer_proof) = fund_ops(&network.node, raw).await?;
-    let mut proofs: OpsProofs =
-        OpProof::Ed25519Sig(key.sign_payload(tx.hash().as_signing_bytes().as_ref())).into();
-    proofs.try_push(transfer_proof.context("missing fee proof")?)?;
-    let signed = SignedMantleTx::new(tx, proofs);
-    let expected = signed
-        .mantle_tx()
-        .ops()
-        .iter()
-        .find_map(|op| match op {
-            Op::ChannelInscribe(inscription) => Some(inscription.id()),
-            _ => None,
-        })
-        .context("missing inscription")?;
-    network.node.post_transaction(signed).await?;
-    wait_for_tip(&network.node, channel, expected).await
 }
 
 fn assert_live_shape(tx: &SignedMantleTx<Unverified>) -> Result<()> {
@@ -730,20 +715,6 @@ async fn wait_for_tips(node: &NodeHttpClient, expected: [(ChannelId, MsgId); 2])
     tokio::time::timeout(TIMEOUT, wait)
         .await
         .context("waiting for atomic Bedrock inclusion")?
-}
-
-async fn wait_for_tip(node: &NodeHttpClient, channel: ChannelId, expected: MsgId) -> Result<()> {
-    let wait = async {
-        loop {
-            if channel_tip(node, channel).await? == expected {
-                return Ok::<_, anyhow::Error>(());
-            }
-            tokio::time::sleep(POLL).await;
-        }
-    };
-    tokio::time::timeout(TIMEOUT, wait)
-        .await
-        .context("waiting for Bedrock inclusion")?
 }
 
 fn heading(number: u8, title: &str) {

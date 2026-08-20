@@ -45,8 +45,9 @@ pub fn open_instruction(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use logos_blockchain_core::mantle::ops::channel::ChannelId;
+
+    use super::*;
 
     #[test]
     fn proposal_has_separate_program_owned_state_and_escrow() {

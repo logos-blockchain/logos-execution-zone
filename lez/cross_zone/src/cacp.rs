@@ -12,7 +12,10 @@ use logos_blockchain_core::mantle::{
         },
     },
     traits::Hashable as _,
-    transactions::{MantleTx, MantleTxBuilder, OpsProofs, TxHash, states::Unverified},
+    transactions::{
+        MantleTxBuilder, OpsProofs, RawMantleTx, TxHash, mantle_tx::MantleTx as _,
+        states::Unverified,
+    },
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use serde::{Deserialize, Serialize};
@@ -203,7 +206,7 @@ pub struct Propose {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Accept {
-    pub tx: MantleTx,
+    pub tx: RawMantleTx,
     pub counterparty_proof: Ed25519Signature,
     /// Proof for the optional Bedrock fee operation appended by the node wallet.
     pub funding_proof: Option<OpProof>,
@@ -220,12 +223,12 @@ impl Accept {
 /// separately by the bond state.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AcceptCandidate {
-    pub tx: MantleTx,
+    pub tx: RawMantleTx,
     pub funding_proof: Option<OpProof>,
 }
 
 impl AcceptCandidate {
-    pub fn new(tx: MantleTx, funding_proof: Option<OpProof>) -> Result<Self, CacpError> {
+    pub fn new(tx: RawMantleTx, funding_proof: Option<OpProof>) -> Result<Self, CacpError> {
         let candidate = Self { tx, funding_proof };
         candidate.validate_shape()?;
         Ok(candidate)
@@ -411,7 +414,7 @@ pub struct CounterpartySession {
     expected_intent: CrossZoneIntent,
     parents: [ChannelParent; PARTICIPANT_COUNT],
     phase: Phase,
-    accepted_tx: Option<MantleTx>,
+    accepted_tx: Option<RawMantleTx>,
     accepted_counterparty_proof: Option<Ed25519Signature>,
     accepted_funding_proof: Option<OpProof>,
     signed_tx: Option<SignedMantleTx<Unverified>>,
@@ -468,7 +471,7 @@ impl CounterpartySession {
     pub fn receive_funded_propose(
         &mut self,
         propose: &Propose,
-        funded_tx: MantleTx,
+        funded_tx: RawMantleTx,
         funding_proof: OpProof,
         signing_key: &Ed25519Key,
     ) -> Result<Accept, CacpError> {
@@ -744,7 +747,7 @@ pub fn build_joint_tx(
     intent: &CrossZoneIntent,
     topology: &TwoZoneTopology,
     parents: &[ChannelParent; PARTICIPANT_COUNT],
-) -> Result<MantleTx, CacpError> {
+) -> Result<RawMantleTx, CacpError> {
     validate_parents(intent, parents)?;
     let mut builder = MantleTxBuilder::new();
     for operation in intent.operations() {
@@ -775,7 +778,7 @@ pub fn build_joint_tx(
 }
 
 fn validate_joint_tx(
-    tx: &MantleTx,
+    tx: &RawMantleTx,
     intent: &CrossZoneIntent,
     topology: &TwoZoneTopology,
     parents: &[ChannelParent; PARTICIPANT_COUNT],
@@ -798,7 +801,7 @@ fn validate_joint_tx(
 }
 
 fn proofs_in_operation_order(
-    tx: &MantleTx,
+    tx: &RawMantleTx,
     topology: &TwoZoneTopology,
     initiator_proof: Ed25519Signature,
     counterparty_proof: Ed25519Signature,
@@ -866,7 +869,6 @@ fn require_key(key: &Ed25519Key, sequencer: &ZoneSequencer) -> Result<(), CacpEr
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use logos_blockchain_codec::BinaryDecodeExt as _;
     use logos_blockchain_core::mantle::{
         NoteId,
@@ -874,6 +876,8 @@ mod tests {
         ops::transfer::TransferOp,
     };
     use logos_blockchain_key_management_system_service::keys::ZkSignature;
+
+    use super::*;
 
     const KEY_A: [u8; 32] = [0xA1; 32];
     const KEY_B: [u8; 32] = [0xB2; 32];

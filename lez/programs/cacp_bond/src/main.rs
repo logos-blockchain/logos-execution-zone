@@ -392,7 +392,7 @@ fn deposit_call(
     let mut escrow_for_transfer = escrow.clone();
     escrow_for_transfer.is_authorized = true;
     ChainedCall::new(
-        sender.account.program_owner,
+        sender.account.program_owner.into(),
         vec![sender.clone(), escrow_for_transfer],
         &TransferInstruction::Transfer { amount },
     )
@@ -408,7 +408,7 @@ fn payout_call(
     let mut escrow_for_transfer = escrow.clone();
     escrow_for_transfer.is_authorized = true;
     ChainedCall::new(
-        escrow.account.program_owner,
+        escrow.account.program_owner.into(),
         vec![escrow_for_transfer, recipient.clone()],
         &TransferInstruction::Transfer { amount },
     )
