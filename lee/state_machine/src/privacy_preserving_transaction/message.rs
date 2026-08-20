@@ -14,11 +14,7 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    /// What the circuit witnessed as each public account's pre-state — deliberately *not*
-    /// reconciled against live sequencer state. Used only to verify the proof is internally
-    /// consistent (see `check_privacy_preserving_circuit_proof_is_valid`); materialization uses
-    /// live state instead, via `public_diffs` below, which is what actually avoids tying this
-    /// transaction's validity to a specific public-account snapshot.
+    /// See `PrivacyPreservingCircuitOutput::public_pre_states`.
     pub public_pre_states: Vec<AccountWithMetadata>,
     /// Raw, per-call, unaggregated diffs for public accounts. See
     /// `PrivacyPreservingCircuitOutput::public_diffs`.
