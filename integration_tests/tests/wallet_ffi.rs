@@ -26,7 +26,7 @@ use lee::{
     Account, AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
-use lee_core::program::DEFAULT_PROGRAM_ID;
+use lee_core::program::DEFAULT_PROGRAM_OWNER;
 use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
@@ -634,7 +634,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
@@ -674,7 +674,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
@@ -843,7 +843,7 @@ fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
         .unwrap();
         (&out_account).try_into().unwrap()
     };
-    assert_eq!(account.program_owner, DEFAULT_PROGRAM_ID);
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
 
     // Call the init funciton
     let mut transfer_result = FfiTransferResult::default();
@@ -872,7 +872,7 @@ fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
     };
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
 
     unsafe {
@@ -932,7 +932,7 @@ fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
     };
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
 
     unsafe {

@@ -131,7 +131,7 @@ impl FromStr for AccountId {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Account {
-    pub program_owner: ProgramId,
+    pub program_owner: AccountId,
     pub balance: u128,
     pub data: Data,
     pub nonce: Nonce,

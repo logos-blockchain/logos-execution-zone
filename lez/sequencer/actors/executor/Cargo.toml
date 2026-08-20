@@ -2,7 +2,7 @@
 name = "sequencer_executor_actor"
 version = "0.1.0"
 edition = "2024"
-license = { workspace = true }
+license.workspace = true
 
 [lints]
 workspace = true
@@ -12,22 +12,28 @@ sequencer_core.workspace = true
 common.workspace = true
 lee_core.workspace = true
 mempool.workspace = true
-storage.workspace = true
+sequencer_storage_actor.workspace = true
 
 kameo.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+futures.workspace = true
 log.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 hex.workspace = true
+num-traits.workspace = true
 
 [dev-dependencies]
 lee.workspace = true
 sequencer_core = { workspace = true, features = ["mock"] }
+sequencer_storage_actor = { workspace = true, features = ["mock"] }
+system_accounts.workspace = true
+sequencer_stake_core.workspace = true
 test_programs.workspace = true
 
 env_logger.workspace = true
+mockall.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
 num-bigint.workspace = true

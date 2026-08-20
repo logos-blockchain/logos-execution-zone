@@ -34,7 +34,7 @@ fn main() {
     assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
     // Read the current timestamp from the clock account.
-    let clock_data = ClockAccountData::from_bytes(&clock_pre.account.data.clone().into_inner());
+    let clock_data = ClockAccountData::from_bytes(&clock_pre.account.data);
 
     assert!(
         clock_data.timestamp >= deadline,

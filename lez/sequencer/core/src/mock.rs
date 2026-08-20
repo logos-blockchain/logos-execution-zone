@@ -130,7 +130,11 @@ impl BlockPublisherTrait for MockBlockPublisher {
         let messages = self
             .messages
             .iter()
-            .filter(move |(_, checkp)| checkpoint.clone().is_none_or(|after| checkp.lib_slot > after.lib_slot))
+            .filter(move |(_, checkp)| {
+                checkpoint
+                    .clone()
+                    .is_none_or(|after| checkp.lib_slot >= after.lib_slot)
+            })
             .cloned();
         futures::stream::iter(messages)
     }

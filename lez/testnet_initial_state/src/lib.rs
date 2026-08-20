@@ -4,6 +4,7 @@ use key_protocol::key_management::{
     KeyChain, key_tree::chain_index::ChainIndex, secret_holders::SecretSpendingKey,
 };
 use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State, program::Program};
+use lee_core::program::DEFAULT_PROGRAM_OWNER;
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -25,8 +26,6 @@ const SSK_PRIV_ACC_B: [u8; 32] = [
     48, 175, 124, 10, 230, 240, 166, 14, 249, 254, 157, 226, 208, 124, 122, 177, 203, 139, 192,
     180, 43, 120, 55, 151, 50, 21, 113, 22, 254, 83, 148, 56,
 ];
-
-const DEFAULT_PROGRAM_OWNER: [u32; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
 
 const PUB_ACC_A_INITIAL_BALANCE: u128 = 10000;
 const PUB_ACC_B_INITIAL_BALANCE: u128 = 20000;
@@ -155,7 +154,7 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
 
             let mut acc = init_comm_data.account.clone();
 
-            acc.program_owner = programs::authenticated_transfer().id();
+            acc.program_owner = programs::authenticated_transfer().id().into();
 
             (
                 lee_core::Commitment::new(&account_id, &acc),
@@ -191,7 +190,7 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             (
                 acc_data.account_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id(),
+                    program_owner: programs::authenticated_transfer().id().into(),
                     balance: acc_data.balance,
                     ..Default::default()
                 },
@@ -277,30 +276,30 @@ mod tests {
     use super::*;
 
     const VSK_D_PRIV_ACC_A: [u8; 32] = [
-        4, 118, 187, 42, 14, 254, 144, 150, 125, 176, 205, 240, 109, 81, 234, 177, 244, 236, 108,
-        71, 107, 10, 107, 169, 95, 134, 75, 193, 213, 57, 81, 218,
+        37, 79, 203, 133, 143, 28, 149, 228, 53, 195, 241, 240, 40, 28, 11, 81, 126, 209, 253, 79,
+        167, 213, 4, 162, 9, 183, 132, 78, 248, 92, 134, 198,
     ];
 
     const VSK_Z_PRIV_ACC_A: [u8; 32] = [
-        117, 29, 113, 136, 175, 148, 38, 38, 110, 220, 157, 155, 245, 13, 239, 244, 106, 126, 188,
-        90, 204, 28, 82, 70, 200, 16, 219, 33, 43, 210, 125, 239,
+        197, 94, 192, 175, 68, 106, 201, 229, 125, 33, 51, 144, 81, 154, 230, 37, 209, 230, 150,
+        29, 73, 203, 166, 56, 65, 178, 205, 15, 101, 81, 111, 150,
     ];
 
     const VSK_D_PRIV_ACC_B: [u8; 32] = [
-        100, 59, 111, 232, 245, 32, 102, 179, 205, 119, 145, 238, 9, 235, 62, 38, 55, 252, 179,
-        217, 219, 211, 6, 188, 85, 160, 68, 54, 61, 114, 102, 81,
+        221, 28, 168, 185, 246, 234, 210, 245, 219, 3, 116, 190, 178, 31, 49, 79, 246, 147, 101,
+        161, 120, 32, 218, 191, 23, 209, 8, 38, 184, 92, 104, 177,
     ];
 
     const VSK_Z_PRIV_ACC_B: [u8; 32] = [
-        123, 246, 87, 46, 116, 95, 39, 122, 251, 71, 207, 144, 70, 227, 120, 27, 98, 59, 67, 247,
-        209, 194, 110, 231, 250, 247, 205, 243, 31, 142, 104, 208,
+        167, 68, 2, 131, 197, 10, 239, 237, 52, 80, 87, 51, 21, 153, 205, 222, 117, 159, 204, 16,
+        66, 136, 209, 158, 243, 254, 168, 14, 19, 222, 8, 97,
     ];
 
     const PUB_ACC_A_TEXT_ADDR: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
     const PUB_ACC_B_TEXT_ADDR: &str = "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo";
 
-    const PRIV_ACC_A_TEXT_ADDR: &str = "GSx3EttJzQqhFPibttxguyhKXkiD4DJmA2dMmuszEmFv";
-    const PRIV_ACC_B_TEXT_ADDR: &str = "Dec1rT4DynCafh6k5pmywLGUU16RpxcxCdrSVYq8ukaN";
+    const PRIV_ACC_A_TEXT_ADDR: &str = "As5oeEYgbwFwHCB8xCnRJA5uQV1eYCcU86Pfir3D29fX";
+    const PRIV_ACC_B_TEXT_ADDR: &str = "GhB15jD2Yig2h2SnDXqxsZii1B3EhnmSucvwodfXKhAa";
 
     #[test]
     fn pub_state_consistency() {

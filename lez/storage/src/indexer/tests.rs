@@ -5,6 +5,15 @@ use tempfile::tempdir;
 
 use super::*;
 
+/// All the checkpoint data we care in DB.
+///
+/// Not exactly the checkpoint, but we put bytes anyway, so will do.
+#[derive(Debug, Clone, Copy, BorshSerialize, BorshDeserialize, PartialEq, Eq)]
+struct TestCheckpoint {
+    l1_header: [u8; 32],
+    slot: u64,
+}
+
 fn genesis_block() -> Block {
     produce_dummy_block(1, None, vec![])
 }
@@ -32,7 +41,7 @@ fn initial_state() -> lee::V03State {
             (
                 id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id(),
+                    program_owner: programs::authenticated_transfer().id().into(),
                     balance,
                     ..Account::default()
                 },
@@ -46,15 +55,6 @@ fn initial_state() -> lee::V03State {
     lee::V03State::new()
         .with_public_accounts(public_accounts)
         .with_programs([programs::authenticated_transfer(), programs::clock()])
-}
-
-/// All the checkpoint data we care in DB.
-///
-/// Not exactly the checkpoint, but we put bytes anyway, so will do.
-#[derive(Debug, Clone, Copy, BorshSerialize, BorshDeserialize, PartialEq, Eq)]
-struct TestCheckpoint {
-    l1_header: [u8; 32],
-    slot: u64,
 }
 
 fn checkpoint_bytes(l1_header: [u8; 32], slot: u64) -> Vec<u8> {

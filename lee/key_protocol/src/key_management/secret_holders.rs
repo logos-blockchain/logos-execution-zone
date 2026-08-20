@@ -90,7 +90,7 @@ impl SecretSpendingKey {
     #[must_use]
     #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
     pub fn generate_authorization_secret_key(&self, index: Option<u32>) -> AuthorizationSecretKey {
-        const DOMAIN: &[u8; 35] = b"/LEE/v0.3/Keys/Authorization/Secret";
+        const DOMAIN: &[u8; 33] = b"/LEE-Keys/v1/Authorization/Secret";
 
         let index = index.unwrap_or(0);
 
@@ -110,16 +110,16 @@ impl SecretSpendingKey {
     #[must_use]
     #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
     pub fn generate_viewing_secret_seed_key(&self, index: Option<u32>) -> ViewingSecretKey {
-        const DOMAIN: &[u8; 29] = b"/LEE/v0.3/Keys/Viewing/Secret";
+        const DOMAIN: &[u8; 27] = b"/LEE-Keys/v1/Viewing/Secret";
 
         let index = index.unwrap_or(0);
 
-        let mut bytes = [0_u8; 29 + 32 + 4];
-        bytes[..29].copy_from_slice(DOMAIN);
-        bytes[29..61].copy_from_slice(&self.0);
-        bytes[61..].copy_from_slice(&index.to_be_bytes());
+        let mut bytes = [0_u8; 27 + 32 + 4];
+        bytes[..27].copy_from_slice(DOMAIN);
+        bytes[27..59].copy_from_slice(&self.0);
+        bytes[59..].copy_from_slice(&index.to_be_bytes());
 
-        let full_seed = hmac_sha512::HMAC::mac(bytes, b"LEE_viewing_seed");
+        let full_seed = hmac_sha512::HMAC::mac(bytes, b"/LEE-Keys/v1/Viewing/Seed");
 
         Self::generate_viewing_secret_key(full_seed)
     }

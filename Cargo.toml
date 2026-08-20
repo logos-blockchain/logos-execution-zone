@@ -25,6 +25,7 @@ members = [
   "lez/sequencer/actors/executor",
   "lez/sequencer/actors/rpc_server",
   "lez/sequencer/actors/rpc_server/metrics",
+  "lez/sequencer/actors/storage",
   "lez/indexer/core",
   "lez/indexer/service",
   "lez/indexer/service/protocol",
@@ -48,6 +49,7 @@ members = [
   "lez/programs/pinata_token",
   "lez/programs/token",
   "lez/programs/vault",
+  "lez/programs/cross_zone_marker",
   "lez/programs/cross_zone_inbox",
   "lez/programs/cross_zone_outbox",
   "lez/programs/bridge_lock",
@@ -90,6 +92,7 @@ sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
 sequencer_executor_actor = { path = "lez/sequencer/actors/executor" }
 sequencer_rpc_server_actor = { path = "lez/sequencer/actors/rpc_server" }
 sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/metrics" }
+sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
 sequencer_service = { path = "lez/sequencer/service" }
 indexer_core = { path = "lez/indexer/core" }
 indexer_service = { path = "lez/indexer/service" }
@@ -104,6 +107,7 @@ programs = { path = "lez/programs", default-features = false, features = [
 ] }
 system_accounts = { path = "lez/system_accounts" }
 clock_core = { path = "lez/programs/clock/core" }
+cross_zone_marker_core = { path = "lez/programs/cross_zone_marker" }
 token_core = { path = "lez/programs/token/core" }
 token_program = { path = "lez/programs/token" }
 amm_core = { path = "lez/programs/amm/core" }
@@ -200,6 +204,7 @@ tokio-retry = "0.3.0"
 schemars = "1.2"
 async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
+mockall = "0.15.0"
 
 logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4a0564b71b825d19ab1446e4b089aebc2ee8167a" }
 logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4a0564b71b825d19ab1446e4b089aebc2ee8167a" }
@@ -236,6 +241,7 @@ clap = { version = "4.5.42", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
 zeroize = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
+num-traits = "0.2.19"
 
 # Profile for leptos WASM release builds
 [profile.wasm-release]

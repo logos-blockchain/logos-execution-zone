@@ -124,7 +124,7 @@ fn main() {
             );
 
             let chained_calls = vec![ChainedCall::new(
-                auth_transfer_program_id,
+                auth_transfer_program_id.into(),
                 vec![sender, bridge],
                 &authenticated_transfer_core::Instruction::Transfer {
                     amount: u128::from(amount),

@@ -12,6 +12,7 @@ workspace = true
 sequencer_core = { workspace = true, features = ["testnet"] }
 sequencer_executor_actor.workspace = true
 sequencer_rpc_server_actor.workspace = true
+sequencer_storage_actor.workspace = true
 lee = { workspace = true, optional = true }
 programs = { workspace = true, optional = true }
 system_accounts = { workspace = true, optional = true }

@@ -139,10 +139,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     info!("Waiting for the Stake transaction's block to land");
     poll_until("stake to take ownership", 30, || async {
-        Ok(
-            get_account(&ctx, ownership_id).await?.program_owner
-                == programs::sequencer_stake().id(),
-        )
+        Ok(get_account(&ctx, ownership_id).await?.program_owner
+            == programs::sequencer_stake().id().into())
     })
     .await?;
 
@@ -151,7 +149,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .context("Failed to read the stake ownership account")?;
     assert_eq!(
         ownership_account.program_owner,
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         "ownership account should now be owned by sequencer_stake"
     );
     assert_eq!(

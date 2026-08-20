@@ -1,6 +1,8 @@
 //! Two-tier chain state: a reorg-able `head` the sequencer builds on, plus an
 //! irreversible `final` tier.
 
+use std::sync::Arc;
+
 use common::block::Block;
 use lee::V03State;
 use log::warn;
@@ -26,11 +28,11 @@ pub struct HeadEntry {
 /// Only the final tier stalls: an invalid `adopted` block just freezes the
 /// head tip and self-heals via reorg or finalization.
 pub struct ChainState {
-    final_state: V03State,
+    final_state: Arc<V03State>,
     final_tip: Option<Tip>,
     final_stall: Option<StallReason>,
 
-    head_state: V03State,
+    head_state: Arc<V03State>,
     head_blocks: Vec<HeadEntry>,
 }
 
@@ -44,8 +46,9 @@ impl ChainState {
     /// State restored from a persisted final tier; head mirrors final.
     #[must_use]
     pub fn from_final(final_state: V03State, final_tip: Option<Tip>) -> Self {
+        let final_state = Arc::new(final_state);
         Self {
-            head_state: final_state.clone(),
+            head_state: Arc::clone(&final_state),
             final_state,
             final_tip,
             head_blocks: Vec::new(),
@@ -55,20 +58,34 @@ impl ChainState {
 
     /// State the sequencer builds its next block on.
     #[must_use]
-    pub const fn head_state(&self) -> &V03State {
+    pub fn head_state(&self) -> &V03State {
         &self.head_state
+    }
+
+    /// A shared handle on the head state, for callers that need to own it.
+    #[must_use]
+    pub fn share_head_state(&self) -> Arc<V03State> {
+        Arc::clone(&self.head_state)
     }
 
     /// Mutable access to the head state. Bypasses the `head_blocks` invariant, so
     /// it is meant for tests and low-level callers.
+    ///
+    /// Copies the state while a handle from [`Self::share_head_state`] is alive.
     #[must_use]
-    pub const fn head_state_mut(&mut self) -> &mut V03State {
-        &mut self.head_state
+    pub fn head_state_mut(&mut self) -> &mut V03State {
+        Arc::make_mut(&mut self.head_state)
     }
 
     #[must_use]
-    pub const fn final_state(&self) -> &V03State {
+    pub fn final_state(&self) -> &V03State {
         &self.final_state
+    }
+
+    /// A shared handle on the final state, for callers that need to own it.
+    #[must_use]
+    pub fn share_final_state(&self) -> Arc<V03State> {
+        Arc::clone(&self.final_state)
     }
 
     /// Parent the next produced block must chain on.
@@ -139,12 +156,12 @@ impl ChainState {
             .position(|entry| entry.block.header.block_id >= block.header.block_id);
         let (mut scratch, tip) = match reorg_at {
             // continue from the tip
-            None => (self.head_state.clone(), self.head_tip()),
+            None => (Arc::clone(&self.head_state), self.head_tip()),
             // reorg upto `idx`
             Some(idx) => self.replay_head_prefix(idx),
         };
 
-        match apply_block(tip.as_ref(), block, &mut scratch) {
+        match apply_block(tip.as_ref(), block, Arc::make_mut(&mut scratch)) {
             Ok(()) => {
                 // now that `apply_block` succeeded, actually reorg the head
                 if let Some(idx) = reorg_at {
@@ -213,7 +230,11 @@ impl ChainState {
     /// persisted — that would need a sidecar `block_id -> MsgId` cell); later
     /// orphan/finalize events correlate by block hash.
     pub fn restore_head_block(&mut self, block: Block) -> Result<(), BlockIngestError> {
-        apply_block(self.head_tip().as_ref(), &block, &mut self.head_state)?;
+        apply_block(
+            self.head_tip().as_ref(),
+            &block,
+            Arc::make_mut(&mut self.head_state),
+        )?;
         let this_msg = MsgId::from(block.header.hash.0);
         self.head_blocks.push(HeadEntry { this_msg, block });
         Ok(())
@@ -250,8 +271,12 @@ impl ChainState {
     fn finalize_through(&mut self, idx: usize) {
         let finalized: Vec<HeadEntry> = self.head_blocks.drain(0..=idx).collect();
         for entry in finalized {
-            apply_block(self.final_tip.as_ref(), &entry.block, &mut self.final_state)
-                .expect("validated head block must apply to the final tier");
+            apply_block(
+                self.final_tip.as_ref(),
+                &entry.block,
+                Arc::make_mut(&mut self.final_state),
+            )
+            .expect("validated head block must apply to the final tier");
             self.final_tip = Some(Tip::from(&entry.block));
         }
         self.final_stall = None;
@@ -274,8 +299,8 @@ impl ChainState {
             return AcceptOutcome::AlreadyApplied;
         }
 
-        let mut scratch = self.final_state.clone();
-        match apply_block(self.final_tip.as_ref(), block, &mut scratch) {
+        let mut scratch = Arc::clone(&self.final_state);
+        match apply_block(self.final_tip.as_ref(), block, Arc::make_mut(&mut scratch)) {
             Ok(()) => {
                 self.final_state = scratch;
                 self.final_tip = Some(Tip::from(block));
@@ -285,7 +310,7 @@ impl ChainState {
                 // orders orphans before their finalized replacement), so its
                 // txs are back in the caller's mempool.
                 self.head_blocks.clear();
-                self.head_state = self.final_state.clone();
+                self.head_state = Arc::clone(&self.final_state);
                 AcceptOutcome::Applied
             }
             Err(err) => {
@@ -301,11 +326,11 @@ impl ChainState {
     }
 
     /// State and tip after replaying `head_blocks[..count]` on the final tier.
-    fn replay_head_prefix(&self, count: usize) -> (V03State, Option<Tip>) {
-        let mut state = self.final_state.clone();
+    fn replay_head_prefix(&self, count: usize) -> (Arc<V03State>, Option<Tip>) {
+        let mut state = Arc::clone(&self.final_state);
         let mut tip = self.final_tip.clone();
         for entry in &self.head_blocks[..count] {
-            apply_block(tip.as_ref(), &entry.block, &mut state)
+            apply_block(tip.as_ref(), &entry.block, Arc::make_mut(&mut state))
                 .expect("validated head blocks must replay");
             tip = Some(Tip::from(&entry.block));
         }
@@ -352,14 +377,15 @@ mod tests {
 
     /// `head_state` equals `final_state` replayed through `head_blocks`.
     fn assert_head_matches_replay(chain: &ChainState) {
-        let mut state = chain.final_state.clone();
+        let mut state = Arc::clone(&chain.final_state);
         let mut tip = chain.final_tip.clone();
         for entry in &chain.head_blocks {
-            apply_block(tip.as_ref(), &entry.block, &mut state).expect("head blocks must replay");
+            apply_block(tip.as_ref(), &entry.block, Arc::make_mut(&mut state))
+                .expect("head blocks must replay");
             tip = Some(Tip::from(&entry.block));
         }
         assert_eq!(
-            borsh::to_vec(&state).expect("state serializes"),
+            borsh::to_vec(state.as_ref()).expect("state serializes"),
             borsh::to_vec(chain.head_state()).expect("state serializes"),
             "head_state must equal final_state replayed through head_blocks"
         );

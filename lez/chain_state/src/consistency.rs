@@ -3,12 +3,12 @@
 
 use anyhow::Result;
 use common::{HashType, block::Block};
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt as _};
 use lee_core::BlockId;
 use log::warn;
 use logos_blockchain_core::mantle::{
     gas::GasCost,
-    ops::{OpId, channel::ChannelId},
+    ops::{OpId as _, channel::ChannelId},
 };
 use logos_blockchain_zone_sdk::{
     Deposit, Slot, Withdraw, ZoneBlock, ZoneMessage, adapter,
@@ -25,6 +25,7 @@ const CHANNEL_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 pub const DEFULT_SIGNING_KEY_BYTES: [u8; 32] = [13; 32];
 
 /// Result of comparing a caller's stored chain against the channel.
+#[derive(Debug)]
 pub enum ChainConsistency {
     /// Channel still serves our anchor block (the stored tip position, or the
     /// parked block while stalled).
@@ -45,6 +46,7 @@ pub enum ChainConsistency {
 }
 
 /// The evidence behind a [`ChainConsistency::Inconsistent`].
+#[derive(Debug)]
 pub enum ChainMismatch {
     /// The channel serves a different block at the anchor's id.
     Block {
@@ -190,6 +192,7 @@ impl Anchor {
 /// sequencer) feeds it the same messages it replays. Run [`Self::check_frontier`]
 /// once the channel tip is known, then feed messages in slot order via
 /// [`Self::observe`] until a verdict is reached.
+#[derive(Debug)]
 pub struct AnchorConsistencyCheck {
     anchor: Anchor,
     verdict: Option<ChainConsistency>,
@@ -253,6 +256,7 @@ enum AnchorProbe {
     KeepLooking,
 }
 
+#[must_use]
 pub fn checkpoint_eq(
     checkpoint_a: &SequencerCheckpoint,
     checkpoint_b: &SequencerCheckpoint,
@@ -263,6 +267,7 @@ pub fn checkpoint_eq(
         && (checkpoint_a.pending_txs == checkpoint_b.pending_txs)
 }
 
+#[must_use]
 pub fn checkpoint_eq_opt(
     checkpoint_a: Option<&SequencerCheckpoint>,
     checkpoint_b: Option<&SequencerCheckpoint>,
@@ -277,7 +282,7 @@ pub fn checkpoint_eq_opt(
 /// Migration of indexer-specific functionality after indexer removal.
 ///
 /// Reads all finalized blocks into a stream.
-pub async fn next_messages<N>(
+pub fn next_messages<N>(
     indexer: &mut ZoneSequencer<N>,
 ) -> impl Stream<Item = (ZoneMessage, SequencerCheckpoint)>
 where
@@ -345,15 +350,15 @@ where
 /// Reads all finalized blocks into a stream.
 ///
 /// Owned variant for cases where it is easier to create indexer in stream.
-pub async fn next_messages_own<N>(
+pub fn next_messages_own<N>(
     node: N,
     channel_id: ChannelId,
-    checkpoint: Option<SequencerCheckpoint>,
+    sequencer_checkpoint: Option<SequencerCheckpoint>,
 ) -> impl Stream<Item = (ZoneMessage, SequencerCheckpoint)>
 where
     N: adapter::Node + Clone + Sync + Send + 'static,
 {
-    let mut indexer = new_indexer(channel_id, node, checkpoint);
+    let mut indexer = new_indexer(channel_id, node, sequencer_checkpoint);
 
     async_stream::stream! {
         loop {
@@ -414,6 +419,7 @@ where
 
 /// Placeholder funding config for indexer, must be provided after merging zone indexer and
 /// sequencer.
+#[must_use]
 pub fn funding_placeholder() -> FundingConfig {
     FundingConfig {
         funding_pk: num_bigint::BigUint::new_const(1).into(),
@@ -422,11 +428,13 @@ pub fn funding_placeholder() -> FundingConfig {
     }
 }
 
-/// Placeholder signing_key for indexer, must be provided after merging zone indexer and sequencer.
+/// Placeholder `signing_key` for indexer, must be provided after merging zone indexer and
+/// sequencer.
 ///
 /// NOT AN EXACT STRUCT, have conversion into necessary key type.
 ///
-/// ToDo: Replace, when zone-sdk keys crate is accesable.
+/// `ToDo`: Replace, when zone-sdk keys crate is accesable.
+#[must_use]
 pub fn signing_key_placeholder() -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&DEFULT_SIGNING_KEY_BYTES)
 }
@@ -488,7 +496,7 @@ where
     );
 
     let scan = async {
-        let stream = next_messages(&mut zone_indexer).await;
+        let stream = next_messages(&mut zone_indexer);
         let mut stream = std::pin::pin!(stream);
 
         while let Some((

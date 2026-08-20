@@ -55,7 +55,7 @@ async fn deploy_and_execute_program() -> Result<()> {
     let post_state_account = get_account(&ctx, account_id).await?;
 
     let expected_data: &[u8] = &[];
-    assert_eq!(post_state_account.program_owner, claimer.id());
+    assert_eq!(post_state_account.program_owner, claimer.id().into());
     assert_eq!(post_state_account.balance, 0);
     assert_eq!(post_state_account.data.as_ref(), expected_data);
     assert_eq!(post_state_account.nonce.0, 1);

@@ -27,7 +27,10 @@ use logos_blockchain_http_api_common::bodies::{
     },
 };
 use logos_blockchain_zone_sdk::{
-    CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, node_types::{ChannelId, Inputs}, sequencer::ZoneSequencer,
+    CommonHttpClient, ZoneMessage,
+    adapter::NodeHttpClient,
+    node_types::{ChannelId, Inputs},
+    sequencer::ZoneSequencer,
 };
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{config::bedrock_channel_id, public_mention};
@@ -532,8 +535,12 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
     let sender_id = recipient_id;
 
     let mut observer = create_zone_indexer_observer(ctx.bedrock_addr(), bedrock_channel_id())?;
-    let observe_fut =
-        wait_for_finalized_withdraw_op(&mut observer, ctx.bedrock_addr(), amount, bedrock_account_pk);
+    let observe_fut = wait_for_finalized_withdraw_op(
+        &mut observer,
+        ctx.bedrock_addr(),
+        amount,
+        bedrock_account_pk,
+    );
 
     let withdraw_fut = execute_subcommand(
         ctx.wallet_mut(),
@@ -569,7 +576,9 @@ fn create_zone_indexer_observer(
 
     let node = NodeHttpClient::new(CommonHttpClient::new(None), bedrock_url);
 
-    Ok(chain_state::consistency::new_indexer(channel_id, node, None))
+    Ok(chain_state::consistency::new_indexer(
+        channel_id, node, None,
+    ))
 }
 
 /// Waits for a finalized withdraw that pays `expected_amount` to `receiver_pk`.
@@ -594,7 +603,7 @@ async fn wait_for_finalized_withdraw_op(
         let mut released_notes = HashSet::new();
 
         loop {
-            let stream = chain_state::consistency::next_messages(observer).await;
+            let stream = chain_state::consistency::next_messages(observer);
             let mut stream = std::pin::pin!(stream);
 
             while let Some((message, _)) = stream.next().await {

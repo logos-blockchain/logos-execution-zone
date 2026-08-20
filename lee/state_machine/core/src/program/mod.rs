@@ -11,9 +11,47 @@ use crate::{
 };
 
 pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
+
+/// TODO: Placeholder `program_owner` for uninitialized `Account`.
+pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
+
+/// TODO: Temporary placeholder for program deployment program id; this serves as
+/// `program_owner` for program `Account`s.
+pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
+
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 pub type ProgramId = [u32; 8];
+
+/// Derives the `AccountId` under which a program's data is stored, directly from its
+/// `ProgramId`, by reinterpreting the 8 little-endian `u32` words as 32 raw bytes.
+///
+/// A 1:1, information-preserving mapping (both types are exactly 32 bytes) rather than a
+/// hash — `ProgramId` is already content-derived (RISC0's `image_id`), so no extra domain
+/// separation is needed just to use it as a `HashMap<AccountId, Account>` key.
+impl From<ProgramId> for AccountId {
+    fn from(program_id: ProgramId) -> Self {
+        let bytes: Vec<u8> = program_id
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        Self::new(bytes.try_into().expect("8 u32 words are exactly 32 bytes"))
+    }
+}
+
+impl From<AccountId> for ProgramId {
+    fn from(account_id: AccountId) -> Self {
+        let mut program_id = [0_u32; 8];
+        for (word, chunk) in program_id
+            .iter_mut()
+            .zip(account_id.value().chunks_exact(4))
+        {
+            *word = u32::from_le_bytes(chunk.try_into().expect("chunk is exactly 4 bytes"));
+        }
+        program_id
+    }
+}
+
 pub type InstructionData = Vec<u32>;
 pub struct ProgramInput<T> {
     pub self_program_id: ProgramId,
@@ -198,6 +236,12 @@ impl AccountId {
     }
 }
 
+#[derive(Debug)]
+pub struct CallerData {
+    pub program_id: Option<ProgramId>,
+    pub authorized_accounts: HashSet<AccountId>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ChainedCall {
     /// The program ID of the program to execute.
@@ -289,7 +333,7 @@ impl AccountPostState {
     /// if the account's program owner is the default program ID.
     #[must_use]
     pub fn new_claimed_if_default(account: Account, claim: Claim) -> Self {
-        let is_default_owner = account.program_owner == DEFAULT_PROGRAM_ID;
+        let is_default_owner = account.program_owner == DEFAULT_PROGRAM_OWNER;
         Self {
             account,
             claim: is_default_owner.then_some(claim),
@@ -589,11 +633,11 @@ pub enum ExecutionValidationError {
     ModifiedProgramOwner { account_id: AccountId },
 
     #[error(
-        "Trying to decrease balance of account {account_id} owned by {owner_program_id:?} in a program {executing_program_id:?} which is not the owner"
+        "Trying to decrease balance of account {account_id} owned by {owner_account_id:?} in a program {executing_program_id:?} which is not the owner"
     )]
     UnauthorizedBalanceDecrease {
         account_id: AccountId,
-        owner_program_id: ProgramId,
+        owner_account_id: AccountId,
         executing_program_id: ProgramId,
     },
 
@@ -672,6 +716,10 @@ pub fn validate_execution(
     post_states: &[AccountPostState],
     executing_program_id: ProgramId,
 ) -> Result<(), ExecutionValidationError> {
+    // `program_owner` is `AccountId`-typed; convert once up front rather than at each
+    // comparison below (see `From<ProgramId> for AccountId`'s doc comment).
+    let executing_account_id = AccountId::from(executing_program_id);
+
     // 1. Check account ids are all different
     if !validate_uniqueness_of_account_ids(pre_states) {
         return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
@@ -706,11 +754,11 @@ pub fn validate_execution(
 
         // 5. Decreasing balance only allowed if owned by executing program
         if post.account.balance < pre.account.balance
-            && account_program_owner != executing_program_id
+            && account_program_owner != executing_account_id
         {
             return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
                 account_id: pre.account_id,
-                owner_program_id: account_program_owner,
+                owner_account_id: account_program_owner,
                 executing_program_id,
             });
         }
@@ -719,7 +767,7 @@ pub fn validate_execution(
         //    default values
         if pre.account.data != post.account.data
             && pre.account != Account::default()
-            && account_program_owner != executing_program_id
+            && account_program_owner != executing_account_id
         {
             return Err(ExecutionValidationError::UnauthorizedDataModification {
                 account_id: pre.account_id,
@@ -729,7 +777,8 @@ pub fn validate_execution(
 
         // 7. If a post state has default program owner, the pre state must have been a default
         //    account
-        if post.account.program_owner == DEFAULT_PROGRAM_ID && pre.account != Account::default() {
+        if post.account.program_owner == DEFAULT_PROGRAM_OWNER && pre.account != Account::default()
+        {
             return Err(
                 ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
                     account_id: pre.account_id,

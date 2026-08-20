@@ -10,7 +10,8 @@ pub fn create_associated_token_account(
     ata_program_id: ProgramId,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
     // No authorization check needed: create is idempotent, so anyone can call it safely.
-    let token_program_id = token_definition.account.program_owner;
+    let token_program_id: lee_core::program::ProgramId =
+        token_definition.account.program_owner.into();
     let ata_seed = associated_token_account_core::verify_ata_and_get_seed(
         &ata_account,
         &owner,

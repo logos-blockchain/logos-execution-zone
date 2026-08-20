@@ -54,15 +54,12 @@ pub enum WitnessKind {
     /// Private PDA. The npk-to-account_id binding is proven upstream via `Claim::Pda(seed)` or a
     /// caller's `pda_seeds` match. The identifier diversifies the PDA within the
     /// `(program_id, seed, npk)` family: `AccountId::for_private_pda` uses it as the 4th input.
-    /// An init is unauthorized; on an update, authorization may be established upstream by a
-    /// caller `pda_seeds` match or a previously-seen authorization in a chained call.
     Pda {
         /// When `Some((authority_program_id, seed))`, the circuit binds this position via the
         /// external derivation check
         /// `AccountId::for_private_pda(authority_program_id, seed, npk, vpk, identifier) ==
         /// pre_state.account_id` rather than requiring a `Claim::Pda` or caller
-        /// `pda_seeds` to establish the binding. The `pre_state` must have `is_authorized
-        /// == false`.
+        /// `pda_seeds` to establish the binding.
         binding: Option<(ProgramId, PdaSeed)>,
     },
 }
@@ -221,7 +218,7 @@ mod tests {
                 PublicAction {
                     pre: AccountWithMetadata::new(
                         Account {
-                            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+                            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
                             balance: 12_345_678_901_234_567_890,
                             data: b"test data".to_vec().try_into().unwrap(),
                             nonce: Nonce(0xFFFF_FFFF_FFFF_FFFE),
@@ -230,7 +227,7 @@ mod tests {
                         AccountId::new([0; 32]),
                     ),
                     post: Account {
-                        program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+                        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
                         balance: 100,
                         data: b"post state data".to_vec().try_into().unwrap(),
                         nonce: Nonce(0xFFFF_FFFF_FFFF_FFFF),
@@ -239,7 +236,7 @@ mod tests {
                 PublicAction {
                     pre: AccountWithMetadata::new(
                         Account {
-                            program_owner: [9, 9, 9, 8, 8, 8, 7, 7],
+                            program_owner: [9, 9, 9, 8, 8, 8, 7, 7].into(),
                             balance: 123_123_123_456_456_567_112,
                             data: b"test data".to_vec().try_into().unwrap(),
                             nonce: Nonce(9_999_999_999_999_999_999_999),
@@ -248,7 +245,7 @@ mod tests {
                         AccountId::new([1; 32]),
                     ),
                     post: Account {
-                        program_owner: [2, 3, 4, 5, 6, 7, 8, 9],
+                        program_owner: [2, 3, 4, 5, 6, 7, 8, 9].into(),
                         balance: 200,
                         data: b"post state data 2".to_vec().try_into().unwrap(),
                         nonce: Nonce(0xFFFF_FFFF_FFFF_FFFD),

@@ -51,7 +51,7 @@ test:
 # Regenerate the prebuilt sequencer db dump for fast TestContext::new() (needs Docker; commit the dump).
 regenerate-test-fixture:
     @echo "🧪 Regenerating test fixture"
-    RISC0_DEV_MODE=1 cargo run -p test_fixtures --bin regenerate_test_fixture
+    RISC0_DEV_MODE=1 RUST_LOG=info cargo run -p test_fixtures --bin regenerate_test_fixture
 
 # Regenerate the committed Grafana dashboards from the Rust generator
 # (tools/dashboard_gen) and commit the result. CI checks these are up to date.

@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use anyhow::Result;
 use arc_swap::ArcSwap;
 pub use chain_state::{AcceptOutcome, BlockIngestError, StallReason};
-use chain_state::{Anchor, ChainConsistency, consistency::checkpoint_eq};
+use chain_state::{Anchor, ChainConsistency, consistency::checkpoint_eq_opt};
 use common::block::Block;
 // TODO: Remove after testnet
 use futures::StreamExt as _;
@@ -60,11 +60,8 @@ impl CheckpointProgress {
     /// that just completed, if this message begins a new one.
     fn enter(&mut self, checkpoint: SequencerCheckpoint) -> Option<SequencerCheckpoint> {
         // Equality is not implemented for `SequencerCheckpoint`
-        if self.0.is_some() {
-            let ch_ref = self.0.as_ref().unwrap();
-            if checkpoint_eq(ch_ref, &checkpoint) {
-                return None;
-            }
+        if checkpoint_eq_opt(self.0.as_ref(), Some(&checkpoint)) {
+            return None;
         }
         self.0.replace(checkpoint)
     }
@@ -237,9 +234,9 @@ impl IndexerCore {
     /// Advances the in-memory L1 read cursor past `slot` and persists it.
     /// A persist failure is only logged: the worst case is re-reading a batch
     /// after a restart, which ingestion handles idempotently.
-    fn advance_cursor(&self, cursor: &mut Option<Slot>, checkpoint: SequencerCheckpoint) {
+    fn advance_cursor(&self, cursor: &mut Option<Slot>, checkpoint: &SequencerCheckpoint) {
         *cursor = Some(checkpoint.lib_slot);
-        if let Err(err) = self.store.set_zone_cursor(&checkpoint) {
+        if let Err(err) = self.store.set_zone_cursor(checkpoint) {
             warn!("Failed to persist indexer cursor: {err:#}");
         }
     }
@@ -297,7 +294,7 @@ impl IndexerCore {
             loop {
                 let mut write_lock = self.zone_indexer.lock().await;
                 let stream =
-                    chain_state::consistency::next_messages(&mut write_lock).await;
+                    chain_state::consistency::next_messages(&mut write_lock);
 
                 //let stream = chain_state::consistency::next_messages(&mut self.zone_indexer).await;
                 let mut stream = std::pin::pin!(stream);
@@ -319,7 +316,7 @@ impl IndexerCore {
                 {
                     // A message from a later checkpoint means the previous one is complete.
                     if let Some(done) = in_progress.enter(checkpoint.clone()) {
-                        self.advance_cursor(&mut cursor, done);
+                        self.advance_cursor(&mut cursor, &done);
                     }
 
                     if !announced_syncing {
@@ -469,7 +466,7 @@ impl IndexerCore {
 
                 // The stream drained cleanly, so the slot in progress completed too.
                 if let Some(done) = in_progress.drained() {
-                    self.advance_cursor(&mut cursor, done);
+                    self.advance_cursor(&mut cursor, &done);
                 }
 
                 // Stream drained. Stay Stalled if parked; otherwise we are caught up.
@@ -492,6 +489,7 @@ impl IndexerCore {
 mod tests {
     use std::time::Duration;
 
+    use chain_state::consistency::checkpoint_eq;
     use common::{HashType, block::HashableBlockData};
     use logos_blockchain_zone_sdk::{Slot, node_types::MsgId};
 
