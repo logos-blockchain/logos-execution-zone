@@ -164,8 +164,11 @@ pub fn execute_and_prove_with_padded_inputs(
     let proof = Proof(borsh::to_vec(&prove_info.receipt.inner)?);
 
     let circuit_output: PrivacyPreservingCircuitOutput = borsh::from_slice(
-        from_frame(&prove_info.receipt.journal.bytes)
-            .expect("prover's own circuit journal is well-formed"),
+        from_frame(&prove_info.receipt.journal.bytes).ok_or_else(|| {
+            LeeError::CircuitOutputDeserializationError(
+                "malformed circuit journal frame".to_owned(),
+            )
+        })?,
     )
     .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
 
