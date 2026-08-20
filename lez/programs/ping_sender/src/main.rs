@@ -12,9 +12,6 @@ use ping_core::{
     SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id, sender_config_seed,
 };
 
-/// Every data write in this program replaces the account's data wholesale with an
-/// already-fully-computed encoding, so `diff_data` already *is* the new data verbatim —
-/// materializing it is a passthrough.
 fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
     Ok(diff_data
         .try_into()
