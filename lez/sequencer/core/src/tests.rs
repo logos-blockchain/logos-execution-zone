@@ -253,6 +253,8 @@ fn cross_zone_test_config() -> SequencerConfig {
                 }],
                 expected_block_signing_pubkey: None,
             }],
+            source_authority: None,
+            source_governance: None,
         }),
         ..setup_sequencer_config()
     }

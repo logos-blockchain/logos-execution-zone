@@ -2103,6 +2103,7 @@ dependencies = [
  "bridge_lock_core",
  "common",
  "cross_zone_inbox_core",
+ "cross_zone_marker_core",
  "hex",
  "lee",
  "lee_core",
@@ -2150,7 +2151,16 @@ name = "cross_zone_inbox_program"
 version = "0.1.0"
 dependencies = [
  "cross_zone_inbox_core",
+ "cross_zone_marker_core",
  "lee_core",
+]
+
+[[package]]
+name = "cross_zone_marker_core"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "risc0-zkvm",
 ]
 
 [[package]]
@@ -4764,6 +4774,7 @@ dependencies = [
  "bytesize",
  "common",
  "cross_zone_inbox_core",
+ "cross_zone_marker_core",
  "cross_zone_outbox_core",
  "cucumber",
  "faucet_core",
@@ -9062,7 +9073,7 @@ dependencies = [
 name = "ping_receiver_program"
 version = "0.1.0"
 dependencies = [
- "cross_zone_inbox_core",
+ "cross_zone_marker_core",
  "lee_core",
  "ping_core",
 ]
@@ -9404,6 +9415,7 @@ dependencies = [
  "build_utils",
  "clock_core",
  "cross_zone_inbox_core",
+ "cross_zone_marker_core",
  "cross_zone_outbox_core",
  "faucet_core",
  "lee",
@@ -14308,7 +14320,7 @@ dependencies = [
 name = "wrapped_token_program"
 version = "0.1.0"
 dependencies = [
- "cross_zone_inbox_core",
+ "cross_zone_marker_core",
  "lee_core",
  "wrapped_token_core",
 ]

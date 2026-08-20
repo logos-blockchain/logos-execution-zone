@@ -28,6 +28,21 @@ pub enum ReceiverInstruction {
     ///
     /// Required accounts (1): the receiver config PDA.
     InitConfig(ReceiverConfig),
+    /// Replaces the authorized sources. Refused unless the config names an
+    /// authority and that account authorized the transaction.
+    ///
+    /// Required accounts (2): the config PDA, then the authority account.
+    UpdateSources { sources: Vec<(ZoneId, ProgramId)> },
+    /// Gives up the authority, leaving the source list fixed for good. Refused
+    /// unless the config names an authority and that account authorized it.
+    ///
+    /// Renounce only, never reassign. A leaked key that could rotate would move
+    /// the authority to the attacker and lock the real holder out permanently;
+    /// with only this, the worst either party achieves is freezing the list,
+    /// which is what a config with no authority does anyway.
+    ///
+    /// Required accounts (2): the config PDA, then the authority account.
+    RenounceAuthority,
 }
 
 /// Who may deliver to this receiver, and which peer sources they may deliver from.
@@ -40,6 +55,12 @@ pub enum ReceiverInstruction {
 pub struct ReceiverConfig {
     /// The program allowed to call `Record`: the cross-zone inbox.
     pub deliverer: ProgramId,
+    /// The program allowed to reach the authority instructions through a chained
+    /// call, or `None` for top-level only. See `WrappedTokenConfig::governance`.
+    pub governance: Option<ProgramId>,
+    /// The account allowed to change `sources`, or `None` for a list fixed at
+    /// genesis. Seeded unset; see `WrappedTokenConfig::authority` for why.
+    pub authority: Option<AccountId>,
     /// The `(src_zone, src_program_id)` pairs a delivery may originate from.
     pub sources: Vec<(ZoneId, ProgramId)>,
 }
@@ -177,6 +198,8 @@ mod tests {
     fn receiver_config_round_trips() {
         let config = ReceiverConfig {
             deliverer: [1; 8],
+            governance: None,
+            authority: None,
             sources: vec![([7; 32], [9; 8])],
         };
         assert_eq!(ReceiverConfig::from_bytes(&config.to_bytes()), Some(config));
