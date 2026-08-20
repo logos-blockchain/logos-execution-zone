@@ -1,5 +1,21 @@
 use super::*;
 
+fn assert_circuit_proving_failure<T>(result: &Result<T, LeeError>, expected: &str) {
+    assert!(
+        matches!(result, Err(LeeError::CircuitProvingError(msg)) if msg.contains(expected)),
+        "expected CircuitProvingError containing {expected:?}, got: {:?}",
+        result.as_ref().err()
+    );
+}
+
+fn assert_program_prove_failure<T>(result: &Result<T, LeeError>, expected: &str) {
+    assert!(
+        matches!(result, Err(LeeError::ProgramProveFailed(msg)) if msg.contains(expected)),
+        "expected ProgramProveFailed containing {expected:?}, got: {:?}",
+        result.as_ref().err()
+    );
+}
+
 #[test]
 fn transition_from_privacy_preserving_transaction_shielded() {
     let sender_keys = test_public_account_keys_1();
@@ -260,7 +276,7 @@ fn burner_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "Total balance across accounts is not preserved");
 }
 
 #[test]
@@ -283,7 +299,7 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "Total balance across accounts is not preserved");
 }
 
 #[test]
@@ -306,7 +322,7 @@ fn nonce_changer_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "Unallowed modification of nonce");
 }
 
 #[test]
@@ -329,7 +345,7 @@ fn data_changer_program_should_fail_for_non_owned_account_in_privacy_preserving_
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "Unauthorized modification of data");
 }
 
 #[test]
@@ -360,7 +376,7 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::ProgramProveFailed(_))));
+    assert_program_prove_failure(&result, "provided data should fit into data limit");
 }
 
 #[test]
