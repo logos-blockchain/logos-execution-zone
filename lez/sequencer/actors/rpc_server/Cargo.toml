@@ -2,7 +2,7 @@
 name = "sequencer_rpc_server_actor"
 version = "0.1.0"
 edition = "2024"
-license = { workspace = true }
+license.workspace = true
 
 [lints]
 workspace = true
