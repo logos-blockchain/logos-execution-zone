@@ -52,10 +52,10 @@ impl From<AccountId> for ProgramId {
     }
 }
 
+/// Borsh-encoded program instruction bytes.
 pub type InstructionData = Vec<u8>;
 
-/// Struct encoding the input to an LEE program. Crosses the guest boundary as
-/// `ProgramInput<InstructionData>` with the instruction still borsh-encoded.
+/// Struct encoding the input to an LEE program.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct ProgramInput<T> {
     pub self_program_id: ProgramId,
