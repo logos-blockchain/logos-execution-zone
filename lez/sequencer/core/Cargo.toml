@@ -14,7 +14,7 @@ lee_core.workspace = true
 chain_state.workspace = true
 common.workspace = true
 sequencer_core_metrics = { workspace = true, features = ["record"] }
-storage.workspace = true
+sequencer_storage_actor.workspace = true
 mempool.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 testnet_initial_state.workspace = true
@@ -31,6 +31,7 @@ sequencer_stake_core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-core.workspace = true
 logos-blockchain-http-api-common.workspace = true
+kameo.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -49,7 +50,6 @@ url.workspace = true
 num-bigint.workspace = true
 risc0-zkvm.workspace = true
 futures.workspace = true
-itertools.workspace = true
 libp2p.workspace = true
 
 [features]
@@ -62,6 +62,8 @@ mdns = []
 
 [dev-dependencies]
 cross_zone = { workspace = true, features = ["test-utils"] }
+sequencer_storage_actor = { workspace = true, features = ["mock"] }
+storage.workspace = true
 futures.workspace = true
 test_programs.workspace = true
 lee = { workspace = true, features = ["test-utils"] }

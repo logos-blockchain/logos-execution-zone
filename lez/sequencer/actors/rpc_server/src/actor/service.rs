@@ -14,13 +14,13 @@ use sequencer_service_protocol::{
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, HashType, MembershipProof, Nonce, ProgramId,
 };
 
-pub struct Service<BP: BlockPublisherTrait + Send + 'static> {
+pub struct Service<BP: BlockPublisherTrait + Send + Sync + 'static> {
     executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
     max_block_size: ByteSize,
     gossip_tx_publisher: Option<GossipTxPublisher>,
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Service<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static> Service<BP> {
     pub fn new(
         executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
         max_block_size: ByteSize,
@@ -37,7 +37,9 @@ impl<BP: BlockPublisherTrait + Send + 'static> Service<BP> {
 }
 
 #[async_trait]
-impl<BP: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer for Service<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::RpcServer
+    for Service<BP>
+{
     async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, ErrorObjectOwned> {
         sequencer_rpc_server_actor_metrics::increment_submitted_transactions_total();
 
@@ -132,10 +134,16 @@ impl<BP: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer 
         start_block_id: BlockId,
         end_block_id: BlockId,
     ) -> Result<Vec<Block>, ErrorObjectOwned> {
+        let range = (start_block_id..=end_block_id).try_into().map_err(|err| {
+            ErrorObjectOwned::owned(
+                ErrorCode::InvalidParams.code(),
+                format!("Invalid block range: {err:#}"),
+                None::<()>,
+            )
+        })?;
+
         self.executor_ref
-            .ask(sequencer_executor_actor::protocol::GetBlockRange {
-                range: (start_block_id..=end_block_id),
-            })
+            .ask(sequencer_executor_actor::protocol::GetBlockRange { range })
             .await
             .map_err(internal_error)
     }

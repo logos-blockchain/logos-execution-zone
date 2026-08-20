@@ -7,12 +7,10 @@ use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
-use sequencer_core::{
-    block_publisher::ED25519_SECRET_KEY_SIZE,
-    block_store::{DbDump, SequencerStore},
-};
+use sequencer_core::block_publisher::ED25519_SECRET_KEY_SIZE;
 use sequencer_service::{GenesisAction, SequencerHandle};
 use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
+use sequencer_storage_actor::{StorageActor, protocol::DbDump};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::{
@@ -156,15 +154,13 @@ impl SequencerSetup {
             genesis
         } else {
             let dump = load_prebuilt_dump()?;
-            // `SequencerCore::open_or_create_store` looks for the channel-suffixed
-            // db under its home, so the restore has to land on the same name.
+            // The sequencer looks for the channel-suffixed db under its home,
+            // so the restore has to land on the same name.
             let dst = home.join(format!("rocksdb-{channel_id}"));
-            let _store = SequencerStore::restore_db_from_dump(
-                &dst,
-                &dump,
-                lee::PrivateKey::try_new(config::SEQUENCER_SIGNING_KEY)?,
-            )
-            .context("Failed to restore prebuilt sequencer database from dump")?;
+            // Dropped right away: this only writes the database, which the
+            // sequencer opens for itself below.
+            let _storage = StorageActor::restore_from_dump(&dst, &dump)
+                .context("Failed to restore prebuilt sequencer database from dump")?;
             // TODO: Technically not correct, we should reconstruct the genesis transactions
             // from the dump, but this crutch doesn't affect anything for now
             Vec::new()

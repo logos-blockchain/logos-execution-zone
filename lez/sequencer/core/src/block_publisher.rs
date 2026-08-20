@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, ensure};
 use common::block::Block;
-use futures::Stream;
+use futures::{Stream, future::BoxFuture};
 use log::{info, warn};
 pub use logos_blockchain_core::mantle::{
     ledger::NoteId,
@@ -77,7 +77,7 @@ pub struct FollowUpdate {
 
 /// Sink for the follow path: apply the channel delta to chain state and
 /// persist the whole event in one write.
-pub type OnFollowSink = Box<dyn Fn(FollowUpdate) + Send + 'static>;
+pub type OnFollowSink = Box<dyn Fn(FollowUpdate) -> BoxFuture<'static, ()> + Send + Sync + 'static>;
 
 /// What one publish produced.
 pub struct PublishOutcome {
@@ -410,10 +410,6 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         }
                                     }
 
-                                    // Nothing is awaited here: an await in this
-                                    // arm blocks the same task `publish_block`
-                                    // needs, and a non-turn sequencer never
-                                    // drains what it would be waiting on.
                                     on_follow(FollowUpdate {
                                         checkpoint,
                                         adopted,
@@ -421,7 +417,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         finalized: finalized_blocks,
                                         deposits,
                                         withdrawals,
-                                    });
+                                    }).await;
                                 }
                                 Event::Ready => {}
                                 Event::TurnNotification { notification } => {

@@ -20,10 +20,10 @@ pub struct RpcServerActor {
 }
 
 impl RpcServerActor {
-    pub async fn new<BP: BlockPublisherTrait + Send + 'static>(
-        executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
+    pub async fn new<BP: BlockPublisherTrait + Send + Sync + 'static>(
         listen_addr: SocketAddr,
         max_block_size: ByteSize,
+        executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
         gossip_tx_publisher: Option<GossipTxPublisher>,
     ) -> Result<Self> {
         let server = jsonrpsee::server::ServerBuilder::with_config(

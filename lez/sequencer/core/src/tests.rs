@@ -1,6 +1,6 @@
 #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
-use std::{pin::pin, time::Duration};
+use std::{pin::pin, sync::Arc, time::Duration};
 
 use common::{
     HashType,
@@ -8,6 +8,7 @@ use common::{
     test_utils::sequencer_sign_key_for_testing,
     transaction::{LeeTransaction, clock_invocation},
 };
+use kameo::actor::Spawn as _;
 use lee::{
     Account, AccountId, Data, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
 };
@@ -24,8 +25,12 @@ use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicK
 use logos_blockchain_zone_sdk::{Slot, sequencer::DepositInfo};
 use mempool::MemPoolHandle;
 use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
-use storage::sequencer::sequencer_cells::{
-    DispatchOrigin, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+use sequencer_storage_actor::{
+    StorageActor,
+    protocol::{
+        AddPendingCrossZoneDispatches, AddPendingDepositEvent, DispatchOrigin,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordNewBlock,
+    },
 };
 use tempfile::tempdir;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
@@ -34,7 +39,6 @@ use crate::{
     MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, TransactionOrigin,
     apply_follow_update,
     block_publisher::FollowUpdate,
-    block_store::SequencerStore,
     build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, build_genesis_state,
     classify_settled_deliveries,
     config::{
@@ -77,6 +81,17 @@ fn test_sequencer_key(seed: u8) -> sequencer_stake_core::SequencerKey {
     let bytes = Ed25519Key::from_bytes(&[seed; 32]).public_key().to_bytes();
     sequencer_stake_core::SequencerKey::new(bytes)
         .expect("a Bedrock public key is a valid Ed25519 public key")
+}
+
+async fn start_sequencer(
+    config: SequencerConfig,
+) -> (
+    SequencerCoreWithMockClients,
+    MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+) {
+    let storage = StorageActor::new(&config.db_path()).expect("Failed to open database");
+    let storage_ref = StorageActor::spawn(storage);
+    SequencerCoreWithMockClients::start_from_config(config, storage_ref).await
 }
 
 /// A follow update carrying nothing, to fill in the fields a test does not
@@ -182,8 +197,7 @@ async fn common_setup_with_config(
     SequencerCoreWithMockClients,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
     let tx = common::test_utils::produce_dummy_empty_transaction();
     mempool_handle
@@ -306,30 +320,33 @@ fn dispatches_in(block: &Block) -> Vec<[u8; 32]> {
 }
 
 /// The pending dispatch records a sequencer still holds.
-fn pending_dispatches(
+async fn pending_dispatches(
     sequencer: &SequencerCoreWithMockClients,
 ) -> Vec<PendingCrossZoneDispatchRecord> {
     sequencer
-        .store
-        .dbio()
-        .get_pending_cross_zone_dispatches()
+        .block_store()
+        .pending_cross_zone_dispatches()
+        .await
         .expect("pending dispatches readable")
 }
 
 #[tokio::test]
 async fn start_from_config() {
     let config = setup_sequencer_config();
-    let (sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config.clone()).await;
+    let (sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
 
-    assert_eq!(sequencer.chain_height(), 1);
+    assert_eq!(sequencer.chain_height().await, 1);
     assert_eq!(sequencer.sequencer_config.max_num_tx_in_block, 10);
 
     let acc1_account_id = initial_public_user_accounts()[0].account_id;
     let acc2_account_id = initial_public_user_accounts()[1].account_id;
 
-    let balance_acc_1 = sequencer.with_state(|s| s.get_account_by_id(acc1_account_id).balance);
-    let balance_acc_2 = sequencer.with_state(|s| s.get_account_by_id(acc2_account_id).balance);
+    let balance_acc_1 = sequencer
+        .with_state(|s| s.get_account_by_id(acc1_account_id).balance)
+        .await;
+    let balance_acc_2 = sequencer
+        .with_state(|s| s.get_account_by_id(acc2_account_id).balance)
+        .await;
 
     assert_eq!(10000, balance_acc_1);
     assert_eq!(20000, balance_acc_2);
@@ -353,18 +370,23 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
     };
     let genesis_block = genesis_hashable_data.into_pending_block(&signing_key);
 
-    SequencerStore::create_db_with_genesis(
-        &config.db_path(),
-        &genesis_block,
-        &genesis_state,
-        signing_key,
-    )
-    .unwrap();
+    let storage = StorageActor::new(&config.db_path()).unwrap();
+    let storage_ref = StorageActor::spawn(storage);
+    storage_ref
+        .ask(RecordNewBlock {
+            block: genesis_block,
+            withdrawals: vec![],
+            state: Arc::new(genesis_state),
+            checkpoint_bytes: None,
+        })
+        .await
+        .unwrap();
+    storage_ref.stop_gracefully().await.unwrap();
+    storage_ref.wait_for_shutdown().await;
 
-    let (sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
-    assert_eq!(sequencer.chain_height(), 1);
-    assert!(sequencer.store.latest_block_meta().is_ok());
+    let (sequencer, _mempool_handle) = start_sequencer(config).await;
+    assert_eq!(sequencer.chain_height().await, 1);
+    assert!(sequencer.store.last_block_id().await.is_ok());
 }
 
 #[should_panic(expected = "Failed to open database")]
@@ -380,7 +402,7 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
     // Force RocksDB open to fail with an IO error by placing a file at DB path.
     std::fs::write(&db_path, b"not-a-directory").unwrap();
 
-    let _ = SequencerCoreWithMockClients::start_from_config(config).await;
+    let _ = start_sequencer(config).await;
 }
 
 #[tokio::test]
@@ -392,10 +414,11 @@ async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
     let expected_amount = 1_u64;
     let recipient_id = initial_public_user_accounts()[0].account_id;
 
-    {
-        let (_sequencer, _mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-    }
+    let storage_weak = {
+        let (sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
+        sequencer.block_store().storage_ref().downgrade()
+    };
+    storage_weak.wait_for_shutdown_with_result(|_| ()).await;
 
     let pending_event = PendingDepositEventRecord {
         deposit_op_id: HashType(deposit_op_id),
@@ -405,21 +428,22 @@ async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
     };
 
     {
-        let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-        let store = SequencerStore::open_db(&config.db_path(), signing_key).unwrap();
-
-        let inserted = store
-            .dbio()
-            .add_pending_deposit_event(pending_event)
+        let storage_ref = StorageActor::spawn(StorageActor::new(&config.db_path()).unwrap());
+        let inserted = storage_ref
+            .ask(AddPendingDepositEvent {
+                event: pending_event,
+            })
+            .await
             .unwrap();
         assert!(inserted);
+        storage_ref.stop_gracefully().await.unwrap();
+        storage_ref.wait_for_shutdown().await;
     }
 
     // The mint never goes through the mempool: the record is the queue, and
     // production drains it. That is what makes a restart — or a follow event
     // arriving while a full mempool would have dropped the push — lossless.
-    let (mut sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     assert!(
         sequencer.mempool.pop().is_none(),
         "deposit mints are drained from the store, never queued in the mempool"
@@ -428,7 +452,8 @@ async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .store
-        .get_block_at_id(block_id)
+        .block_at_id(block_id)
+        .await
         .unwrap()
         .expect("produced block is stored");
     assert!(
@@ -446,13 +471,16 @@ async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
         sequencer
             .store
             .get_pending_deposit_events()
+            .await
             .unwrap()
             .iter()
             .any(|event| event.deposit_op_id == HashType(deposit_op_id)),
         "the record remains until the deposit finalizes"
     );
     assert!(
-        sequencer.with_state(|state| deposit_already_minted(state, HashType(deposit_op_id))),
+        sequencer
+            .with_state(|state| deposit_already_minted(state, HashType(deposit_op_id)))
+            .await,
         "the deposit's receipt PDA marks it minted in head state"
     );
 }
@@ -464,26 +492,29 @@ async fn a_drained_deposit_is_not_minted_twice_across_turns() {
     let deposit_op_id = [17_u8; 32];
     let recipient_id = initial_public_user_accounts()[0].account_id;
 
-    let (mut sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     sequencer
-        .store
-        .dbio()
-        .add_pending_deposit_event(PendingDepositEventRecord {
-            deposit_op_id: HashType(deposit_op_id),
-            source_tx_hash: HashType([7_u8; 32]),
-            amount: 1,
-            metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
+        .block_store()
+        .storage_ref()
+        .ask(AddPendingDepositEvent {
+            event: PendingDepositEventRecord {
+                deposit_op_id: HashType(deposit_op_id),
+                source_tx_hash: HashType([7_u8; 32]),
+                amount: 1,
+                metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
+            },
         })
+        .await
         .unwrap();
 
     let first = sequencer.run_production_turn().await.unwrap();
     let second = sequencer.run_production_turn().await.unwrap();
 
-    let minted_in = |block_id: u64| {
+    let minted_in = async |block_id: u64| {
         sequencer
             .store
-            .get_block_at_id(block_id)
+            .block_at_id(block_id)
+            .await
             .unwrap()
             .expect("produced block is stored")
             .body
@@ -493,9 +524,9 @@ async fn a_drained_deposit_is_not_minted_twice_across_turns() {
             .count()
     };
 
-    assert_eq!(minted_in(first), 1);
+    assert_eq!(minted_in(first).await, 1);
     assert_eq!(
-        minted_in(second),
+        minted_in(second).await,
         0,
         "the receipt PDA from the first mint must keep the drain from re-minting"
     );
@@ -513,31 +544,35 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
     let deposit_op_id = [0x2c_u8; 32];
     let amount = 500_u64;
 
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
     sequencer
-        .store
-        .dbio()
-        .add_pending_deposit_event(PendingDepositEventRecord {
-            deposit_op_id: HashType(deposit_op_id),
-            source_tx_hash: HashType([7_u8; 32]),
-            amount,
-            metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
+        .block_store()
+        .storage_ref()
+        .ask(AddPendingDepositEvent {
+            event: PendingDepositEventRecord {
+                deposit_op_id: HashType(deposit_op_id),
+                source_tx_hash: HashType([7_u8; 32]),
+                amount,
+                metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
+            },
         })
+        .await
         .unwrap();
 
     // Produce the block that mints the deposit; its receipt marks it minted.
     sequencer.run_production_turn().await.unwrap();
-    let minted_block = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    let minted_block = sequencer.store.block_at_id(2).await.unwrap().unwrap();
     assert!(
-        sequencer.with_state(|s| deposit_already_minted(s, HashType(deposit_op_id))),
+        sequencer
+            .with_state(|s| deposit_already_minted(s, HashType(deposit_op_id)))
+            .await,
         "the first mint claims the receipt in head state"
     );
 
     // Orphan that block. The receipt reverts with it — nothing else tracks the
     // mint — so the deposit reads as unminted again.
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
@@ -545,10 +580,17 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
             orphaned: vec![(MsgId::from(minted_block.header.hash.0), minted_block)],
             ..empty_follow_update()
         },
+    )
+    .await;
+    assert_eq!(
+        sequencer.chain_height().await,
+        1,
+        "the minting block is orphaned"
     );
-    assert_eq!(sequencer.chain_height(), 1, "the minting block is orphaned");
     assert!(
-        !sequencer.with_state(|s| deposit_already_minted(s, HashType(deposit_op_id))),
+        !sequencer
+            .with_state(|s| deposit_already_minted(s, HashType(deposit_op_id)))
+            .await,
         "the receipt reverts with the orphaned block"
     );
 
@@ -557,7 +599,8 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
     let replacement = sequencer.run_production_turn().await.unwrap();
     let mints = sequencer
         .store
-        .get_block_at_id(replacement)
+        .block_at_id(replacement)
+        .await
         .unwrap()
         .expect("replacement block is stored")
         .body
@@ -571,7 +614,9 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
     );
     let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient_id);
     assert_eq!(
-        sequencer.with_state(|s| s.get_account_by_id(vault_id).balance),
+        sequencer
+            .with_state(|s| s.get_account_by_id(vault_id).balance)
+            .await,
         u128::from(amount),
         "the vault is credited exactly once across the reorg"
     );
@@ -590,8 +635,7 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
     let deposit_op_id = [0x5a_u8; 32];
     let amount = 500_u64;
 
-    let (sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (sequencer, _mempool_handle) = start_sequencer(config).await;
 
     let deposit_tx = build_bridge_deposit_tx_from_event(&PendingDepositEventRecord {
         deposit_op_id: HashType(deposit_op_id),
@@ -605,7 +649,7 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
     };
 
     let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient_id);
-    let mut state = sequencer.chain().lock().unwrap().head_state().clone();
+    let mut state = sequencer.chain().lock().await.head_state().clone();
 
     // First mint: claims the receipt and credits the recipient vault.
     state
@@ -638,13 +682,15 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
     let record = dispatch_record(7, ping_payload(&payload));
     let key = record.message_key;
 
-    let (mut sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
     assert_eq!(
         sequencer
-            .store
-            .dbio()
-            .add_pending_cross_zone_dispatches(vec![record])
+            .block_store()
+            .storage_ref()
+            .ask(AddPendingCrossZoneDispatches {
+                dispatches: vec![record],
+            })
+            .await
             .unwrap(),
         1
     );
@@ -660,7 +706,8 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .store
-        .get_block_at_id(block_id)
+        .block_at_id(block_id)
+        .await
         .unwrap()
         .expect("produced block is stored");
     assert_eq!(
@@ -671,7 +718,9 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
 
     let record_id = ping_record_pda(programs::ping_receiver().id());
     assert_eq!(
-        sequencer.with_state(|state| state.get_account_by_id(record_id).data.into_inner()),
+        sequencer
+            .with_state(|state| state.get_account_by_id(record_id).data.into_inner())
+            .await,
         payload,
         "the dispatch must reach its target program, not just sit in the block"
     );
@@ -680,6 +729,7 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
     // the inbox seen-set now in head state, not by any marker on the record.
     assert_eq!(
         pending_dispatches(&sequencer)
+            .await
             .iter()
             .map(|record| record.message_key)
             .collect::<Vec<_>>(),
@@ -696,36 +746,41 @@ async fn a_delivered_dispatch_is_skipped_on_the_next_turn() {
     let record = dispatch_record(11, ping_payload(b"once"));
     let key = record.message_key;
 
-    let (mut sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
     sequencer
-        .store
-        .dbio()
-        .add_pending_cross_zone_dispatches(vec![record])
+        .block_store()
+        .storage_ref()
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![record],
+        })
+        .await
         .unwrap();
 
     let first = sequencer.run_production_turn().await.unwrap();
     let second = sequencer.run_production_turn().await.unwrap();
 
-    let delivered_in = |block_id: u64| {
+    let delivered_in = async |block_id: u64| {
         dispatches_in(
             &sequencer
                 .store
-                .get_block_at_id(block_id)
+                .block_at_id(block_id)
+                .await
                 .unwrap()
                 .expect("produced block is stored"),
         )
     };
-    assert_eq!(delivered_in(first), vec![key]);
+    assert_eq!(delivered_in(first).await, vec![key]);
     assert!(
-        delivered_in(second).is_empty(),
+        delivered_in(second).await.is_empty(),
         "the inbox seen-set must keep the drain from re-delivering"
     );
 
     let message = extract_cross_zone_dispatch(&dispatch_tx(11, ping_payload(b"once")))
         .expect("the dispatch carries a cross-zone message");
     assert!(
-        sequencer.with_state(|state| dispatch_already_delivered(state, &message)),
+        sequencer
+            .with_state(|state| dispatch_already_delivered(state, &message))
+            .await,
         "the seen shard in head state is what the skip reads"
     );
 }
@@ -738,19 +793,22 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
     // so without a give-up policy it would fail on every block for ever.
     let record = dispatch_record(13, b"odd".to_vec());
 
-    let (mut sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
     sequencer
-        .store
-        .dbio()
-        .add_pending_cross_zone_dispatches(vec![record])
+        .block_store()
+        .storage_ref()
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![record],
+        })
+        .await
         .unwrap();
 
     for attempt in 1..RETIRE_DISPATCH_AFTER_FAILURES {
         let block_id = sequencer.run_production_turn().await.unwrap();
         let block = sequencer
             .store
-            .get_block_at_id(block_id)
+            .block_at_id(block_id)
+            .await
             .unwrap()
             .expect("produced block is stored");
         assert!(
@@ -758,7 +816,7 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
             "a dispatch that fails to execute must not reach the block"
         );
 
-        let records = pending_dispatches(&sequencer);
+        let records = pending_dispatches(&sequencer).await;
         assert_eq!(records.len(), 1);
         assert_eq!(
             records[0].failed_attempts, attempt,
@@ -772,14 +830,13 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
     // list without bound.
     sequencer.run_production_turn().await.unwrap();
     assert!(
-        pending_dispatches(&sequencer).is_empty(),
+        pending_dispatches(&sequencer).await.is_empty(),
         "giving up on a delivery must take its record out of the pending list"
     );
 
     // The dead letter is the only record that this happened, and the origin is
     // what identifies which message stopped being attempted.
-    let dbio = sequencer.store.dbio();
-    let dead_letters = dbio.get_dead_letter_cross_zone_dispatches().unwrap();
+    let (dead_letter_count, dead_letters) = sequencer.cross_zone_dead_letters().await.unwrap();
     assert_eq!(dead_letters.len(), 1);
     assert_eq!(
         dead_letters[0].origin,
@@ -798,18 +855,23 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
         dead_letters[0].failed_attempts,
         RETIRE_DISPATCH_AFTER_FAILURES
     );
-    assert_eq!(dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(), 1);
+    assert_eq!(dead_letter_count, 1);
 
     // The same view the RPC serves, so an operator sees what the store holds.
-    let (total_retired, retained) = sequencer.cross_zone_dead_letters().unwrap();
+    let (total_retired, retained) = sequencer.cross_zone_dead_letters().await.unwrap();
     assert_eq!(total_retired, 1);
     assert_eq!(retained, dead_letters);
 
     // And nothing re-feeds it, so it stops costing a guest execution per block.
     let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(dispatches_in(&block).is_empty());
-    assert!(pending_dispatches(&sequencer).is_empty());
+    assert!(pending_dispatches(&sequencer).await.is_empty());
 }
 
 #[tokio::test]
@@ -822,45 +884,61 @@ async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
     let record = dispatch_record(29, ping_payload(b"again"));
     let key = record.message_key;
 
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(cross_zone_test_config()).await;
     sequencer
-        .store
-        .dbio()
-        .add_pending_cross_zone_dispatches(vec![record.clone()])
+        .block_store()
+        .storage_ref()
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![record.clone()],
+        })
+        .await
         .unwrap();
 
     let block_id = sequencer.run_production_turn().await.unwrap();
-    let delivery_block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    let delivery_block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(dispatches_in(&delivery_block), vec![key]);
 
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
             finalized: vec![(MsgId::from(delivery_block.header.hash.0), delivery_block)],
             ..empty_follow_update()
         },
-    );
-    assert!(pending_dispatches(&sequencer).is_empty());
+    )
+    .await;
+    assert!(pending_dispatches(&sequencer).await.is_empty());
 
     // The watcher re-reads the slot and records it again.
     sequencer
-        .store
-        .dbio()
-        .add_pending_cross_zone_dispatches(vec![record])
+        .block_store()
+        .storage_ref()
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![record],
+        })
+        .await
         .unwrap();
-    assert_eq!(pending_dispatches(&sequencer).len(), 1);
+    assert_eq!(pending_dispatches(&sequencer).await.len(), 1);
 
     let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         dispatches_in(&block).is_empty(),
         "the delivery is already on the chain, so it must not be delivered again"
     );
     assert!(
-        pending_dispatches(&sequencer).is_empty(),
+        pending_dispatches(&sequencer).await.is_empty(),
         "a record whose delivery is already irreversible must be dropped, not kept for ever"
     );
 }
@@ -874,12 +952,14 @@ async fn a_delivery_still_reversible_keeps_its_record() {
     let record = dispatch_record(31, ping_payload(b"pending"));
     let key = record.message_key;
 
-    let (mut sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
     sequencer
-        .store
-        .dbio()
-        .add_pending_cross_zone_dispatches(vec![record])
+        .block_store()
+        .storage_ref()
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![record],
+        })
+        .await
         .unwrap();
 
     sequencer.run_production_turn().await.unwrap();
@@ -887,6 +967,7 @@ async fn a_delivery_still_reversible_keeps_its_record() {
 
     assert_eq!(
         pending_dispatches(&sequencer)
+            .await
             .iter()
             .map(|record| record.message_key)
             .collect::<Vec<_>>(),
@@ -942,12 +1023,14 @@ async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
 
     let mut config = cross_zone_test_config();
     config.max_block_size = bytesize::ByteSize::kib(4);
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
     sequencer
-        .store
-        .dbio()
-        .add_pending_cross_zone_dispatches(vec![record])
+        .block_store()
+        .storage_ref()
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![record],
+        })
+        .await
         .unwrap();
 
     let user_tx = common::test_utils::create_transaction_native_token_transfer(
@@ -964,7 +1047,12 @@ async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
 
     // Production must get past it to the mempool in the very first block.
     let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         block.body.transactions.contains(&user_tx),
         "an oversized drained delivery must not stop production reaching the mempool"
@@ -976,7 +1064,7 @@ async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
         sequencer.run_production_turn().await.unwrap();
     }
     assert!(
-        pending_dispatches(&sequencer).is_empty(),
+        pending_dispatches(&sequencer).await.is_empty(),
         "a delivery that fits in no block must be given up on"
     );
 }
@@ -997,16 +1085,23 @@ async fn a_delivery_backlog_is_spread_across_blocks() {
 
     let mut config = cross_zone_test_config();
     config.max_num_tx_in_block = backlog + 10;
-    let (mut sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     sequencer
-        .store
-        .dbio()
-        .add_pending_cross_zone_dispatches(records)
+        .block_store()
+        .storage_ref()
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: records,
+        })
+        .await
         .unwrap();
 
     let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         dispatches_in(&block).len(),
         MAX_DISPATCHES_PER_BLOCK,
@@ -1015,7 +1110,12 @@ async fn a_delivery_backlog_is_spread_across_blocks() {
 
     // Deferred, not dropped: the rest go in the next block.
     let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(dispatches_in(&block).len(), 3);
 }
 
@@ -1059,15 +1159,7 @@ async fn transaction_pre_check_native_transfer_other_signature() {
     let tx = tx.transaction_stateless_check().unwrap();
 
     // Signature is not from sender. Execution fails
-    let result = tx.execute_check_on_state(
-        sequencer
-            .chain()
-            .lock()
-            .expect("chain mutex poisoned")
-            .head_state_mut(),
-        0,
-        0,
-    );
+    let result = tx.execute_check_on_state(sequencer.chain().lock().await.head_state_mut(), 0, 0);
 
     assert!(matches!(
         result,
@@ -1094,11 +1186,7 @@ async fn transaction_pre_check_native_transfer_sent_too_much() {
     assert!(result.is_ok());
 
     let result = result.unwrap().execute_check_on_state(
-        sequencer
-            .chain()
-            .lock()
-            .expect("chain mutex poisoned")
-            .head_state_mut(),
+        sequencer.chain().lock().await.head_state_mut(),
         0,
         0,
     );
@@ -1123,19 +1211,15 @@ async fn transaction_execute_native_transfer() {
         acc1, 0, acc2, 100, &sign_key1,
     );
 
-    tx.execute_check_on_state(
-        sequencer
-            .chain()
-            .lock()
-            .expect("chain mutex poisoned")
-            .head_state_mut(),
-        0,
-        0,
-    )
-    .unwrap();
+    tx.execute_check_on_state(sequencer.chain().lock().await.head_state_mut(), 0, 0)
+        .unwrap();
 
-    let bal_from = sequencer.with_state(|s| s.get_account_by_id(acc1).balance);
-    let bal_to = sequencer.with_state(|s| s.get_account_by_id(acc2).balance);
+    let bal_from = sequencer
+        .with_state(|s| s.get_account_by_id(acc1).balance)
+        .await;
+    let bal_to = sequencer
+        .with_state(|s| s.get_account_by_id(acc2).balance)
+        .await;
 
     assert_eq!(bal_from, 9900);
     assert_eq!(bal_to, 20100);
@@ -1172,7 +1256,7 @@ async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
 #[tokio::test]
 async fn build_block_from_mempool() {
     let (mut sequencer, mempool_handle) = common_setup().await;
-    let genesis_height = sequencer.chain_height();
+    let genesis_height = sequencer.chain_height().await;
 
     let tx = common::test_utils::produce_dummy_empty_transaction();
     mempool_handle
@@ -1180,10 +1264,10 @@ async fn build_block_from_mempool() {
         .await
         .unwrap();
 
-    let result = sequencer.build_block_from_mempool(Some(&[]));
+    let result = sequencer.build_block_from_mempool(Some(&[])).await;
     assert!(result.is_ok());
     // Building itself does not advance the head; only apply-after-publish does.
-    assert_eq!(sequencer.chain_height(), genesis_height);
+    assert_eq!(sequencer.chain_height().await, genesis_height);
 }
 
 #[test]
@@ -1249,7 +1333,8 @@ async fn replay_transactions_are_rejected_in_the_same_block() {
     sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height())
+        .block_at_id(sequencer.chain_height().await)
+        .await
         .unwrap()
         .unwrap();
 
@@ -1284,7 +1369,8 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
     sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height())
+        .block_at_id(sequencer.chain_height().await)
+        .await
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -1303,7 +1389,8 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
     sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height())
+        .block_at_id(sequencer.chain_height().await)
+        .await
         .unwrap()
         .unwrap();
     // The replay is rejected, so only the clock tx is in the block.
@@ -1325,9 +1412,8 @@ async fn restart_from_storage() {
     // In the following code block a transaction will be processed that moves `balance_to_move`
     // from `acc_1` to `acc_2`. The block created with that transaction will be kept stored in
     // the temporary directory for the block storage of this test.
-    {
-        let (mut sequencer, mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config.clone()).await;
+    let storage_weak = {
+        let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
         let signing_key = create_signing_key_for_account1();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
@@ -1345,7 +1431,8 @@ async fn restart_from_storage() {
         sequencer.run_production_turn().await.unwrap();
         let block = sequencer
             .store
-            .get_block_at_id(sequencer.chain_height())
+            .block_at_id(sequencer.chain_height().await)
+            .await
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -1355,14 +1442,19 @@ async fn restart_from_storage() {
                 LeeTransaction::Public(clock_invocation(block.header.timestamp))
             ]
         );
-    }
+        sequencer.block_store().storage_ref().downgrade()
+    };
+    storage_weak.wait_for_shutdown_with_result(|_| ()).await;
 
     // Instantiating a new sequencer from the same config. This should load the existing block
     // with the above transaction and update the state to reflect that.
-    let (sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-    let balance_acc_1 = sequencer.with_state(|s| s.get_account_by_id(acc1_account_id).balance);
-    let balance_acc_2 = sequencer.with_state(|s| s.get_account_by_id(acc2_account_id).balance);
+    let (sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
+    let balance_acc_1 = sequencer
+        .with_state(|s| s.get_account_by_id(acc1_account_id).balance)
+        .await;
+    let balance_acc_2 = sequencer
+        .with_state(|s| s.get_account_by_id(acc2_account_id).balance)
+        .await;
 
     // Balances should be consistent with the stored block
     assert_eq!(
@@ -1378,19 +1470,17 @@ async fn restart_from_storage() {
 #[tokio::test]
 async fn get_pending_blocks() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     sequencer.run_production_turn().await.unwrap();
     sequencer.run_production_turn().await.unwrap();
     sequencer.run_production_turn().await.unwrap();
-    assert_eq!(sequencer.get_pending_blocks().unwrap().len(), 4);
+    assert_eq!(sequencer.get_pending_blocks().await.unwrap().len(), 4);
 }
 
 #[tokio::test]
 async fn delete_blocks() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     sequencer.run_production_turn().await.unwrap();
     sequencer.run_production_turn().await.unwrap();
     sequencer.run_production_turn().await.unwrap();
@@ -1398,9 +1488,10 @@ async fn delete_blocks() {
     let last_finalized_block = 3;
     sequencer
         .clean_finalized_blocks_from_db(last_finalized_block)
+        .await
         .unwrap();
 
-    assert_eq!(sequencer.get_pending_blocks().unwrap().len(), 1);
+    assert_eq!(sequencer.get_pending_blocks().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -1410,9 +1501,8 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
     let acc2_account_id = initial_public_user_accounts()[1].account_id;
 
     // Step 1: Create initial database with some block metadata
-    let expected_prev_meta = {
-        let (mut sequencer, mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config.clone()).await;
+    let (storage_weak, expected_prev_meta) = {
+        let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
 
         let signing_key = create_signing_key_for_account1();
 
@@ -1432,12 +1522,13 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
         sequencer.run_production_turn().await.unwrap();
 
         // Get the metadata of the last block produced
-        sequencer.store.latest_block_meta().unwrap().unwrap()
+        let meta = sequencer.store.latest_block_meta().await.unwrap().unwrap();
+        (sequencer.block_store().storage_ref().downgrade(), meta)
     };
+    storage_weak.wait_for_shutdown_with_result(|_| ()).await;
 
     // Step 2: Restart sequencer from the same storage
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config.clone()).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
 
     // Step 3: Submit a new transaction
     let signing_key = create_signing_key_for_account1();
@@ -1460,7 +1551,8 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
     // Step 5: Verify the new block has correct previous block metadata
     let new_block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height())
+        .block_at_id(sequencer.chain_height().await)
+        .await
         .unwrap()
         .unwrap();
 
@@ -1512,7 +1604,8 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
 
     let block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height())
+        .block_at_id(sequencer.chain_height().await)
+        .await
         .unwrap()
         .unwrap();
 
@@ -1567,7 +1660,8 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
 
     let block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height())
+        .block_at_id(sequencer.chain_height().await)
+        .await
         .unwrap()
         .unwrap();
 
@@ -1586,12 +1680,14 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 
     // Corrupt the clock 01 account data so the clock program panics on deserialization.
     let clock_account_id = system_accounts::clock_account_ids()[0];
-    let mut corrupted = sequencer.with_state(|s| s.get_account_by_id(clock_account_id));
+    let mut corrupted = sequencer
+        .with_state(|s| s.get_account_by_id(clock_account_id))
+        .await;
     corrupted.data = vec![0xff; 3].try_into().unwrap();
     sequencer
         .chain()
         .lock()
-        .expect("chain mutex poisoned")
+        .await
         .head_state_mut()
         .force_insert_account(clock_account_id, corrupted);
 
@@ -2117,31 +2213,38 @@ fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
 #[tokio::test]
 async fn follow_update_persists_the_checkpoint_with_its_effects() {
     let config = setup_sequencer_config();
-    let (sequencer, mempool_handle) = SequencerCoreWithMockClients::start_from_config(config).await;
+    let (sequencer, mempool_handle) = start_sequencer(config).await;
     let genesis_meta = sequencer
         .store
         .latest_block_meta()
+        .await
         .unwrap()
         .expect("genesis meta is set");
 
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
             adopted: vec![(MsgId::from([1; 32]), peer_block)],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
     // The checkpoint is the sdk resume cursor; landing it without the block
     // would let a restart stream past a block the store never got.
     assert!(
-        sequencer.store.get_zone_checkpoint().unwrap().is_some(),
+        sequencer
+            .store
+            .get_zone_checkpoint()
+            .await
+            .unwrap()
+            .is_some(),
         "the event's checkpoint must be persisted alongside the block it covers"
     );
-    assert!(sequencer.store.get_block_at_id(2).unwrap().is_some());
+    assert!(sequencer.store.block_at_id(2).await.unwrap().is_some());
 }
 
 /// The channel orphaning our own still-unfinalized blocks rewinds the head and
@@ -2151,29 +2254,28 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
 #[tokio::test]
 async fn head_rewound_below_published_height_blocks_production() {
     let config = setup_sequencer_config();
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
     let first = sequencer.run_production_turn().await.unwrap();
     let published_tip = sequencer.run_production_turn().await.unwrap();
     assert_eq!(
-        sequencer.store.published_high_water().unwrap(),
+        sequencer.store.published_high_water().await.unwrap(),
         Some(published_tip),
         "publishing records the high water mark"
     );
     assert!(
-        sequencer.rewound_below_published().is_none(),
+        sequencer.rewound_below_published().await.is_none(),
         "an intact head is free to produce"
     );
 
-    let produced: Vec<Block> = [first, published_tip]
-        .into_iter()
-        .map(|id| sequencer.store.get_block_at_id(id).unwrap().unwrap())
-        .collect();
+    let mut produced: Vec<Block> = Vec::new();
+    for id in [first, published_tip] {
+        produced.push(sequencer.store.block_at_id(id).await.unwrap().unwrap());
+    }
 
     // The sdk reports both of them as orphaned.
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
@@ -2183,14 +2285,22 @@ async fn head_rewound_below_published_height_blocks_production() {
                 .collect(),
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
     assert!(
-        sequencer.store.latest_block_meta().unwrap().unwrap().id < published_tip,
+        sequencer
+            .store
+            .latest_block_meta()
+            .await
+            .unwrap()
+            .unwrap()
+            .id
+            < published_tip,
         "the orphan report rewound the stored tip"
     );
     assert_eq!(
-        sequencer.rewound_below_published(),
+        sequencer.rewound_below_published().await,
         Some(published_tip),
         "the mark outlives the pruning and blocks the turn"
     );
@@ -2198,7 +2308,7 @@ async fn head_rewound_below_published_height_blocks_production() {
     // Those inscriptions were on the channel all along: finalizing them rebases
     // the head onto them, and production is free again. The guard is a wait.
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
@@ -2208,11 +2318,12 @@ async fn head_rewound_below_published_height_blocks_production() {
                 .collect(),
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
-    assert_eq!(sequencer.next_block_height(), published_tip + 1);
+    assert_eq!(sequencer.next_block_height().await, published_tip + 1);
     assert!(
-        sequencer.rewound_below_published().is_none(),
+        sequencer.rewound_below_published().await.is_none(),
         "a recovered head resumes producing"
     );
 }
@@ -2220,7 +2331,7 @@ async fn head_rewound_below_published_height_blocks_production() {
 #[tokio::test]
 async fn follow_update_records_deposits_for_the_production_drain() {
     let config = setup_sequencer_config();
-    let (sequencer, mempool_handle) = SequencerCoreWithMockClients::start_from_config(config).await;
+    let (sequencer, mempool_handle) = start_sequencer(config).await;
 
     let recipient_id = initial_public_user_accounts()[0].account_id;
     let metadata = borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap();
@@ -2235,16 +2346,17 @@ async fn follow_update_records_deposits_for_the_production_drain() {
     };
 
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
             deposits: vec![deposit],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
-    let pending = sequencer.store.get_pending_deposit_events().unwrap();
+    let pending = sequencer.store.get_pending_deposit_events().await.unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].deposit_op_id, HashType([21; 32]));
 }
@@ -2252,10 +2364,11 @@ async fn follow_update_records_deposits_for_the_production_drain() {
 #[tokio::test]
 async fn follow_adopted_peer_block_applies_and_persists() {
     let config = setup_sequencer_config();
-    let (sequencer, mempool_handle) = SequencerCoreWithMockClients::start_from_config(config).await;
+    let (sequencer, mempool_handle) = start_sequencer(config).await;
     let genesis_meta = sequencer
         .store
         .latest_block_meta()
+        .await
         .unwrap()
         .expect("genesis meta is set");
 
@@ -2271,24 +2384,28 @@ async fn follow_adopted_peer_block_applies_and_persists() {
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![tx]);
 
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
             adopted: vec![(MsgId::from([1; 32]), peer_block.clone())],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
-    assert_eq!(sequencer.chain_height(), 2);
+    assert_eq!(sequencer.chain_height().await, 2);
     let stored = sequencer
         .store
-        .get_block_at_id(2)
+        .block_at_id(2)
+        .await
         .unwrap()
         .expect("adopted peer block should be persisted");
     assert_eq!(stored.header.hash, peer_block.header.hash);
     assert_eq!(
-        sequencer.with_state(|s| s.get_account_by_id(acc2).balance),
+        sequencer
+            .with_state(|s| s.get_account_by_id(acc2).balance)
+            .await,
         20010
     );
 }
@@ -2296,8 +2413,7 @@ async fn follow_adopted_peer_block_applies_and_persists() {
 #[tokio::test]
 async fn follow_redelivery_of_own_block_is_deduped() {
     let config = setup_sequencer_config();
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
     let acc1 = initial_public_user_accounts()[0].account_id;
     let acc2 = initial_public_user_accounts()[1].account_id;
@@ -2313,23 +2429,26 @@ async fn follow_redelivery_of_own_block_is_deduped() {
         .await
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
-    let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
 
     // The channel redelivers our own block under the MsgId the mock publisher
     // assigned at publish time.
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
             adopted: vec![(MsgId::from(block2.header.hash.0), block2)],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
-    assert_eq!(sequencer.chain_height(), 2);
+    assert_eq!(sequencer.chain_height().await, 2);
     assert_eq!(
-        sequencer.with_state(|s| s.get_account_by_id(acc2).balance),
+        sequencer
+            .with_state(|s| s.get_account_by_id(acc2).balance)
+            .await,
         20010,
         "the transfer must not be double-applied"
     );
@@ -2338,8 +2457,7 @@ async fn follow_redelivery_of_own_block_is_deduped() {
 #[tokio::test]
 async fn follow_orphan_reverts_head_and_requeues_user_txs() {
     let config = setup_sequencer_config();
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
     let acc1 = initial_public_user_accounts()[0].account_id;
     let acc2 = initial_public_user_accounts()[1].account_id;
@@ -2355,10 +2473,10 @@ async fn follow_orphan_reverts_head_and_requeues_user_txs() {
         .await
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
-    let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
 
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
@@ -2366,11 +2484,14 @@ async fn follow_orphan_reverts_head_and_requeues_user_txs() {
             orphaned: vec![(MsgId::from(block2.header.hash.0), block2)],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
-    assert_eq!(sequencer.chain_height(), 1);
+    assert_eq!(sequencer.chain_height().await, 1);
     assert_eq!(
-        sequencer.with_state(|s| s.get_account_by_id(acc1).balance),
+        sequencer
+            .with_state(|s| s.get_account_by_id(acc1).balance)
+            .await,
         10000,
         "the orphaned transfer must be reverted from the head"
     );
@@ -2394,8 +2515,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
     // included, so requeueing them would put them back in every block we
     // produce from then on.
     let config = setup_sequencer_config();
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
     let acc1 = initial_public_user_accounts()[0].account_id;
     let acc2 = initial_public_user_accounts()[1].account_id;
@@ -2411,34 +2531,38 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
         .await
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
-    let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
 
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
             finalized: vec![(MsgId::from(block2.header.hash.0), block2.clone())],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
             orphaned: vec![(MsgId::from(block2.header.hash.0), block2)],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
     assert_eq!(
-        sequencer.chain_height(),
+        sequencer.chain_height().await,
         2,
         "an irreversible block cannot be reverted"
     );
     assert_eq!(
-        sequencer.with_state(|s| s.get_account_by_id(acc2).balance),
+        sequencer
+            .with_state(|s| s.get_account_by_id(acc2).balance)
+            .await,
         20010,
         "the finalized transfer stands"
     );
@@ -2451,8 +2575,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
 #[tokio::test]
 async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
     let config = setup_sequencer_config();
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
     let tx = common::test_utils::produce_dummy_empty_transaction();
     mempool_handle
@@ -2460,10 +2583,10 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
         .await
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
-    let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
 
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
@@ -2472,17 +2595,18 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
             finalized: vec![(MsgId::from(block2.header.hash.0), block2)],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
     let final_tip = sequencer
         .chain()
         .lock()
-        .expect("chain mutex poisoned")
+        .await
         .final_tip()
         .expect("final tip set");
     assert_eq!(final_tip.block_id, 2);
-    assert_eq!(sequencer.chain_height(), 2, "head is unchanged");
-    let stored = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    assert_eq!(sequencer.chain_height().await, 2, "head is unchanged");
+    let stored = sequencer.store.block_at_id(2).await.unwrap().unwrap();
     assert!(matches!(stored.bedrock_status, BedrockStatus::Finalized));
 }
 
@@ -2495,35 +2619,43 @@ async fn follow_finalized_delivery_drops_its_pending_record() {
     let record = dispatch_record(17, ping_payload(b"settled"));
     let key = record.message_key;
 
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(cross_zone_test_config()).await;
     sequencer
-        .store
-        .dbio()
-        .add_pending_cross_zone_dispatches(vec![record])
+        .block_store()
+        .storage_ref()
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![record],
+        })
+        .await
         .unwrap();
 
     let block_id = sequencer.run_production_turn().await.unwrap();
-    let delivery_block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    let delivery_block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(dispatches_in(&delivery_block), vec![key]);
     assert_eq!(
-        pending_dispatches(&sequencer).len(),
+        pending_dispatches(&sequencer).await.len(),
         1,
         "including the delivery is not enough to settle its record"
     );
 
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
             finalized: vec![(MsgId::from(delivery_block.header.hash.0), delivery_block)],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
     assert!(
-        pending_dispatches(&sequencer).is_empty(),
+        pending_dispatches(&sequencer).await.is_empty(),
         "a delivery in an irreversible block settles its record"
     );
 }
@@ -2538,12 +2670,14 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
     let key = record.message_key;
     let delivery = dispatch_tx(19, ping_payload(b"parked"));
 
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(cross_zone_test_config()).await;
     sequencer
-        .store
-        .dbio()
-        .add_pending_cross_zone_dispatches(vec![record])
+        .block_store()
+        .storage_ref()
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: vec![record],
+        })
+        .await
         .unwrap();
 
     let tx = common::test_utils::produce_dummy_empty_transaction();
@@ -2559,17 +2693,19 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
         common::test_utils::produce_dummy_block(9, Some(HashType([44; 32])), vec![delivery]);
 
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
             finalized: vec![(MsgId::from([9; 32]), parked)],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
     assert_eq!(
         pending_dispatches(&sequencer)
+            .await
             .iter()
             .map(|record| record.message_key)
             .collect::<Vec<_>>(),
@@ -2581,10 +2717,11 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
 #[tokio::test]
 async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
     let config = setup_sequencer_config();
-    let (sequencer, mempool_handle) = SequencerCoreWithMockClients::start_from_config(config).await;
+    let (sequencer, mempool_handle) = start_sequencer(config).await;
     let genesis_meta = sequencer
         .store
         .latest_block_meta()
+        .await
         .unwrap()
         .expect("genesis meta is set");
 
@@ -2593,7 +2730,7 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
 
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
@@ -2602,16 +2739,18 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
             finalized: vec![(MsgId::from([2; 32]), peer_block.clone())],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
     assert_eq!(
-        sequencer.chain_height(),
+        sequencer.chain_height().await,
         2,
         "head mirrors final on backfill"
     );
     let stored = sequencer
         .store
-        .get_block_at_id(2)
+        .block_at_id(2)
+        .await
         .unwrap()
         .expect("backfilled block should be persisted");
     assert_eq!(stored.header.hash, peer_block.header.hash);
@@ -2621,8 +2760,7 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
 #[tokio::test]
 async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_record() {
     let config = setup_sequencer_config();
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
     // A produced block at head, still pending on the channel.
     let tx = common::test_utils::produce_dummy_empty_transaction();
@@ -2645,9 +2783,10 @@ async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_r
     let deposit_tx = build_bridge_deposit_tx_from_event(&record).unwrap();
     assert!(
         sequencer
-            .store
-            .dbio()
-            .add_pending_deposit_event(record)
+            .block_store()
+            .storage_ref()
+            .ask(AddPendingDepositEvent { event: record })
+            .await
             .unwrap()
     );
 
@@ -2657,7 +2796,7 @@ async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_r
         common::test_utils::produce_dummy_block(9, Some(HashType([44; 32])), vec![deposit_tx]);
 
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
@@ -2666,11 +2805,12 @@ async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_r
             finalized: vec![(MsgId::from([9; 32]), parked)],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
     // Nothing became irreversible, so the store must not be swept through the
     // parked block's height.
-    let stored = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    let stored = sequencer.store.block_at_id(2).await.unwrap().unwrap();
     assert!(
         matches!(stored.bedrock_status, BedrockStatus::Pending),
         "a parked finalized block must not mark earlier blocks finalized"
@@ -2681,6 +2821,7 @@ async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_r
         sequencer
             .store
             .get_pending_deposit_events()
+            .await
             .unwrap()
             .iter()
             .any(|event| event.deposit_op_id == deposit_op_id),
@@ -2695,9 +2836,8 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
     let acc2 = initial_public_user_accounts()[1].account_id;
 
     // Produce block 2 (a user transfer), then "crash" before it finalizes.
-    let (tx, block2) = {
-        let (mut sequencer, mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config.clone()).await;
+    let (storage_weak, tx, block2) = {
+        let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
         let tx = common::test_utils::create_transaction_native_token_transfer(
             acc1,
             0,
@@ -2710,22 +2850,27 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
             .await
             .unwrap();
         sequencer.run_production_turn().await.unwrap();
-        (tx, sequencer.store.get_block_at_id(2).unwrap().unwrap())
+        let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
+        (
+            sequencer.block_store().storage_ref().downgrade(),
+            tx,
+            block2,
+        )
     };
+    storage_weak.wait_for_shutdown_with_result(|_| ()).await;
 
     // Restart: nothing is finalized, so block 2 must come back as *head*, not
     // final — the L1 can still orphan it.
-    let (mut sequencer, mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-    assert_eq!(sequencer.chain_height(), 2);
+    let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
+    assert_eq!(sequencer.chain_height().await, 2);
 
     // The L1 orphans block 2 under its real MsgId (which we never persisted)
     // and adopts a competing empty block 2'.
-    let genesis = sequencer.store.get_block_at_id(1).unwrap().unwrap();
+    let genesis = sequencer.store.block_at_id(1).await.unwrap().unwrap();
     let block2_prime =
         common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
@@ -2733,24 +2878,27 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
             orphaned: vec![(MsgId::from([20; 32]), block2)],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
     // The head reorged onto 2': transfer reverted, store overwritten, and the
     // orphaned user tx returned to the mempool.
-    assert_eq!(sequencer.chain_height(), 2);
+    assert_eq!(sequencer.chain_height().await, 2);
     let head_tip = sequencer
         .chain()
         .lock()
-        .expect("chain mutex poisoned")
+        .await
         .head_tip()
         .expect("head tip set");
     assert_eq!(head_tip.hash, block2_prime.header.hash);
     assert_eq!(
-        sequencer.with_state(|s| s.get_account_by_id(acc1).balance),
+        sequencer
+            .with_state(|s| s.get_account_by_id(acc1).balance)
+            .await,
         10000,
         "the orphaned transfer must be reverted"
     );
-    let stored = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    let stored = sequencer.store.block_at_id(2).await.unwrap().unwrap();
     assert_eq!(stored.header.hash, block2_prime.header.hash);
     let (origin, requeued) = sequencer
         .mempool
@@ -2766,18 +2914,17 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
 
     // Produce block 2 and follow its finalization, which persists the final
     // snapshot; then "crash".
-    {
-        let (mut sequencer, mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config.clone()).await;
+    let storage_weak = {
+        let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
         let tx = common::test_utils::produce_dummy_empty_transaction();
         mempool_handle
             .push((TransactionOrigin::User, tx))
             .await
             .unwrap();
         sequencer.run_production_turn().await.unwrap();
-        let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+        let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
         apply_follow_update(
-            &sequencer.store.dbio(),
+            sequencer.block_store().storage_ref(),
             &sequencer.chain(),
             &mempool_handle,
             FollowUpdate {
@@ -2786,15 +2933,17 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
                 finalized: vec![(MsgId::from(block2.header.hash.0), block2)],
                 ..empty_follow_update()
             },
-        );
-    }
+        )
+        .await;
+        sequencer.block_store().storage_ref().downgrade()
+    };
+    storage_weak.wait_for_shutdown_with_result(|_| ()).await;
 
     // Restart: the final tier re-anchors on the snapshot instead of treating
     // the whole stored chain as final.
-    let (sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config.clone()).await;
+    let (sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
     let chain = sequencer.chain();
-    let chain = chain.lock().expect("chain mutex poisoned");
+    let chain = chain.lock().await;
     assert_eq!(chain.final_tip().expect("final tip set").block_id, 2);
     assert_eq!(chain.head_tip().expect("head tip set").block_id, 2);
 }
@@ -2802,11 +2951,11 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
 #[tokio::test]
 async fn record_produced_block_skips_persistence_on_lost_race() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     let genesis_meta = sequencer
         .store
         .latest_block_meta()
+        .await
         .unwrap()
         .expect("genesis meta is set");
 
@@ -2815,7 +2964,7 @@ async fn record_produced_block_skips_persistence_on_lost_race() {
     sequencer
         .chain()
         .lock()
-        .expect("chain mutex poisoned")
+        .await
         .apply_adopted(MsgId::from([9; 32]), &peer_block);
 
     // Our competing block at the same height: same parent, different content.
@@ -2832,51 +2981,48 @@ async fn record_produced_block_skips_persistence_on_lost_race() {
     sequencer
         .record_produced_block(
             MsgId::from(our_block.header.hash.0),
-            &our_block,
-            &[],
+            our_block.clone(),
+            vec![],
             &mock_checkpoint(),
         )
+        .await
         .unwrap();
 
     // The lost-race block must not reach the store; the head keeps the peer block.
-    assert!(sequencer.store.get_block_at_id(2).unwrap().is_none());
-    let head_tip = sequencer
-        .chain()
-        .lock()
-        .expect("chain mutex poisoned")
-        .head_tip()
-        .expect("head tip");
+    assert!(sequencer.store.block_at_id(2).await.unwrap().is_none());
+    let head_tip = sequencer.chain().lock().await.head_tip().expect("head tip");
     assert_eq!(head_tip.hash, peer_block.header.hash);
 }
 
 #[tokio::test]
 async fn record_produced_block_skips_persistence_when_block_no_longer_chains() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) =
-        SequencerCoreWithMockClients::start_from_config(config).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
 
     // The head reorged under us: our block's parent is no longer the tip.
     let stale = common::test_utils::produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
     sequencer
         .record_produced_block(
             MsgId::from(stale.header.hash.0),
-            &stale,
-            &[],
+            stale.clone(),
+            vec![],
             &mock_checkpoint(),
         )
+        .await
         .unwrap();
 
-    assert!(sequencer.store.get_block_at_id(2).unwrap().is_none());
-    assert_eq!(sequencer.chain_height(), 1, "head is unchanged");
+    assert!(sequencer.store.block_at_id(2).await.unwrap().is_none());
+    assert_eq!(sequencer.chain_height().await, 1, "head is unchanged");
 }
 
 #[tokio::test]
 async fn follow_update_persists_blocks_meta_and_state_atomically() {
     let config = setup_sequencer_config();
-    let (sequencer, mempool_handle) = SequencerCoreWithMockClients::start_from_config(config).await;
+    let (sequencer, mempool_handle) = start_sequencer(config).await;
     let genesis_meta = sequencer
         .store
         .latest_block_meta()
+        .await
         .unwrap()
         .expect("genesis meta is set");
 
@@ -2894,7 +3040,7 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
 
     // One update carrying several blocks: both adopted, block 2 also finalized.
     apply_follow_update(
-        &sequencer.store.dbio(),
+        sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
@@ -2906,23 +3052,27 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
             finalized: vec![(MsgId::from([2; 32]), block2)],
             ..empty_follow_update()
         },
-    );
+    )
+    .await;
 
     // Blocks, tip meta and state all reflect the end of the batch: a late
     // finalized entry for an earlier block must not drag the tip meta back.
     let meta = sequencer
         .store
         .latest_block_meta()
+        .await
         .unwrap()
         .expect("meta is set");
     assert_eq!(meta.id, 3);
     assert_eq!(meta.hash, block3.header.hash);
-    let stored2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    let stored2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
     assert!(matches!(stored2.bedrock_status, BedrockStatus::Finalized));
     let stored_balance = sequencer
         .store
         .get_lee_state()
+        .await
         .unwrap()
+        .expect("the store holds a chain")
         .get_account_by_id(acc2)
         .balance;
     assert_eq!(stored_balance, 20010);
