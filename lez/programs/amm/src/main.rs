@@ -9,7 +9,9 @@
 use std::num::NonZero;
 
 use amm_core::Instruction;
-use lee_core::program::{ProgramCall, ProgramInput, ProgramOutput, read_lee_call, write_update_from_diff_output};
+use lee_core::program::{
+    ProgramCall, ProgramInput, ProgramOutput, read_lee_call, write_update_from_diff_output,
+};
 
 fn main() {
     let (

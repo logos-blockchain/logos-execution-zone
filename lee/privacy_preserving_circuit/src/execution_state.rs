@@ -398,9 +398,9 @@ impl ExecutionState {
                 };
                 let journal_words =
                     to_vec(&expected_output).expect("UpdateFromDiffOutput must be serializable");
-                env::verify(program_id, &journal_words).unwrap_or_else(
-                    |_: Infallible| unreachable!("Infallible error is never constructed"),
-                );
+                env::verify(program_id, &journal_words).unwrap_or_else(|_: Infallible| {
+                    unreachable!("Infallible error is never constructed")
+                });
                 data
             } else {
                 pre_account.data.clone()
@@ -414,8 +414,7 @@ impl ExecutionState {
             if let Some(claim) = diff_output.required_claim() {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(
-                    pre_account.program_owner,
-                    DEFAULT_PROGRAM_ID,
+                    pre_account.program_owner, DEFAULT_PROGRAM_ID,
                     "Cannot claim an initialized account {pre_account_id}"
                 );
 

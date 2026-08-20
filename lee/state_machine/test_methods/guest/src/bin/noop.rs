@@ -17,7 +17,9 @@ fn main() {
     ) = match read_lee_call::<Instruction>() {
         ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
         ProgramCall::UpdateFromDiff { .. } => {
-            unreachable!("noop program never writes diff_data, so update_from_diff is never dispatched")
+            unreachable!(
+                "noop program never writes diff_data, so update_from_diff is never dispatched"
+            )
         }
     };
 

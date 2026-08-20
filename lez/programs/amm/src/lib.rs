@@ -7,10 +7,9 @@
     reason = "TODO: Fix later"
 )]
 
-pub use amm_core as core;
-
 use std::convert::Infallible;
 
+pub use amm_core as core;
 use lee_core::{
     account::{Account, AccountDiff, AccountId, BalanceDiff, Data},
     program::AccountDiffOutput,

@@ -48,10 +48,7 @@ fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> AccountDiffOutput {
     )
 }
 
-fn move_data(
-    from_pre: AccountWithMetadata,
-    to_pre: AccountWithMetadata,
-) -> Vec<AccountDiffOutput> {
+fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<AccountDiffOutput> {
     // Construct the post state account values
     let from_data: Vec<u8> = from_pre.account.data.clone().into();
 
@@ -68,7 +65,9 @@ fn move_data(
     let to_post = {
         let mut bytes = to_pre.account.data.clone().into_inner();
         bytes.extend_from_slice(&from_data);
-        let bytes: Data = bytes.try_into().expect("moved data fits under DATA_MAX_LENGTH");
+        let bytes: Data = bytes
+            .try_into()
+            .expect("moved data fits under DATA_MAX_LENGTH");
         AccountDiffOutput::new_claimed_if_default(
             AccountDiff {
                 id: to_pre.account_id,
@@ -129,6 +128,9 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, std::convert::Infallible> {
+fn update_from_diff(
+    _pre_state: Account,
+    diff_data: Data,
+) -> Result<Data, std::convert::Infallible> {
     Ok(diff_data)
 }

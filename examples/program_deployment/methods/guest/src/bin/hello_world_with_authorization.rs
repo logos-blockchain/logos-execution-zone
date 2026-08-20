@@ -1,6 +1,9 @@
 use lee_core::{
     account::{Account, AccountDiff, BalanceDiff, Data},
-    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call, write_update_from_diff_output},
+    program::{
+        AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        write_update_from_diff_output,
+    },
 };
 
 // Hello-world with authorization example program.
@@ -89,6 +92,9 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, std::convert::Infallible> {
+fn update_from_diff(
+    _pre_state: Account,
+    diff_data: Data,
+) -> Result<Data, std::convert::Infallible> {
     Ok(diff_data)
 }

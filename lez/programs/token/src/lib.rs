@@ -3,7 +3,6 @@
 use std::convert::Infallible;
 
 use lee_core::account::{Account, Data};
-
 pub use token_core as core;
 
 pub mod burn;

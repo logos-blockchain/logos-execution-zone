@@ -30,8 +30,7 @@ fn expected_diff(pre: &AccountWithMetadata, expected_post: &Account) -> AccountD
     } else {
         BalanceDiff::Sub(pre.account.balance - expected_post.balance)
     };
-    let diff_data =
-        (expected_post.data != pre.account.data).then(|| expected_post.data.clone());
+    let diff_data = (expected_post.data != pre.account.data).then(|| expected_post.data.clone());
     AccountDiff {
         id: pre.account_id,
         diff_balance,
@@ -3020,7 +3019,13 @@ fn new_definition_lp_asymmetric_amounts() {
 
     // check the minted LP amount
     let pool_post = post_states[0].clone();
-    let pool_data: Data = pool_post.diff().diff_data.clone().unwrap().try_into().unwrap();
+    let pool_data: Data = pool_post
+        .diff()
+        .diff_data
+        .clone()
+        .unwrap()
+        .try_into()
+        .unwrap();
     let pool_def = PoolDefinition::try_from(&pool_data).unwrap();
     assert_eq!(
         pool_def.liquidity_pool_supply,
@@ -3053,7 +3058,13 @@ fn new_definition_lp_symmetric_amounts() {
     );
 
     let pool_post = post_states[0].clone();
-    let pool_data: Data = pool_post.diff().diff_data.clone().unwrap().try_into().unwrap();
+    let pool_data: Data = pool_post
+        .diff()
+        .diff_data
+        .clone()
+        .unwrap()
+        .try_into()
+        .unwrap();
     let pool_def = PoolDefinition::try_from(&pool_data).unwrap();
     assert_eq!(pool_def.liquidity_pool_supply, expected_lp);
 
