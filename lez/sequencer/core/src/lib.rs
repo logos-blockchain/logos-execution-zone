@@ -687,15 +687,15 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     pub async fn update_committee_absence(
         &mut self,
     ) -> Option<Vec<sequencer_stake_core::SequencerKey>> {
-        let live_accredited_keys = self.live_accredited_sequencer_keys().await;
-        if let Some(live) = live_accredited_keys.as_deref() {
+        let snapshot = self.live_accredited_sequencer_keys().await;
+        if let Some((live, tip_slot)) = snapshot.as_ref() {
             let leaving = self
                 .with_state(committee_discovery::keys_leaving_the_committee)
                 .await;
-            let height = self.chain_height().await;
-            self.committee_absence.observe(live, &leaving, height);
+            self.committee_absence
+                .observe(live, &leaving, tip_slot.into_inner());
         }
-        live_accredited_keys
+        snapshot.map(|(keys, _)| keys)
     }
 
     /// Runs everything this sequencer owes its turn: builds a block from
@@ -747,12 +747,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     }
 
     /// Live committee snapshot for gating `FinalizeUnstake` inclusion and
-    /// committee updates. `None` if it could not be read.
+    /// committee updates, with the channel tip slot it was read at. `None` if
+    /// the channel is missing or unreadable.
     async fn live_accredited_sequencer_keys(
         &self,
-    ) -> Option<Vec<sequencer_stake_core::SequencerKey>> {
+    ) -> Option<(Vec<sequencer_stake_core::SequencerKey>, Slot)> {
         match self.block_publisher.accredited_keys().await {
-            Ok(keys) => Some(
+            Ok(Some((keys, tip_slot))) => Some((
                 keys.iter()
                     .filter_map(|key| {
                         sequencer_stake_core::SequencerKey::new(key.to_bytes()).or_else(|| {
@@ -764,7 +765,15 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                         })
                     })
                     .collect(),
-            ),
+                tip_slot,
+            )),
+            Ok(None) => {
+                warn!(
+                    "No channel to read a live committee from; skipping FinalizeUnstake inclusion \
+                     and committee updates this round"
+                );
+                None
+            }
             Err(err) => {
                 warn!(
                     "Failed to read live committee snapshot; skipping FinalizeUnstake inclusion \
@@ -997,7 +1006,6 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             mut working_state,
             pending_dispatches,
             finalize_unstake_txs,
-            finalized_height,
             committee_update,
         ) = {
             let chain = self.chain.lock().await;
@@ -1038,10 +1046,19 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 chain.head_state().clone(),
                 pending,
                 build_finalize_unstake_txs(chain.head_state()),
-                chain.final_tip().map(|final_tip| final_tip.block_id),
                 committee_update,
             )
         };
+
+        // The last irreversible bedrock slot.
+        let finalized_slot = self
+            .store
+            .get_zone_checkpoint()
+            .await
+            .inspect_err(|err| warn!("Failed to read the zone checkpoint: {err:#}"))
+            .ok()
+            .flatten()
+            .map(|checkpoint| checkpoint.lib_slot.into_inner());
 
         if !settled.is_empty() {
             if let Err(err) = self
@@ -1185,7 +1202,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 &working_state,
                 &tx,
                 &self.committee_absence,
-                finalized_height,
+                finalized_slot,
             ) {
                 continue;
             }
@@ -2152,7 +2169,7 @@ fn finalize_unstake_is_includable(
     state: &lee::V03State,
     tx: &LeeTransaction,
     committee_absence: &committee_discovery::CommitteeAbsence,
-    finalized_height: Option<u64>,
+    finalized_slot: Option<u64>,
 ) -> bool {
     let Some(ownership_id) = finalize_unstake_ownership_account(tx) else {
         return true;
@@ -2161,7 +2178,7 @@ fn finalize_unstake_is_includable(
         state,
         ownership_id,
         committee_absence,
-        finalized_height,
+        finalized_slot,
     )
 }
 

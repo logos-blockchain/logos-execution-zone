@@ -5,36 +5,40 @@ use std::collections::{BTreeMap, BTreeSet};
 use log::warn;
 use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig, StakeRecord};
 
-/// When each leaving key was first seen gone from the live committee.
+/// The channel slot each leaving key was first seen gone from the live committee at.
+///
+/// In memory only: a restart re-stamps at the current tip and costs a pending
+/// exit one more finality delay.
 #[derive(Debug, Default)]
 pub struct CommitteeAbsence {
     absent_since: BTreeMap<SequencerKey, u64>,
 }
 
 impl CommitteeAbsence {
-    /// Records one look at the live committee, taken at block height `height`.
+    /// Records one look at the live committee, taken with the channel tip at
+    /// `tip_slot`.
     pub fn observe(
         &mut self,
         live: &[SequencerKey],
         leaving: &BTreeSet<SequencerKey>,
-        height: u64,
+        tip_slot: u64,
     ) {
         self.absent_since.retain(|key, _| leaving.contains(key));
         for key in leaving {
             if live.contains(key) {
                 self.absent_since.remove(key);
             } else {
-                self.absent_since.entry(*key).or_insert(height);
+                self.absent_since.entry(*key).or_insert(tip_slot);
             }
         }
     }
 
-    /// Whether a block built after `key` was seen leaving has finalized.
+    /// Whether the channel slot that first showed `key` gone is irreversible.
     #[must_use]
-    pub fn removal_is_final(&self, key: SequencerKey, finalized_height: Option<u64>) -> bool {
+    pub fn removal_is_final(&self, key: SequencerKey, finalized_slot: Option<u64>) -> bool {
         self.absent_since
             .get(&key)
-            .is_some_and(|absent_since| finalized_height > Some(*absent_since))
+            .is_some_and(|absent_since| finalized_slot > Some(*absent_since))
     }
 }
 
@@ -113,7 +117,7 @@ pub fn finalize_unstake_is_valid(
     state: &lee::V03State,
     ownership_id: lee::AccountId,
     absence: &CommitteeAbsence,
-    finalized_height: Option<u64>,
+    finalized_slot: Option<u64>,
 ) -> bool {
     let Some(record) = stake_record(state, ownership_id) else {
         return true;
@@ -128,7 +132,7 @@ pub fn finalize_unstake_is_valid(
     };
 
     let fully_drains = entry.net_stake() == 0;
-    !fully_drains || absence.removal_is_final(record.sequencer_key, finalized_height)
+    !fully_drains || absence.removal_is_final(record.sequencer_key, finalized_slot)
 }
 
 /// Keys whose pending release takes them out of the committee.
