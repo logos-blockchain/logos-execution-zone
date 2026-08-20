@@ -78,6 +78,12 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> ExecutorActor<BP, S> {
     pub fn mempool_handle(&self) -> MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
         self.mempool_handle.clone()
     }
+
+    /// Handle to the slash record, for gossip to collect peer approvals into.
+    #[must_use]
+    pub fn slash_record(&self) -> sequencer_core::slashing::SlashRecord {
+        self.sequencer.slash_record()
+    }
 }
 
 impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Actor

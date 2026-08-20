@@ -1,11 +1,16 @@
 use std::time::{Duration, Instant};
 
 use common::transaction::LeeTransaction;
+use kameo::actor::Spawn as _;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use mempool::MemPool;
+use sequencer_stake_core::SequencerKey;
+use sequencer_storage_actor::mock::MockStorageActor;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
-use crate::{TransactionOrigin, config::GossipConfig, gossip::GossipNetwork};
+use crate::{
+    TransactionOrigin, config::GossipConfig, gossip::GossipNetwork, slashing::SlashRecord,
+};
 
 const CHANNEL: [u8; 32] = [1; 32];
 const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
@@ -43,6 +48,20 @@ async fn start_node(
     secret: [u8; 32],
     bootstrap: Vec<libp2p::Multiaddr>,
 ) -> (GossipNetwork, MemPool<(TransactionOrigin, LeeTransaction)>) {
+    let (network, mempool, _) =
+        start_slashing_node(secret, bootstrap, SlashRecord::default()).await;
+    (network, mempool)
+}
+
+async fn start_slashing_node(
+    secret: [u8; 32],
+    bootstrap: Vec<libp2p::Multiaddr>,
+    record: SlashRecord,
+) -> (
+    GossipNetwork,
+    MemPool<(TransactionOrigin, LeeTransaction)>,
+    SlashRecord,
+) {
     let config = GossipConfig {
         listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
         bootstrap_peers: bootstrap,
@@ -54,10 +73,11 @@ async fn start_node(
         Ed25519Key::from_bytes(&secret),
         mempool_handle,
         TEST_MAX_BLOCK_SIZE,
+        Some(record.clone()),
     )
     .await
     .expect("node should start");
-    (network, mempool)
+    (network, mempool, record)
 }
 
 async fn wait_for(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
@@ -189,4 +209,35 @@ async fn invalid_transaction_is_not_propagated() {
         "an invalidly-signed transaction must not reach the mempool"
     );
     drop((node_a, node_b));
+}
+
+/// An approval this node signed reaches a peer's record over the mesh.
+#[tokio::test]
+async fn slash_approval_reaches_a_peer() {
+    const INSCRIPTION: [u8; 32] = [7; 32];
+    let offender = SequencerKey::new(pubkey([31; 32])).expect("valid key");
+
+    let mut mock = MockStorageActor::new();
+    mock.expect_handle_put_slash_record_bytes()
+        .returning(|_, _| Ok(()));
+    let storage = MockStorageActor::spawn(mock);
+
+    let reporter = SlashRecord::default();
+    reporter
+        .attribute(&storage, INSCRIPTION, 42, offender)
+        .await;
+
+    let (node_a, _mempool_a, _) = start_slashing_node([21; 32], vec![], reporter).await;
+    let (_node_b, _mempool_b, collector) =
+        start_slashing_node([22; 32], node_a.bootstrap_addrs(), SlashRecord::default()).await;
+
+    let signer = pubkey([21; 32]);
+    let collected = wait_for(Duration::from_secs(60), || {
+        collector
+            .approvals_for(offender, INSCRIPTION)
+            .iter()
+            .any(|approval| approval.signer.to_bytes() == signer)
+    })
+    .await;
+    assert!(collected, "the peer should have collected the approval");
 }

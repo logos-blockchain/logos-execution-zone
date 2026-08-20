@@ -157,6 +157,7 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
 
     let executor = ExecutorActor::new(config, storage_ref.clone()).await;
     let mempool_handle = executor.mempool_handle();
+    let slash_record = executor.slash_record();
     let executor_ref = ExecutorActor::spawn(executor);
     info!("Executor Actor spawned");
 
@@ -175,6 +176,7 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
                 signing_key,
                 mempool_handle,
                 max_block_size.as_u64(),
+                Some(slash_record),
             )
             .await
             .context("Failed to start sequencer gossip network")?;

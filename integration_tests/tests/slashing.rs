@@ -152,7 +152,7 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         offender_key,
         Duration::from_secs(5),
         None,
-        Box::new(|_update| {}),
+        Box::new(|_update| Box::pin(async {})),
     )
     .await
     .context("Failed to open a publisher for the offender")?;

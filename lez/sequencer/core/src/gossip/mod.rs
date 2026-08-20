@@ -9,6 +9,7 @@ pub use libp2p::Multiaddr;
 pub use network::{GossipNetwork, GossipTxPublisher};
 
 pub mod accreditation;
+pub mod message;
 pub mod network;
 pub mod seen_cache;
 pub mod validation;

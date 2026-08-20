@@ -1459,6 +1459,12 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         self.block_publisher.is_our_turn()
     }
 
+    /// Handle to the slash record, for gossip to collect peer approvals into.
+    #[must_use]
+    pub fn slash_record(&self) -> slashing::SlashRecord {
+        self.slash_record.clone()
+    }
+
     /// The height the next produced block would claim.
     pub async fn next_block_height(&self) -> u64 {
         self.chain

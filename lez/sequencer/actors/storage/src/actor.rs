@@ -29,12 +29,10 @@ use crate::{
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
         GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes,
-        MarkBlockAsFinalized,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
-        RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        PutSlashRecordBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
-        StoreUpdateOutcome,
-        ZoneAnchorRecord,
+        MarkBlockAsFinalized, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure, RecordNewBlock,
+        ResetAllBlocksToPending, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        SetZoneCheckpointBytes, StoreUpdateOutcome, ZoneAnchorRecord,
     },
 };
 
@@ -330,7 +328,9 @@ impl Message<PutSlashRecordBytes> for StorageActor {
         PutSlashRecordBytes { bytes }: PutSlashRecordBytes,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.dbio().put_slash_record_bytes(&bytes).map_err(Into::into)
+        self.dbio()
+            .put_slash_record_bytes(&bytes)
+            .map_err(Into::into)
     }
 }
 

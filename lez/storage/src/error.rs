@@ -1,6 +1,6 @@
 #[derive(thiserror::Error, Debug)]
 pub enum DbError {
-    #[error("RocksDb error: {}", additional_info.as_deref().unwrap_or("No additional info"))]
+    #[error("RocksDb error: {} ({error})", additional_info.as_deref().unwrap_or("No additional info"))]
     RocksDbError {
         #[source]
         error: rocksdb::Error,

@@ -3,28 +3,38 @@
 //! The approvals a `Slash` carries are its only authorization.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, RwLock},
 };
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
+use kameo::actor::ActorRef;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use log::{error, warn};
 use logos_blockchain_zone_sdk::Slot;
-use kameo::actor::ActorRef;
-use sequencer_stake_core::{SequencerKey, SlashApproval};
+use sequencer_stake_core::{
+    SLASH_APPROVAL_THRESHOLD, SequencerKey, SequencerStakeConfig, SlashApproval,
+};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{GetSlashRecordBytes, PutSlashRecordBytes},
 };
 
-use crate::block_publisher::{BlockPublisherTrait, Ed25519Key, MsgId};
+use crate::{
+    block_publisher::{BlockPublisherTrait, Ed25519Key, MsgId},
+    gossip::message::SlashApprovalMessage,
+};
+
+/// Peer approvals for one offence, keyed by signer.
+type ApprovalsByOffence = BTreeMap<([u8; 32], [u8; 32]), BTreeMap<[u8; 32], [u8; 64]>>;
 
 /// Offending inscriptions, before and after the writer is known.
 #[derive(Clone, Default)]
-pub(crate) struct SlashRecord {
+pub struct SlashRecord {
     state: Arc<RwLock<Offences>>,
+    /// Peer approvals collected over gossip; refilled by rebroadcast, so not persisted.
+    approvals: Arc<RwLock<ApprovalsByOffence>>,
 }
 
 #[derive(Debug, Default, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -48,6 +58,7 @@ impl SlashRecord {
             });
         Self {
             state: Arc::new(RwLock::new(state)),
+            approvals: Arc::new(RwLock::new(ApprovalsByOffence::default())),
         }
     }
 
@@ -87,7 +98,7 @@ impl SlashRecord {
             .collect()
     }
 
-    async fn attribute<S: StorageActorTrait>(
+    pub(crate) async fn attribute<S: StorageActorTrait>(
         &self,
         storage_ref: &ActorRef<S>,
         inscription: [u8; 32],
@@ -103,6 +114,60 @@ impl SlashRecord {
         persist(storage_ref, bytes).await;
     }
 
+    /// Stores a peer approval whose signature the gossip layer already checked.
+    pub fn record_approval(&self, approval: &SlashApprovalMessage) {
+        self.approvals
+            .write()
+            .expect("slash approvals lock poisoned")
+            .entry((approval.offender, approval.inscription))
+            .or_default()
+            .insert(approval.signer, approval.signature);
+    }
+
+    /// This node's approval of every offence it has attributed, for broadcast.
+    #[must_use]
+    pub fn own_approvals(&self, approver: &Ed25519Key) -> Vec<SlashApprovalMessage> {
+        let signer = approver_key(approver);
+        self.all()
+            .into_iter()
+            .map(|(offender, inscription)| SlashApprovalMessage {
+                offender: offender.to_bytes(),
+                inscription,
+                signer: signer.to_bytes(),
+                signature: approver
+                    .sign_payload(&sequencer_stake_core::slash_approval_message(
+                        offender,
+                        inscription,
+                    ))
+                    .to_bytes(),
+            })
+            .collect()
+    }
+
+    /// Approvals held for one offence, as the program expects them.
+    pub(crate) fn approvals_for(
+        &self,
+        offender: SequencerKey,
+        inscription: [u8; 32],
+    ) -> Vec<SlashApproval> {
+        self.approvals
+            .read()
+            .expect("slash approvals lock poisoned")
+            .get(&(offender.to_bytes(), inscription))
+            .map(|signers| {
+                signers
+                    .iter()
+                    .filter_map(|(signer, signature)| {
+                        Some(SlashApproval {
+                            signer: SequencerKey::new(*signer)?,
+                            signature: signature.to_vec(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn all(&self) -> Vec<(SequencerKey, [u8; 32])> {
         self.state
             .read()
@@ -112,7 +177,6 @@ impl SlashRecord {
             .copied()
             .collect()
     }
-
 }
 
 fn encoded(offences: &Offences) -> Vec<u8> {
@@ -147,7 +211,9 @@ pub(crate) async fn attribute_offences<BP: BlockPublisherTrait, S: StorageActorT
             "Inscription at slot {slot} attributed to {}",
             hex::encode(offender)
         );
-        record.attribute(storage_ref, inscription, slot, offender).await;
+        record
+            .attribute(storage_ref, inscription, slot, offender)
+            .await;
     }
 
     Ok(())
@@ -176,16 +242,36 @@ pub(crate) fn slash_candidates(
         .into_iter()
         .filter_map(|(offender, inscription)| {
             let entry = config.entries.get(&offender)?;
-            build_slash_tx(
-                entry.account_id,
-                offender,
-                inscription,
-                vec![approve(approver, offender, inscription)],
-            )
-            .inspect_err(|err| warn!("Failed to build a Slash tx: {err:#}"))
-            .ok()
+            let approvals = gathered_approvals(record, &config, approver, offender, inscription)?;
+            build_slash_tx(entry.account_id, offender, inscription, approvals)
+                .inspect_err(|err| warn!("Failed to build a Slash tx: {err:#}"))
+                .ok()
         })
         .collect()
+}
+
+/// Our approval plus every accredited peer's, deduped; `None` below the threshold.
+#[must_use]
+fn gathered_approvals(
+    record: &SlashRecord,
+    config: &SequencerStakeConfig,
+    approver: &Ed25519Key,
+    offender: SequencerKey,
+    inscription: [u8; 32],
+) -> Option<Vec<SlashApproval>> {
+    let mut by_signer: BTreeMap<SequencerKey, SlashApproval> = record
+        .approvals_for(offender, inscription)
+        .into_iter()
+        .filter(|approval| config.entries.contains_key(&approval.signer))
+        .map(|approval| (approval.signer, approval))
+        .collect();
+    let own = approve(approver, offender, inscription);
+    by_signer.insert(own.signer, own);
+
+    if by_signer.len() < SLASH_APPROVAL_THRESHOLD {
+        return None;
+    }
+    Some(by_signer.into_values().collect())
 }
 
 /// This node's signature over an offence. Peers supply the rest over gossip.
@@ -251,6 +337,9 @@ mod tests {
     use super::*;
     use crate::mock::MockBlockPublisher;
 
+    const INSCRIPTION: [u8; 32] = [7; 32];
+    const SLOT: u64 = 42;
+
     /// A storage actor that holds no record and accepts every write.
     fn storage() -> ActorRef<MockStorageActor> {
         let mut mock = MockStorageActor::new();
@@ -260,9 +349,6 @@ mod tests {
             .returning(|_, _| Ok(()));
         MockStorageActor::spawn(mock)
     }
-
-    const INSCRIPTION: [u8; 32] = [7; 32];
-    const SLOT: u64 = 42;
 
     fn offender_signing_key() -> Ed25519Key {
         Ed25519Key::from_bytes(&[3; 32])
@@ -288,6 +374,63 @@ mod tests {
             .report(&storage(), &[(MsgId::from(INSCRIPTION), Slot::from(SLOT))])
             .await;
         record
+    }
+
+    /// A peer's approval of the standing offence.
+    fn peer_approval(peer: &Ed25519Key) -> SlashApprovalMessage {
+        let signature = peer.sign_payload(&sequencer_stake_core::slash_approval_message(
+            offender(),
+            INSCRIPTION,
+        ));
+        SlashApprovalMessage {
+            offender: offender().to_bytes(),
+            inscription: INSCRIPTION,
+            signer: approver_key(peer).to_bytes(),
+            signature: signature.to_bytes(),
+        }
+    }
+
+    /// Signers of the approvals a `Slash` for `offender()` would carry.
+    fn gathered_signers(
+        state: &lee::V03State,
+        record: &SlashRecord,
+        key: &Ed25519Key,
+    ) -> Vec<SequencerKey> {
+        let config = crate::committee_discovery::read_config(state).expect("config");
+        gathered_approvals(record, &config, key, offender(), INSCRIPTION)
+            .expect("threshold met")
+            .into_iter()
+            .map(|approval| approval.signer)
+            .collect()
+    }
+
+    /// State whose config accredits every `key`, each with a stake to burn.
+    fn state_accrediting(keys: &[SequencerKey]) -> lee::V03State {
+        let config = Account {
+            program_owner: programs::sequencer_stake().id().into(),
+            data: SequencerStakeConfig {
+                minimum_sequencer_stake: 1,
+                entries: keys
+                    .iter()
+                    .map(|key| {
+                        (
+                            *key,
+                            SequencerEntry {
+                                account_id: AccountId::new([8; 32]),
+                                total_staked: 1,
+                                total_pending_unstake: 0,
+                            },
+                        )
+                    })
+                    .collect(),
+            }
+            .to_bytes()
+            .try_into()
+            .expect("config fits"),
+            ..Account::default()
+        };
+        lee::V03State::new()
+            .with_public_accounts([(system_accounts::sequencer_stake_config_account_id(), config)])
     }
 
     /// State whose config account accredits `key` with a stake to burn.
@@ -371,6 +514,57 @@ mod tests {
         assert_eq!(
             slash_candidates(&state, &record, &offender_signing_key()).len(),
             1
+        );
+    }
+
+    /// The whole point of collection: a peer's approval rides along with ours.
+    #[tokio::test]
+    async fn an_accredited_peer_approval_joins_our_own() {
+        let record = reported().await;
+        attribute_offences(&publisher(true), &record, &storage())
+            .await
+            .expect("attribute");
+
+        let peer = Ed25519Key::from_bytes(&[4; 32]);
+        record.record_approval(&peer_approval(&peer));
+
+        // Only the offender is accredited, so the peer's approval is not counted yet.
+        let offender_only = state_staking(offender(), AccountId::new([8; 32]));
+        assert_eq!(
+            gathered_signers(&offender_only, &record, &offender_signing_key()),
+            vec![offender()],
+            "an approval from a key the config does not accredit is dropped"
+        );
+
+        // Accredit the peer and it joins.
+        let both = state_accrediting(&[offender(), approver_key(&peer)]);
+        let mut expected = vec![offender(), approver_key(&peer)];
+        expected.sort_unstable();
+        assert_eq!(
+            gathered_signers(&both, &record, &offender_signing_key()),
+            expected,
+            "an accredited peer's approval is carried alongside ours"
+        );
+    }
+
+    /// One signer cannot pad the count by approving twice.
+    #[tokio::test]
+    async fn a_repeated_approval_counts_once() {
+        let record = reported().await;
+        attribute_offences(&publisher(true), &record, &storage())
+            .await
+            .expect("attribute");
+
+        let peer = Ed25519Key::from_bytes(&[4; 32]);
+        record.record_approval(&peer_approval(&peer));
+        record.record_approval(&peer_approval(&peer));
+        // Our own key arriving over gossip must not double-count either.
+        record.record_approval(&peer_approval(&offender_signing_key()));
+
+        let both = state_accrediting(&[offender(), approver_key(&peer)]);
+        assert_eq!(
+            gathered_signers(&both, &record, &offender_signing_key()).len(),
+            2
         );
     }
 

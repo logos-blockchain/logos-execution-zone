@@ -20,7 +20,12 @@ use mempool::MemPoolHandle;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::{TransactionOrigin, config::GossipConfig, gossip::seen_cache::SeenCache};
+use crate::{
+    TransactionOrigin,
+    config::GossipConfig,
+    gossip::{message::GossipMessage, seen_cache::SeenCache},
+    slashing::SlashRecord,
+};
 
 /// How long to wait for the first listen address before failing startup.
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -40,6 +45,9 @@ const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Local transactions whose publish failed (e.g. `InsufficientPeers` while
 /// the mesh is still forming), kept for republish once a peer subscribes.
 const PENDING_PUBLISH_CAPACITY: usize = 256;
+/// How often this node rebroadcasts its own slash approvals, so peers that
+/// missed one or joined later still collect it.
+const APPROVAL_BROADCAST_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(NetworkBehaviour)]
 struct GossipBehaviour {
@@ -82,6 +90,7 @@ impl GossipNetwork {
         signing_key: Ed25519Key,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
         max_block_size: u64,
+        slash_record: Option<SlashRecord>,
     ) -> Result<Self> {
         // Reuse the node's L1 bedrock signing key as the libp2p identity. The
         // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
@@ -89,6 +98,7 @@ impl GossipNetwork {
         //
         // FIXME: get rid of `unsecure` here when we introduce accredited key
         // handling, and a separete `Gossip node key -> Bedrock signing key` mapping.
+        let approver = signing_key.clone();
         let mut secret = signing_key.into_unsecured().to_bytes();
         let keypair = Keypair::ed25519_from_bytes(&mut *secret)
             .map_err(|err| anyhow!("Invalid bedrock signing key for libp2p identity: {err}"))?;
@@ -102,10 +112,10 @@ impl GossipNetwork {
             // deterministic digest, not the attacker-controlled bytes
             // themselves and not a process-local hash (`DefaultHasher`):
             // every peer has to derive the same id from the same data.
-            let id = borsh::from_slice::<LeeTransaction>(&msg.data).map_or_else(
-                |_| common::block::OwnHasher::hash(&msg.data).0.to_vec(),
-                |tx| tx.hash().0.to_vec(),
-            );
+            let id = match borsh::from_slice::<GossipMessage>(&msg.data) {
+                Ok(GossipMessage::Transaction(tx)) => tx.hash().0.to_vec(),
+                _ => common::block::OwnHasher::hash(&msg.data).0.to_vec(),
+            };
             gossipsub::MessageId::from(id)
         };
         // Derived from this node's `max_block_size`, so all nodes on a channel
@@ -211,6 +221,8 @@ impl GossipNetwork {
             tx_rx,
             bootstrap,
             pending_publish: VecDeque::new(),
+            slash_record,
+            approver,
         }));
         spawn_driver_watchdog(driver, shutdown.clone());
 
@@ -225,7 +237,7 @@ impl GossipNetwork {
 
     #[must_use]
     pub fn get_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
-        gossipsub::IdentTopic::new(format!("/lez/{}/v1/txs", hex::encode(channel_id)))
+        gossipsub::IdentTopic::new(format!("/lez/{}/v2/gossip", hex::encode(channel_id)))
     }
 
     #[must_use]
@@ -292,6 +304,9 @@ struct DriveTask {
     /// Local transactions whose publish failed, retried when a peer
     /// subscribes to the topic. Bounded; the oldest is dropped on overflow.
     pending_publish: VecDeque<LeeTransaction>,
+    /// Absent when slashing collection is not wired in.
+    slash_record: Option<SlashRecord>,
+    approver: Ed25519Key,
 }
 
 impl DriveTask {
@@ -389,14 +404,20 @@ impl DriveTask {
         message_id: &gossipsub::MessageId,
         data: &[u8],
     ) {
-        use crate::gossip::validation::{TxEvaluation, evaluate_transaction};
+        use crate::gossip::validation::{Evaluation, evaluate_message};
 
-        let acceptance = match evaluate_transaction(data, self.max_block_size) {
-            TxEvaluation::Reject(reason) => {
-                log::debug!("Rejecting gossiped tx from {source}: {reason}");
+        let acceptance = match evaluate_message(data, self.max_block_size) {
+            Evaluation::Reject(reason) => {
+                log::debug!("Rejecting gossiped message from {source}: {reason}");
                 gossipsub::MessageAcceptance::Reject
             }
-            TxEvaluation::Accept(tx) => {
+            Evaluation::SlashApproval(approval) => {
+                if let Some(record) = &self.slash_record {
+                    record.record_approval(&approval);
+                }
+                gossipsub::MessageAcceptance::Accept
+            }
+            Evaluation::Transaction(tx) => {
                 let hash = tx.hash();
                 if self.seen.contains(&hash) {
                     gossipsub::MessageAcceptance::Ignore
@@ -430,7 +451,8 @@ impl DriveTask {
     /// retried when a peer subscribes to the topic.
     fn publish_transaction(&mut self, tx: LeeTransaction) {
         let hash = tx.hash();
-        let bytes = borsh::to_vec(&tx).expect("tx borsh serialization should not fail");
+        let bytes = borsh::to_vec(&GossipMessage::Transaction(tx.clone()))
+            .expect("tx borsh serialization should not fail");
         match self
             .swarm
             .behaviour_mut()
@@ -452,6 +474,25 @@ impl DriveTask {
                     );
                 }
                 self.pending_publish.push_back(tx);
+            }
+        }
+    }
+
+    /// Publishes this node's approval of every offence it has attributed.
+    fn broadcast_own_approvals(&mut self) {
+        let Some(record) = &self.slash_record else {
+            return;
+        };
+        for approval in record.own_approvals(&self.approver) {
+            let bytes = borsh::to_vec(&GossipMessage::SlashApproval(approval))
+                .expect("approval borsh serialization should not fail");
+            if let Err(err) = self
+                .swarm
+                .behaviour_mut()
+                .gossipsub
+                .publish(self.topic.clone(), bytes)
+            {
+                log::debug!("Failed to publish a slash approval: {err}");
             }
         }
     }
@@ -557,12 +598,14 @@ async fn run_drive_task(mut task: DriveTask) {
             .expect("bootstrap retry deadline within Instant range"),
         BOOTSTRAP_RETRY_INTERVAL,
     );
+    let mut approval_broadcast = tokio::time::interval(APPROVAL_BROADCAST_INTERVAL);
     loop {
         tokio::select! {
             () = task.shutdown.cancelled() => break,
             event = task.swarm.select_next_some() => task.on_swarm_event(event),
             Some(tx) = task.tx_rx.recv() => task.publish_transaction(tx),
             _ = bootstrap_retry.tick() => task.retry_bootstrap(),
+            _ = approval_broadcast.tick() => task.broadcast_own_approvals(),
         }
     }
 }
@@ -637,6 +680,7 @@ mod tests {
             Ed25519Key::from_bytes(&[9; 32]),
             test_mempool_handle(),
             TEST_MAX_BLOCK_SIZE,
+            None,
         )
         .await
         .unwrap();
@@ -654,6 +698,7 @@ mod tests {
             Ed25519Key::from_bytes(&[9; 32]),
             test_mempool_handle(),
             TEST_MAX_BLOCK_SIZE,
+            None,
         )
         .await
         .unwrap();
