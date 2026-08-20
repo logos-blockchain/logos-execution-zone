@@ -133,7 +133,7 @@ pub fn execute_and_prove_with_padded_inputs(
                 continue;
             };
             let update_receipt =
-                program.prove_update_from_diff(pre.account.clone(), diff_data.into())?;
+                program.prove_update_from_diff(pre.account.clone(), diff_data)?;
             let update_output: UpdateFromDiffOutput = update_receipt
                 .journal
                 .decode()

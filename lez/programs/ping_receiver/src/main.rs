@@ -353,7 +353,7 @@ fn init_config(
                 config_value
                     .to_bytes()
                     .try_into()
-                    .expect("receiver config fits in account data"),
+                    .expect("receiver config fits under DATA_MAX_LENGTH"),
             ),
         },
         config.account.program_owner.into(),

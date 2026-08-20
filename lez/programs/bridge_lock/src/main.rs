@@ -254,7 +254,7 @@ fn init_config(
                 config_bytes(outbox_program_id, target_program_id)
                     .to_vec()
                     .try_into()
-                    .expect("config bytes fit in account data"),
+                    .expect("bridge-lock config fits under DATA_MAX_LENGTH"),
             ),
         },
         config.account.program_owner.into(),

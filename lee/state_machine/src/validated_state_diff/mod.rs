@@ -225,7 +225,7 @@ impl ValidatedStateDiff {
                     .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
 
                 let data = if let Some(diff_data) = diff.diff_data.clone() {
-                    program.execute_update_from_diff(pre.account.clone(), diff_data.into())?
+                    program.execute_update_from_diff(pre.account.clone(), diff_data)?
                 } else {
                     pre.account.data.clone()
                 };

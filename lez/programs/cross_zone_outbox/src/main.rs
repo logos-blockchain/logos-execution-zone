@@ -96,7 +96,7 @@ fn main() {
     }
     .to_bytes()
     .try_into()
-    .expect("outbox record fits under DATA_MAX_LENGTH");
+    .expect("OutboxRecord fits under DATA_MAX_LENGTH");
 
     // Unconditional, since the pre-state is provably default by the assert above.
     let post = AccountDiffOutput::new_claimed(

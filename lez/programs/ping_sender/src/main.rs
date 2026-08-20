@@ -176,7 +176,7 @@ fn init_config(
                 outbox_bytes(outbox_program_id)
                     .to_vec()
                     .try_into()
-                    .expect("outbox bytes fit in account data"),
+                    .expect("ping-sender config fits under DATA_MAX_LENGTH"),
             ),
         },
         config.account.program_owner.into(),

@@ -30,8 +30,8 @@ fn expected_diff(pre: &AccountWithMetadata, expected_post: &Account) -> AccountD
     } else {
         BalanceDiff::Sub(pre.account.balance - expected_post.balance)
     };
-    let diff_data = (expected_post.data != pre.account.data)
-        .then(|| expected_post.data.clone());
+    let diff_data =
+        (expected_post.data != pre.account.data).then(|| expected_post.data.clone());
     AccountDiff {
         id: pre.account_id,
         diff_balance,

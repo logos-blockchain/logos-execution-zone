@@ -121,7 +121,7 @@ impl Program {
     pub(crate) fn execute_update_from_diff(
         &self,
         pre_state: Account,
-        diff_data: Vec<u8>,
+        diff_data: Data,
     ) -> Result<Data, LeeError> {
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
@@ -149,7 +149,7 @@ impl Program {
     pub(crate) fn prove_update_from_diff(
         &self,
         pre_state: Account,
-        diff_data: Vec<u8>,
+        diff_data: Data,
     ) -> Result<Receipt, LeeError> {
         let mut env_builder = ExecutorEnv::builder();
         Self::write_update_from_diff_inputs(&pre_state, &diff_data, &mut env_builder)?;
@@ -164,7 +164,7 @@ impl Program {
 
     fn write_update_from_diff_inputs(
         pre_state: &Account,
-        diff_data: &[u8],
+        diff_data: &Data,
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
         env_builder

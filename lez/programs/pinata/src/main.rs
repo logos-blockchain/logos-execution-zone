@@ -91,7 +91,7 @@ fn main() {
                 data.next_data()
                     .to_vec()
                     .try_into()
-                    .expect("challenge data fits in account data"),
+                    .expect("pinata challenge data always fits under DATA_MAX_LENGTH"),
             ),
         },
         pinata.account.program_owner.into(),

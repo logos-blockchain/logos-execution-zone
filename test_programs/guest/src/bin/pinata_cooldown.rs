@@ -103,7 +103,7 @@ fn main() {
     let updated_data: Data = updated_state
         .to_bytes()
         .try_into()
-        .expect("pinata state fits in account data");
+        .expect("pinata account data always fits under DATA_MAX_LENGTH");
 
     let pinata_post = AccountDiffOutput::new_claimed_if_default(
         AccountDiff {

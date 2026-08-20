@@ -158,7 +158,7 @@ fn dispatch(
                     shard
                         .to_bytes()
                         .try_into()
-                        .expect("seen shard fits in account data"),
+                        .expect("seen shard fits under DATA_MAX_LENGTH"),
                 ),
             },
             seen.account.program_owner.into(),
@@ -248,7 +248,7 @@ fn init_config(
                 config
                     .to_bytes()
                     .try_into()
-                    .expect("inbox config fits in account data"),
+                    .expect("inbox config fits under DATA_MAX_LENGTH"),
             ),
         },
         config_meta.account.program_owner.into(),

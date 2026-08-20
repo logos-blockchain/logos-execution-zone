@@ -139,7 +139,7 @@ fn mint(
                 balance_bytes(new_balance)
                     .to_vec()
                     .try_into()
-                    .expect("balance bytes fit in account data"),
+                    .expect("wrapped-token balance always fits under DATA_MAX_LENGTH"),
             ),
         },
         holding.account.program_owner.into(),
@@ -373,7 +373,7 @@ fn init_config(
                 config_value
                     .to_bytes()
                     .try_into()
-                    .expect("wrapped-token config fits in account data"),
+                    .expect("wrapped-token config fits under DATA_MAX_LENGTH"),
             ),
         },
         config.account.program_owner.into(),
