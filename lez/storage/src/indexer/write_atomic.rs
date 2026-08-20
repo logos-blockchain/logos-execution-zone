@@ -7,8 +7,8 @@ use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellRef, LastObservedL1LibHeaderCell,
-        TipSlotCell, TxHashToBlockIdMapCell,
+        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellRef, TipCheckpointCellRef,
+        TxHashToBlockIdMapCell,
     },
 };
 
@@ -123,20 +123,12 @@ impl RocksDBIO {
         self.put_batch(&LastBlockCell(block_id), (), write_batch)
     }
 
-    pub fn put_meta_last_observed_l1_lib_header_in_db_batch(
+    pub fn put_meta_tip_checkpoint_in_db_batch(
         &self,
-        l1_lib_header: [u8; 32],
+        checkpoint_bytes: &[u8],
         write_batch: &mut WriteBatch,
     ) -> DbResult<()> {
-        self.put_batch(&LastObservedL1LibHeaderCell(l1_lib_header), (), write_batch)
-    }
-
-    pub fn put_meta_tip_slot_in_db_batch(
-        &self,
-        l1_slot: u64,
-        write_batch: &mut WriteBatch,
-    ) -> DbResult<()> {
-        self.put_batch(&TipSlotCell(l1_slot), (), write_batch)
+        self.put_batch(&TipCheckpointCellRef(checkpoint_bytes), (), write_batch)
     }
 
     pub fn put_meta_is_first_block_set_batch(&self, write_batch: &mut WriteBatch) -> DbResult<()> {
@@ -149,8 +141,7 @@ impl RocksDBIO {
     pub fn put_block(
         &self,
         block: &Block,
-        l1_lib_header: [u8; 32],
-        l1_slot: u64,
+        checkpoint_bytes: &[u8],
         post_state: &V03State,
     ) -> DbResult<()> {
         let cf_block = self.block_column();
@@ -169,8 +160,7 @@ impl RocksDBIO {
 
         if block.header.block_id > last_curr_block {
             self.put_meta_last_block_in_db_batch(block.header.block_id, &mut write_batch)?;
-            self.put_meta_last_observed_l1_lib_header_in_db_batch(l1_lib_header, &mut write_batch)?;
-            self.put_meta_tip_slot_in_db_batch(l1_slot, &mut write_batch)?;
+            self.put_meta_tip_checkpoint_in_db_batch(checkpoint_bytes, &mut write_batch)?;
         }
         if last_curr_block == 0 {
             self.put_meta_first_block_in_db_batch(block, &mut write_batch)?;

@@ -4406,6 +4406,7 @@ dependencies = [
  "bridge_core",
  "bridge_lock_core",
  "bytesize",
+ "chain_state",
  "common",
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",

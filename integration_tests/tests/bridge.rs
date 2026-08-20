@@ -27,11 +27,10 @@ use logos_blockchain_http_api_common::bodies::{
     },
 };
 use logos_blockchain_zone_sdk::{
-    CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
-    node_types::Inputs,
+    CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, node_types::{ChannelId, Inputs}, sequencer::ZoneSequencer,
 };
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::public_mention;
+use test_fixtures::{config::bedrock_channel_id, public_mention};
 use tokio::test;
 use wallet::cli::{Command, execute_subcommand, programs::bridge::BridgeSubcommand};
 
@@ -532,9 +531,9 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
     // Withdraw back to Bedrock and wait for finalized withdraw event.
     let sender_id = recipient_id;
 
-    let observer = create_zone_indexer_observer(ctx.bedrock_addr())?;
+    let mut observer = create_zone_indexer_observer(ctx.bedrock_addr(), bedrock_channel_id())?;
     let observe_fut =
-        wait_for_finalized_withdraw_op(&observer, ctx.bedrock_addr(), amount, bedrock_account_pk);
+        wait_for_finalized_withdraw_op(&mut observer, ctx.bedrock_addr(), amount, bedrock_account_pk);
 
     let withdraw_fut = execute_subcommand(
         ctx.wallet_mut(),
@@ -560,7 +559,8 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
 
 fn create_zone_indexer_observer(
     bedrock_addr: std::net::SocketAddr,
-) -> anyhow::Result<ZoneIndexer<NodeHttpClient>> {
+    channel_id: ChannelId,
+) -> anyhow::Result<ZoneSequencer<NodeHttpClient>> {
     let bedrock_url = integration_tests::config::addr_to_url(
         integration_tests::config::UrlProtocol::Http,
         bedrock_addr,
@@ -569,10 +569,7 @@ fn create_zone_indexer_observer(
 
     let node = NodeHttpClient::new(CommonHttpClient::new(None), bedrock_url);
 
-    Ok(ZoneIndexer::new(
-        integration_tests::config::bedrock_channel_id(),
-        node,
-    ))
+    Ok(chain_state::consistency::new_indexer(channel_id, node, None))
 }
 
 /// Waits for a finalized withdraw that pays `expected_amount` to `receiver_pk`.
@@ -583,7 +580,7 @@ fn create_zone_indexer_observer(
 /// Bedrock wallet: one of the released notes must land there with the expected
 /// value.
 async fn wait_for_finalized_withdraw_op(
-    observer: &ZoneIndexer<NodeHttpClient>,
+    observer: &mut ZoneSequencer<NodeHttpClient>,
     bedrock_addr: std::net::SocketAddr,
     expected_amount: u64,
     receiver_pk: &str,
@@ -597,13 +594,10 @@ async fn wait_for_finalized_withdraw_op(
         let mut released_notes = HashSet::new();
 
         loop {
-            let stream = observer
-                .follow()
-                .await
-                .context("Failed to read zone indexer message batch")?;
+            let stream = chain_state::consistency::next_messages(observer).await;
             let mut stream = std::pin::pin!(stream);
 
-            while let Some(message) = stream.next().await {
+            while let Some((message, _)) = stream.next().await {
                 log::info!("Observed zone message {message:?}");
 
                 if let ZoneMessage::Withdraw(withdraw) = message {

@@ -4,10 +4,7 @@ use crate::error::DbError;
 use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
-    indexer::indexer_cells::{
-        BreakpointCellRef, LastObservedL1LibHeaderCell, StallReasonCellRef,
-        ZoneSdkIndexerCursorCellRef,
-    },
+    indexer::indexer_cells::{BreakpointCellRef, StallReasonCellRef, ZoneSdkIndexerCursorCellRef},
 };
 
 #[expect(clippy::multiple_inherent_impl, reason = "Readability")]
@@ -16,13 +13,6 @@ impl RocksDBIO {
 
     pub fn put_meta_last_block_in_db(&self, block_id: u64) -> DbResult<()> {
         self.put(&LastBlockCell(block_id), ())
-    }
-
-    pub fn put_meta_last_observed_l1_lib_header_in_db(
-        &self,
-        l1_lib_header: [u8; 32],
-    ) -> DbResult<()> {
-        self.put(&LastObservedL1LibHeaderCell(l1_lib_header), ())
     }
 
     pub fn put_meta_is_first_block_set(&self) -> DbResult<()> {

@@ -1,3 +1,4 @@
+use borsh::{BorshDeserialize, BorshSerialize};
 use common::test_utils::produce_dummy_block;
 use lee::{Account, AccountId, PublicKey};
 use tempfile::tempdir;
@@ -47,6 +48,19 @@ fn initial_state() -> lee::V03State {
         .with_programs([programs::authenticated_transfer(), programs::clock()])
 }
 
+/// All the checkpoint data we care in DB.
+///
+/// Not exactly the checkpoint, but we put bytes anyway, so will do.
+#[derive(Debug, Clone, Copy, BorshSerialize, BorshDeserialize, PartialEq, Eq)]
+struct TestCheckpoint {
+    l1_header: [u8; 32],
+    slot: u64,
+}
+
+fn checkpoint_bytes(l1_header: [u8; 32], slot: u64) -> Vec<u8> {
+    borsh::to_vec(&TestCheckpoint { l1_header, slot }).unwrap()
+}
+
 #[test]
 fn start_db() {
     let initial_state = initial_state();
@@ -58,14 +72,14 @@ fn start_db() {
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap();
     let first_id = dbio.get_meta_first_block_id_in_db().unwrap();
     let is_first_set = dbio.get_meta_is_first_block_set().unwrap();
-    let last_observed_l1_header = dbio.get_meta_last_observed_l1_lib_header_in_db().unwrap();
+    let last_tip_checkpoint = dbio.get_meta_tip_checkpoint_in_db().unwrap();
     let last_block = dbio.get_block(1).unwrap();
     let breakpoint = dbio.get_breakpoint(0).unwrap();
     let final_state = dbio.final_state().unwrap();
 
     assert_eq!(last_id, None);
     assert_eq!(first_id, None);
-    assert_eq!(last_observed_l1_header, None);
+    assert_eq!(last_tip_checkpoint, None);
     assert!(!is_first_set);
     assert!(last_block.is_none());
     assert_eq!(
@@ -87,8 +101,12 @@ fn one_block_insertion() {
     let dbio = RocksDBIO::open_or_create(temdir_path, &initial_state).unwrap();
 
     let genesis_block = genesis_block();
-    dbio.put_block(&genesis_block, [0; 32], 0, &initial_state)
-        .unwrap();
+    dbio.put_block(
+        &genesis_block,
+        &checkpoint_bytes([0; 32], 0),
+        &initial_state,
+    )
+    .unwrap();
 
     let prev_hash = genesis_block.header.hash;
     let from = acc1();
@@ -99,14 +117,13 @@ fn one_block_insertion() {
         common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
-    dbio.put_block(&block, [1; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([1; 32], 0), &initial_state)
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let first_id = dbio.get_meta_first_block_id_in_db().unwrap();
-    let last_observed_l1_header = dbio
-        .get_meta_last_observed_l1_lib_header_in_db()
-        .unwrap()
-        .unwrap();
+    let last_tip_checkpoint: TestCheckpoint =
+        borsh::from_slice(&dbio.get_meta_tip_checkpoint_in_db().unwrap().unwrap()).unwrap();
     let is_first_set = dbio.get_meta_is_first_block_set().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
     let breakpoint = dbio.get_breakpoint(0).unwrap();
@@ -114,7 +131,13 @@ fn one_block_insertion() {
 
     assert_eq!(last_id, 2);
     assert_eq!(first_id, Some(1));
-    assert_eq!(last_observed_l1_header, [1; 32]);
+    assert_eq!(
+        last_tip_checkpoint,
+        TestCheckpoint {
+            l1_header: [1; 32],
+            slot: 0
+        }
+    );
     assert!(is_first_set);
     assert_eq!(last_block.header.hash, block.header.hash);
     assert_eq!(
@@ -130,27 +153,44 @@ fn one_block_insertion() {
 }
 
 #[test]
-fn put_block_records_tip_inscription_slot() {
+fn put_block_records_tip_inscription_checkpoint() {
     let initial_state = initial_state();
     let temp_dir = tempdir().unwrap();
     let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
 
-    assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), None);
+    assert_eq!(dbio.get_meta_tip_checkpoint_in_db().unwrap(), None);
 
     let genesis_block = genesis_block();
-    dbio.put_block(&genesis_block, [0; 32], 1_000, &initial_state)
-        .unwrap();
-    assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), Some(1_000));
+    dbio.put_block(
+        &genesis_block,
+        &checkpoint_bytes([0; 32], 1_000),
+        &initial_state,
+    )
+    .unwrap();
+    assert_eq!(
+        dbio.get_meta_tip_checkpoint_in_db().unwrap(),
+        Some(checkpoint_bytes([0; 32], 1_000))
+    );
 
     let block = produce_dummy_block(2, Some(genesis_block.header.hash), vec![]);
-    dbio.put_block(&block, [1; 32], 1_005, &initial_state)
+    dbio.put_block(&block, &checkpoint_bytes([1; 32], 1_005), &initial_state)
         .unwrap();
-    assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), Some(1_005));
+    assert_eq!(
+        dbio.get_meta_tip_checkpoint_in_db().unwrap(),
+        Some(checkpoint_bytes([1; 32], 1_005))
+    );
 
-    // Re-inserting a block at/below the tip must not move the tip slot.
-    dbio.put_block(&genesis_block, [0; 32], 1_010, &initial_state)
-        .unwrap();
-    assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), Some(1_005));
+    // Re-inserting a block at/below the tip must not move the tip checkpoint.
+    dbio.put_block(
+        &genesis_block,
+        &checkpoint_bytes([0; 32], 1_010),
+        &initial_state,
+    )
+    .unwrap();
+    assert_eq!(
+        dbio.get_meta_tip_checkpoint_in_db().unwrap(),
+        Some(checkpoint_bytes([1; 32], 1_005))
+    );
 }
 
 #[test]
@@ -182,7 +222,8 @@ fn put_block_stores_breakpoint_in_same_batch() {
         );
         let block = produce_dummy_block(i.into(), prev_hash, vec![transfer_tx]);
 
-        dbio.put_block(&block, [i; 32], 0, &initial_state).unwrap();
+        dbio.put_block(&block, &checkpoint_bytes([i; 32], 0), &initial_state)
+            .unwrap();
     }
 
     let bp1 = dbio.get_breakpoint(1).unwrap();
@@ -221,7 +262,8 @@ fn state_replay_falls_back_over_missing_breakpoints() {
             &sign_key,
         );
         let block = produce_dummy_block(i, prev_hash, vec![transfer_tx]);
-        dbio.put_block(&block, [0; 32], 0, &initial_state).unwrap();
+        dbio.put_block(&block, &checkpoint_bytes([0; 32], 0), &initial_state)
+            .unwrap();
     }
 
     // Simulate a store whose boundary snapshot was lost (#605).
@@ -256,7 +298,8 @@ fn simple_maps() {
 
     let control_hash1 = block.header.hash;
 
-    dbio.put_block(&block, [1; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([1; 32], 0), &initial_state)
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -268,7 +311,8 @@ fn simple_maps() {
 
     let control_hash2 = block.header.hash;
 
-    dbio.put_block(&block, [2; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([2; 32], 0), &initial_state)
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -280,7 +324,8 @@ fn simple_maps() {
     let control_tx_hash1 = transfer_tx.hash();
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
-    dbio.put_block(&block, [3; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([3; 32], 0), &initial_state)
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -292,7 +337,8 @@ fn simple_maps() {
     let control_tx_hash2 = transfer_tx.hash();
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
-    dbio.put_block(&block, [4; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([4; 32], 0), &initial_state)
+        .unwrap();
 
     let control_block_id1 = dbio.get_block_id_by_hash(control_hash1.0).unwrap().unwrap();
     let control_block_id2 = dbio.get_block_id_by_hash(control_hash2.0).unwrap().unwrap();
@@ -330,7 +376,8 @@ fn block_batch() {
     let block = produce_dummy_block(1, None, vec![transfer_tx]);
 
     block_res.push(block.clone());
-    dbio.put_block(&block, [1; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([1; 32], 0), &initial_state)
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -341,7 +388,8 @@ fn block_batch() {
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
     block_res.push(block.clone());
-    dbio.put_block(&block, [2; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([2; 32], 0), &initial_state)
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -352,7 +400,8 @@ fn block_batch() {
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
     block_res.push(block.clone());
-    dbio.put_block(&block, [3; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([3; 32], 0), &initial_state)
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -363,7 +412,8 @@ fn block_batch() {
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
     block_res.push(block.clone());
-    dbio.put_block(&block, [4; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([4; 32], 0), &initial_state)
+        .unwrap();
 
     let block_hashes_mem: Vec<[u8; 32]> =
         block_res.into_iter().map(|bl| bl.header.hash.0).collect();
@@ -423,7 +473,8 @@ fn account_map() {
 
     let block = produce_dummy_block(1, None, vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [1; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([1; 32], 0), &initial_state)
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -438,7 +489,8 @@ fn account_map() {
 
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [2; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([2; 32], 0), &initial_state)
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -453,7 +505,8 @@ fn account_map() {
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [3; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([3; 32], 0), &initial_state)
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -465,7 +518,8 @@ fn account_map() {
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
 
-    dbio.put_block(&block, [4; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, &checkpoint_bytes([4; 32], 0), &initial_state)
+        .unwrap();
 
     let acc1_tx = dbio.get_acc_transactions(*acc1().value(), 0, 7).unwrap();
     let acc1_tx_hashes: Vec<[u8; 32]> = acc1_tx.into_iter().map(|tx| tx.hash().0).collect();

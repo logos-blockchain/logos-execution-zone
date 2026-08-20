@@ -9,13 +9,17 @@ use std::sync::Mutex;
 use chain_state::ChainState;
 use common::block::Block;
 use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
-use logos_blockchain_zone_sdk::{Slot, ZoneBlock, ZoneMessage};
-use storage::sequencer::sequencer_cells::{WithdrawalReconciliationKey, ZoneAnchorRecord};
+use logos_blockchain_zone_sdk::{Slot, ZoneBlock, ZoneMessage, sequencer::SequencerCheckpoint};
+use storage::sequencer::sequencer_cells::{WithdrawalReconciliationKey};
 
 use super::*;
 use crate::{
-    SequencerCore, block_store::SequencerStore, config::GenesisAction, mock::MockBlockPublisher,
+    SequencerCore, block_store::{SequencerStore, ZoneAnchorRecord}, config::GenesisAction, mock::MockBlockPublisher,
 };
+
+fn checkpoint(slot: u64) -> SequencerCheckpoint {
+    SequencerCheckpoint { last_msg_id: [0; 32].into(), pending_txs: vec![], lib: [42; 32].into(), lib_slot: Slot::from(slot) }
+}
 
 /// Fresh `(store, chain)` pair for a reconstruction target, as
 /// `start_from_config` would build them before the publisher starts.
@@ -29,18 +33,18 @@ fn fresh_store_and_chain(config: &SequencerConfig) -> (SequencerStore, Mutex<Cha
     (store, chain)
 }
 
-fn block_to_channel_message(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
+fn block_to_channel_message(block: &Block, slot: u64) -> (ZoneMessage, SequencerCheckpoint) {
     let bytes = borsh::to_vec(block).expect("serialize block");
     let message = ZoneMessage::Block(ZoneBlock {
         id: MsgId::from([0_u8; 32]),
         data: Inscription::try_from(bytes.as_slice()).expect("inscription"),
     });
-    (message, Slot::from(slot))
+    (message, checkpoint(slot))
 }
 
 /// Collects a sequencer's whole chain (genesis..=tip) into a canned channel,
 /// one block per slot at `slot_step` spacing.
-fn channel_from_store(store: &SequencerStore, slot_step: u64) -> Vec<(ZoneMessage, Slot)> {
+fn channel_from_store(store: &SequencerStore, slot_step: u64) -> Vec<(ZoneMessage, SequencerCheckpoint)> {
     let genesis_id = store.genesis_id();
     let tip_id = store.latest_block_meta().expect("tip").expect("present").id;
     (genesis_id..=tip_id)
@@ -63,7 +67,7 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
 
     let messages = channel_from_store(seq_a.block_store(), 10);
-    let tip_slot = messages.last().unwrap().1;
+    let tip_slot = messages.last().unwrap().1.lib_slot;
     let channel_id = config_a.bedrock_config.channel_id;
 
     // Sequencer B starts from a fresh store and reconstructs A's chain.
@@ -94,7 +98,7 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
 
     let anchor = store_b.get_zone_anchor().unwrap().expect("anchor recorded");
     assert_eq!(anchor.block_id, tip_a.id);
-    assert_eq!(anchor.slot, tip_slot.into_inner());
+    assert_eq!(anchor.checkpoint.lib_slot, tip_slot);
 
     // Re-running is idempotent: everything is already applied, no error.
     let channel_was_empty = SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
@@ -115,9 +119,10 @@ async fn fails_when_channel_serves_a_divergent_block() {
     let genesis_id = store.genesis_id();
     let genesis = store.get_block_at_id(genesis_id).unwrap().unwrap();
     let anchor_slot = 100_u64;
+    let anchor_checkpoint = checkpoint(anchor_slot);
     store
         .set_zone_anchor(&ZoneAnchorRecord {
-            slot: anchor_slot,
+            checkpoint: anchor_checkpoint,
             block_id: genesis_id,
             hash: genesis.header.hash,
         })
@@ -147,7 +152,7 @@ async fn fails_when_channel_is_missing() {
     let genesis = store.get_block_at_id(genesis_id).unwrap().unwrap();
     store
         .set_zone_anchor(&ZoneAnchorRecord {
-            slot: 100,
+            checkpoint: checkpoint(100),
             block_id: genesis_id,
             hash: genesis.header.hash,
         })
@@ -294,7 +299,7 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
     seq_a.run_production_turn().await.unwrap();
     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
     let mut messages = channel_from_store(seq_a.block_store(), 10);
-    let settled_slot = messages.last().unwrap().1;
+    let settled_slot = messages.last().unwrap().1.lib_slot;
 
     // Sequencer B: the cold-start backfill finalizes A's chain into its store.
     let (seq_b, mempool_b) =
@@ -362,7 +367,7 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
         .get_zone_anchor()
         .unwrap()
         .expect("anchor");
-    assert_eq!(anchor.slot, settled_slot.into_inner());
+    assert_eq!(anchor.checkpoint.lib_slot, settled_slot);
     assert_eq!(anchor.hash, tip_a.hash);
 }
 
@@ -377,7 +382,7 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
     seq_a.run_production_turn().await.unwrap();
     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
     let messages = channel_from_store(seq_a.block_store(), 10);
-    let tip_slot = messages.last().unwrap().1;
+    let tip_slot = messages.last().unwrap().1.lib_slot;
 
     // Sequencer B adopted a competitor at that height and never saw it finalize.
     let (seq_b, mempool_b) =
@@ -525,7 +530,7 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
 
     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
     let messages = channel_from_store(seq_a.block_store(), 10);
-    let tip_slot = messages.last().unwrap().1;
+    let tip_slot = messages.last().unwrap().1.lib_slot;
     let channel_id = config_a.bedrock_config.channel_id;
 
     let config_b = bridge_funded_config();
@@ -656,7 +661,7 @@ async fn reconstructed_withdraw_leaves_no_phantom_unseen_count() {
     );
 
     let messages = channel_from_store(seq_a.block_store(), 10);
-    let tip_slot = messages.last().unwrap().1;
+    let tip_slot = messages.last().unwrap().1.lib_slot;
     let channel_id = config_a.bedrock_config.channel_id;
 
     // Sequencer B reconstructs A's chain from a fresh store.
@@ -698,7 +703,7 @@ async fn reconstruction_reconciles_already_finished_deposit() {
     seq_a.run_production_turn().await.unwrap();
 
     let messages = channel_from_store(seq_a.block_store(), 10);
-    let tip_slot = messages.last().unwrap().1;
+    let tip_slot = messages.last().unwrap().1.lib_slot;
     let channel_id = config_a.bedrock_config.channel_id;
 
     // Sequencer B: fresh store, but with the *unfulfilled* pending deposit event
@@ -771,7 +776,7 @@ async fn reconstructed_delivery_settles_its_pending_record() {
 
     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
     let messages = channel_from_store(seq_a.block_store(), 10);
-    let tip_slot = messages.last().unwrap().1;
+    let tip_slot = messages.last().unwrap().1.lib_slot;
     let channel_id = config_a.bedrock_config.channel_id;
 
     // Sequencer B holds the same record, as its own watcher would after reading
@@ -865,7 +870,7 @@ async fn a_verified_own_block_settles_its_delivery_records() {
 
     // The channel serves our own chain back, tip included.
     let messages = channel_from_store(seq.block_store(), 10);
-    let tip_slot = messages.last().unwrap().1;
+    let tip_slot = messages.last().unwrap().1.lib_slot;
     let mock = MockBlockPublisher::with_canned_channel(
         seq.sequencer_config.bedrock_config.channel_id,
         Some(tip_slot),

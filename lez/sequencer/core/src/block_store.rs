@@ -8,12 +8,11 @@ use common::{
 };
 use lee::V03State;
 use lee_core::BlockId;
-use logos_blockchain_zone_sdk::{Slot, sequencer::SequencerCheckpoint};
+use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
+use serde::{Deserialize, Serialize};
 use storage::sequencer::{
     RocksDBIO,
-    sequencer_cells::{
-        PeerZoneKey, PendingDepositEventRecord, WithdrawalReconciliationKey, ZoneAnchorRecord,
-    },
+    sequencer_cells::{PeerZoneKey, PendingDepositEventRecord, WithdrawalReconciliationKey},
 };
 pub use storage::{DbResult, sequencer::DbDump};
 
@@ -23,6 +22,19 @@ pub struct SequencerStore {
     tx_hash_to_block_map: HashMap<HashType, BlockId>,
     genesis_id: u64,
     signing_key: lee::PrivateKey,
+}
+
+/// The last channel block read back and verified from Bedrock.
+///
+/// Holds its L1 inscription `slot` plus the block's `id`/`hash`, and serves as
+/// both the anchor for the startup consistency check and the resume point for
+/// reconstruction. `slot` is stored as a raw `u64` because the zone-sdk `Slot`
+/// does not derive borsh; the caller converts to/from `Slot`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZoneAnchorRecord {
+    pub checkpoint: SequencerCheckpoint,
+    pub block_id: u64,
+    pub hash: HashType,
 }
 
 impl SequencerStore {
@@ -206,12 +218,21 @@ impl SequencerStore {
 
     /// The last channel block read back and verified from Bedrock (L1 slot +
     /// `id`/`hash`), or `None` before any block has been read from the channel.
-    pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
-        self.dbio.get_zone_anchor()
+    pub fn get_zone_anchor(&self) -> Result<Option<ZoneAnchorRecord>> {
+        let achor_bytes = self.dbio.get_zone_anchor_bytes()?;
+        if let Some(bytes) = achor_bytes {
+            Ok(Some(
+                serde_json::from_slice(&bytes).context("Anchor must be deserializable")?,
+            ))
+        } else {
+            Ok(None)
+        }
     }
 
-    pub fn set_zone_anchor(&self, anchor: &ZoneAnchorRecord) -> DbResult<()> {
-        self.dbio.put_zone_anchor(anchor)
+    pub fn set_zone_anchor(&self, anchor: &ZoneAnchorRecord) -> Result<()> {
+        let achor_bytes = serde_json::to_vec(anchor).context("Anchor must be serializable")?;
+
+        Ok(self.dbio.put_zone_anchor_bytes(&achor_bytes)?)
     }
 
     /// The highest block id ever inscribed on the channel by this sequencer,
@@ -253,25 +274,25 @@ pub(crate) fn block_to_transactions_map(block: &Block) -> HashMap<HashType, u64>
 /// Free functions rather than only [`SequencerStore`] methods because each
 /// watcher runs as its own spawned task and holds an `Arc<RocksDBIO>`;
 /// `SequencerStore` is not `Clone`.
-pub fn get_cross_zone_peer_floor(dbio: &RocksDBIO, peer_zone: PeerZoneKey) -> Result<Option<Slot>> {
+pub fn get_cross_zone_peer_floor(
+    dbio: &RocksDBIO,
+    peer_zone: PeerZoneKey,
+) -> Result<Option<SequencerCheckpoint>> {
     let Some(bytes) = dbio.get_cross_zone_peer_floor_bytes(peer_zone)? else {
         return Ok(None);
     };
-    let bytes: [u8; 8] = bytes.as_slice().try_into().with_context(|| {
-        format!(
-            "Stored cross-zone peer floor is {} bytes, expected 8",
-            bytes.len()
-        )
-    })?;
-    Ok(Some(Slot::new(u64::from_le_bytes(bytes))))
+    let checkpoint: SequencerCheckpoint =
+        serde_json::from_slice(&bytes).context("Checkpoint must be deserializable")?;
+    Ok(Some(checkpoint))
 }
 
 pub fn set_cross_zone_peer_floor(
     dbio: &RocksDBIO,
     peer_zone: PeerZoneKey,
-    floor: Slot,
+    floor: SequencerCheckpoint,
 ) -> Result<()> {
-    dbio.put_cross_zone_peer_floor_bytes(peer_zone, &floor.to_le_bytes())?;
+    let checkpoint_bytes = serde_json::to_vec(&floor).context("Checkpoint must be serializable")?;
+    dbio.put_cross_zone_peer_floor_bytes(peer_zone, &checkpoint_bytes)?;
     Ok(())
 }
 

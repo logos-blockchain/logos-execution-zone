@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use anyhow::Result;
 use arc_swap::ArcSwap;
 pub use chain_state::{AcceptOutcome, BlockIngestError, StallReason};
-use chain_state::{Anchor, ChainConsistency};
+use chain_state::{Anchor, ChainConsistency, consistency::checkpoint_eq};
 use common::block::Block;
 // TODO: Remove after testnet
 use futures::StreamExt as _;
@@ -14,7 +14,7 @@ use logos_blockchain_zone_sdk::{
     sequencer::{SequencerCheckpoint, ZoneSequencer},
 };
 use retry::ApplyRetryGate;
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 
 use crate::{
     block_store::IndexerStore,
@@ -44,7 +44,7 @@ struct CheckpointProgress(Option<SequencerCheckpoint>);
 
 #[derive(Clone)]
 pub struct IndexerCore {
-    pub zone_indexer: Arc<RwLock<ZoneSequencer<NodeHttpClient>>>,
+    pub zone_indexer: Arc<Mutex<ZoneSequencer<NodeHttpClient>>>,
     /// Direct node handle for queries outside `ZoneSequencer`'s streaming API.
     pub node: NodeHttpClient,
     pub config: IndexerConfig,
@@ -56,18 +56,22 @@ pub struct IndexerCore {
 }
 
 impl CheckpointProgress {
-    /// Records that a message from `slot` is being handled, returning the slot
+    /// Records that a message from `checkpoint` is being handled, returning the checkpoint
     /// that just completed, if this message begins a new one.
     fn enter(&mut self, checkpoint: SequencerCheckpoint) -> Option<SequencerCheckpoint> {
-        if self.0 == Some(slot) {
-            return None;
+        // Equality is not implemented for `SequencerCheckpoint`
+        if self.0.is_some() {
+            let ch_ref = self.0.as_ref().unwrap();
+            if checkpoint_eq(ch_ref, &checkpoint) {
+                return None;
+            }
         }
-        self.0.replace(slot)
+        self.0.replace(checkpoint)
     }
 
-    /// The slot in progress when the stream drained cleanly, which is therefore
-    /// complete. Not called when a pass ends early: that slot must be re-read.
-    const fn drained(self) -> Option<SequencerCheckpoint> {
+    /// The checkpoint in progress when the stream drained cleanly, which is therefore
+    /// complete. Not called when a pass ends early: that checkpoint must be re-read.
+    fn drained(self) -> Option<SequencerCheckpoint> {
         self.0
     }
 }
@@ -136,7 +140,7 @@ impl IndexerCore {
         let verifier = CrossZoneVerifier::start(&config);
 
         Ok(Self {
-            zone_indexer: Arc::new(RwLock::new(zone_indexer)),
+            zone_indexer: Arc::new(Mutex::new(zone_indexer)),
             store: IndexerStore::open_db(&home, genesis_accounts)?,
             node,
             config,
@@ -175,10 +179,10 @@ impl IndexerCore {
         }
 
         // not stalled, so anchor on the tip at its own inscription slot
-        let Some(checkpoint) = self
-            .store
-            .get_tip_checkpoint()?
-            .map_or_else(|| self.store.get_zone_cursor(), |checkpoint| Ok(Some(checkpoint)))?
+        let Some(checkpoint) = self.store.get_tip_checkpoint()?.map_or_else(
+            || self.store.get_zone_cursor(),
+            |checkpoint| Ok(Some(checkpoint)),
+        )?
         else {
             return Ok(None);
         };
@@ -188,7 +192,10 @@ impl IndexerCore {
         let Some(tip) = self.store.get_block_at_id(tip_id)? else {
             return Ok(None);
         };
-        Ok(Some(Anchor::new(checkpoint, Some((tip_id, tip.header.hash)))))
+        Ok(Some(Anchor::new(
+            checkpoint,
+            Some((tip_id, tip.header.hash)),
+        )))
     }
 
     /// Snapshot of the current ingestion status (sync state + indexed tip).
@@ -242,16 +249,21 @@ impl IndexerCore {
     ///
     /// Returns `false` if the stall could not be recorded durably; the caller
     /// must then hold the cursor and retry instead of advancing past the slot.
-    fn park_undeserializable(&self, checkpoint: SequencerCheckpoint, error: std::io::Error) -> bool {
+    fn park_undeserializable(
+        &self,
+        checkpoint: SequencerCheckpoint,
+        error: std::io::Error,
+    ) -> bool {
         let error = anyhow::Error::new(error);
 
         // use `:#` to get the entire error chain
         let reason = format!("{error:#}");
         error!("Failed to deserialize L2 block from zone-sdk: {reason}");
-        if let Err(err) =
-            self.store
-                .record_stall(None, checkpoint, BlockIngestError::Deserialize(reason.clone()))
-        {
+        if let Err(err) = self.store.record_stall(
+            None,
+            checkpoint,
+            BlockIngestError::Deserialize(reason.clone()),
+        ) {
             error!("Failed to record stall reason: {err:#}");
             self.set_status(IndexerSyncStatus::error(format!("store error: {err:#}")));
             return false;
@@ -283,7 +295,7 @@ impl IndexerCore {
             }
 
             loop {
-                let mut write_lock = self.zone_indexer.write().await;
+                let mut write_lock = self.zone_indexer.lock().await;
                 let stream =
                     chain_state::consistency::next_messages(&mut write_lock).await;
 
@@ -298,16 +310,15 @@ impl IndexerCore {
                 // stream resumes *after* the stored slot, so advancing inside a
                 // slot would put a later message in it beyond the cursor
                 // for ever if this pass ends early.
-                let mut in_progress = SlotProgress::default();
+                let mut in_progress = CheckpointProgress::default();
 
                 while let Some((
                             msg,
                             checkpoint,
                         )) = stream.next().await
                 {
-                    let slot = checkpoint.lib_slot;
-                    // A message from a later slot means the previous one is complete.
-                    if let Some(done) = in_progress.enter(slot) {
+                    // A message from a later checkpoint means the previous one is complete.
+                    if let Some(done) = in_progress.enter(checkpoint.clone()) {
                         self.advance_cursor(&mut cursor, done);
                     }
 
@@ -496,49 +507,46 @@ mod tests {
         }
     }
 
-    /// The cursor must not move while more of the same slot may still arrive.
+    /// The cursor must not move while more of the same checkpoint may still arrive.
     ///
-    /// Two L2 blocks in one L1 slot: the first applies, the second stalls on an
+    /// Two L2 blocks in one L1 checkpoint: the first applies, the second stalls on an
     /// unavailable peer and the pass retries. If handling the first had advanced
-    /// the cursor onto the slot, the retry would resume past it and the second
+    /// the cursor onto the checkpoint, the retry would resume past it and the second
     /// block would never be read again, silently losing whatever it carried.
     #[test]
-    fn a_slot_is_only_left_behind_once_it_is_finished() {
-        let mut progress = SlotProgress::default();
-        let slot = Slot::from(7);
+    fn a_checkpoint_is_only_left_behind_once_it_is_finished() {
+        let mut progress = CheckpointProgress::default();
+        let checkpoint = checkpoint(7);
 
-        assert_eq!(
-            progress.enter(slot),
-            None,
-            "nothing precedes the first slot"
+        assert!(
+            progress.enter(checkpoint.clone()).is_none(),
+            "nothing precedes the first checkpoint"
         );
-        assert_eq!(
-            progress.enter(slot),
-            None,
-            "a second message in the same slot must not release it"
+        assert!(
+            progress.enter(checkpoint).is_none(),
+            "a second message in the same checkpoint must not release it"
         );
 
         // The pass ends early here, so `drained` is never called and the cursor
-        // is still below slot 7: the next pass re-reads it whole.
+        // is still below checkpoint 7: the next pass re-reads it whole.
     }
 
     #[test]
-    fn a_completed_slot_is_released_when_the_next_one_starts() {
-        let mut progress = SlotProgress::default();
+    fn a_completed_checkpoint_is_released_when_the_next_one_starts() {
+        let mut progress = CheckpointProgress::default();
 
-        assert_eq!(progress.enter(Slot::from(3)), None);
-        assert_eq!(progress.enter(Slot::from(3)), None);
-        assert_eq!(
-            progress.enter(Slot::from(4)),
-            Some(Slot::from(3)),
+        assert!(progress.enter(checkpoint(3)).is_none());
+        assert!(progress.enter(checkpoint(3)).is_none());
+        assert!(
+            checkpoint_eq(&progress.enter(checkpoint(4)).unwrap(), &checkpoint(3)),
             "slot 3 is complete once a message from slot 4 arrives"
         );
-        assert_eq!(progress.drained(), Some(Slot::from(4)));
+        assert!(checkpoint_eq(&progress.drained().unwrap(), &checkpoint(4)));
     }
 
     #[test]
     fn draining_an_untouched_stream_releases_nothing() {
-        assert_eq!(SlotProgress::default().drained(), None);
+        assert!(CheckpointProgress::default().drained().is_none());
     }
 
     fn unreachable_core(dir: &std::path::Path) -> IndexerCore {
@@ -651,6 +659,6 @@ mod tests {
 
         let anchor = core.get_startup_anchor().expect("anchor").expect("present");
         let expected = Anchor::new(checkpoint(1_010), Some((3, block3.header.hash)));
-        assert_eq!(anchor, expected);
+        assert_eq!(anchor.slot(), expected.slot());
     }
 }

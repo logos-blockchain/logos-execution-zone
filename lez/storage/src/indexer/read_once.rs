@@ -3,8 +3,8 @@ use crate::{
     DBIO as _,
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, LastObservedL1LibHeaderCell,
-        StallReasonCellOwned, TipSlotCell, TxHashToBlockIdMapCell, ZoneSdkIndexerCursorCellOwned,
+        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, StallReasonCellOwned,
+        TipCheckpointCellOwned, TxHashToBlockIdMapCell, ZoneSdkIndexerCursorCellOwned,
     },
 };
 
@@ -22,17 +22,12 @@ impl RocksDBIO {
             .map(|opt| opt.map(|cell| cell.0))
     }
 
-    pub fn get_meta_last_observed_l1_lib_header_in_db(&self) -> DbResult<Option<[u8; 32]>> {
-        self.get_opt::<LastObservedL1LibHeaderCell>(())
-            .map(|opt| opt.map(|val| val.0))
-    }
-
     pub fn get_meta_is_first_block_set(&self) -> DbResult<bool> {
         Ok(self.get_opt::<FirstBlockSetCell>(())?.is_some())
     }
 
     pub fn get_meta_tip_checkpoint_in_db(&self) -> DbResult<Option<Vec<u8>>> {
-        self.get_opt::<TipCheckpointCell>(())
+        self.get_opt::<TipCheckpointCellOwned>(())
             .map(|opt| opt.map(|cell| cell.0))
     }
 

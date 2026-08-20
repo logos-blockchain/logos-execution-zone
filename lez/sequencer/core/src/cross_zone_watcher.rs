@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use chain_state::consistency::checkpoint_eq_opt;
 use common::{HashType, block::Block, transaction::LeeTransaction};
 use cross_zone::{
     EmissionSource, build_dispatch_from_emission, extract_emission, is_sequencer_only_program,
@@ -10,7 +11,7 @@ use lee::{GENESIS_BLOCK_ID, PublicKey};
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
-    CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
+    CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, sequencer::SequencerCheckpoint,
 };
 use storage::sequencer::{
     RocksDBIO,
@@ -33,6 +34,18 @@ use crate::{
 /// mid-upgrade) heals well inside that; anything still stuck after it wants
 /// someone to look.
 const STUCK_SLOT_ALERT_PASSES: u32 = 20;
+
+/// An indexer context for spawning
+struct IndexerContext {
+    channel_id: ChannelId,
+    node: NodeHttpClient,
+}
+
+impl IndexerContext {
+    fn new(channel_id: ChannelId, node: NodeHttpClient) -> Self {
+        Self { channel_id, node }
+    }
+}
 
 /// The per-peer settings one watcher pass needs.
 struct PeerContext {
@@ -90,7 +103,11 @@ impl WatcherState {
     /// ends a stream on a fetch failure exactly as it does on catching up, so
     /// without it a flaky peer endpoint resets the count for ever and a watcher
     /// stuck for hours never says so.
-    fn after_pass(&mut self, outcome: PassOutcome, cursor: Option<Slot>) -> Option<(Slot, u32)> {
+    fn after_pass(
+        &mut self,
+        outcome: PassOutcome,
+        cursor: Option<SequencerCheckpoint>,
+    ) -> Option<(Slot, u32)> {
         let slot = match outcome {
             PassOutcome::Drained | PassOutcome::Stranded => {
                 if self.passed_the_stall(cursor) {
@@ -117,20 +134,29 @@ impl WatcherState {
 
     /// Whether the read position is now past whatever the watcher was stuck on.
     /// Vacuously true when it was not stuck.
-    fn passed_the_stall(self, cursor: Option<Slot>) -> bool {
+    fn passed_the_stall(self, cursor: Option<SequencerCheckpoint>) -> bool {
         self.stalled
-            .is_none_or(|(stuck_on, _)| cursor.is_some_and(|read_to| read_to >= stuck_on))
+            .is_none_or(|(stuck_on, _)| cursor.is_some_and(|read_to| read_to.lib_slot >= stuck_on))
     }
 }
 
 /// What a starting watcher does with its stored floor and chain tip.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 struct Resume {
     /// Where to read from. `None` is the peer's genesis.
-    cursor: Option<Slot>,
+    cursor: Option<SequencerCheckpoint>,
     /// Whether the stored floor has to be dropped before anything is read.
     clear_floor: bool,
 }
+
+impl core::cmp::PartialEq for Resume {
+    fn eq(&self, other: &Self) -> bool {
+        (self.clear_floor == other.clear_floor)
+            && checkpoint_eq_opt(self.cursor.as_ref(), other.cursor.as_ref())
+    }
+}
+
+impl core::cmp::Eq for Resume {}
 
 /// Where a peer block sits relative to the chain this watcher has delivered
 /// from.
@@ -232,7 +258,7 @@ const fn alerts_at(attempts: u32) -> bool {
 ///
 /// The floor is dropped rather than ignored, or a crash partway through the
 /// rebuild resumes above the tip it had just started building.
-const fn resume_from(tip: Option<PeerChainTip>, floor: Option<Slot>) -> Resume {
+fn resume_from(tip: Option<PeerChainTip>, floor: Option<SequencerCheckpoint>) -> Resume {
     match tip {
         Some(_) => Resume {
             cursor: floor,
@@ -277,7 +303,7 @@ pub fn spawn_watchers(
             PublicKey::try_new(bytes).expect("configured peer block-signing pubkey is a valid key")
         });
         tasks.push(tokio::spawn(watch_peer(
-            ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
+            IndexerContext::new(ChannelId::from(peer.channel_id), node),
             PeerContext {
                 peer_zone: peer.channel_id,
                 self_zone,
@@ -296,7 +322,7 @@ pub fn spawn_watchers(
     reason = "the peer watcher runs for the lifetime of the sequencer process"
 )]
 async fn watch_peer(
-    zone_indexer: ZoneIndexer<NodeHttpClient>,
+    zone_indexer_context: IndexerContext,
     peer: PeerContext,
     poll_interval: Duration,
     dbio: Arc<RocksDBIO>,
@@ -355,9 +381,9 @@ async fn watch_peer(
         }
     }
     let mut cursor = resume.cursor;
-    if let Some(slot) = cursor {
+    if let Some(checkpoint) = &cursor {
         log::info!(
-            "Resuming watcher for peer {} from slot {slot:?}",
+            "Resuming watcher for peer {} from checkpoint {checkpoint:?}",
             hex::encode(peer_zone)
         );
     }
@@ -366,20 +392,15 @@ async fn watch_peer(
     // loud to be about a slot this watcher is stuck on.
     let mut state = WatcherState::default();
     loop {
-        let stream = match zone_indexer.next_messages(cursor).await {
-            Ok(stream) => stream,
-            Err(err) => {
-                error!(
-                    "Watcher next_messages failed for peer {}: {err}",
-                    hex::encode(peer_zone)
-                );
-                tokio::time::sleep(poll_interval).await;
-                continue;
-            }
-        };
+        let stream = chain_state::consistency::next_messages_own(
+            zone_indexer_context.node.clone(),
+            zone_indexer_context.channel_id,
+            cursor.clone(),
+        )
+        .await;
         let outcome = consume_peer_stream(stream, &peer, &dbio, &mut cursor, &mut tip).await;
 
-        if let Some((slot, attempts)) = state.after_pass(outcome, cursor)
+        if let Some((slot, attempts)) = state.after_pass(outcome, cursor.clone())
             && alerts_at(attempts)
         {
             error!(
@@ -416,29 +437,31 @@ async fn consume_peer_stream<S>(
     stream: S,
     peer: &PeerContext,
     dbio: &RocksDBIO,
-    cursor: &mut Option<Slot>,
+    cursor: &mut Option<SequencerCheckpoint>,
     tip: &mut Option<PeerChainTip>,
 ) -> PassOutcome
 where
-    S: Stream<Item = (ZoneMessage, Slot)>,
+    S: Stream<Item = (ZoneMessage, SequencerCheckpoint)>,
 {
     let mut stream = std::pin::pin!(stream);
     // The slot being consumed: every message of it seen so far is handled, but
     // there may be more to come, so the cursor may not advance onto it yet.
-    let mut in_progress: Option<Slot> = None;
+    let mut in_progress: Option<SequencerCheckpoint> = None;
     // What the pass did with the blocks it read, so a peer going quiet behind a
     // tip that no longer tracks it is distinguishable from one with nothing to
     // say.
     let mut placed = 0_usize;
     let mut skipped = 0_usize;
 
-    while let Some((msg, slot)) = stream.next().await {
-        if in_progress != Some(slot) {
+    while let Some((msg, checkpoint)) = stream.next().await {
+        let slot = checkpoint.lib_slot;
+
+        if checkpoint_eq_opt(in_progress.as_ref(), Some(&checkpoint)) {
             // A message from a later slot means the previous one completed.
             if let Some(done) = in_progress {
                 advance_cursor(dbio, peer.peer_zone, cursor, done);
             }
-            in_progress = Some(slot);
+            in_progress = Some(checkpoint);
         }
 
         let zone_block = match msg {
@@ -530,9 +553,14 @@ where
 ///
 /// A persist failure is only logged: the worst case is re-reading from the last
 /// stored slot after a restart, which delivery handles idempotently.
-fn advance_cursor(dbio: &RocksDBIO, peer_zone: [u8; 32], cursor: &mut Option<Slot>, slot: Slot) {
-    *cursor = Some(slot);
-    if let Err(err) = set_cross_zone_peer_floor(dbio, peer_zone, slot) {
+fn advance_cursor(
+    dbio: &RocksDBIO,
+    peer_zone: [u8; 32],
+    cursor: &mut Option<SequencerCheckpoint>,
+    checkpoint: SequencerCheckpoint,
+) {
+    *cursor = Some(checkpoint.clone());
+    if let Err(err) = set_cross_zone_peer_floor(dbio, peer_zone, checkpoint) {
         warn!(
             "Failed to persist watcher delivery floor for peer {}: {err:#}",
             hex::encode(peer_zone)
@@ -718,13 +746,13 @@ mod tests {
         ))
     }
 
-    fn peer_msg(data: Vec<u8>, slot: u64) -> (ZoneMessage, Slot) {
+    fn peer_msg(data: Vec<u8>, slot: u64) -> (ZoneMessage, SequencerCheckpoint) {
         (
             ZoneMessage::Block(ZoneBlock {
                 id: MsgId::from([0; 32]),
                 data: Inscription::try_from(data).expect("test inscription is within bounds"),
             }),
-            Slot::from(slot),
+            checkpoint(slot),
         )
     }
 
@@ -761,12 +789,12 @@ mod tests {
         )
     }
 
-    fn block_msg(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
+    fn block_msg(block: &Block, slot: u64) -> (ZoneMessage, SequencerCheckpoint) {
         peer_msg(borsh::to_vec(block).expect("block serializes"), slot)
     }
 
     /// A stream item carrying the peer's block `block_id`.
-    fn peer_block_msg(block_id: u64, slot: u64) -> (ZoneMessage, Slot) {
+    fn peer_block_msg(block_id: u64, slot: u64) -> (ZoneMessage, SequencerCheckpoint) {
         block_msg(&chain_block(block_id), slot)
     }
 
@@ -776,7 +804,7 @@ mod tests {
         block_id: u64,
         slot: u64,
         target_program_id: lee_core::program::ProgramId,
-    ) -> (ZoneMessage, Slot) {
+    ) -> (ZoneMessage, SequencerCheckpoint) {
         block_msg(&chain_block_to(block_id, target_program_id), slot)
     }
 
@@ -788,8 +816,17 @@ mod tests {
         }
     }
 
-    fn undecodable_msg(slot: u64) -> (ZoneMessage, Slot) {
+    fn undecodable_msg(slot: u64) -> (ZoneMessage, SequencerCheckpoint) {
         peer_msg(b"not a block".to_vec(), slot)
+    }
+
+    fn checkpoint(slot: u64) -> SequencerCheckpoint {
+        SequencerCheckpoint {
+            last_msg_id: MsgId::from([0; 32]),
+            pending_txs: vec![],
+            lib: [42; 32].into(),
+            lib_slot: Slot::from(slot),
+        }
     }
 
     /// The message keys recorded so far, in insertion order.
@@ -821,7 +858,7 @@ mod tests {
     fn run_passes(passes: &[(PassOutcome, Option<u64>)]) -> WatcherState {
         let mut state = WatcherState::default();
         for (outcome, cursor) in passes {
-            state.after_pass(*outcome, cursor.map(Slot::from));
+            state.after_pass(*outcome, cursor.map(|val| checkpoint(val)));
         }
         state
     }
@@ -1023,16 +1060,16 @@ mod tests {
         // A store written before chain pinning. The floor is cleared rather
         // than ignored so a crash mid-rebuild does not resume from it either.
         assert_eq!(
-            resume_from(None, Some(Slot::from(7))),
+            resume_from(None, Some(checkpoint(7))),
             Resume {
                 cursor: None,
                 clear_floor: true
             }
         );
         assert_eq!(
-            resume_from(Some(tip_at(2)), Some(Slot::from(7))),
+            resume_from(Some(tip_at(2)), Some(checkpoint(7))),
             Resume {
-                cursor: Some(Slot::from(7)),
+                cursor: Some(checkpoint(7)),
                 clear_floor: false
             },
             "an ordinary restart resumes where it left off and keeps its floor"
@@ -1063,10 +1100,14 @@ mod tests {
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
-        assert_eq!(cursor, Some(Slot::from(1)));
-        assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
-            Some(Slot::from(1)),
+        assert!(checkpoint_eq_opt(cursor.as_ref(), Some(&checkpoint(1))));
+        assert!(
+            checkpoint_eq_opt(
+                get_cross_zone_peer_floor(&dbio, PEER_ZONE)
+                    .unwrap()
+                    .as_ref(),
+                Some(&checkpoint(1))
+            ),
             "the cursor must be durable, not just in memory"
         );
         assert_eq!(
@@ -1108,9 +1149,13 @@ mod tests {
             recorded_keys(&dbio).is_empty(),
             "a message aimed at a sequencer-only program must not be recorded"
         );
-        assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
-            Some(Slot::from(0)),
+        assert!(
+            checkpoint_eq_opt(
+                get_cross_zone_peer_floor(&dbio, PEER_ZONE)
+                    .unwrap()
+                    .as_ref(),
+                Some(&checkpoint(0))
+            ),
             "the slot was fully read, so the floor still advances"
         );
     }
@@ -1236,9 +1281,13 @@ mod tests {
         // that failed to record must not let it move, or the delivery is lost
         // rather than retried.
         assert_eq!(outcome, PassOutcome::Undelivered(Slot::from(0)));
-        assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
-            None,
+        assert!(
+            checkpoint_eq_opt(
+                get_cross_zone_peer_floor(&dbio, PEER_ZONE)
+                    .unwrap()
+                    .as_ref(),
+                None
+            ),
             "the slot must stay re-readable"
         );
         // The tip is written after the deliveries, never before. Ahead of them a
@@ -1268,7 +1317,7 @@ mod tests {
         // the store. One that had to rebuild the tip in memory would accept
         // whatever block arrived first.
         let resumed = get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap();
-        assert_eq!(resumed, Some(Slot::from(1)));
+        assert!(checkpoint_eq_opt(resumed.as_ref(), Some(&checkpoint(1))));
         let mut resumed_tip = dbio.get_cross_zone_peer_tip(PEER_ZONE).unwrap();
         assert_eq!(
             resumed_tip,
@@ -1296,10 +1345,12 @@ mod tests {
             ],
             "only the unread block is recorded on the second pass"
         );
-        assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
-            Some(Slot::from(2))
-        );
+        assert!(checkpoint_eq_opt(
+            get_cross_zone_peer_floor(&dbio, PEER_ZONE)
+                .unwrap()
+                .as_ref(),
+            Some(&checkpoint(2))
+        ),);
     }
 
     #[tokio::test]
@@ -1324,10 +1375,12 @@ mod tests {
         // A durable cursor makes this load-bearing: advancing past the bad block
         // would drop its messages permanently rather than until the next restart.
         assert_eq!(outcome, PassOutcome::Undecodable(Slot::from(1)));
-        assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
-            Some(Slot::from(0))
-        );
+        assert!(checkpoint_eq_opt(
+            get_cross_zone_peer_floor(&dbio, PEER_ZONE)
+                .unwrap()
+                .as_ref(),
+            Some(&checkpoint(0))
+        ),);
         assert_eq!(
             recorded_keys(&dbio),
             vec![message_key(&PEER_ZONE, 1, 0)],
@@ -1354,8 +1407,16 @@ mod tests {
         .await;
 
         assert_eq!(outcome, PassOutcome::Undecodable(Slot::from(4)));
-        assert_eq!(cursor, None, "slot 4 is re-read whole on the next pass");
-        assert_eq!(get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(), None);
+        assert!(
+            checkpoint_eq_opt(cursor.as_ref(), None),
+            "slot 4 is re-read whole on the next pass"
+        );
+        assert!(checkpoint_eq_opt(
+            get_cross_zone_peer_floor(&dbio, PEER_ZONE)
+                .unwrap()
+                .as_ref(),
+            None
+        ));
         assert_eq!(recorded_keys(&dbio), vec![message_key(&PEER_ZONE, 1, 0)]);
     }
 
@@ -1389,9 +1450,13 @@ mod tests {
             vec![message_key(&PEER_ZONE, 1, 0)],
             "no pass reads past the slot it cannot decode"
         );
-        assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
-            Some(Slot::from(0)),
+        assert!(
+            checkpoint_eq_opt(
+                get_cross_zone_peer_floor(&dbio, PEER_ZONE)
+                    .unwrap()
+                    .as_ref(),
+                Some(&checkpoint(0))
+            ),
             "the floor stays below it, so a fixed decoder recovers the messages"
         );
         assert_eq!(tip, Some(tip_at(1)));
@@ -1569,18 +1634,25 @@ mod tests {
         // partway through the rebuild would otherwise leave a floor far above a
         // tip of 1, and nothing read after that restart could link.
         let (_dir, dbio) = store();
-        set_cross_zone_peer_floor(&dbio, PEER_ZONE, Slot::from(5000)).unwrap();
+        set_cross_zone_peer_floor(&dbio, PEER_ZONE, checkpoint(5000)).unwrap();
 
         let floor = get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap();
         let tip = dbio.get_cross_zone_peer_tip(PEER_ZONE).unwrap();
         let resume = resume_from(tip, floor);
-        assert_eq!(resume.cursor, None, "the rebuild reads from genesis");
+        assert!(
+            checkpoint_eq_opt(resume.cursor.as_ref(), None),
+            "the rebuild reads from genesis"
+        );
         assert!(resume.clear_floor);
 
         clear_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap();
-        assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
-            None,
+        assert!(
+            checkpoint_eq_opt(
+                get_cross_zone_peer_floor(&dbio, PEER_ZONE)
+                    .unwrap()
+                    .as_ref(),
+                None
+            ),
             "and a crash mid-rebuild resumes from genesis too, not from slot 5000"
         );
     }

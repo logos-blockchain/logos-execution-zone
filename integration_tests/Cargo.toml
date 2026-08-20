@@ -36,6 +36,7 @@ sequencer_stake_core.workspace = true
 programs.workspace = true
 test_programs.workspace = true
 testnet_initial_state.workspace = true
+chain_state.workspace = true
 
 logos-blockchain-core.workspace = true
 logos-blockchain-zone-sdk.workspace = true

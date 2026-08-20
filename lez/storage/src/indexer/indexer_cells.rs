@@ -7,34 +7,10 @@ use crate::{
     error::DbError,
     indexer::{
         ACC_NUM_CELL_NAME, BLOCK_HASH_CELL_NAME, BREAKPOINT_CELL_NAME, CF_ACC_META,
-        CF_BREAKPOINT_NAME, CF_HASH_TO_ID, CF_TX_TO_ID,
-        DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, DB_META_STALL_REASON_KEY,
-        DB_META_TIP_SLOT_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY, TX_HASH_CELL_NAME,
+        CF_BREAKPOINT_NAME, CF_HASH_TO_ID, CF_TX_TO_ID, DB_META_STALL_REASON_KEY,
+        DB_META_TIP_CHECKPOINT_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY, TX_HASH_CELL_NAME,
     },
 };
-
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
-pub struct LastObservedL1LibHeaderCell(pub [u8; 32]);
-
-impl SimpleStorableCell for LastObservedL1LibHeaderCell {
-    type KeyParams = ();
-
-    const CELL_NAME: &'static str = DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY;
-    const CF_NAME: &'static str = CF_META_NAME;
-}
-
-impl SimpleReadableCell for LastObservedL1LibHeaderCell {}
-
-impl SimpleWritableCell for LastObservedL1LibHeaderCell {
-    fn value_constructor(&self) -> DbResult<Vec<u8>> {
-        borsh::to_vec(&self).map_err(|err| {
-            DbError::borsh_cast_message(
-                err,
-                Some("Failed to serialize last observed l1 header".to_owned()),
-            )
-        })
-    }
-}
 
 #[derive(BorshDeserialize)]
 pub struct BreakpointCellOwned(pub V03State);
@@ -189,29 +165,42 @@ impl SimpleWritableCell for AccNumTxCell {
     }
 }
 
-/// The L1 inscription slot of the tip block, written atomically with the tip.
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
-pub struct TipSlotCell(pub u64);
+/// The L1 inscription checkpoint of the tip block, written atomically with the tip.
+#[derive(BorshDeserialize)]
+pub struct TipCheckpointCellOwned(pub Vec<u8>);
 
-impl SimpleStorableCell for TipSlotCell {
+impl SimpleStorableCell for TipCheckpointCellOwned {
     type KeyParams = ();
 
-    const CELL_NAME: &'static str = DB_META_TIP_SLOT_KEY;
+    const CELL_NAME: &'static str = DB_META_TIP_CHECKPOINT_KEY;
     const CF_NAME: &'static str = CF_META_NAME;
 }
 
-impl SimpleReadableCell for TipSlotCell {}
+impl SimpleReadableCell for TipCheckpointCellOwned {}
 
-impl SimpleWritableCell for TipSlotCell {
+#[derive(BorshSerialize)]
+pub struct TipCheckpointCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for TipCheckpointCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_TIP_CHECKPOINT_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for TipCheckpointCellRef<'_> {
     fn value_constructor(&self) -> DbResult<Vec<u8>> {
         borsh::to_vec(&self).map_err(|err| {
-            DbError::borsh_cast_message(err, Some("Failed to serialize tip slot".to_owned()))
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize zone-sdk indexer cursor cell".to_owned()),
+            )
         })
     }
 }
 
-/// Opaque bytes for the zone-sdk indexer cursor `Option<(MsgId, Slot)>`.
-/// The caller serializes via `serde_json` (neither type derives borsh).
+/// Opaque bytes for the zone-sdk indexer cursor `Option<SequencerCheckpoint>`.
+/// The caller serializes via `serde_json` (type does not devive borsh).
 #[derive(BorshDeserialize)]
 pub struct ZoneSdkIndexerCursorCellOwned(pub Vec<u8>);
 

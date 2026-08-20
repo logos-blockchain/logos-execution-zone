@@ -421,6 +421,15 @@ pub enum BlockIngestError {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct SequencerCheckpoint {
+    pub last_msg_id: [u8; 32],
+    pub lib: [u8; 32],
+    pub lib_slot: u64,
+    // We are dropping pending transactions here
+    // ineexer can not send transactions, therefore field should be empty
+}
+
 /// Diagnostic record of the first block that broke the L2 chain.
 ///
 /// The block-derived fields are `None` for a deserialize break (no header was
@@ -430,7 +439,7 @@ pub struct StallReason {
     pub block_id: Option<u64>,
     pub block_hash: Option<HashType>,
     pub prev_block_hash: Option<HashType>,
-    pub l1_slot: u64,
+    pub checkpoint: SequencerCheckpoint,
     pub error: BlockIngestError,
     /// The breaking block's L2 timestamp (`None` for a deserialize break).
     pub first_seen: Option<Timestamp>,

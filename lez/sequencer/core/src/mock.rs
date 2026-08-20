@@ -29,7 +29,7 @@ pub struct MockBlockPublisher {
     /// Canned channel frontier returned by [`Self::channel_tip_slot`].
     tip_slot: Option<Slot>,
     /// Canned finalized channel history returned by [`Self::read_channel_after`].
-    messages: Vec<(ZoneMessage, Slot)>,
+    messages: Vec<(ZoneMessage, SequencerCheckpoint)>,
 }
 
 impl MockBlockPublisher {
@@ -40,7 +40,7 @@ impl MockBlockPublisher {
     pub fn with_canned_channel(
         channel_id: ChannelId,
         tip_slot: Option<Slot>,
-        messages: Vec<(ZoneMessage, Slot)>,
+        messages: Vec<(ZoneMessage, SequencerCheckpoint)>,
     ) -> Self {
         Self {
             channel_id,
@@ -124,15 +124,15 @@ impl BlockPublisherTrait for MockBlockPublisher {
 
     async fn read_channel_after(
         &self,
-        after_slot: Option<Slot>,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + '_> {
+        checkpoint: Option<SequencerCheckpoint>,
+    ) -> impl Stream<Item = (ZoneMessage, SequencerCheckpoint)> {
         // Mirror `next_messages`: `after_slot` is exclusive.
         let messages = self
             .messages
             .iter()
-            .filter(move |(_, slot)| after_slot.is_none_or(|after| *slot > after))
+            .filter(move |(_, checkp)| checkpoint.clone().is_none_or(|after| checkp.lib_slot > after.lib_slot))
             .cloned();
-        Ok(futures::stream::iter(messages))
+        futures::stream::iter(messages)
     }
 }
 

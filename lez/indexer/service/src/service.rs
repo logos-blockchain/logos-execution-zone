@@ -231,7 +231,7 @@ impl SubscriptionService {
     }
 
     fn spawn_respond_subscribers_loop(
-        indexer: IndexerCore,
+        mut indexer: IndexerCore,
         shutdown: CancellationToken,
     ) -> SubscriptionLoopParts {
         let (new_subscription_sender, mut sub_receiver) =

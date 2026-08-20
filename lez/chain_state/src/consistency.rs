@@ -253,6 +253,27 @@ enum AnchorProbe {
     KeepLooking,
 }
 
+pub fn checkpoint_eq(
+    checkpoint_a: &SequencerCheckpoint,
+    checkpoint_b: &SequencerCheckpoint,
+) -> bool {
+    (checkpoint_a.last_msg_id == checkpoint_b.last_msg_id)
+        && (checkpoint_a.lib == checkpoint_b.lib)
+        && (checkpoint_a.lib_slot == checkpoint_b.lib_slot)
+        && (checkpoint_a.pending_txs == checkpoint_b.pending_txs)
+}
+
+pub fn checkpoint_eq_opt(
+    checkpoint_a: Option<&SequencerCheckpoint>,
+    checkpoint_b: Option<&SequencerCheckpoint>,
+) -> bool {
+    match (checkpoint_a, checkpoint_b) {
+        (None, None) => true,
+        (Some(checkpoint_a), Some(checkpoint_b)) => checkpoint_eq(checkpoint_a, checkpoint_b),
+        _ => false,
+    }
+}
+
 /// Migration of indexer-specific functionality after indexer removal.
 ///
 /// Reads all finalized blocks into a stream.
@@ -262,6 +283,78 @@ pub async fn next_messages<N>(
 where
     N: adapter::Node + Clone + Sync + Send + 'static,
 {
+    async_stream::stream! {
+        loop {
+            match indexer.next_event().await {
+                Event::BlocksProcessed {
+                    checkpoint, finalized: batch, ..
+                } => {
+                    for fin_tx in batch {
+                        for op in fin_tx.ops {
+                            let zone_msg = match op {
+                                FinalizedOp::Deposit(DepositInfo {
+                                    tx_hash,
+                                    op_id,
+                                    channel_id: _,
+                                    inputs,
+                                    notes,
+                                    amount,
+                                    metadata,
+                                }) => ZoneMessage::Deposit(Deposit {
+                                    tx_hash,
+                                    op_id,
+                                    inputs,
+                                    notes,
+                                    amount,
+                                    metadata,
+                                }),
+                                FinalizedOp::Withdraw(WithdrawInfo { tx_hash, op }) => {
+                                    ZoneMessage::Withdraw(Withdraw {
+                                        tx_hash,
+                                        op_id: op.op_id(),
+                                        inputs: op.inputs,
+                                    })
+                                }
+                                FinalizedOp::Inscription(InscriptionInfo {
+                                    tx_hash: _,
+                                    parent_msg: _,
+                                    this_msg,
+                                    payload,
+                                }) => ZoneMessage::Block(ZoneBlock {
+                                        id: this_msg,
+                                        data: payload,
+                                }),
+                            };
+
+                            // Clonuing checkpoint here can be a costly operation.
+                            // ToDo: Consider refactoring, right now, we need checkpoint here to
+                            // fully anchor an indexer, which in turn is needed for old interfaces.
+                            yield (zone_msg, checkpoint.clone());
+                        }
+                    }
+                },
+                Event::Ready => break,
+                Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
+            }
+        }
+    }
+}
+
+/// Migration of indexer-specific functionality after indexer removal.
+///
+/// Reads all finalized blocks into a stream.
+///
+/// Owned variant for cases where it is easier to create indexer in stream.
+pub async fn next_messages_own<N>(
+    node: N,
+    channel_id: ChannelId,
+    checkpoint: Option<SequencerCheckpoint>,
+) -> impl Stream<Item = (ZoneMessage, SequencerCheckpoint)>
+where
+    N: adapter::Node + Clone + Sync + Send + 'static,
+{
+    let mut indexer = new_indexer(channel_id, node, checkpoint);
+
     async_stream::stream! {
         loop {
             match indexer.next_event().await {

@@ -11,8 +11,7 @@ use common::{
 use lee::{Account, AccountId, V03State};
 use lee_core::BlockId;
 use log::warn;
-use logos_blockchain_core::header::HeaderId;
-use logos_blockchain_zone_sdk::{Slot, sequencer::SequencerCheckpoint};
+use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
@@ -45,13 +44,6 @@ impl IndexerStore {
             dbio: Arc::new(dbio),
             current_state: Arc::new(RwLock::new(current_state)),
         })
-    }
-
-    pub fn last_observed_l1_lib_header(&self) -> Result<Option<HeaderId>> {
-        Ok(self
-            .dbio
-            .get_meta_last_observed_l1_lib_header_in_db()?
-            .map(HeaderId::from))
     }
 
     pub fn get_last_block_id(&self) -> Result<Option<u64>> {
@@ -133,8 +125,8 @@ impl IndexerStore {
         let Some(bytes) = self.dbio.get_meta_tip_checkpoint_in_db()? else {
             return Ok(None);
         };
-        let checkpoint: Option<SequencerCheckpoint> =
-            serde_json::from_slice(&bytes).context("Failed to deserialize stored tip checkpoint")?;
+        let checkpoint: Option<SequencerCheckpoint> = serde_json::from_slice(&bytes)
+            .context("Failed to deserialize stored tip checkpoint")?;
         Ok(checkpoint)
     }
 
@@ -220,6 +212,10 @@ impl IndexerStore {
         block: &Block,
         checkpoint: SequencerCheckpoint,
     ) -> Result<AcceptOutcome> {
+        // First of all, checkpoint must be serializable
+        let checkpoint_bytes = serde_json::to_vec(&checkpoint)
+            .context("Failed to serialize SequencerCheckpoint, check signature")?;
+
         let tip = self.validated_tip()?;
 
         // Re-delivery of an already-applied block is idempotent, not a divergence
@@ -251,12 +247,7 @@ impl IndexerStore {
         let mut stored = block.clone();
         stored.bedrock_status = BedrockStatus::Finalized;
         self.dbio
-            .put_block(
-                &stored,
-                [0_u8; 32],
-                checkpoint.lib_slot.into_inner(),
-                &scratch,
-            )
+            .put_block(&stored, &checkpoint_bytes, &scratch)
             .context("Failed to persist accepted block")?;
 
         // Commit in-memory state (infallible) only after the DB write succeeded.
@@ -273,7 +264,7 @@ impl IndexerStore {
 #[cfg(test)]
 mod stall_reason_tests {
     use common::HashType;
-    use logos_blockchain_zone_sdk::{node_types::MsgId, sequencer::SequencerCheckpoint};
+    use logos_blockchain_zone_sdk::{Slot, node_types::MsgId, sequencer::SequencerCheckpoint};
 
     use super::*;
 
@@ -323,7 +314,7 @@ mod stall_reason_tests {
 #[cfg(test)]
 mod tests {
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
-    use logos_blockchain_zone_sdk::node_types::MsgId;
+    use logos_blockchain_zone_sdk::{Slot, node_types::MsgId};
     use tempfile::tempdir;
     use testnet_initial_state::initial_pub_accounts_private_keys;
 
@@ -437,7 +428,7 @@ mod tests {
 #[cfg(test)]
 mod accept_tests {
     use common::{HashType, block::HashableBlockData, test_utils::produce_dummy_block};
-use logos_blockchain_zone_sdk::node_types::MsgId;
+    use logos_blockchain_zone_sdk::{Slot, node_types::MsgId};
 
     use super::*;
 
@@ -595,25 +586,43 @@ use logos_blockchain_zone_sdk::node_types::MsgId;
     }
 
     #[tokio::test]
-    async fn accept_block_records_tip_inscription_slot() {
+    async fn accept_block_records_tip_inscription_checkpoint() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
 
-        assert_eq!(store.get_tip_slot().expect("get"), None);
+        assert_eq!(
+            store
+                .get_tip_checkpoint()
+                .expect("get")
+                .map(|ch| ch.lib_slot),
+            None
+        );
 
         let genesis = produce_dummy_block(1, None, vec![]);
         store
             .accept_block(&genesis, checkpoint(1_000))
             .await
             .expect("accept");
-        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_000)));
+        assert_eq!(
+            store
+                .get_tip_checkpoint()
+                .expect("get")
+                .map(|ch| ch.lib_slot),
+            Some(Slot::from(1_000))
+        );
 
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         store
             .accept_block(&block2, checkpoint(1_005))
             .await
             .expect("accept");
-        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_005)));
+        assert_eq!(
+            store
+                .get_tip_checkpoint()
+                .expect("get")
+                .map(|ch| ch.lib_slot),
+            Some(Slot::from(1_005))
+        );
 
         // A parked block freezes the tip, so its slot must not advance either.
         let bad = produce_dummy_block(4, Some(block2.header.hash), vec![]);
@@ -621,7 +630,13 @@ use logos_blockchain_zone_sdk::node_types::MsgId;
             store.accept_block(&bad, checkpoint(1_010)).await.unwrap(),
             AcceptOutcome::Parked(_)
         ));
-        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_005)));
+        assert_eq!(
+            store
+                .get_tip_checkpoint()
+                .expect("get")
+                .map(|ch| ch.lib_slot),
+            Some(Slot::from(1_005))
+        );
 
         // Neither must a re-delivered old block move it.
         assert!(matches!(
@@ -631,7 +646,13 @@ use logos_blockchain_zone_sdk::node_types::MsgId;
                 .unwrap(),
             AcceptOutcome::AlreadyApplied
         ));
-        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_005)));
+        assert_eq!(
+            store
+                .get_tip_checkpoint()
+                .expect("get")
+                .map(|ch| ch.lib_slot),
+            Some(Slot::from(1_005))
+        );
     }
 
     #[tokio::test]
