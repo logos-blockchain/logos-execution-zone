@@ -108,7 +108,7 @@ fn send(
 
     let call = ChainedCall::new(
         outbox_program_id,
-        vec![outbox.clone()],
+        vec![outbox.account_id],
         &OutboxInstruction::Emit {
             target_zone,
             target_program_id,

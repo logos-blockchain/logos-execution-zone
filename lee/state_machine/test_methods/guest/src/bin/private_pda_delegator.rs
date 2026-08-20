@@ -43,14 +43,10 @@ fn main() {
         Claim::Pda(claim_seed),
     );
 
-    let mut pre_for_callee = pre.clone();
-    pre_for_callee.is_authorized = true;
-    pre_for_callee.account.program_owner = self_program_id.into();
-
     let chained_call = ChainedCall {
         program_id: callee_program_id,
         instruction_data: to_vec(&()).unwrap(),
-        pre_states: vec![pre_for_callee],
+        pre_state_refs: vec![pre.account_id],
         pda_seeds: vec![delegated_seed],
     };
 

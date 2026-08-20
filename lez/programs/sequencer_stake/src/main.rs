@@ -221,7 +221,7 @@ fn stake(
         AccountDiff {
             id: ownership_account.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(new_record_data.clone()),
+            diff_data: Some(new_record_data),
         },
         ownership_account.account.program_owner.into(),
         Claim::Authorized,
@@ -237,25 +237,20 @@ fn stake(
         diff_data: Some(new_config_data),
     });
 
-    // chained-call pre-states reflect state as of when each call runs
-    let mut ownership_account_claimed = ownership_account;
-    ownership_account_claimed.account.data = new_record_data;
-    ownership_account_claimed.account.program_owner = AccountId::from(self_program_id);
-
     let mover_call = ChainedCall {
         program_id: mover_program_id,
-        pre_states: vec![funding_account, ownership_account_claimed.clone()],
+        pre_state_refs: vec![funding_account.account_id, ownership_account.account_id],
         instruction_data: mover_instruction_data,
         pda_seeds: Vec::new(),
     };
 
-    // expected balance after the mover call
-    let mut ownership_account_after_mover = ownership_account_claimed;
-    ownership_account_after_mover.account.balance = expected_balance_after;
-
+    // `expected_balance_after` is threaded through the instruction, not the pre-state — the
+    // protocol resolves `ownership_account`'s real post-`mover_call` state on its own, so
+    // `confirm_stake` compares the real outcome against this expectation rather than an
+    // assumed-successful prediction of it.
     let confirm_call = ChainedCall::new(
         self_program_id,
-        vec![ownership_account_after_mover],
+        vec![ownership_account.account_id],
         &Instruction::ConfirmStake {
             expected_balance_after,
         },

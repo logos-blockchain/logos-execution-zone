@@ -1,13 +1,13 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
-    account::{AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     program::{
         ChainedCall, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramId, ProgramOutput,
-        UpdateFromDiffOutput,
+        UpdateFromDiffOutput, compute_public_authorized_pdas,
     },
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
@@ -83,6 +83,12 @@ pub fn execute_and_prove(
     )
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public entry point — taking ownership signals the caller hands off its top-level \
+              account values for the duration of the proof; callers already construct these \
+              freshly per call, so a borrow would just push the clone to every call site"
+)]
 pub fn execute_and_prove_with_padded_inputs(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
@@ -109,10 +115,47 @@ pub fn execute_and_prove_with_padded_inputs(
         .map(|(pre, _)| pre.account_id)
         .collect();
 
+    // Tracks each account's currently-known materialized state as calls are proven, so a
+    // chained call naming an account by id (rather than supplying a value) can be resolved to
+    // the real thing rather than trusting whatever the calling guest program predicted. Mirrors
+    // `state_diff` in the public-transaction path, and the circuit's own `self.post_states` —
+    // this is the host-side counterpart, since the host has no access to the circuit's internal
+    // state (it drives execution and proving sequentially, before the outer circuit ever runs).
+    let mut materialized_state: HashMap<AccountId, Account> = pre_states
+        .iter()
+        .map(|pre| (pre.account_id, pre.account.clone()))
+        .collect();
+    let pre_state_refs: Vec<AccountId> = pre_states.iter().map(|pre| pre.account_id).collect();
+
+    // Host-side best-effort mirror of the circuit's own authorization derivation
+    // (`resolve_authorization_and_record_bindings`), used only to decide what `is_authorized`
+    // to feed a *chained* callee — getting this wrong isn't a security issue (the circuit is the
+    // actual source of truth and simply fails to prove on a mismatch), only a wasted proving
+    // attempt. Seeded from every top-level account's own `is_authorized`, not just
+    // `signer_account_ids` (public-only) — a private account's authorization comes from a
+    // witnessed `ask` with no public-derivable equivalent, and still needs to propagate forward
+    // if that account gets named again in a later chained call.
+    let mut host_authorized_accounts: HashSet<AccountId> = pre_states
+        .iter()
+        .filter(|pre| pre.is_authorized)
+        .map(|pre| pre.account_id)
+        .collect();
+
+    // Position of each account's first sighting, in the same traversal order the circuit uses
+    // internally (`account_identities` is supplied 1:1 with that order, by contract). Needed to
+    // look up a private-PDA account's witnessed `(npk, vpk, identifier)`, since a private PDA's
+    // authorization can't be derived from `AccountId` alone the way a public PDA's can.
+    let mut position_by_account: HashMap<AccountId, usize> = pre_states
+        .iter()
+        .enumerate()
+        .map(|(pos, pre)| (pre.account_id, pos))
+        .collect();
+    let mut next_position = pre_states.len();
+
     let initial_call = ChainedCall {
         program_id: initial_program.id(),
         instruction_data,
-        pre_states,
+        pre_state_refs,
         pda_seeds: vec![],
     };
 
@@ -123,10 +166,66 @@ pub fn execute_and_prove_with_padded_inputs(
             return Err(LeeError::MaxChainedCallsDepthExceeded);
         }
 
+        // The very first call (`caller_program_id.is_none()`) is the only one whose pre_states
+        // were directly supplied by the caller of `execute_and_prove`, not by another guest
+        // program's `ChainedCall` — use them as-is, since a private account's `is_authorized`
+        // here can't be re-derived from `host_authorized_accounts`/`authorized_pdas` (both
+        // scoped to what's publicly re-derivable) without silently dropping legitimate
+        // authorization backed by a witnessed `ask`.
+        let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_id) = caller_program_id {
+            let authorized_pdas =
+                compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
+
+            // Resolve the callee's actual pre_states from the tracked state above — the calling
+            // guest program only named which accounts to call with, it never supplied a value.
+            let mut resolved = Vec::with_capacity(chained_call.pre_state_refs.len());
+            for account_id in &chained_call.pre_state_refs {
+                let account = materialized_state.get(account_id).cloned().ok_or(
+                    InvalidProgramBehaviorError::UnknownChainedCallAccount {
+                        account_id: *account_id,
+                    },
+                )?;
+
+                let position = *position_by_account.entry(*account_id).or_insert_with(|| {
+                    let pos = next_position;
+                    next_position = next_position
+                        .checked_add(1)
+                        .expect("account position count cannot overflow usize");
+                    pos
+                });
+                let private_pda_witness = account_identities
+                    .get(position)
+                    .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
+
+                let is_authorized = host_authorized_accounts.contains(account_id)
+                    || authorized_pdas.contains(account_id)
+                    || private_pda_witness.is_some_and(|(npk, vpk, identifier)| {
+                        chained_call.pda_seeds.iter().any(|seed| {
+                            AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
+                                == *account_id
+                        })
+                    });
+
+                resolved.push(AccountWithMetadata::new(
+                    account,
+                    is_authorized,
+                    *account_id,
+                ));
+            }
+            resolved
+        } else {
+            // The very first call is the only one whose pre_states were directly supplied by the
+            // caller of `execute_and_prove`, not by another guest program's `ChainedCall` — use
+            // them as-is, since a private account's `is_authorized` here can't be re-derived from
+            // the checks above (all scoped to what's publicly/PDA re-derivable) without silently
+            // dropping legitimate authorization backed by a witnessed `ask`.
+            pre_states.clone()
+        };
+
         let inner_receipt = execute_and_prove_program(
             program,
             caller_program_id,
-            &chained_call.pre_states,
+            &real_pre_states,
             &chained_call.instruction_data,
         )?;
 
@@ -139,36 +238,69 @@ pub fn execute_and_prove_with_padded_inputs(
         // same order `execution_state::derive_from_outputs` will visit them, so
         // `update_from_diff_results` lines up positionally with the circuit's own traversal.
         // Dispatched to the account's *owner* program, not necessarily the caller — falls back
-        // to the caller only when the account is still unclaimed (default owner).
+        // to the caller only when the account is still unclaimed (default owner). Also
+        // materializes each diff into `materialized_state` below, mirroring the circuit's own
+        // `validate_and_sync_states` — a best-effort mirror, not authoritative: if it's ever
+        // wrong, the circuit (the real source of truth) just fails to prove.
         for (pre, diff_output) in program_output
             .pre_states
             .iter()
             .zip(&program_output.post_states)
         {
-            let Some(diff_data) = diff_output.diff().diff_data.as_ref() else {
-                continue;
-            };
-            let owner_id: ProgramId = if pre.account.program_owner == DEFAULT_PROGRAM_OWNER {
-                chained_call.program_id
+            let diff = diff_output.diff();
+            let balance = apply_balance_diff(pre.account.balance, diff.diff_balance)
+                .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
+
+            let data = if let Some(diff_data) = diff.diff_data.as_ref() {
+                let owner_id: ProgramId = if pre.account.program_owner == DEFAULT_PROGRAM_OWNER {
+                    chained_call.program_id
+                } else {
+                    pre.account.program_owner.into()
+                };
+                let owner_program = if owner_id == program.id() {
+                    program
+                } else {
+                    dependencies.get(&owner_id).ok_or(
+                        InvalidProgramBehaviorError::UndeclaredProgramDependency {
+                            program_id: owner_id,
+                        },
+                    )?
+                };
+                let update_receipt =
+                    owner_program.prove_update_from_diff(&pre.account, diff_data)?;
+                let update_output: UpdateFromDiffOutput = update_receipt
+                    .journal
+                    .decode()
+                    .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+                update_from_diff_results.push(update_output.data.clone());
+                env_builder.add_assumption(update_receipt);
+                update_output.data
             } else {
-                pre.account.program_owner.into()
+                pre.account.data.clone()
             };
-            let owner_program = if owner_id == program.id() {
-                program
+
+            let program_owner = if diff_output.required_claim().is_some() {
+                AccountId::from(chained_call.program_id)
             } else {
-                dependencies.get(&owner_id).ok_or(
-                    InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                        program_id: owner_id,
-                    },
-                )?
+                pre.account.program_owner
             };
-            let update_receipt = owner_program.prove_update_from_diff(&pre.account, diff_data)?;
-            let update_output: UpdateFromDiffOutput = update_receipt
-                .journal
-                .decode()
-                .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
-            update_from_diff_results.push(update_output.data);
-            env_builder.add_assumption(update_receipt);
+
+            materialized_state.insert(
+                pre.account_id,
+                Account {
+                    program_owner,
+                    balance,
+                    data,
+                    nonce: pre.account.nonce,
+                },
+            );
+
+            // Authorization propagates forward: once an account is authorized at any point in
+            // the chain, it stays authorized for later calls — mirrors the union in the
+            // public-transaction path and the circuit's own `authorized_accounts` set.
+            if pre.is_authorized {
+                host_authorized_accounts.insert(pre.account_id);
+            }
         }
 
         // TODO: remove clone

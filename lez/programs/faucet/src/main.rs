@@ -61,13 +61,10 @@ fn main() {
                 "First account must be faucet PDA"
             );
 
-            let mut faucet_for_vault = faucet;
-            faucet_for_vault.is_authorized = true;
-
             vec![
                 ChainedCall::new(
                     vault_program_id,
-                    vec![faucet_for_vault, recipient_vault],
+                    vec![faucet.account_id, recipient_vault.account_id],
                     &vault_core::Instruction::Transfer {
                         recipient_id,
                         amount,
@@ -87,13 +84,10 @@ fn main() {
                 "First account must be faucet PDA"
             );
 
-            let mut faucet_for_transfer = faucet;
-            faucet_for_transfer.is_authorized = true;
-
             vec![
                 ChainedCall::new(
-                    faucet_for_transfer.account.program_owner.into(),
-                    vec![faucet_for_transfer, recipient],
+                    faucet.account.program_owner.into(),
+                    vec![faucet.account_id, recipient.account_id],
                     &authenticated_transfer_core::Instruction::Transfer { amount },
                 )
                 .with_pda_seeds(vec![faucet_core::compute_faucet_seed()]),

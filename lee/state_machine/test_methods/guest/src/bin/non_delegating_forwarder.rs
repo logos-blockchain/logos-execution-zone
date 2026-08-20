@@ -52,7 +52,7 @@ fn main() {
     .with_chained_calls(vec![ChainedCall {
         program_id: callee_program_id,
         instruction_data: callee_instruction,
-        pre_states,
+        pre_state_refs: pre_states.iter().map(|pre| pre.account_id).collect(),
         pda_seeds: vec![],
     }])
     .write();

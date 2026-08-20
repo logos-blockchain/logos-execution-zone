@@ -114,12 +114,10 @@ fn main() {
                     receipt_post,
                 ];
 
-                let mut bridge_for_vault = bridge;
-                bridge_for_vault.is_authorized = true;
                 let chained_calls = vec![
                     ChainedCall::new(
                         vault_program_id,
-                        vec![bridge_for_vault, recipient_vault],
+                        vec![bridge.account_id, recipient_vault.account_id],
                         &vault_core::Instruction::Transfer {
                             recipient_id,
                             amount: u128::from(amount),

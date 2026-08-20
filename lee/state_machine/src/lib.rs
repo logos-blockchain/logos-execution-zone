@@ -128,14 +128,6 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn undeclaring_pda_delegator() -> Program {
-        Program::new_unchecked(
-            test_methods::UNDECLARING_PDA_DELEGATOR_ID,
-            Cow::Borrowed(test_methods::UNDECLARING_PDA_DELEGATOR_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn non_delegating_forwarder() -> Program {
         Program::new_unchecked(
             test_methods::NON_DELEGATING_FORWARDER_ID,
@@ -173,10 +165,10 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn malicious_authorization_changer() -> Program {
+    pub const fn initialize_then_fund() -> Program {
         Program::new_unchecked(
-            test_methods::MALICIOUS_AUTHORIZATION_CHANGER_ID,
-            Cow::Borrowed(test_methods::MALICIOUS_AUTHORIZATION_CHANGER_ELF),
+            test_methods::INITIALIZE_THEN_FUND_ID,
+            Cow::Borrowed(test_methods::INITIALIZE_THEN_FUND_ELF),
         )
     }
 
@@ -258,22 +250,6 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::SIMPLE_TRANSFER_PROXY_ID,
             Cow::Borrowed(test_methods::SIMPLE_TRANSFER_PROXY_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn malicious_injector() -> Program {
-        Program::new_unchecked(
-            test_methods::MALICIOUS_INJECTOR_ID,
-            Cow::Borrowed(test_methods::MALICIOUS_INJECTOR_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn malicious_launderer() -> Program {
-        Program::new_unchecked(
-            test_methods::MALICIOUS_LAUNDERER_ID,
-            Cow::Borrowed(test_methods::MALICIOUS_LAUNDERER_ELF),
         )
     }
 }

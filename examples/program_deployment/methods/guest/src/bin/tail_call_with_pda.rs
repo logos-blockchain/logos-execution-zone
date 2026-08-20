@@ -17,7 +17,9 @@ use lee_core::{
 //
 // Emits this account unchanged, then performs a tail call to the
 // Hello-World-with-Authorization program with a fixed greeting. The same
-// account is passed along but marked with `is_authorized = true`.
+// account is passed along by id; the callee resolves its `is_authorized`
+// itself, from the PDA seed below, rather than trusting a value this
+// program supplies.
 
 const HELLO_WORLD_WITH_AUTHORIZATION_PROGRAM_ID_HEX: &str =
     "1d95c761168a7fa62eb15a3cc74d3f075e6ec98e6c1ac25bd5bcc7e0a9426398";
@@ -66,16 +68,10 @@ fn main() {
         b"Hello from tail call with Program Derived Account ID".to_vec();
     let chained_call_instruction_data = risc0_zkvm::serde::to_vec(&chained_call_greeting).unwrap();
 
-    // Flip the `is_authorized` flag to true
-    let pre_state_for_chained_call = {
-        let mut this = pre_state.clone();
-        this.is_authorized = true;
-        this
-    };
     let chained_call = ChainedCall {
         program_id: hello_world_program_id(),
         instruction_data: chained_call_instruction_data,
-        pre_states: vec![pre_state_for_chained_call],
+        pre_state_refs: vec![pre_state.account_id],
         pda_seeds: vec![PDA_SEED],
     };
 

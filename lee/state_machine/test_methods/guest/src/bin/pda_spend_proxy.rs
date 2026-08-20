@@ -44,13 +44,10 @@ fn main() {
         diff_data: None,
     });
 
-    let mut first_for_callee = first.clone();
-    first_for_callee.is_authorized = true;
-
     let chained_call = ChainedCall {
         program_id: simple_transfer_id,
         instruction_data: to_vec(&amount).unwrap(),
-        pre_states: vec![first_for_callee, second.clone()],
+        pre_state_refs: vec![first.account_id, second.account_id],
         pda_seeds: vec![seed],
     };
 

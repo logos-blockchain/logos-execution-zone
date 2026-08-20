@@ -32,7 +32,7 @@ fn main() {
         ),
     };
 
-    let [pre] = <[_; 1]>::try_from(pre_states.clone()).expect("Expected exactly one pre state");
+    let [pre] = <[_; 1]>::try_from(pre_states).expect("Expected exactly one pre state");
     let account_id = pre.account_id;
 
     let chained_instruction = to_vec(&(
@@ -43,7 +43,7 @@ fn main() {
     let chained_call = ChainedCall {
         program_id: chained_program_id,
         instruction_data: chained_instruction,
-        pre_states,
+        pre_state_refs: vec![account_id],
         pda_seeds: vec![],
     };
 

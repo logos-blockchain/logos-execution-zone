@@ -435,73 +435,8 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
 
-#[test]
-fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
-    // Arrange
-    let malicious_program = crate::test_methods::malicious_authorization_changer();
-    let simple_transfers = crate::test_methods::simple_balance_transfer();
-    let sender_keys = test_public_account_keys_1();
-    let recipient_keys = test_private_account_keys_1();
-
-    let sender_account = AccountWithMetadata::new(
-        Account {
-            program_owner: simple_transfers.id().into(),
-            balance: 100,
-            ..Default::default()
-        },
-        false,
-        sender_keys.account_id(),
-    );
-    let recipient_account = AccountWithMetadata::new(
-        Account::default(),
-        true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
-    );
-
-    let recipient_account_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
-    let recipient_commitment = Commitment::new(&recipient_account_id, &recipient_account.account);
-    let recipient_init_nullifier = Nullifier::for_account_initialization(&recipient_account_id);
-    let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[(
-            sender_account.account_id,
-            sender_account.account.balance,
-        )]))
-        .with_private_accounts([(recipient_commitment, recipient_init_nullifier)])
-        .with_test_programs();
-
-    let balance_to_transfer = 10_u128;
-    let instruction = (balance_to_transfer, simple_transfers.id());
-
-    let mut dependencies = HashMap::new();
-    dependencies.insert(simple_transfers.id(), simple_transfers);
-    let program_with_deps = ProgramWithDependencies::new(malicious_program, dependencies);
-
-    // Act - execute the malicious program - this should fail during proving
-    let result = execute_and_prove(
-        vec![sender_account, recipient_account],
-        Program::serialize_instruction(instruction).unwrap(),
-        vec![
-            InputAccountIdentity::Public,
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: recipient_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(recipient_keys.ask),
-                },
-                nullifier: NullifierWitness::Update {
-                    view_tag: 0,
-                    nsk: recipient_keys.nsk(),
-                    membership_proof: state
-                        .get_proof_for_commitment(&recipient_commitment)
-                        .expect("recipient's commitment must be in state"),
-                },
-            }),
-        ],
-        &program_with_deps,
-    );
-
-    // Assert - should fail because the malicious program tries to manipulate is_authorized
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
+// `malicious_authorization_changer_should_fail_in_privacy_preserving_circuit` previously lived
+// here, proving that a chained call couldn't forge `is_authorized=true` for a legitimately-held
+// account. Since `ChainedCall.pre_state_refs` no longer carries an `is_authorized` field at all
+// — only `AccountId`s — that forgery is a compile-time impossibility now, not something a
+// runtime check needs to keep catching. See the equivalent note in `validated_state_diff/tests.rs`.

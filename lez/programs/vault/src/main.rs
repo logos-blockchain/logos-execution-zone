@@ -58,13 +58,10 @@ fn main() {
 
             let seed = vault_core::compute_vault_seed(recipient_id);
 
-            let mut recipient_vault_for_callee = recipient_vault;
-            recipient_vault_for_callee.is_authorized = true;
-
             vec![
                 ChainedCall::new(
                     sender.account.program_owner.into(),
-                    vec![sender, recipient_vault_for_callee],
+                    vec![sender.account_id, recipient_vault.account_id],
                     &AuthTransferInstruction::Transfer { amount },
                 )
                 .with_pda_seeds(vec![seed]),
@@ -82,13 +79,10 @@ fn main() {
 
             let seed = vault_core::compute_vault_seed(owner.account_id);
 
-            let mut owner_vault_for_callee = owner_vault;
-            owner_vault_for_callee.is_authorized = true;
-
             vec![
                 ChainedCall::new(
-                    owner_vault_for_callee.account.program_owner.into(),
-                    vec![owner_vault_for_callee, owner],
+                    owner_vault.account.program_owner.into(),
+                    vec![owner_vault.account_id, owner.account_id],
                     &AuthTransferInstruction::Transfer { amount },
                 )
                 .with_pda_seeds(vec![seed]),

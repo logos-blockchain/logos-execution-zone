@@ -75,25 +75,12 @@ impl ValidatedStateDiff {
             LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
         );
 
-        // Build pre_states for execution
-        let input_pre_states: Vec<_> = message
-            .account_ids
-            .iter()
-            .map(|account_id| {
-                AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
-                    *account_id,
-                )
-            })
-            .collect();
-
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
 
         let initial_call = ChainedCall {
             program_id: message.program_id,
             instruction_data: message.instruction_data.clone(),
-            pre_states: input_pre_states,
+            pre_state_refs: message.account_ids.clone(),
             pda_seeds: vec![],
         };
 
@@ -120,20 +107,6 @@ impl ValidatedStateDiff {
                 Cow::Owned(program_account.data.to_vec()),
             );
 
-            debug!(
-                "Program {:?} pre_states: {:?}, instruction_data: {:?}",
-                chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
-            );
-            let program_output = program.execute(
-                caller_data.program_id,
-                &chained_call.pre_states,
-                &chained_call.instruction_data,
-            )?;
-            debug!(
-                "Program {:?} output: {:?}",
-                chained_call.program_id, program_output
-            );
-
             let authorized_pdas =
                 compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
 
@@ -144,6 +117,42 @@ impl ValidatedStateDiff {
                     || caller_data.authorized_accounts.contains(account_id)
             };
 
+            // Construct the callee's actual pre_states from the protocol's own tracked state —
+            // live state plus any diffs already applied earlier in this transaction — rather
+            // than trusting a value the caller might assert. The caller only names which
+            // accounts to call with (`pre_state_refs`); it has no channel left to supply a
+            // fabricated or stale `Account` value.
+            let real_pre_states: Vec<AccountWithMetadata> = chained_call
+                .pre_state_refs
+                .iter()
+                .map(|account_id| {
+                    let account = state_diff
+                        .get(account_id)
+                        .cloned()
+                        .unwrap_or_else(|| state.get_account_by_id(*account_id));
+                    AccountWithMetadata::new(account, is_authorized(account_id), *account_id)
+                })
+                .collect();
+
+            debug!(
+                "Program {:?} pre_states: {:?}, instruction_data: {:?}",
+                chained_call.program_id, real_pre_states, chained_call.instruction_data
+            );
+            let program_output = program.execute(
+                caller_data.program_id,
+                &real_pre_states,
+                &chained_call.instruction_data,
+            )?;
+            debug!(
+                "Program {:?} output: {:?}",
+                chained_call.program_id, program_output
+            );
+
+            // The above independently constructed the exact pre_states the callee should see;
+            // this loop now checks the callee's OWN echoed pre_states (program_output.pre_states)
+            // match what it was actually given — a pure callee-honesty check (a dishonest callee
+            // could still lie about what it received in its own output), not a caller-prediction
+            // check, since the caller no longer has anything to predict.
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
                 // Check that the program output pre_states coincide with the values in the public
@@ -282,10 +291,10 @@ impl ValidatedStateDiff {
                 );
             }
 
-            // Source from `program_output.pre_states`, not `chained_call.pre_states`:
-            // the loop above already gates program_output's `is_authorized` via the
-            // `!pre.is_authorized || is_indeed_authorized` check, while `chained_call.
-            // pre_states` is caller-controlled and can be forged (audit-issue 91).
+            // Source from `program_output.pre_states` (the callee's own checked echo), not
+            // `chained_call.pre_state_refs` (bare ids the caller supplied, carrying no
+            // authorization claim at all) — the loop above already gates program_output's
+            // `is_authorized` via the `!pre.is_authorized || is_indeed_authorized` check.
             //
             // Union with the caller's authorized set so that authorization is monotonically
             // growing: once an account is authorized at any point in the chain it remains

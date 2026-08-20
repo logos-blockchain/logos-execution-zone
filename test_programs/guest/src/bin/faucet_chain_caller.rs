@@ -48,7 +48,7 @@ fn main() {
             amount,
         })
         .unwrap(),
-        pre_states: vec![faucet_pre, vault_pda_pre],
+        pre_state_refs: vec![faucet_pre.account_id, vault_pda_pre.account_id],
         pda_seeds: vec![],
     }];
 

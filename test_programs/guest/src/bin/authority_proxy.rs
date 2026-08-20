@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountDiff, AccountId, BalanceDiff},
+    account::{AccountDiff, BalanceDiff},
     program::{
         AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
         ProgramOutput, read_lee_call,
@@ -8,8 +8,9 @@ use lee_core::{
 
 /// Chain-calls an arbitrary target with caller-supplied instruction words,
 /// forwarding every account it was given. With a seed, the PDA derived from
-/// `(self, seed)` is delegated through `pda_seeds` and flagged authorized in the
-/// call, which is how a program-held authority acts on a callee.
+/// `(self, seed)` is delegated through `pda_seeds` — the protocol resolves its
+/// authorization for the callee from that, which is how a program-held
+/// authority acts on a callee.
 type Instruction = (ProgramId, Vec<u32>, Option<PdaSeed>);
 
 fn main() {
@@ -28,20 +29,10 @@ fn main() {
         ),
     };
 
-    let mut call_pre_states = pre_states.clone();
-    if let Some(seed) = pda_seed {
-        let delegated = AccountId::for_public_pda(&self_program_id, &seed);
-        for pre in &mut call_pre_states {
-            if pre.account_id == delegated {
-                pre.is_authorized = true;
-            }
-        }
-    }
-
     let chained_call = ChainedCall {
         program_id: target_program_id,
         instruction_data: target_instruction_words,
-        pre_states: call_pre_states,
+        pre_state_refs: pre_states.iter().map(|pre| pre.account_id).collect(),
         pda_seeds: pda_seed.into_iter().collect(),
     };
 

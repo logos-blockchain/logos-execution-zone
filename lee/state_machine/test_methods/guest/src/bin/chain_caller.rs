@@ -35,33 +35,17 @@ fn main() {
 
     let instruction_data = to_vec(&balance).unwrap();
 
-    let mut running_recipient_pre = recipient_pre.clone();
-    let mut running_sender_pre = sender_pre.clone();
-
-    if pda_seed.is_some() {
-        running_sender_pre.is_authorized = true;
-    }
-
     let mut chained_calls = Vec::new();
     for _i in 0..num_chain_calls {
         let new_chained_call = ChainedCall {
             program_id: simple_transfer_id,
             instruction_data: instruction_data.clone(),
-            pre_states: vec![running_sender_pre.clone(), running_recipient_pre.clone()], /* <- Account order permutation here */
+            // Account order permuted here (sender before recipient), matching the callee's own
+            // parameter order.
+            pre_state_refs: vec![sender_pre.account_id, recipient_pre.account_id],
             pda_seeds: pda_seed.iter().copied().collect(),
         };
         chained_calls.push(new_chained_call);
-
-        running_sender_pre.account.balance =
-            match running_sender_pre.account.balance.checked_sub(balance) {
-                Some(new_balance) => new_balance,
-                None => return,
-            };
-        running_recipient_pre.account.balance =
-            match running_recipient_pre.account.balance.checked_add(balance) {
-                Some(new_balance) => new_balance,
-                None => return,
-            };
     }
 
     ProgramOutput::new(

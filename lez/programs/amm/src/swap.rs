@@ -159,6 +159,10 @@ pub fn swap_exact_input(
 }
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "consistent with codebase style"
+)]
 fn swap_logic(
     user_deposit: AccountWithMetadata,
     vault_deposit: AccountWithMetadata,
@@ -190,14 +194,11 @@ fn swap_logic(
     let mut chained_calls = Vec::new();
     chained_calls.push(ChainedCall::new(
         token_program_id,
-        vec![user_deposit, vault_deposit],
+        vec![user_deposit.account_id, vault_deposit.account_id],
         &token_core::Instruction::Transfer {
             amount_to_transfer: swap_amount_in,
         },
     ));
-
-    let mut vault_withdraw = vault_withdraw;
-    vault_withdraw.is_authorized = true;
 
     let pda_seed = compute_vault_pda_seed(
         pool_id,
@@ -209,7 +210,7 @@ fn swap_logic(
     chained_calls.push(
         ChainedCall::new(
             token_program_id,
-            vec![vault_withdraw, user_withdraw],
+            vec![vault_withdraw.account_id, user_withdraw.account_id],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: withdraw_amount,
             },
@@ -284,6 +285,10 @@ pub fn swap_exact_output(
 }
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "consistent with codebase style"
+)]
 fn exact_output_swap_logic(
     user_deposit: AccountWithMetadata,
     vault_deposit: AccountWithMetadata,
@@ -322,14 +327,11 @@ fn exact_output_swap_logic(
     let mut chained_calls = Vec::new();
     chained_calls.push(ChainedCall::new(
         token_program_id,
-        vec![user_deposit, vault_deposit],
+        vec![user_deposit.account_id, vault_deposit.account_id],
         &token_core::Instruction::Transfer {
             amount_to_transfer: deposit_amount,
         },
     ));
-
-    let mut vault_withdraw = vault_withdraw;
-    vault_withdraw.is_authorized = true;
 
     let pda_seed = compute_vault_pda_seed(
         pool_id,
@@ -341,7 +343,7 @@ fn exact_output_swap_logic(
     chained_calls.push(
         ChainedCall::new(
             token_program_id,
-            vec![vault_withdraw, user_withdraw],
+            vec![vault_withdraw.account_id, user_withdraw.account_id],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: exact_amount_out,
             },
