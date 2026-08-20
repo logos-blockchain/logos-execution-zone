@@ -4,6 +4,21 @@
 //! [`to_frame`] layout is used by the guest journal commit, the circuit's `env::verify`
 //! reconstruction, and the host input write.
 
+/// Frames `payload`'s borsh serialization as [`to_frame`] would, but serializes directly into
+/// one exact-sized buffer instead of copying an intermediate payload vector.
+#[must_use]
+pub fn to_borsh_frame<T: borsh::BorshSerialize>(payload: &T) -> Vec<u8> {
+    let len = borsh::object_length(payload).expect("borsh serialization is infallible");
+    let mut framed = Vec::with_capacity(len.checked_add(4).expect("length overflow"));
+    framed.extend_from_slice(
+        &u32::try_from(len)
+            .expect("frame payload length must fit in u32")
+            .to_le_bytes(),
+    );
+    borsh::to_writer(&mut framed, payload).expect("borsh serialization is infallible");
+    framed
+}
+
 /// Frames `payload` as a 4-byte little-endian length prefix followed by the payload bytes.
 #[must_use]
 pub fn to_frame(payload: &[u8]) -> Vec<u8> {
@@ -26,7 +41,16 @@ pub fn from_frame(bytes: &[u8]) -> Option<&[u8]> {
 
 #[cfg(test)]
 mod tests {
-    use super::{from_frame, to_frame};
+    use super::{from_frame, to_borsh_frame, to_frame};
+
+    #[test]
+    fn to_borsh_frame_matches_framed_to_vec() {
+        let payload: (u32, Vec<u8>, Option<[u8; 32]>) = (7, vec![1, 2, 3], Some([42; 32]));
+        assert_eq!(
+            to_borsh_frame(&payload),
+            to_frame(&borsh::to_vec(&payload).unwrap())
+        );
+    }
 
     #[test]
     fn frame_round_trip() {

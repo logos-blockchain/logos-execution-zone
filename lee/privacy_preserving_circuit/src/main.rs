@@ -20,6 +20,5 @@ fn main() {
 
     let output = output::compute_circuit_output(execution_state, &account_identities, dummy_inputs);
 
-    let payload = borsh::to_vec(&output).expect("borsh serialization is infallible");
-    env::commit_slice(&lee_core::to_frame(&payload));
+    env::commit_slice(&lee_core::to_borsh_frame(&output));
 }

@@ -155,9 +155,7 @@ impl ExecutionState {
 
             // Check that `program_output` is consistent with the execution of the corresponding
             // program.
-            let program_output_frame = lee_core::to_frame(
-                &borsh::to_vec(&program_output).expect("borsh serialization is infallible"),
-            );
+            let program_output_frame = lee_core::to_borsh_frame(&program_output);
             env::verify(chained_call.program_id, &program_output_frame).unwrap_or_else(
                 |_: Infallible| unreachable!("Infallible error is never constructed"),
             );
