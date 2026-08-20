@@ -36,11 +36,9 @@ fn main() {
     };
 
     // Update data if provided.
-    let diff_data = data_opt.map(|data| {
-        let data: Data = data
-            .try_into()
-            .expect("provided data should fit into data limit");
-        data.as_ref().to_vec()
+    let diff_data: Option<Data> = data_opt.map(|data| {
+        data.try_into()
+            .expect("provided data should fit into data limit")
     });
 
     let diff = AccountDiff {
@@ -66,11 +64,6 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(
-    _pre_state: Account,
-    diff_data: Vec<u8>,
-) -> Result<Data, std::convert::Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, std::convert::Infallible> {
+    Ok(diff_data)
 }

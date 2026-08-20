@@ -12,10 +12,8 @@ use ping_core::{
     SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id, sender_config_seed,
 };
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
 }
 
 fn unchanged(account_id: AccountId) -> AccountDiffOutput {
@@ -173,7 +171,12 @@ fn init_config(
         AccountDiff {
             id: config.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(outbox_bytes(outbox_program_id).to_vec()),
+            diff_data: Some(
+                outbox_bytes(outbox_program_id)
+                    .to_vec()
+                    .try_into()
+                    .expect("ping-sender config fits under DATA_MAX_LENGTH"),
+            ),
         },
         config.account.program_owner,
         Claim::Pda(sender_config_seed()),

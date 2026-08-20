@@ -63,13 +63,13 @@ pub fn mint(
         AccountDiffOutput::new(AccountDiff {
             id: definition_account.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(Data::from(&definition).as_ref().to_vec()),
+            diff_data: Some(Data::from(&definition)),
         }),
         AccountDiffOutput::new_claimed_if_default(
             AccountDiff {
                 id: user_holding_account.account_id,
                 diff_balance: BalanceDiff::Add(0),
-                diff_data: Some(Data::from(&holding).as_ref().to_vec()),
+                diff_data: Some(Data::from(&holding)),
             },
             user_holding_account.account.program_owner,
             Claim::Authorized,

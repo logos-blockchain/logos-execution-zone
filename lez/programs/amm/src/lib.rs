@@ -34,8 +34,6 @@ pub fn unchanged(account_id: AccountId) -> AccountDiffOutput {
     })
 }
 
-pub fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+pub fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
 }

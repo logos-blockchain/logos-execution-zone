@@ -49,7 +49,7 @@ fn main() {
             AccountDiff {
                 id: account_id,
                 diff_balance: BalanceDiff::Add(0),
-                diff_data: Some(new_data.as_ref().to_vec()),
+                diff_data: Some(new_data),
             },
             Claim::Authorized,
         )],
@@ -57,11 +57,6 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(
-    _pre_state: Account,
-    diff_data: Vec<u8>,
-) -> Result<Data, std::convert::Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, std::convert::Infallible> {
+    Ok(diff_data)
 }

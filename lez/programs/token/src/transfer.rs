@@ -101,14 +101,14 @@ pub fn transfer(
     let sender_post = AccountDiffOutput::new(AccountDiff {
         id: sender.account_id,
         diff_balance: BalanceDiff::Add(0),
-        diff_data: Some(Data::from(&sender_holding).as_ref().to_vec()),
+        diff_data: Some(Data::from(&sender_holding)),
     });
 
     let recipient_post = AccountDiffOutput::new_claimed_if_default(
         AccountDiff {
             id: recipient.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(Data::from(&recipient_holding).as_ref().to_vec()),
+            diff_data: Some(Data::from(&recipient_holding)),
         },
         recipient.account.program_owner,
         Claim::Authorized,

@@ -83,7 +83,7 @@ fn create_swap_post_states(
     let pool_post = AccountDiffOutput::new(AccountDiff {
         id: pool.account_id,
         diff_balance: BalanceDiff::Add(0),
-        diff_data: Some(Data::from(&pool_post_definition).as_ref().to_vec()),
+        diff_data: Some(Data::from(&pool_post_definition)),
     });
 
     vec![

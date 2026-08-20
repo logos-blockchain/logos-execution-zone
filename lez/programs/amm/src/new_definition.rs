@@ -111,7 +111,7 @@ pub fn new_definition(
         AccountDiff {
             id: pool.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(Data::from(&pool_post_definition).as_ref().to_vec()),
+            diff_data: Some(Data::from(&pool_post_definition)),
         },
         pool.account.program_owner,
         Claim::Pda(pool_pda_seed),

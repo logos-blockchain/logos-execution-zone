@@ -100,7 +100,10 @@ fn main() {
         last_claim_timestamp: current_timestamp,
         ..pinata_state
     };
-    let updated_data = updated_state.to_bytes();
+    let updated_data: Data = updated_state
+        .to_bytes()
+        .try_into()
+        .expect("pinata account data always fits under DATA_MAX_LENGTH");
 
     let pinata_post = AccountDiffOutput::new_claimed_if_default(
         AccountDiff {
@@ -134,8 +137,6 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, std::convert::Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, std::convert::Infallible> {
+    Ok(diff_data)
 }

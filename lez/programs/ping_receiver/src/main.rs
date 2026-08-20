@@ -13,10 +13,8 @@ use ping_core::{
     receiver_config_account_id, receiver_config_seed,
 };
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
 }
 
 fn unchanged(account_id: lee_core::account::AccountId) -> AccountDiffOutput {
@@ -111,7 +109,7 @@ fn record(
         AccountDiff {
             id: record.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(payload.as_ref().to_vec()),
+            diff_data: Some(payload),
         },
         record.account.program_owner,
         Claim::Pda(ping_record_seed()),
@@ -171,7 +169,12 @@ fn init_config(
         AccountDiff {
             id: config.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(config_value.to_bytes()),
+            diff_data: Some(
+                config_value
+                    .to_bytes()
+                    .try_into()
+                    .expect("receiver config fits under DATA_MAX_LENGTH"),
+            ),
         },
         config.account.program_owner,
         Claim::Pda(receiver_config_seed()),

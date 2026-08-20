@@ -54,10 +54,12 @@ fn main() {
     // ####
 
     // Construct the new data value
-    let new_data = {
+    let new_data: Data = {
         let mut bytes = pre_state.account.data.clone().into_inner();
         bytes.extend_from_slice(&greeting);
         bytes
+            .try_into()
+            .expect("greeting fits under DATA_MAX_LENGTH")
     };
 
     // Wrap the diff inside a `AccountDiffOutput` instance.
@@ -87,8 +89,6 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, std::convert::Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, std::convert::Infallible> {
+    Ok(diff_data)
 }

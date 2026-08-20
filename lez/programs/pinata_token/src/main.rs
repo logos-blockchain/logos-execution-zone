@@ -94,7 +94,7 @@ fn main() {
     let pinata_definition_post = AccountDiffOutput::new(AccountDiff {
         id: pinata_definition.account_id,
         diff_balance: BalanceDiff::Add(0),
-        diff_data: Some(data.next_data().as_ref().to_vec()),
+        diff_data: Some(data.next_data()),
     });
     let token_program_owner = pinata_token_holding.account.program_owner;
 
@@ -136,10 +136,8 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
 }
 
 fn unchanged(account_id: lee_core::account::AccountId) -> AccountDiffOutput {

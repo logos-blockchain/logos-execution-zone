@@ -13,10 +13,8 @@ use lee_core::{
     },
 };
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
 }
 
 fn unchanged(pre: &AccountWithMetadata) -> AccountDiffOutput {
@@ -144,7 +142,12 @@ fn dispatch(
             AccountDiff {
                 id: seen.account_id,
                 diff_balance: BalanceDiff::Add(0),
-                diff_data: Some(shard.to_bytes()),
+                diff_data: Some(
+                    shard
+                        .to_bytes()
+                        .try_into()
+                        .expect("seen shard fits under DATA_MAX_LENGTH"),
+                ),
             },
             seen.account.program_owner,
             Claim::Pda(inbox_seen_shard_seed(&msg.src_zone, msg.src_block_id)),
@@ -228,7 +231,12 @@ fn init_config(
         AccountDiff {
             id: config_meta.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(config.to_bytes()),
+            diff_data: Some(
+                config
+                    .to_bytes()
+                    .try_into()
+                    .expect("inbox config fits under DATA_MAX_LENGTH"),
+            ),
         },
         config_meta.account.program_owner,
         Claim::Pda(inbox_config_seed()),

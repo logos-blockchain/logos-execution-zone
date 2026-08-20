@@ -40,7 +40,7 @@ pub fn new_fungible_definition(
             AccountDiff {
                 id: definition_target_account.account_id,
                 diff_balance: BalanceDiff::Add(0),
-                diff_data: Some(Data::from(&token_definition).as_ref().to_vec()),
+                diff_data: Some(Data::from(&token_definition)),
             },
             Claim::Authorized,
         ),
@@ -48,7 +48,7 @@ pub fn new_fungible_definition(
             AccountDiff {
                 id: holding_target_account.account_id,
                 diff_balance: BalanceDiff::Add(0),
-                diff_data: Some(Data::from(&token_holding).as_ref().to_vec()),
+                diff_data: Some(Data::from(&token_holding)),
             },
             Claim::Authorized,
         ),
@@ -122,7 +122,7 @@ pub fn new_definition_with_metadata(
             AccountDiff {
                 id: definition_target_account.account_id,
                 diff_balance: BalanceDiff::Add(0),
-                diff_data: Some(Data::from(&token_definition).as_ref().to_vec()),
+                diff_data: Some(Data::from(&token_definition)),
             },
             Claim::Authorized,
         ),
@@ -130,7 +130,7 @@ pub fn new_definition_with_metadata(
             AccountDiff {
                 id: holding_target_account.account_id,
                 diff_balance: BalanceDiff::Add(0),
-                diff_data: Some(Data::from(&token_holding).as_ref().to_vec()),
+                diff_data: Some(Data::from(&token_holding)),
             },
             Claim::Authorized,
         ),
@@ -138,7 +138,7 @@ pub fn new_definition_with_metadata(
             AccountDiff {
                 id: metadata_target_account.account_id,
                 diff_balance: BalanceDiff::Add(0),
-                diff_data: Some(Data::from(&token_metadata).as_ref().to_vec()),
+                diff_data: Some(Data::from(&token_metadata)),
             },
             Claim::Authorized,
         ),

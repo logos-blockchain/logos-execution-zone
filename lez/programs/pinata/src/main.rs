@@ -87,7 +87,12 @@ fn main() {
         AccountDiff {
             id: pinata.account_id,
             diff_balance: BalanceDiff::Sub(PRIZE),
-            diff_data: Some(data.next_data().to_vec()),
+            diff_data: Some(
+                data.next_data()
+                    .to_vec()
+                    .try_into()
+                    .expect("pinata challenge data always fits under DATA_MAX_LENGTH"),
+            ),
         },
         pinata.account.program_owner,
         Claim::Authorized,
@@ -108,8 +113,6 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
 }

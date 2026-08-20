@@ -9,10 +9,8 @@ use lee_core::{
     },
 };
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
 }
 
 fn main() {
@@ -88,7 +86,7 @@ fn main() {
         "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
     );
 
-    let new_data = OutboxRecord {
+    let new_data: Data = OutboxRecord {
         emitter,
         target_zone,
         ordinal,
@@ -96,7 +94,9 @@ fn main() {
         target_accounts,
         payload,
     }
-    .to_bytes();
+    .to_bytes()
+    .try_into()
+    .expect("OutboxRecord fits under DATA_MAX_LENGTH");
 
     // Unconditional, since the pre-state is provably default by the assert above.
     let post = AccountDiffOutput::new_claimed(

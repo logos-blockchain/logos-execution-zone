@@ -14,10 +14,8 @@ use lee_core::{
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
 }
 
 fn unchanged(account_id: AccountId) -> AccountDiffOutput {
@@ -250,7 +248,12 @@ fn init_config(
         AccountDiff {
             id: config.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(config_bytes(outbox_program_id, target_program_id).to_vec()),
+            diff_data: Some(
+                config_bytes(outbox_program_id, target_program_id)
+                    .to_vec()
+                    .try_into()
+                    .expect("bridge-lock config fits under DATA_MAX_LENGTH"),
+            ),
         },
         config.account.program_owner,
         Claim::Pda(config_seed()),

@@ -96,12 +96,12 @@ pub fn burn(
         AccountDiffOutput::new(AccountDiff {
             id: definition_account.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(Data::from(&definition).as_ref().to_vec()),
+            diff_data: Some(Data::from(&definition)),
         }),
         AccountDiffOutput::new(AccountDiff {
             id: user_holding_account.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(Data::from(&holding).as_ref().to_vec()),
+            diff_data: Some(Data::from(&holding)),
         }),
     ]
 }

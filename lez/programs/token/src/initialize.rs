@@ -34,7 +34,7 @@ pub fn initialize_account(
             AccountDiff {
                 id: account_to_initialize.account_id,
                 diff_balance: BalanceDiff::Add(0),
-                diff_data: Some(Data::from(&holding).as_ref().to_vec()),
+                diff_data: Some(Data::from(&holding)),
             },
             Claim::Authorized,
         ),

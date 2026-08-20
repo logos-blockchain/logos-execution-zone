@@ -97,10 +97,8 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("diff_data was already validated to fit under DATA_MAX_LENGTH when constructed"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
 }
 
 fn unchanged(account_id: AccountId) -> AccountDiffOutput {
@@ -222,7 +220,7 @@ fn stake(
         AccountDiff {
             id: ownership_account.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(new_record_data.as_ref().to_vec()),
+            diff_data: Some(new_record_data.clone()),
         },
         ownership_account.account.program_owner,
         Claim::Authorized,
@@ -235,7 +233,7 @@ fn stake(
     let config_account_post = AccountDiffOutput::new(AccountDiff {
         id: config_account.account_id,
         diff_balance: BalanceDiff::Add(0),
-        diff_data: Some(new_config_data.as_ref().to_vec()),
+        diff_data: Some(new_config_data.clone()),
     });
 
     // chained-call pre-states reflect state as of when each call runs
@@ -341,16 +339,14 @@ fn unstake_request(
         .expect("total pending unstake overflow");
 
     // only data changes here; transfer happens in FinalizeUnstake
-    let new_record_data: Vec<u8> = record
+    let new_record_data: Data = record
         .to_bytes()
         .try_into()
-        .map(|data: Data| data.as_ref().to_vec())
         .expect("StakeRecord should fit in account data");
 
-    let new_config_data: Vec<u8> = config
+    let new_config_data: Data = config
         .to_bytes()
         .try_into()
-        .map(|data: Data| data.as_ref().to_vec())
         .expect("SequencerStakeConfig should fit in account data");
 
     vec![
@@ -393,10 +389,9 @@ fn finalize_unstake(
     );
 
     // no signature check: already authorized back in UnstakeRequest
-    let new_record_data: Vec<u8> = record
+    let new_record_data: Data = record
         .to_bytes()
         .try_into()
-        .map(|data: Data| data.as_ref().to_vec())
         .expect("StakeRecord should fit in account data");
 
     let mut config = decode_config(&config_account, self_program_id);
@@ -421,10 +416,9 @@ fn finalize_unstake(
         config.entries.remove(&record.sequencer_key);
     }
 
-    let new_config_data: Vec<u8> = config
+    let new_config_data: Data = config
         .to_bytes()
         .try_into()
-        .map(|data: Data| data.as_ref().to_vec())
         .expect("SequencerStakeConfig should fit in account data");
 
     vec![

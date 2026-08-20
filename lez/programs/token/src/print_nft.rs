@@ -43,20 +43,16 @@ pub fn print_nft(
         AccountDiffOutput::new(AccountDiff {
             id: master_account.account_id,
             diff_balance: BalanceDiff::Add(0),
-            diff_data: Some(Data::from(&master_account_data).as_ref().to_vec()),
+            diff_data: Some(Data::from(&master_account_data)),
         }),
         AccountDiffOutput::new_claimed(
             AccountDiff {
                 id: printed_account.account_id,
                 diff_balance: BalanceDiff::Add(0),
-                diff_data: Some(
-                    Data::from(&TokenHolding::NftPrintedCopy {
-                        definition_id,
-                        owned: true,
-                    })
-                    .as_ref()
-                    .to_vec(),
-                ),
+                diff_data: Some(Data::from(&TokenHolding::NftPrintedCopy {
+                    definition_id,
+                    owned: true,
+                })),
             },
             Claim::Authorized,
         ),

@@ -28,9 +28,12 @@ fn update_if_multiple(
     current_block_id: u64,
     updated_data: &[u8],
 ) -> AccountDiffOutput {
-    let diff_data = current_block_id
-        .is_multiple_of(divisor)
-        .then(|| updated_data.to_vec());
+    let diff_data = current_block_id.is_multiple_of(divisor).then(|| {
+        updated_data
+            .to_vec()
+            .try_into()
+            .expect("clock account data always fits under DATA_MAX_LENGTH")
+    });
     AccountDiffOutput::new(AccountDiff {
         id: pre.account_id,
         diff_balance: BalanceDiff::Add(0),
@@ -106,8 +109,6 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, Infallible> {
-    Ok(diff_data
-        .try_into()
-        .expect("clock account data always fits under DATA_MAX_LENGTH"))
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
+    Ok(diff_data)
 }
