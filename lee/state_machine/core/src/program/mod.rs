@@ -691,7 +691,7 @@ pub fn compute_public_authorized_pdas(
 }
 
 /// Reads first 4 bytes indicating the length in bytes of the program input bytes.
-/// Afterwards, reads the exact number of frames in the header.
+/// Afterwards, reads exactly that many payload bytes.
 #[must_use]
 pub fn read_input_frame() -> Vec<u8> {
     let mut len_bytes = [0; 4];
