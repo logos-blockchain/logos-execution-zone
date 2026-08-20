@@ -202,7 +202,7 @@ typedef struct FfiPublicTransactionBody {
  * byte arrays since C doesn't have native u128 support.
  */
 typedef struct FfiAccount {
-  struct FfiProgramId program_owner;
+  struct FfiBytes32 program_owner;
   /**
    * Balance as little-endian [u8; 16].
    */

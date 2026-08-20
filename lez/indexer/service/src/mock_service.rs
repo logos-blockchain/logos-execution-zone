@@ -105,7 +105,9 @@ impl MockIndexerService {
             accounts.insert(
                 *account_id,
                 Account {
-                    program_owner: ProgramId([i as u32; 8]),
+                    program_owner: AccountId {
+                        value: [i as u8; 32],
+                    },
                     balance: 1000 * (i as u128 + 1),
                     data: Data(vec![0xaa, 0xbb, 0xcc]),
                     nonce: i as u128,
@@ -388,7 +390,7 @@ fn mock_privacy_preserving_tx(
             public_actions: vec![PublicActionWithID {
                 account_id: account_ids[tx_idx as usize % account_ids.len()],
                 post_state: Account {
-                    program_owner: ProgramId([1_u32; 8]),
+                    program_owner: AccountId { value: [1_u8; 32] },
                     balance: 500,
                     data: Data(vec![0xdd, 0xee]),
                     nonce: block_id as u128,

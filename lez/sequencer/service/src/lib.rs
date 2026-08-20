@@ -1,13 +1,15 @@
 use std::net::SocketAddr;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use futures::never::Never;
 use kameo::actor::Spawn as _;
 use kameo_actors::scheduler::{Scheduler, SetInterval};
 use log::info;
 pub use sequencer_core::config::*;
+use sequencer_core::load_or_create_signing_key;
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_rpc_server_actor::RpcServerActor;
+use sequencer_storage_actor::StorageActor;
 use tokio::select;
 
 use crate::actor_handle::ActorHandle;
@@ -28,7 +30,11 @@ pub struct SequencerHandle {
     scheduler: ActorHandle<Scheduler>,
     rpc_server: ActorHandle<RpcServerActor>,
     executor: ActorHandle<ExecutorActor<BlockPublisher>>,
+    storage: ActorHandle<StorageActor>,
     addr: SocketAddr,
+    /// Held for its lifetime: dropping it stops the gossip drive task.
+    /// `None` when gossip is unconfigured.
+    gossip: Option<sequencer_core::gossip::GossipNetwork>,
 }
 
 impl SequencerHandle {
@@ -36,13 +42,17 @@ impl SequencerHandle {
         scheduler: ActorHandle<Scheduler>,
         rpc_server: ActorHandle<RpcServerActor>,
         executor: ActorHandle<ExecutorActor<BlockPublisher>>,
+        storage: ActorHandle<StorageActor>,
         addr: SocketAddr,
+        gossip: Option<sequencer_core::gossip::GossipNetwork>,
     ) -> Self {
         Self {
             scheduler,
             rpc_server,
             executor,
+            storage,
             addr,
+            gossip,
         }
     }
 
@@ -53,13 +63,16 @@ impl SequencerHandle {
             scheduler,
             rpc_server,
             executor,
+            storage,
             addr: _,
+            gossip: _,
         } = self;
 
         // NOTE: Order of shutdown matters. Make sure it follows the order of fields in the struct.
         scheduler.shutdown().await;
         rpc_server.shutdown().await;
         executor.shutdown().await;
+        storage.shutdown().await;
     }
 
     /// Wait for any of the sequencer tasks to fail and return the error.
@@ -72,7 +85,9 @@ impl SequencerHandle {
             executor,
             rpc_server,
             scheduler,
+            storage,
             addr: _,
+            gossip: _,
         } = self;
 
         select! {
@@ -83,6 +98,9 @@ impl SequencerHandle {
                 Err(err)
             }
             Err(err) = scheduler.failed() => {
+                Err(err)
+            }
+            Err(err) = storage.failed() => {
                 Err(err)
             }
         }
@@ -98,15 +116,29 @@ impl SequencerHandle {
             executor,
             rpc_server,
             scheduler,
+            storage,
             addr: _,
+            gossip: _,
         } = self;
 
-        executor.is_healthy() && rpc_server.is_healthy() && scheduler.is_healthy()
+        executor.is_healthy()
+            && rpc_server.is_healthy()
+            && scheduler.is_healthy()
+            && storage.is_healthy()
     }
 
     #[must_use]
     pub const fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Multiaddrs (with the `/p2p/` peer id suffix) other nodes can use as
+    /// gossip `bootstrap_peers`. `None` when gossip is unconfigured.
+    #[must_use]
+    pub fn gossip_bootstrap_addrs(&self) -> Option<Vec<sequencer_core::gossip::Multiaddr>> {
+        self.gossip
+            .as_ref()
+            .map(sequencer_core::gossip::GossipNetwork::bootstrap_addrs)
     }
 }
 
@@ -114,11 +146,54 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
     let block_timeout = config.block_create_timeout;
     let max_block_size = config.max_block_size;
 
-    let executor = ExecutorActor::new(config).await;
+    let gossip_config = config.gossip.clone();
+    let bedrock_config = config.bedrock_config.clone();
+    let sequencer_home = config.home.clone();
+
+    let storage =
+        StorageActor::new(&config.db_path()).context("Failed to initialize Storage Actor")?;
+    let storage_ref = StorageActor::spawn(storage);
+    info!("Storage Actor spawned");
+
+    let executor = ExecutorActor::new(config, storage_ref.clone()).await;
+    let mempool_handle = executor.mempool_handle();
     let executor_ref = ExecutorActor::spawn(executor);
     info!("Executor Actor spawned");
 
-    let rpc_server = RpcServerActor::new(executor_ref.clone(), listen_addr, max_block_size).await?;
+    // TODO: Should be a separate actor
+    let gossip_network = match gossip_config {
+        None => None,
+        Some(gossip_config) => {
+            // The node's L1 bedrock signing key is deliberately reused as the
+            // libp2p identity; `GossipNetwork::start` derives the keypair.
+            let signing_key =
+                load_or_create_signing_key(&sequencer_home.join("bedrock_signing_key"))?;
+            let channel_id = *bedrock_config.channel_id.as_ref();
+            let network = sequencer_core::gossip::GossipNetwork::start(
+                gossip_config,
+                channel_id,
+                signing_key,
+                mempool_handle,
+                max_block_size.as_u64(),
+            )
+            .await
+            .context("Failed to start sequencer gossip network")?;
+            info!("Gossip network started as {}", network.local_peer_id());
+            Some(network)
+        }
+    };
+    let tx_publisher = gossip_network
+        .as_ref()
+        .map(sequencer_core::gossip::GossipNetwork::tx_publisher);
+
+    let rpc_server = RpcServerActor::new(
+        listen_addr,
+        max_block_size,
+        executor_ref.clone(),
+        tx_publisher,
+    )
+    .await
+    .context("Failed to initialize RPC Server Actor")?;
     let addr = rpc_server.addr();
     let rpc_server_ref = RpcServerActor::spawn(rpc_server);
     info!("RPC Server Actor spawned");
@@ -141,6 +216,8 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
         ActorHandle::new(scheduler_ref),
         ActorHandle::new(rpc_server_ref),
         ActorHandle::new(executor_ref),
+        ActorHandle::new(storage_ref),
         addr,
+        gossip_network,
     ))
 }

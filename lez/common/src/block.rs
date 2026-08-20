@@ -40,7 +40,8 @@ pub struct PeerChainTip {
 pub struct OwnHasher;
 
 impl OwnHasher {
-    fn hash(data: &[u8]) -> HashType {
+    #[must_use]
+    pub fn hash(data: &[u8]) -> HashType {
         let mut hasher = Sha256::new();
 
         hasher.update(data);

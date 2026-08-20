@@ -5,7 +5,7 @@ use risc0_zkvm::serde::to_vec;
 
 /// Proxy for spending from a private PDA via `simple_transfer`.
 ///
-/// `pre_states = [pda (authorized), recipient]`. Debits the PDA and credits the recipient.
+/// `pre_states = [pda, recipient]`. Debits the PDA and credits the recipient.
 /// The PDA-to-npk binding is established via `pda_seeds` in the chained call to `simple_transfer`.
 type Instruction = (PdaSeed, u128, ProgramId);
 
@@ -24,15 +24,16 @@ fn main() {
         return;
     };
 
-    assert!(first.is_authorized, "first pre_state must be authorized");
-
     let first_post = AccountPostState::new(first.account.clone());
     let second_post = AccountPostState::new(second.account.clone());
+
+    let mut first_for_callee = first.clone();
+    first_for_callee.is_authorized = true;
 
     let chained_call = ChainedCall {
         program_id: simple_transfer_id,
         instruction_data: to_vec(&amount).unwrap(),
-        pre_states: vec![first.clone(), second.clone()],
+        pre_states: vec![first_for_callee, second.clone()],
         pda_seeds: vec![seed],
     };
 

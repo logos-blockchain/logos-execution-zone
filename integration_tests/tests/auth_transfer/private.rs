@@ -382,7 +382,7 @@ async fn initialize_private_account() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(account.balance, 0);
     assert!(account.data.is_empty());
@@ -461,7 +461,7 @@ async fn initialize_private_account_using_label() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
 
     log::info!("Successfully initialized private account using label");

@@ -14,6 +14,10 @@
         "node_url": "http://localhost:18080",
         "funding_key": "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
     },
+    "gossip": {
+        "listen_addr": "/ip4/127.0.0.1/udp/0/quic-v1",
+        "bootstrap_peers": []
+    },
     "genesis": [
         {
             "supply_bridge_account": {

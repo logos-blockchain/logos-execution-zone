@@ -133,7 +133,8 @@ pub fn add_liquidity(
     };
 
     pool_post.data = Data::from(&pool_post_definition);
-    let token_program_id = user_holding_a.account.program_owner;
+    let token_program_id: lee_core::program::ProgramId =
+        user_holding_a.account.program_owner.into();
 
     // Chain call for Token A (UserHoldingA -> Vault_A)
     let call_token_a = ChainedCall::new(

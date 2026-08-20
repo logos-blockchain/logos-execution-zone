@@ -16,7 +16,9 @@ lee.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 sequencer_core = { workspace = true, features = ["default", "testnet"] }
 sequencer_service.workspace = true
+sequencer_stake_core.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
+sequencer_storage_actor.workspace = true
 wallet.workspace = true
 programs.workspace = true
 
@@ -27,6 +29,7 @@ env_logger.workspace = true
 futures.workspace = true
 hex.workspace = true
 jsonrpsee = { workspace = true, features = ["ws-client"] }
+kameo.workspace = true
 log.workspace = true
 num-bigint.workspace = true
 serde.workspace = true

@@ -1,27 +1,34 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
-use common::{HashType, block::Block, transaction::LeeTransaction};
+use anyhow::{Context as _, Result};
+use common::{
+    HashType,
+    block::{Block, PeerChainTip},
+    transaction::LeeTransaction,
+};
 use cross_zone::{
     EmissionSource, Link, StallState, alerts_at, build_dispatch_from_emission, equivocation_report,
     extract_emission, is_sequencer_only_program, link_to_tip, pinned_keys, screen_peer_block,
 };
 use cross_zone_inbox_core::message_key;
 use futures::{Stream, StreamExt as _};
+use kameo::actor::ActorRef;
 use lee::PublicKey;
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
-use storage::sequencer::{
-    RocksDBIO,
-    sequencer_cells::{PeerChainTip, PendingCrossZoneDispatchRecord},
+use sequencer_storage_actor::{
+    StorageActorTrait,
+    protocol::{
+        AddPendingCrossZoneDispatches, DeleteCrossZonePeerFloor, GetCrossZonePeerFloorBytes,
+        GetCrossZonePeerTip, PeerZoneKey, PendingCrossZoneDispatchRecord,
+        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
+    },
 };
 
 use crate::{
-    block_store::{
-        clear_cross_zone_peer_floor, get_cross_zone_peer_floor, set_cross_zone_peer_floor,
-    },
     config::{BedrockConfig, CrossZoneConfig},
     task_group::TaskGroup,
 };
@@ -119,6 +126,56 @@ const fn resume_from(tip: Option<PeerChainTip>, floor: Option<Slot>) -> Resume {
     }
 }
 
+/// This watcher's delivery floor on `peer_zone`'s channel.
+///
+/// The highest slot every message of which was delivered, or `None` before it
+/// has delivered anything from that peer. Stored as a little-endian `u64`, which
+/// is why the encoding lives here rather than in the storage actor.
+async fn get_cross_zone_peer_floor<S: StorageActorTrait>(
+    storage_ref: &ActorRef<S>,
+    peer_zone: PeerZoneKey,
+) -> Result<Option<Slot>> {
+    let Some(bytes) = storage_ref
+        .ask(GetCrossZonePeerFloorBytes { peer_zone })
+        .await?
+    else {
+        return Ok(None);
+    };
+    let bytes: [u8; 8] = bytes.as_slice().try_into().with_context(|| {
+        format!(
+            "Stored cross-zone peer floor is {} bytes, expected 8",
+            bytes.len()
+        )
+    })?;
+    Ok(Some(Slot::new(u64::from_le_bytes(bytes))))
+}
+
+async fn set_cross_zone_peer_floor<S: StorageActorTrait>(
+    storage_ref: &ActorRef<S>,
+    peer_zone: PeerZoneKey,
+    floor: Slot,
+) -> Result<()> {
+    storage_ref
+        .ask(SetCrossZonePeerFloorBytes {
+            peer_zone,
+            bytes: floor.to_le_bytes().to_vec(),
+        })
+        .await?;
+    Ok(())
+}
+
+/// Drops the stored floor so the watcher reads `peer_zone`'s channel from the
+/// peer's genesis again.
+async fn clear_cross_zone_peer_floor<S: StorageActorTrait>(
+    storage_ref: &ActorRef<S>,
+    peer_zone: PeerZoneKey,
+) -> Result<()> {
+    storage_ref
+        .ask(DeleteCrossZonePeerFloor { peer_zone })
+        .await?;
+    Ok(())
+}
+
 /// Spawns one watcher task per configured peer.
 ///
 /// Each task reads the peer's finalized blocks from Bedrock, recognizes outbound
@@ -129,15 +186,13 @@ const fn resume_from(tip: Option<PeerChainTip>, floor: Option<Slot>) -> Resume {
 /// The returned group must be kept alive for as long as the watchers should
 /// run; dropping it stops them, and awaiting
 /// [`TaskGroup::shutdown`](crate::task_group::TaskGroup::shutdown) is what
-/// proves they have stopped. Each watcher holds an `Arc<RocksDBIO>`, so a
-/// watcher still running keeps the `RocksDB` lock held and a restarting
-/// sequencer cannot reopen its home directory.
+/// proves they have stopped.
 #[must_use]
-pub fn spawn_watchers(
+pub fn spawn_watchers<S: StorageActorTrait>(
     bedrock_config: &BedrockConfig,
     cross_zone: &CrossZoneConfig,
     poll_interval: Duration,
-    dbio: &Arc<RocksDBIO>,
+    storage_ref: &ActorRef<S>,
 ) -> TaskGroup {
     let self_zone: [u8; 32] = *bedrock_config.channel_id.as_ref();
     let mut tasks = Vec::new();
@@ -156,7 +211,7 @@ pub fn spawn_watchers(
                 expected_pubkeys,
             },
             poll_interval,
-            Arc::clone(dbio),
+            storage_ref.clone(),
         )));
     }
 
@@ -167,11 +222,11 @@ pub fn spawn_watchers(
     clippy::infinite_loop,
     reason = "the peer watcher runs for the lifetime of the sequencer process"
 )]
-async fn watch_peer(
+async fn watch_peer<S: StorageActorTrait>(
     zone_indexer: ZoneIndexer<NodeHttpClient>,
     peer: PeerContext,
     poll_interval: Duration,
-    dbio: Arc<RocksDBIO>,
+    storage_ref: ActorRef<S>,
 ) {
     let peer_zone = peer.peer_zone;
     log::info!(
@@ -184,7 +239,7 @@ async fn watch_peer(
     // key is content-addressed and the inbox no-ops a replay) but re-records
     // every already-delivered message, so without this a restart replayed the
     // peer's whole history into the store.
-    let floor = match get_cross_zone_peer_floor(&dbio, peer_zone) {
+    let floor = match get_cross_zone_peer_floor(&storage_ref, peer_zone).await {
         Ok(floor) => floor,
         Err(err) => {
             // Falling back to `None` would re-read the peer's whole history and
@@ -200,7 +255,7 @@ async fn watch_peer(
     // The chain this watcher has already delivered from. Without it no block can
     // be told apart from one claiming an id it never reached, so a watcher that
     // cannot read it delivers nothing rather than guessing.
-    let mut tip = match dbio.get_cross_zone_peer_tip(peer_zone) {
+    let mut tip = match storage_ref.ask(GetCrossZonePeerTip { peer_zone }).await {
         Ok(tip) => tip,
         Err(err) => {
             error!(
@@ -218,7 +273,7 @@ async fn watch_peer(
         );
         // Durably, before reading anything, or a crash partway through the
         // rebuild resumes from the stale floor with nothing able to link.
-        if let Err(err) = clear_cross_zone_peer_floor(&dbio, peer_zone) {
+        if let Err(err) = clear_cross_zone_peer_floor(&storage_ref, peer_zone).await {
             error!(
                 "Watcher could not clear the stale delivery floor for peer {}: {err:#}. Stopping this watcher rather than rebuilding its chain against a floor a restart would resume from.",
                 hex::encode(peer_zone)
@@ -249,7 +304,7 @@ async fn watch_peer(
                 continue;
             }
         };
-        let outcome = consume_peer_stream(stream, &peer, &dbio, &mut cursor, &mut tip).await;
+        let outcome = consume_peer_stream(stream, &peer, &storage_ref, &mut cursor, &mut tip).await;
 
         if let Some((slot, attempts)) = state.after_pass(outcome, cursor)
             && alerts_at(attempts)
@@ -257,7 +312,10 @@ async fn watch_peer(
             error!(
                 "Watcher for peer {} has been stuck at slot {slot:?} for {attempts} passes. Nothing from that peer is being delivered until it clears, and the delivery floor stays at {:?} so the slot keeps coming back.",
                 hex::encode(peer_zone),
-                get_cross_zone_peer_floor(&dbio, peer_zone).ok().flatten()
+                get_cross_zone_peer_floor(&storage_ref, peer_zone)
+                    .await
+                    .ok()
+                    .flatten()
             );
         }
         // Reads on rather than stopping, since one such pass is ordinary, but a
@@ -284,15 +342,15 @@ async fn watch_peer(
 ///
 /// Ending early holds the floor at the last slot consumed whole, so the next
 /// poll re-reads from there and a transient failure heals.
-async fn consume_peer_stream<S>(
-    stream: S,
+async fn consume_peer_stream<Str, S: StorageActorTrait>(
+    stream: Str,
     peer: &PeerContext,
-    dbio: &RocksDBIO,
+    storage_ref: &ActorRef<S>,
     cursor: &mut Option<Slot>,
     tip: &mut Option<PeerChainTip>,
 ) -> PassOutcome
 where
-    S: Stream<Item = (ZoneMessage, Slot)>,
+    Str: Stream<Item = (ZoneMessage, Slot)>,
 {
     let mut stream = std::pin::pin!(stream);
     // The slot being consumed: every message of it seen so far is handled, but
@@ -308,7 +366,7 @@ where
         if in_progress != Some(slot) {
             // A message from a later slot means the previous one completed.
             if let Some(done) = in_progress {
-                advance_cursor(dbio, peer.peer_zone, cursor, done);
+                advance_cursor(storage_ref, peer.peer_zone, cursor, done).await;
             }
             in_progress = Some(slot);
         }
@@ -369,7 +427,7 @@ where
                         );
                     }
                     Link::Next(block_hash) => {
-                        if !record_block_deliveries(&block, block_hash, peer, dbio) {
+                        if !record_block_deliveries(&block, block_hash, peer, storage_ref).await {
                             // Recording a delivery is what makes it survive the
                             // mempool. Letting the pass finish here would move
                             // the floor past this slot on a store that just
@@ -390,7 +448,13 @@ where
                             block_id: block.header.block_id,
                             block_hash,
                         };
-                        if let Err(err) = dbio.put_cross_zone_peer_tip(peer.peer_zone, next) {
+                        if let Err(err) = storage_ref
+                            .ask(SetCrossZonePeerTip {
+                                peer_zone: peer.peer_zone,
+                                tip: next,
+                            })
+                            .await
+                        {
                             // Advancing only in memory would leave a restart
                             // resuming from a floor above a tip, and every block
                             // after it unlinkable.
@@ -418,7 +482,7 @@ where
 
     // The stream drained cleanly, so the slot in progress completed too.
     if let Some(done) = in_progress {
-        advance_cursor(dbio, peer.peer_zone, cursor, done);
+        advance_cursor(storage_ref, peer.peer_zone, cursor, done).await;
     }
     if placed == 0 && skipped > 0 {
         return PassOutcome::Stranded;
@@ -431,9 +495,14 @@ where
 ///
 /// A persist failure is only logged: the worst case is re-reading from the last
 /// stored slot after a restart, which delivery handles idempotently.
-fn advance_cursor(dbio: &RocksDBIO, peer_zone: [u8; 32], cursor: &mut Option<Slot>, slot: Slot) {
+async fn advance_cursor<S: StorageActorTrait>(
+    storage_ref: &ActorRef<S>,
+    peer_zone: [u8; 32],
+    cursor: &mut Option<Slot>,
+    slot: Slot,
+) {
     *cursor = Some(slot);
-    if let Err(err) = set_cross_zone_peer_floor(dbio, peer_zone, slot) {
+    if let Err(err) = set_cross_zone_peer_floor(storage_ref, peer_zone, slot).await {
         warn!(
             "Failed to persist watcher delivery floor for peer {}: {err:#}",
             hex::encode(peer_zone)
@@ -449,18 +518,16 @@ fn advance_cursor(dbio: &RocksDBIO, peer_zone: [u8; 32], cursor: &mut Option<Slo
 ///
 /// `block_hash` is the value [`screen_peer_block`] recomputed from the block's
 /// own contents, not `block.header.hash`, which the signature does not cover.
-fn record_block_deliveries(
+async fn record_block_deliveries<S: StorageActorTrait>(
     block: &Block,
     block_hash: HashType,
     peer: &PeerContext,
-    dbio: &RocksDBIO,
+    storage_ref: &ActorRef<S>,
 ) -> bool {
     let peer_zone = peer.peer_zone;
     let self_zone = peer.self_zone;
-    // Collected and written once. The pending list is a single value, so a write
-    // per delivery would rewrite the whole list once per message, which is
-    // quadratic in a peer block that carries many of them, on a task holding the
-    // lock block production needs.
+    // Collected and written once, so recording a block is all-or-nothing; see
+    // RocksDBIO::add_pending_cross_zone_dispatches.
     let mut deliveries = Vec::new();
     for (index, tx) in block.body.transactions.iter().enumerate() {
         let LeeTransaction::Public(public_tx) = tx else {
@@ -522,7 +589,12 @@ fn record_block_deliveries(
     }
 
     let offered = deliveries.len();
-    match dbio.add_pending_cross_zone_dispatches(deliveries) {
+    match storage_ref
+        .ask(AddPendingCrossZoneDispatches {
+            dispatches: deliveries,
+        })
+        .await
+    {
         // Fewer accepted than offered means the rest were recorded by an earlier
         // pass over the same slot, which the retry loop repeats for as long as
         // the slot stays stuck.
@@ -558,12 +630,19 @@ fn record_block_deliveries(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use common::test_utils::produce_dummy_block;
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
+    use kameo::actor::Spawn as _;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
-    use storage::sequencer::{DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY, RocksDBIO};
+    use sequencer_storage_actor::{
+        StorageActor,
+        mock::MockStorageActor,
+        protocol::{GetPendingCrossZoneDispatches, RecordNewBlock},
+    };
     use tempfile::TempDir;
 
     use super::*;
@@ -580,11 +659,25 @@ mod tests {
     }
 
     /// A store backed by a temp dir. The dir is returned so it outlives the db.
-    fn store() -> (TempDir, RocksDBIO) {
+    async fn store() -> (TempDir, ActorRef<StorageActor>) {
         let dir = tempfile::tempdir().expect("temp dir");
-        let genesis = produce_dummy_block(0, None, vec![]);
-        let dbio = RocksDBIO::create(dir.path(), &genesis, &lee::V03State::new()).expect("db");
-        (dir, dbio)
+        let storage_ref = StorageActor::spawn(StorageActor::new(dir.path()).expect("open storage"));
+        seed_genesis(&storage_ref).await;
+        (dir, storage_ref)
+    }
+
+    /// The watcher's messages need a database, not a chain, but the peer-tip
+    /// and dispatch cells share a store with one — so seed it like a real node.
+    async fn seed_genesis(storage_ref: &ActorRef<StorageActor>) {
+        storage_ref
+            .ask(RecordNewBlock {
+                block: produce_dummy_block(0, None, vec![]),
+                withdrawals: vec![],
+                state: Arc::new(lee::V03State::new()),
+                checkpoint_bytes: None,
+            })
+            .await
+            .expect("seed genesis");
     }
 
     /// A `ping_sender` emission addressed to `SELF_ZONE`.
@@ -666,28 +759,60 @@ mod tests {
         peer_msg(b"not a block".to_vec(), slot)
     }
 
-    /// The message keys recorded so far, in insertion order.
-    fn recorded_keys(dbio: &RocksDBIO) -> Vec<[u8; 32]> {
-        dbio.get_pending_cross_zone_dispatches()
+    /// The message keys recorded so far, sorted: the store keys each record by
+    /// its message key, so no insertion order survives.
+    async fn recorded_keys(storage_ref: &ActorRef<StorageActor>) -> Vec<[u8; 32]> {
+        let mut keys = storage_ref
+            .ask(GetPendingCrossZoneDispatches)
+            .await
             .expect("pending dispatches readable")
             .into_iter()
             .map(|record| record.message_key)
-            .collect()
+            .collect::<Vec<_>>();
+
+        keys.sort_unstable();
+        keys
     }
 
-    /// Makes every later pending-dispatch read fail, standing in for any store
+    /// A store that refuses every delivery write, standing in for any store
     /// failure between reading a peer block and the delivery being durable.
-    /// Recording reads the list before it writes it, so a value that will not
-    /// decode is enough.
-    fn break_the_dispatch_store(dbio: &RocksDBIO) {
-        let cf = dbio
-            .db
-            .cf_handle(storage::CF_META_NAME)
-            .expect("meta column family");
-        let key = borsh::to_vec(&DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY).expect("key encodes");
-        dbio.db
-            .put_cf(&cf, key, b"not a pending dispatch list")
-            .expect("write");
+    fn store_refusing_deliveries() -> ActorRef<MockStorageActor> {
+        let floor: Arc<Mutex<Option<Vec<u8>>>> = Arc::default();
+        let tip: Arc<Mutex<Option<PeerChainTip>>> = Arc::default();
+        let mut storage = MockStorageActor::new();
+
+        storage
+            .expect_handle_add_pending_cross_zone_dispatches()
+            .returning(|_, _| {
+                Err(storage::error::DbError::db_interaction_error(
+                    "the store refused the write".to_owned(),
+                )
+                .into())
+            });
+
+        let written_floor = Arc::clone(&floor);
+        storage
+            .expect_handle_set_cross_zone_peer_floor_bytes()
+            .returning(move |msg, _| {
+                *written_floor.lock().expect("floor cell") = Some(msg.bytes);
+                Ok(())
+            });
+        storage
+            .expect_handle_get_cross_zone_peer_floor_bytes()
+            .returning(move |_, _| Ok(floor.lock().expect("floor cell").clone()));
+
+        let written_tip = Arc::clone(&tip);
+        storage
+            .expect_handle_set_cross_zone_peer_tip()
+            .returning(move |msg, _| {
+                *written_tip.lock().expect("tip cell") = Some(msg.tip);
+                Ok(())
+            });
+        storage
+            .expect_handle_get_cross_zone_peer_tip()
+            .returning(move |_, _| Ok(*tip.lock().expect("tip cell")));
+
+        MockStorageActor::spawn(storage)
     }
 
     /// Drives the state machine over a sequence of pass outcomes, with the read
@@ -771,14 +896,14 @@ mod tests {
 
     #[tokio::test]
     async fn watcher_persists_its_cursor_as_it_consumes() {
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
 
         let outcome = consume_peer_stream(
             stream::iter(vec![peer_block_msg(1, 0), peer_block_msg(2, 1)]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
@@ -787,14 +912,15 @@ mod tests {
         assert_eq!(outcome, PassOutcome::Drained);
         assert_eq!(cursor, Some(Slot::from(1)));
         assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
+            get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+                .await
+                .unwrap(),
             Some(Slot::from(1)),
             "the cursor must be durable, not just in memory"
         );
-        assert_eq!(
-            recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)]
-        );
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
+        assert_eq!(recorded_keys(&storage_ref).await, expected);
     }
 
     #[tokio::test]
@@ -804,7 +930,7 @@ mod tests {
         // certainly refuse: the inbox is injected by this node alone, so a peer
         // naming it as a target is junk that would cost a pending slot and three
         // execution attempts.
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
 
@@ -815,7 +941,7 @@ mod tests {
                 programs::cross_zone_inbox().id(),
             )]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
@@ -827,11 +953,13 @@ mod tests {
             "a message the watcher drops is not a failure"
         );
         assert!(
-            recorded_keys(&dbio).is_empty(),
+            recorded_keys(&storage_ref).await.is_empty(),
             "a message aimed at a sequencer-only program must not be recorded"
         );
         assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
+            get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+                .await
+                .unwrap(),
             Some(Slot::from(0)),
             "the slot was fully read, so the floor still advances"
         );
@@ -841,7 +969,7 @@ mod tests {
     async fn a_delivery_to_an_unrelated_target_is_still_recorded() {
         // The watcher is not the authorization point any more. A target it knows
         // nothing about is recorded and delivered, and that target decides.
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
 
@@ -852,7 +980,7 @@ mod tests {
                 programs::wrapped_token().id(),
             )]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
@@ -860,7 +988,7 @@ mod tests {
 
         assert_eq!(outcome, PassOutcome::Drained);
         assert_eq!(
-            recorded_keys(&dbio).len(),
+            recorded_keys(&storage_ref).await.len(),
             1,
             "the watcher records it and lets the target refuse it"
         );
@@ -868,14 +996,14 @@ mod tests {
 
     #[tokio::test]
     async fn watcher_records_every_delivery_it_reads() {
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
 
         consume_peer_stream(
             stream::iter(vec![peer_block_msg(1, 0)]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
@@ -885,7 +1013,10 @@ mod tests {
         // never re-read. The record is the whole of what survives that: block
         // production drains it, and it outlives a restart. It is dropped when
         // the delivery itself becomes irreversible, not when it is included.
-        let records = dbio.get_pending_cross_zone_dispatches().unwrap();
+        let records = storage_ref
+            .ask(GetPendingCrossZoneDispatches)
+            .await
+            .unwrap();
         assert_eq!(records.len(), 1, "the delivery must be recorded");
         assert_eq!(
             records[0].message_key,
@@ -904,20 +1035,23 @@ mod tests {
 
     #[tokio::test]
     async fn a_recorded_delivery_names_the_hash_the_watcher_validated() {
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
 
         consume_peer_stream(
             stream::iter(vec![peer_block_msg(1, 0)]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
         .await;
 
-        let records = dbio.get_pending_cross_zone_dispatches().unwrap();
+        let records = storage_ref
+            .ask(GetPendingCrossZoneDispatches)
+            .await
+            .unwrap();
         assert_eq!(records.len(), 1, "the delivery must be recorded");
         let tx = borsh::from_slice::<LeeTransaction>(&records[0].transaction).unwrap();
         let LeeTransaction::Public(public_tx) = tx else {
@@ -940,15 +1074,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_delivery_that_cannot_be_recorded_holds_the_floor() {
-        let (_dir, dbio) = store();
-        break_the_dispatch_store(&dbio);
+        let storage_ref = store_refusing_deliveries();
         let mut cursor = None;
         let mut tip = None;
 
         let outcome = consume_peer_stream(
             stream::iter(vec![peer_block_msg(1, 0)]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
@@ -959,7 +1092,9 @@ mod tests {
         // rather than retried.
         assert_eq!(outcome, PassOutcome::Undelivered(Slot::from(0)));
         assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
+            get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+                .await
+                .unwrap(),
             None,
             "the slot must stay re-readable"
         );
@@ -967,31 +1102,46 @@ mod tests {
         // crash in between makes the re-read see the block as already delivered
         // from, and its messages are never looked at again.
         assert_eq!(tip, None);
-        assert_eq!(dbio.get_cross_zone_peer_tip(PEER_ZONE).unwrap(), None);
+        assert_eq!(
+            storage_ref
+                .ask(GetCrossZonePeerTip {
+                    peer_zone: PEER_ZONE
+                })
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
     async fn watcher_resumes_from_the_persisted_cursor_without_rereading() {
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
 
         consume_peer_stream(
             stream::iter(vec![peer_block_msg(1, 0), peer_block_msg(2, 1)]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
         .await;
-        assert_eq!(recorded_keys(&dbio).len(), 2);
+        assert_eq!(recorded_keys(&storage_ref).await.len(), 2);
 
         // Restart: a fresh watcher seeds both its cursor and its chain tip from
         // the store. One that had to rebuild the tip in memory would accept
         // whatever block arrived first.
-        let resumed = get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap();
+        let resumed = get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+            .await
+            .unwrap();
         assert_eq!(resumed, Some(Slot::from(1)));
-        let mut resumed_tip = dbio.get_cross_zone_peer_tip(PEER_ZONE).unwrap();
+        let mut resumed_tip = storage_ref
+            .ask(GetCrossZonePeerTip {
+                peer_zone: PEER_ZONE,
+            })
+            .await
+            .unwrap();
         assert_eq!(
             resumed_tip,
             Some(tip_at(2)),
@@ -1003,30 +1153,34 @@ mod tests {
         consume_peer_stream(
             stream::iter(vec![peer_block_msg(3, 2)]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut resumed_cursor,
             &mut resumed_tip,
         )
         .await;
 
+        let mut expected = vec![
+            message_key(&PEER_ZONE, 1, 0),
+            message_key(&PEER_ZONE, 2, 0),
+            message_key(&PEER_ZONE, 3, 0),
+        ];
+        expected.sort_unstable();
         assert_eq!(
-            recorded_keys(&dbio),
-            vec![
-                message_key(&PEER_ZONE, 1, 0),
-                message_key(&PEER_ZONE, 2, 0),
-                message_key(&PEER_ZONE, 3, 0)
-            ],
+            recorded_keys(&storage_ref).await,
+            expected,
             "only the unread block is recorded on the second pass"
         );
         assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
+            get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+                .await
+                .unwrap(),
             Some(Slot::from(2))
         );
     }
 
     #[tokio::test]
     async fn watcher_does_not_persist_past_an_undecodable_block() {
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
 
@@ -1037,7 +1191,7 @@ mod tests {
                 peer_block_msg(3, 2),
             ]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
@@ -1047,11 +1201,13 @@ mod tests {
         // would drop its messages permanently rather than until the next restart.
         assert_eq!(outcome, PassOutcome::Undecodable(Slot::from(1)));
         assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
+            get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+                .await
+                .unwrap(),
             Some(Slot::from(0))
         );
         assert_eq!(
-            recorded_keys(&dbio),
+            recorded_keys(&storage_ref).await,
             vec![message_key(&PEER_ZONE, 1, 0)],
             "the block after the failure is unread"
         );
@@ -1062,14 +1218,14 @@ mod tests {
         // One slot can carry several messages. Persisting after each message
         // would store a cursor the retry resumes past, so the message that
         // failed is never re-read and its delivery is lost for good.
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
 
         let outcome = consume_peer_stream(
             stream::iter(vec![peer_block_msg(1, 4), undecodable_msg(4)]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
@@ -1077,8 +1233,16 @@ mod tests {
 
         assert_eq!(outcome, PassOutcome::Undecodable(Slot::from(4)));
         assert_eq!(cursor, None, "slot 4 is re-read whole on the next pass");
-        assert_eq!(get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(), None);
-        assert_eq!(recorded_keys(&dbio), vec![message_key(&PEER_ZONE, 1, 0)]);
+        assert_eq!(
+            get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            recorded_keys(&storage_ref).await,
+            vec![message_key(&PEER_ZONE, 1, 0)]
+        );
     }
 
     #[tokio::test]
@@ -1086,7 +1250,7 @@ mod tests {
         // This used to be read past after twenty attempts, which advanced the
         // floor over the hole and lost those messages rather than delaying
         // them: nothing after a hole can link. Stopping keeps the slot readable.
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
 
@@ -1098,7 +1262,7 @@ mod tests {
                     peer_block_msg(3, 2),
                 ]),
                 &peer_context(),
-                &dbio,
+                &storage_ref,
                 &mut cursor,
                 &mut tip,
             )
@@ -1107,12 +1271,14 @@ mod tests {
         }
 
         assert_eq!(
-            recorded_keys(&dbio),
+            recorded_keys(&storage_ref).await,
             vec![message_key(&PEER_ZONE, 1, 0)],
             "no pass reads past the slot it cannot decode"
         );
         assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
+            get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+                .await
+                .unwrap(),
             Some(Slot::from(0)),
             "the floor stays below it, so a fixed decoder recovers the messages"
         );
@@ -1129,7 +1295,7 @@ mod tests {
         //
         // The honest blocks behind it still deliver: stopping here would cost
         // the peer one inscription to end its own deliveries for good.
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
         let pre_burn = produce_dummy_block(5, None, vec![emission()]);
@@ -1142,20 +1308,22 @@ mod tests {
                 peer_block_msg(3, 3),
             ]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
+        let mut expected = vec![
+            message_key(&PEER_ZONE, 1, 0),
+            message_key(&PEER_ZONE, 2, 0),
+            message_key(&PEER_ZONE, 3, 0),
+        ];
+        expected.sort_unstable();
         assert_eq!(
-            recorded_keys(&dbio),
-            vec![
-                message_key(&PEER_ZONE, 1, 0),
-                message_key(&PEER_ZONE, 2, 0),
-                message_key(&PEER_ZONE, 3, 0)
-            ],
+            recorded_keys(&storage_ref).await,
+            expected,
             "the key the peer aimed to burn is never recorded, and nothing else is held up"
         );
         assert_eq!(tip, Some(tip_at(3)));
@@ -1165,7 +1333,7 @@ mod tests {
     async fn a_second_block_at_a_delivered_id_is_not_delivered_from() {
         // Both claim id 2, so on chain both deliveries key on (PEER_ZONE, 2, 0)
         // and the second is a replay the inbox no-ops.
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
         let equivocation = produce_dummy_block(2, Some(HashType([9; 32])), vec![emission()]);
@@ -1177,7 +1345,7 @@ mod tests {
                 block_msg(&equivocation, 2),
             ]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
@@ -1188,9 +1356,11 @@ mod tests {
             PassOutcome::Drained,
             "a peer equivocating about its own chain is not this node's failure"
         );
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
         assert_eq!(
-            recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)],
+            recorded_keys(&storage_ref).await,
+            expected,
             "one delivery per id, whatever the peer publishes under it"
         );
         assert_eq!(tip, Some(tip_at(2)));
@@ -1200,7 +1370,7 @@ mod tests {
     async fn a_block_that_does_not_link_to_the_tip_is_not_delivered_from() {
         // Not on the chain we verified, so nothing is delivered from it, and
         // the honest block at that id still is when it lands.
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
         let forked = produce_dummy_block(2, Some(HashType([9; 32])), vec![emission()]);
@@ -1212,16 +1382,18 @@ mod tests {
                 peer_block_msg(2, 2),
             ]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
         assert_eq!(
-            recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)],
+            recorded_keys(&storage_ref).await,
+            expected,
             "the fork is passed over and the peer's own chain continues"
         );
         assert_eq!(tip, Some(tip_at(2)));
@@ -1231,7 +1403,7 @@ mod tests {
     async fn watcher_delivers_from_a_block_signed_by_any_pinned_key() {
         // The multi-sequencer peer shape: the block's signer is one configured
         // key among several, not the first one listed.
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
         let signer =
@@ -1244,7 +1416,7 @@ mod tests {
         let outcome = consume_peer_stream(
             stream::iter(vec![peer_block_msg(1, 0)]),
             &peer,
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
@@ -1252,7 +1424,7 @@ mod tests {
 
         assert_eq!(outcome, PassOutcome::Drained);
         assert_eq!(
-            recorded_keys(&dbio),
+            recorded_keys(&storage_ref).await,
             vec![message_key(&PEER_ZONE, 1, 0)],
             "any listed key admits the block, whatever its position"
         );
@@ -1261,7 +1433,7 @@ mod tests {
 
     #[tokio::test]
     async fn watcher_skips_a_block_signed_by_no_pinned_key() {
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
         let peer = PeerContext {
@@ -1277,7 +1449,7 @@ mod tests {
         let outcome = consume_peer_stream(
             stream::iter(vec![peer_block_msg(1, 0)]),
             &peer,
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
@@ -1285,7 +1457,7 @@ mod tests {
 
         assert_eq!(outcome, PassOutcome::Stranded);
         assert!(
-            recorded_keys(&dbio).is_empty(),
+            recorded_keys(&storage_ref).await.is_empty(),
             "a block signed by none of the pinned keys is never delivered from"
         );
         assert_eq!(tip, None, "a screened-out block does not advance the tip");
@@ -1296,14 +1468,14 @@ mod tests {
         // A fresh watcher handed a mid-chain block has nothing to link it
         // against. Adopting it would let the peer choose where the chain starts
         // and burn every key below it with one block.
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
 
         let outcome = consume_peer_stream(
             stream::iter(vec![peer_block_msg(2, 0)]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
@@ -1314,7 +1486,7 @@ mod tests {
             PassOutcome::Stranded,
             "a pass that placed nothing while passing blocks over is how a peer goes quiet"
         );
-        assert!(recorded_keys(&dbio).is_empty());
+        assert!(recorded_keys(&storage_ref).await.is_empty());
         assert_eq!(tip, None);
     }
 
@@ -1322,7 +1494,7 @@ mod tests {
     async fn a_tampered_header_hash_is_not_delivered_from() {
         // As correctly signed as any other block, since the signature does not
         // cover `header.hash`. Block 2 arriving behind it still delivers.
-        let (_dir, dbio) = store();
+        let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;
         let mut tampered = chain_block(2);
@@ -1335,17 +1507,16 @@ mod tests {
                 peer_block_msg(2, 2),
             ]),
             &peer_context(),
-            &dbio,
+            &storage_ref,
             &mut cursor,
             &mut tip,
         )
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
-        assert_eq!(
-            recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)]
-        );
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
+        assert_eq!(recorded_keys(&storage_ref).await, expected);
         assert_eq!(tip, Some(tip_at(2)));
     }
 
@@ -1354,18 +1525,31 @@ mod tests {
         // The tip is written per block and the floor per slot, so a crash
         // partway through the rebuild would otherwise leave a floor far above a
         // tip of 1, and nothing read after that restart could link.
-        let (_dir, dbio) = store();
-        set_cross_zone_peer_floor(&dbio, PEER_ZONE, Slot::from(5000)).unwrap();
+        let (_dir, storage_ref) = store().await;
+        set_cross_zone_peer_floor(&storage_ref, PEER_ZONE, Slot::from(5000))
+            .await
+            .unwrap();
 
-        let floor = get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap();
-        let tip = dbio.get_cross_zone_peer_tip(PEER_ZONE).unwrap();
+        let floor = get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+            .await
+            .unwrap();
+        let tip = storage_ref
+            .ask(GetCrossZonePeerTip {
+                peer_zone: PEER_ZONE,
+            })
+            .await
+            .unwrap();
         let resume = resume_from(tip, floor);
         assert_eq!(resume.cursor, None, "the rebuild reads from genesis");
         assert!(resume.clear_floor);
 
-        clear_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap();
+        clear_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+            .await
+            .unwrap();
         assert_eq!(
-            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
+            get_cross_zone_peer_floor(&storage_ref, PEER_ZONE)
+                .await
+                .unwrap(),
             None,
             "and a crash mid-rebuild resumes from genesis too, not from slot 5000"
         );

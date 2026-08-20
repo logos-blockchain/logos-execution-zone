@@ -527,20 +527,20 @@ fn private_key_tree_acc_preparation(
 
     let from_identifier = from_acc.kind.identifier();
     let from_keys = &from_acc.key_chain;
-    let ask = from_keys.private_key_holder.authorization_secret_key;
+    // A PDA is program-authorized and carries no credential of its own.
+    let ask = (!is_pda).then_some(from_keys.private_key_holder.authorization_secret_key);
     let nsk = from_keys.private_key_holder.nullifier_secret_key();
     let from_npk = from_keys.nullifier_public_key;
     let from_vpk = from_keys.viewing_public_key.clone();
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), true, account_id);
+    let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), ask.is_some(), account_id);
 
     let random_seed = random_bytes();
 
     Ok(AccountPreparedData {
-        // A PDA is program-authorized and carries no credential of its own.
-        ask: (!is_pda).then_some(ask),
+        ask,
         nsk: Some(nsk),
         npk: from_npk,
         identifier: from_identifier,
@@ -593,7 +593,7 @@ fn private_shared_acc_preparation(
         .map(|e| e.account.clone())
         .unwrap_or_default();
 
-    let pre_state = AccountWithMetadata::new(acc, true, account_id);
+    let pre_state = AccountWithMetadata::new(acc, ask.is_some(), account_id);
 
     let random_seed = random_bytes();
 

@@ -25,6 +25,7 @@ use crate::{
             native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
             token::TokenProgramAgnosticSubcommand, vault::VaultSubcommand,
         },
+        statistics::StatisticsSubcommand,
     },
     config::SequencerConnectionData,
     storage::Storage,
@@ -37,6 +38,7 @@ pub mod group;
 pub mod keycard;
 pub mod network;
 pub mod programs;
+pub mod statistics;
 
 pub(crate) trait WalletSubcommand {
     async fn handle_subcommand(self, wallet_core: &mut WalletCore)
@@ -101,6 +103,9 @@ pub enum Command {
     /// Keycard hardware wallet management.
     #[command(subcommand)]
     Keycard(KeycardSubcommand),
+    /// Metrics management.
+    #[command(subcommand)]
+    Statistics(StatisticsSubcommand),
 }
 
 /// To execute commands, env var `LEE_WALLET_HOME_DIR` must be set into directory with config.
@@ -319,6 +324,9 @@ pub async fn execute_subcommand(
                 .poll_and_finalize_public_transaction(response)
                 .await
                 .context("Transaction finalization error")?
+        }
+        Command::Statistics(statistics_subcommand) => {
+            statistics_subcommand.handle_subcommand(wallet_core).await?
         }
     };
 

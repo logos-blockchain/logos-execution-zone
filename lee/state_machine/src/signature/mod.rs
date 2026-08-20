@@ -5,11 +5,14 @@ use k256::ecdsa::signature::hazmat::PrehashVerifier as _;
 pub use private_key::PrivateKey;
 pub use public_key::PublicKey;
 use rand::{RngCore as _, rngs::OsRng};
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 mod private_key;
 mod public_key;
 
-#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(
+    Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, SerializeDisplay, DeserializeFromStr,
+)]
 pub struct Signature {
     pub value: [u8; 64],
 }

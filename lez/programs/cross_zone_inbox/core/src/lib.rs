@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::AccountId,
+    account::{AccountId, data::DATA_MAX_LENGTH},
     program::{PdaSeed, ProgramId},
 };
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,6 @@ const INBOX_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxCfg/000/";
 /// indistinguishable under one domain. Belt and braces, since the image id
 /// already relocates every PDA in this crate whenever the crate changes.
 const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/01/";
-const SOURCE_MARKER_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneSource/00000/";
 
 /// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
 pub type ZoneId = [u8; 32];
@@ -24,11 +23,11 @@ pub type MessageKey = [u8; 32];
 /// One delivery a peer is allowed to make: a program on the peer that may emit,
 /// paired with the program here it may reach.
 ///
-/// The pair is the unit rather than two independent lists. A bridging peer needs
-/// `wrapped_token` reachable, and any emitter that lets its caller choose the
-/// target (`ping_sender` does) would otherwise reach it too, minting tokens with
-/// no lock behind them. Naming the pair is what stops two separately reasonable
-/// entries composing into a route nobody wrote down.
+/// The pair is the unit because the target authorizes a source, not a zone. A
+/// bridging peer needs `wrapped_token` reachable, and `ping_sender` lets its
+/// caller choose the target, so a zone-wide allowance would let it mint with no
+/// lock behind it. That rule now lives in each target, seeded from these pairs at
+/// genesis, rather than in the inbox.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct CrossZoneRoute {
     /// The program on the peer zone that emitted the message.
@@ -46,8 +45,13 @@ pub struct CrossZoneRoute {
 pub struct CrossZonePeer {
     /// The peer's Bedrock channel; its 32 bytes double as the peer's zone id.
     pub channel_id: ZoneId,
-    /// The deliveries this peer may make: which of its programs may emit, and
-    /// what each of them may reach here.
+    /// Which of this peer's programs may reach which local program.
+    ///
+    /// No longer enforced in transit: the inbox delivers to whatever a message
+    /// names, and the target refuses a source it did not authorize. This is the
+    /// operator's statement of intent, fanned out at genesis into each target's
+    /// own config. A route naming a program that does not authorize cross-zone
+    /// sources is refused there, at genesis.
     pub allowed_routes: Vec<CrossZoneRoute>,
     /// The peer's block-signing public keys, pinned to reject blocks inscribed
     /// by anyone other than that zone's sequencers: a block is acceptable when
@@ -58,12 +62,33 @@ pub struct CrossZonePeer {
 }
 
 /// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer
-/// (verifier): the peers it reads from Bedrock and, per peer, the local programs
-/// they may deliver to.
+/// (verifier): the peers it reads from Bedrock and, per peer, the deliveries the
+/// operator intends each target to accept.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CrossZoneConfig {
+    /// Read once at startup by the watchers and the verifier, so adding a peer
+    /// zone needs a config change and a restart on both sequencer and indexer.
     pub peers: Vec<CrossZonePeer>,
+    /// Account allowed to change which peer sources each target program accepts,
+    /// seeded into every target's own config at genesis.
+    ///
+    /// Unset by default, which leaves those lists fixed at genesis. It can only
+    /// ever be set at genesis and there is no rotation. One value seeds every
+    /// target, including the ones that mint, and whoever holds it can authorize
+    /// a source, so its compromise is theft rather than delay.
+    ///
+    /// Must be a fresh, never-used account: the first use has the target claim
+    /// it, renouncing seizes it the same way, whichever target acts first owns
+    /// it, and anything sent to it is frozen for good. An `AccountId` rather
+    /// than a key so a governance program's PDA can hold it later.
+    #[serde(default)]
+    pub source_authority: Option<AccountId>,
+    /// Program allowed to act on the source authority's behalf through a chained
+    /// call, seeded into every target's config at genesis. Needed only for a PDA
+    /// authority, which cannot sign; unset means the authority acts at top level.
+    #[serde(default)]
+    pub source_governance: Option<ProgramId>,
 }
 
 /// A finalized outbound message observed on a peer zone, addressed to a program
@@ -136,13 +161,25 @@ impl SeenShard {
     /// Deliveries one shard can hold before it exceeds `DATA_MAX_LENGTH`.
     ///
     /// Borsh is 32 bytes of hash, a 4-byte count, then 4 bytes per index, so
-    /// this is exactly the 100 KiB an account may carry.
+    /// this is exactly the `DATA_MAX_LENGTH` an account may carry.
     ///
     /// Out of reach only because of the L1 inscription cap: a block inscribes as
     /// one op near 1.75 MiB and a minimal emitting transaction is about 257
     /// bytes, capping a peer block near 7,100 deliveries. Raising that L1 cap
     /// past roughly 6.3 MiB puts this back in reach.
-    pub const MAX_DELIVERIES: usize = 25_591;
+    pub const MAX_DELIVERIES: usize = {
+        let remaining_bytes = DATA_MAX_LENGTH.as_u64() - 36;
+        let count = remaining_bytes
+            .checked_div(4)
+            .expect("division is well-defined");
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            reason = "usize::try_from is not yet const-stable; the value is tiny and always fits"
+        )]
+        let count = count as usize;
+        count
+    };
 
     /// Decodes a shard from account data; empty data is an unclaimed shard.
     pub fn from_bytes(bytes: &[u8]) -> borsh::io::Result<Self> {
@@ -260,51 +297,8 @@ pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
     PdaSeed::new(seed)
 }
 
-/// The account naming who sent a delivery, which the inbox passes at position 0
-/// of the chained call so the target can authenticate its own sources.
-///
-/// Nothing writes or claims it, so the state machine's uninitialized-account rule
-/// skips it for being unchanged rather than for being default: anyone may send it
-/// balance, and the inbox and the targets all round-trip it untouched.
-///
-/// The address is derivable by anyone, so it is not a secret and not a
-/// capability. What makes it mean something is that a target checks it only after
-/// pinning its caller to the inbox, and only the inbox can be that caller.
-#[must_use]
-pub fn inbox_source_marker_account_id(
-    inbox_id: ProgramId,
-    src_zone: &ZoneId,
-    src_program_id: ProgramId,
-) -> AccountId {
-    AccountId::for_public_pda(
-        &inbox_id,
-        &inbox_source_marker_seed(src_zone, src_program_id),
-    )
-}
-
-/// Seed of the source marker, exposed so a target can re-derive the address of
-/// the one source it accepts and compare.
-#[must_use]
-pub fn inbox_source_marker_seed(src_zone: &ZoneId, src_program_id: ProgramId) -> PdaSeed {
-    use risc0_zkvm::sha::{Impl, Sha256 as _};
-
-    let mut bytes = [0_u8; 96];
-    bytes[..32].copy_from_slice(&SOURCE_MARKER_SEED_DOMAIN);
-    bytes[32..64].copy_from_slice(src_zone);
-    for (word, chunk) in src_program_id.iter().zip(bytes[64..].chunks_exact_mut(4)) {
-        chunk.copy_from_slice(&word.to_le_bytes());
-    }
-
-    let seed: [u8; 32] = Impl::hash_bytes(&bytes)
-        .as_bytes()
-        .try_into()
-        .unwrap_or_else(|_| unreachable!());
-    PdaSeed::new(seed)
-}
 #[cfg(test)]
 mod tests {
-    use lee_core::account::data::DATA_MAX_LENGTH;
-
     use super::*;
 
     fn zone(b: u8) -> ZoneId {
@@ -382,6 +376,7 @@ mod tests {
 
     #[test]
     fn a_full_shard_fits_in_account_data() {
+        // Exact only because `DATA_MAX_LENGTH` is whole KiB, hence a multiple of 4.
         let mut shard = SeenShard::default();
         for index in 0..SeenShard::MAX_DELIVERIES {
             shard.insert([5; 32], u32::try_from(index).expect("index fits"));

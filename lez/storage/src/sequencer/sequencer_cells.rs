@@ -12,7 +12,8 @@ use crate::{
         DB_META_CROSS_ZONE_PEER_FLOOR_KEY, DB_META_CROSS_ZONE_PEER_TIP_KEY,
         DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCH_COUNT_KEY,
         DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCHES_KEY, DB_META_LAST_FINALIZED_BLOCK_ID,
-        DB_META_LATEST_BLOCK_META_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY,
+        DB_META_LATEST_BLOCK_META_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCH_COUNT_KEY,
+        DB_META_PENDING_CROSS_ZONE_DISPATCH_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY,
         DB_META_PENDING_DEPOSIT_EVENTS_KEY, DB_META_PUBLISHED_HIGH_WATER_KEY,
         DB_META_UNSEEN_WITHDRAW_COUNT_KEY, DB_META_ZONE_CURSOR_KEY,
         DB_META_ZONE_SDK_CHECKPOINT_KEY,
@@ -315,40 +316,106 @@ impl PendingCrossZoneDispatchRecord {
     }
 }
 
+/// One pending delivery, held under its own message key so a mutation touches
+/// one entry rather than rewriting the whole set.
 #[derive(BorshDeserialize)]
-pub struct PendingCrossZoneDispatchesCellOwned(pub Vec<PendingCrossZoneDispatchRecord>);
+pub struct PendingCrossZoneDispatchCellOwned(pub PendingCrossZoneDispatchRecord);
 
-impl SimpleStorableCell for PendingCrossZoneDispatchesCellOwned {
-    type KeyParams = ();
+impl SimpleStorableCell for PendingCrossZoneDispatchCellOwned {
+    type KeyParams = [u8; 32];
 
-    const CELL_NAME: &'static str = DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY;
+    const CELL_NAME: &'static str = DB_META_PENDING_CROSS_ZONE_DISPATCH_KEY;
     const CF_NAME: &'static str = CF_META_NAME;
-}
 
-impl SimpleReadableCell for PendingCrossZoneDispatchesCellOwned {}
-
-#[derive(BorshSerialize)]
-pub struct PendingCrossZoneDispatchesCellRef<'records>(
-    pub &'records [PendingCrossZoneDispatchRecord],
-);
-
-impl SimpleStorableCell for PendingCrossZoneDispatchesCellRef<'_> {
-    type KeyParams = ();
-
-    const CELL_NAME: &'static str = DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY;
-    const CF_NAME: &'static str = CF_META_NAME;
-}
-
-impl SimpleWritableCell for PendingCrossZoneDispatchesCellRef<'_> {
-    fn value_constructor(&self) -> DbResult<Vec<u8>> {
-        borsh::to_vec(&self).map_err(|err| {
+    /// Folds the message key into the db key so each delivery is its own entry.
+    fn key_constructor(message_key: Self::KeyParams) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&(Self::CELL_NAME, message_key)).map_err(|err| {
             DbError::borsh_cast_message(
                 err,
-                Some("Failed to serialize pending cross-zone dispatches cell".to_owned()),
+                Some(format!(
+                    "Failed to serialize {:?} key params",
+                    Self::CELL_NAME
+                )),
             )
         })
     }
 }
+
+impl SimpleReadableCell for PendingCrossZoneDispatchCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct PendingCrossZoneDispatchCellRef<'record>(pub &'record PendingCrossZoneDispatchRecord);
+
+impl SimpleStorableCell for PendingCrossZoneDispatchCellRef<'_> {
+    type KeyParams = [u8; 32];
+
+    const CELL_NAME: &'static str = DB_META_PENDING_CROSS_ZONE_DISPATCH_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+
+    fn key_constructor(message_key: Self::KeyParams) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&(Self::CELL_NAME, message_key)).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some(format!(
+                    "Failed to serialize {:?} key params",
+                    Self::CELL_NAME
+                )),
+            )
+        })
+    }
+}
+
+impl SimpleWritableCell for PendingCrossZoneDispatchCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize pending cross-zone dispatch cell".to_owned()),
+            )
+        })
+    }
+}
+
+/// How many pending dispatch records the store holds, written in the same
+/// batch as every record mutation so the cap check reads one value instead of
+/// scanning the set it bounds.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct PendingCrossZoneDispatchCountCell(pub u64);
+
+impl SimpleStorableCell for PendingCrossZoneDispatchCountCell {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_PENDING_CROSS_ZONE_DISPATCH_COUNT_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for PendingCrossZoneDispatchCountCell {}
+
+impl SimpleWritableCell for PendingCrossZoneDispatchCountCell {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize pending cross-zone dispatch count".to_owned()),
+            )
+        })
+    }
+}
+
+/// The whole pending set as one borsh blob, the layout stores held before the
+/// per-message entries. Read-only: opening such a store migrates the blob and
+/// deletes its key, and nothing writes it again.
+#[derive(BorshDeserialize)]
+pub struct LegacyPendingCrossZoneDispatchesCellOwned(pub Vec<PendingCrossZoneDispatchRecord>);
+
+impl SimpleStorableCell for LegacyPendingCrossZoneDispatchesCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for LegacyPendingCrossZoneDispatchesCellOwned {}
 
 /// Which peer message a delivery carried, kept so a lost one can be traced back
 /// to the peer block it was in.
@@ -632,6 +699,8 @@ mod uniform_tests {
         cells::SimpleStorableCell as _,
         sequencer::sequencer_cells::{
             LEEStateCellOwned, LEEStateCellRef, LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
+            LegacyPendingCrossZoneDispatchesCellOwned, PendingCrossZoneDispatchCellOwned,
+            PendingCrossZoneDispatchCellRef, PendingCrossZoneDispatchCountCell,
             PendingDepositEventsCellOwned, PendingDepositEventsCellRef,
         },
     };
@@ -659,6 +728,46 @@ mod uniform_tests {
         assert_eq!(
             LatestBlockMetaCellRef::key_constructor(()).unwrap(),
             LatestBlockMetaCellOwned::key_constructor(()).unwrap()
+        );
+    }
+
+    #[test]
+    fn pending_dispatch_ref_and_owned_is_aligned() {
+        assert_eq!(
+            PendingCrossZoneDispatchCellRef::CELL_NAME,
+            PendingCrossZoneDispatchCellOwned::CELL_NAME
+        );
+        assert_eq!(
+            PendingCrossZoneDispatchCellRef::CF_NAME,
+            PendingCrossZoneDispatchCellOwned::CF_NAME
+        );
+        assert_eq!(
+            PendingCrossZoneDispatchCellRef::key_constructor([7; 32]).unwrap(),
+            PendingCrossZoneDispatchCellOwned::key_constructor([7; 32]).unwrap()
+        );
+    }
+
+    #[test]
+    fn pending_dispatch_scan_prefix_covers_only_the_per_message_cells() {
+        // A stray meta cell keyed into this range would decode as a dispatch
+        // record and fail the lock-free scan.
+        let prefix = borsh::to_vec(&PendingCrossZoneDispatchCellOwned::CELL_NAME).unwrap();
+        assert!(
+            PendingCrossZoneDispatchCellOwned::key_constructor([0; 32])
+                .unwrap()
+                .starts_with(&prefix)
+        );
+        assert!(
+            !PendingCrossZoneDispatchCountCell::key_constructor(())
+                .unwrap()
+                .starts_with(&prefix),
+            "the count cell must stay out of the record scan"
+        );
+        assert!(
+            !LegacyPendingCrossZoneDispatchesCellOwned::key_constructor(())
+                .unwrap()
+                .starts_with(&prefix),
+            "the legacy blob must stay out of the record scan"
         );
     }
 

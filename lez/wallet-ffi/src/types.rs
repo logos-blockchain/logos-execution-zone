@@ -83,7 +83,7 @@ pub struct FfiU128 {
 /// byte arrays since C doesn't have native u128 support.
 #[repr(C)]
 pub struct FfiAccount {
-    pub program_owner: FfiProgramId,
+    pub program_owner: FfiBytes32,
     /// Balance as little-endian [u8; 16].
     pub balance: FfiU128,
     /// Pointer to account data bytes.
@@ -97,7 +97,7 @@ pub struct FfiAccount {
 impl Default for FfiAccount {
     fn default() -> Self {
         Self {
-            program_owner: FfiProgramId::default(),
+            program_owner: FfiBytes32::default(),
             balance: FfiU128::default(),
             data: std::ptr::null(),
             data_len: 0,
@@ -331,11 +331,8 @@ impl From<lee::Account> for FfiAccount {
             ptr::null()
         };
 
-        let program_owner = FfiProgramId {
-            data: value.program_owner,
-        };
         Self {
-            program_owner,
+            program_owner: value.program_owner.into(),
             balance: value.balance.into(),
             data,
             data_len,
@@ -358,7 +355,7 @@ impl TryFrom<&FfiAccount> for lee::Account {
             Data::default()
         };
         Ok(Self {
-            program_owner: value.program_owner.data,
+            program_owner: value.program_owner.into(),
             balance: value.balance.into(),
             data,
             nonce: lee_core::account::Nonce(value.nonce.into()),

@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
     hash::Hash,
 };
@@ -7,7 +8,7 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_ID, ProgramId, compute_public_authorized_pdas,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
         validate_execution,
     },
 };
@@ -111,10 +112,13 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
-            // Check that the `program_id` corresponds to a deployed program
-            let Some(program) = state.programs().get(&chained_call.program_id) else {
+            let Some(program_account) = state.get_program(chained_call.program_id) else {
                 return Err(LeeError::InvalidInput("Unknown program".into()));
             };
+            let program = Program::new_unchecked(
+                chained_call.program_id,
+                Cow::Owned(program_account.data.to_vec()),
+            );
 
             debug!(
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
@@ -217,7 +221,7 @@ impl ValidatedStateDiff {
 
                 // The invoked program can only claim accounts with default program id.
                 ensure!(
-                    post.account().program_owner == DEFAULT_PROGRAM_ID,
+                    post.account().program_owner == DEFAULT_PROGRAM_OWNER,
                     InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
                 );
 
@@ -244,7 +248,7 @@ impl ValidatedStateDiff {
                     }
                 }
 
-                post.account_mut().program_owner = chained_call.program_id;
+                post.account_mut().program_owner = AccountId::from(chained_call.program_id);
             }
 
             // Update the state diff
@@ -264,17 +268,14 @@ impl ValidatedStateDiff {
             // Union with the caller's authorized set so that authorization is monotonically
             // growing: once an account is authorized at any point in the chain it remains
             // authorized for all subsequent calls.
-            let authorized_accounts: HashSet<_> = caller_data
-                .authorized_accounts
-                .into_iter()
-                .chain(
-                    program_output
-                        .pre_states
-                        .iter()
-                        .filter(|pre| pre.is_authorized)
-                        .map(|pre| pre.account_id),
-                )
-                .collect();
+            let mut authorized_accounts = caller_data.authorized_accounts;
+            authorized_accounts.extend(
+                program_output
+                    .pre_states
+                    .iter()
+                    .filter(|pre| pre.is_authorized)
+                    .map(|pre| pre.account_id),
+            );
             for new_call in program_output.chained_calls.into_iter().rev() {
                 chained_calls.push_front((
                     new_call,
@@ -293,7 +294,7 @@ impl ValidatedStateDiff {
         // Check that all modified uninitialized accounts where claimed
         for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
             let pre = state.get_account_by_id(*account_id);
-            if pre.program_owner != DEFAULT_PROGRAM_ID {
+            if pre.program_owner != DEFAULT_PROGRAM_OWNER {
                 return None;
             }
             if pre == *post {
@@ -302,7 +303,7 @@ impl ValidatedStateDiff {
             Some((*account_id, post))
         }) {
             ensure!(
-                post.program_owner != DEFAULT_PROGRAM_ID,
+                post.program_owner != DEFAULT_PROGRAM_OWNER,
                 InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
             );
         }
@@ -444,7 +445,7 @@ impl ValidatedStateDiff {
     ) -> Result<Self, LeeError> {
         // TODO: remove clone
         let program = Program::new(tx.message.bytecode.clone().into())?;
-        if state.programs().contains_key(&program.id()) {
+        if state.get_program(program.id()).is_some() {
             return Err(LeeError::ProgramAlreadyExists);
         }
         Ok(Self(StateDiff {
@@ -468,12 +469,6 @@ impl ValidatedStateDiff {
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
     }
-}
-
-#[derive(Debug)]
-struct CallerData {
-    program_id: Option<ProgramId>,
-    authorized_accounts: HashSet<AccountId>,
 }
 
 fn authenticate_public_transaction_signers(
