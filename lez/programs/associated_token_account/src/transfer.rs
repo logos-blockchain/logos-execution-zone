@@ -1,4 +1,7 @@
-use lee_core::{account::AccountWithMetadata, program::{AccountDiffOutput, ChainedCall, ProgramId}};
+use lee_core::{
+    account::AccountWithMetadata,
+    program::{AccountDiffOutput, ChainedCall, ProgramId},
+};
 use token_core::TokenHolding;
 
 pub fn transfer_from_associated_token_account(

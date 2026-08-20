@@ -48,10 +48,7 @@ fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> AccountDiffOutput {
     )
 }
 
-fn move_data(
-    from_pre: AccountWithMetadata,
-    to_pre: AccountWithMetadata,
-) -> Vec<AccountDiffOutput> {
+fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<AccountDiffOutput> {
     // Construct the post state account values
     let from_data: Vec<u8> = from_pre.account.data.clone().into();
 
@@ -131,6 +128,9 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, std::convert::Infallible> {
+fn update_from_diff(
+    _pre_state: Account,
+    diff_data: Data,
+) -> Result<Data, std::convert::Infallible> {
     Ok(diff_data)
 }
