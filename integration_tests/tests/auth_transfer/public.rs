@@ -3,8 +3,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, get_account, new_account,
-    public_mention, send, send_claiming_new_account,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention,
+    utils::{account_balance, get_account, new_account, send, send_claiming_new_account},
 };
 use lee::{PublicKey, public_transaction};
 use sequencer_service_rpc::RpcClient as _;

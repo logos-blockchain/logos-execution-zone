@@ -284,8 +284,20 @@ jobs:
             RISC0_DEV_MODE=1
             RUST_LOG=info
           run: |
-              source .github/scripts/with_retry.sh
-              with_retry 'cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 5 
+            source .github/scripts/with_retry.sh
+
+            if [[ "${{ matrix.target }}" == "tf_bedrock_builder" || \
+                  "${{ matrix.target }}" == "tf_app_deployments" ]]; then
+              # The nextest archive contains the absolute Cargo git checkout
+              # path compiled into the Logos testing framework. This is a fresh
+              # runner, so materialize the pinned Logos checkout again before
+              # allowing TF to use its local build provider.
+              cargo fetch --locked
+
+              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 5
+            else
+              with_retry 'cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 5
+            fi
 
   valid-proof-test:
     needs: ci-image

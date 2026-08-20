@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use common::{block::Block, transaction::LeeTransaction};
 use futures::{StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream};
 use kameo::{
@@ -53,22 +55,31 @@ pub struct ExecutorActor<BP: BlockPublisherTrait, S: StorageActorTrait = Storage
     background_tasks: Vec<TaskGroup>,
 }
 
-impl<BP: BlockPublisherTrait, S: StorageActorTrait> ExecutorActor<BP, S> {
-    pub async fn new(config: SequencerConfig, storage_ref: ActorRef<S>) -> Self {
-        // TODO: Leave storage_ref as a top-level field only in `ExecutorActor`,
-        // while moving `SequencerCore` code into this actor.
-        let (sequencer, mempool_handle) =
-            SequencerCore::<BP, S>::start_from_config(config, storage_ref.clone()).await;
+impl<BP: BlockPublisherTrait + Send + 'static, S: StorageActorTrait> ExecutorActor<BP, S> {
+    #[expect(
+        clippy::manual_async_fn,
+        reason = "Explicit Send future works around rust-lang/rust#100013"
+    )]
+    pub fn new(
+        config: SequencerConfig,
+        storage_ref: ActorRef<S>,
+    ) -> impl Future<Output = Self> + Send + 'static {
+        async move {
+            // TODO: Leave storage_ref as a top-level field only in `ExecutorActor`,
+            // while moving `SequencerCore` code into this actor.
+            let (sequencer, mempool_handle) =
+                SequencerCore::<BP, S>::start_from_config(config, storage_ref.clone()).await;
 
-        let driver_cancellation = sequencer.block_publisher().driver_cancellation();
-        let background_tasks = sequencer.background_tasks();
+            let driver_cancellation = sequencer.block_publisher().driver_cancellation();
+            let background_tasks = sequencer.background_tasks();
 
-        Self {
-            mempool_handle,
-            sequencer,
-            storage_ref,
-            driver_cancellation,
-            background_tasks,
+            Self {
+                mempool_handle,
+                sequencer,
+                storage_ref,
+                driver_cancellation,
+                background_tasks,
+            }
         }
     }
 

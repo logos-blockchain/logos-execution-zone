@@ -75,9 +75,9 @@ impl BlockPublisherTrait for MockBlockPublisher {
         })
     }
 
-    async fn publish_block<'blk, 'pbl: 'blk>(
-        &'pbl self,
-        block: &'blk Block,
+    async fn publish_block(
+        &self,
+        block: &Block,
         withdrawals: Vec<WithdrawArg>,
     ) -> Result<PublishOutcome> {
         // Deterministic per-block id so head dedup behaves in tests.
@@ -125,7 +125,7 @@ impl BlockPublisherTrait for MockBlockPublisher {
     async fn read_channel_after(
         &self,
         after_slot: Option<Slot>,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + '_> {
+    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + '_> {
         // Mirror `next_messages`: `after_slot` is exclusive.
         let messages = self
             .messages
