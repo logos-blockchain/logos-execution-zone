@@ -15,15 +15,13 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub public_pre_states: Vec<AccountWithMetadata>,
-    /// Raw, per-call, unaggregated diffs for public accounts. See
-    /// `PrivacyPreservingCircuitOutput::public_diffs`.
     pub public_diffs: Vec<PublicDiff>,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
     /// The accounts the circuit claims are signers — cross-checked by the sequencer against real
-    /// signatures. See `PrivacyPreservingCircuitOutput::signer_account_ids`.
+    /// signatures.
     pub signer_account_ids: Vec<AccountId>,
 }
 

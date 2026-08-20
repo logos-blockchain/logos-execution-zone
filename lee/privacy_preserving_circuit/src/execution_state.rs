@@ -54,15 +54,10 @@ pub struct ExecutionState {
     /// The set containing non-PDA accounts authorized at their first sight, anywhere in the
     /// call tree, remaining authorized throughout all calls.
     globally_authorized: HashSet<AccountId>,
-    /// The canonical, committed signer set. `is_authorized` for a public account's first sighting
-    /// is derived from membership in this list (or PDA-authorization via a caller's seeds) —
-    /// never trusted as an independently-reported witness — and the list itself is echoed in the
-    /// circuit's output so the sequencer can cross-check it against real signatures.
     signer_account_ids: Vec<AccountId>,
-    /// Raw, per-call, unaggregated diffs for public accounts. This, not `post_states`, is what
-    /// the circuit ultimately outputs for public accounts: `post_states` is only ever used
-    /// internally, to give a later call in the same chain a concrete `pre_state` for an account
-    /// an earlier call already touched. See `PrivacyPreservingCircuitOutput::public_diffs`.
+    /// This, not `post_states`, is what the circuit ultimately outputs for public accounts:
+    /// `post_states` is only ever used internally, to give a later call in the same chain a
+    /// concrete `pre_state` for an account an earlier call already touched.
     public_diffs: Vec<PublicDiff>,
 }
 

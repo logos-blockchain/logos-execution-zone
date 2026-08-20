@@ -149,7 +149,7 @@ pub fn execute_and_prove_with_padded_inputs(
             .iter()
             .zip(&program_output.post_states)
         {
-            let Some(diff_data) = diff_output.diff().diff_data.clone() else {
+            let Some(diff_data) = diff_output.diff().diff_data.as_ref() else {
                 continue;
             };
             let owner_id: ProgramId = if pre.account.program_owner == DEFAULT_PROGRAM_OWNER {
@@ -166,7 +166,7 @@ pub fn execute_and_prove_with_padded_inputs(
                     },
                 )?
             };
-            let update_receipt = owner_program.prove_update_from_diff(&pre.account, &diff_data)?;
+            let update_receipt = owner_program.prove_update_from_diff(&pre.account, diff_data)?;
             let update_output: UpdateFromDiffOutput = update_receipt
                 .journal
                 .decode()

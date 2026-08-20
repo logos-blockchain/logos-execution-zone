@@ -11,7 +11,7 @@ const BLOCK_HEADER_OVERHEAD: u64 = 200;
 #[derive(Debug)]
 pub enum TxEvaluation {
     /// Structurally valid and authenticated; forward and admit.
-    Accept(LeeTransaction),
+    Accept(Box<LeeTransaction>),
     /// Malformed / forbidden; do not forward. `GossipSub` peer scoring is not
     /// configured, so this does not currently penalize the propagating peer.
     Reject(String),
@@ -44,7 +44,7 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
         return TxEvaluation::Reject("sequencer-only program".to_owned());
     }
 
-    TxEvaluation::Accept(authenticated)
+    TxEvaluation::Accept(Box::new(authenticated))
 }
 
 #[cfg(test)]

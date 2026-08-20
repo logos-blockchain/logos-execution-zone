@@ -371,7 +371,7 @@ impl From<lee_core::account::AccountDiff> for AccountDiff {
         Self {
             id: id.into(),
             diff_balance: diff_balance.into(),
-            diff_data: diff_data.map(|data| data.into_inner()),
+            diff_data: diff_data.map(lee_core::account::Data::into_inner),
         }
     }
 }

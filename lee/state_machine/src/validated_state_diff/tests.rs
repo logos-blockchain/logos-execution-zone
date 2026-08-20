@@ -62,18 +62,11 @@ fn public_diff_reflects_a_successful_transfer() {
     );
 }
 
-/// Privacy-path version of the authorization-injection attack. The test passes when the attack
-/// is rejected.
-///
-/// `signer_account_ids` is derived once, before the chain even starts, strictly from the
-/// *top-level* `pre_states` passed to `execute_and_prove` — here, just the attacker's own
-/// private account. The victim is only ever introduced later, inside `malicious_injector`'s
-/// chained call, so it can never be part of `signer_account_ids` regardless of what P1 forges.
-/// The circuit's own Vacant-branch consistency check (scoped to public accounts) derives the
-/// victim's expected `is_authorized` from `signer_account_ids` membership, finds it absent, and
-/// asserts that against the witnessed `is_authorized=true` — which fails, panicking inside the
-/// guest. So the attack is caught during proving itself: `execute_and_prove` returns
-/// `Err(CircuitProvingError)`, and never even reaches `from_privacy_preserving_transaction`.
+/// Privacy-path version of the authorization-injection attack. The victim is only ever
+/// introduced via `malicious_injector`'s chained call, never the top-level `pre_states`
+/// `signer_account_ids` is derived from, so the circuit's own consistency check rejects the
+/// forged `is_authorized=true` and `execute_and_prove` fails with `CircuitProvingError` before
+/// any proof is produced.
 #[test]
 fn privacy_malicious_programs_cannot_drain_public_victim() {
     use lee_core::{
@@ -194,13 +187,8 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 
 /// Private-victim variant of the authorization-injection attack. The attacker has no `nsk` for
 /// the victim's private account, so a regular update isn't an option — the only route is to
-/// declare the victim `InputAccountIdentity::Public` and inject its data directly, since the
-/// circuit has no access to chain state and can't detect the values are fabricated. That's the
-/// exact same route `privacy_malicious_programs_cannot_drain_public_victim` exercises, so the
-/// same mechanism catches it: the victim is only ever introduced via `malicious_injector`'s
-/// chained call, never the top-level `pre_states` `signer_account_ids` is derived from, so the
-/// circuit's Vacant-branch consistency check rejects the forged `is_authorized=true` and
-/// `execute_and_prove` fails with `CircuitProvingError` before any proof is produced.
+/// declare the victim `InputAccountIdentity::Public` and inject its data directly. Same
+/// mechanism as `privacy_malicious_programs_cannot_drain_public_victim` catches it from there.
 #[test]
 fn privacy_malicious_programs_cannot_drain_private_victim() {
     use lee_core::{

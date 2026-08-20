@@ -224,8 +224,8 @@ impl ValidatedStateDiff {
                 let balance = apply_balance_diff(pre.account.balance, diff.diff_balance)
                     .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
 
-                let data = if let Some(diff_data) = diff.diff_data.clone() {
-                    program.execute_update_from_diff(&pre.account, &diff_data)?
+                let data = if let Some(diff_data) = diff.diff_data.as_ref() {
+                    program.execute_update_from_diff(&pre.account, diff_data)?
                 } else {
                     pre.account.data.clone()
                 };
@@ -525,7 +525,7 @@ impl ValidatedStateDiff {
             let mut post = pre_account.clone();
             post.balance = apply_balance_diff(pre_account.balance, diff.diff_balance)
                 .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-            if let Some(diff_data) = diff.diff_data.clone() {
+            if let Some(diff_data) = diff.diff_data.as_ref() {
                 let owner_id = claimed_owner.unwrap_or(account_program_owner);
                 let Some(owner_program_account) = state.get_program(owner_id.into()) else {
                     return Err(InvalidProgramBehaviorError::NoOwnerProgramForDataUpdate {
@@ -537,7 +537,7 @@ impl ValidatedStateDiff {
                     owner_id.into(),
                     Cow::Owned(owner_program_account.data.to_vec()),
                 );
-                post.data = owner_program.execute_update_from_diff(&pre_account, &diff_data)?;
+                post.data = owner_program.execute_update_from_diff(&pre_account, diff_data)?;
             }
             if let Some(owner) = claimed_owner {
                 post.program_owner = owner;

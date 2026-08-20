@@ -194,18 +194,13 @@ pub struct PublicDiff {
 #[derive(Serialize, Deserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
 pub struct PrivacyPreservingCircuitOutput {
-    /// What the circuit witnessed as each public account's pre-state — deliberately *not*
-    /// reconciled against live sequencer state. Used only to verify the proof is internally
-    /// consistent (see `check_privacy_preserving_circuit_proof_is_valid`); materialization uses
-    /// live state instead, via `public_diffs`, which is what actually avoids tying this
-    /// transaction's validity to a specific public-account snapshot.
+    /// What the circuit witnessed as each public account's pre-state, used only to check the
+    /// proof is internally consistent — never reconciled against live state.
     pub public_pre_states: Vec<AccountWithMetadata>,
     pub public_diffs: Vec<PublicDiff>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
-    /// Committed so the sequencer can verify every account this circuit treated as authorized
-    /// really did sign the transaction — see `PrivacyPreservingCircuitInput::signer_account_ids`.
     pub signer_account_ids: Vec<AccountId>,
 }
 

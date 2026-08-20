@@ -347,10 +347,9 @@ impl From<AccountDiff> for FfiAccountDiff {
         Self {
             id: id.into(),
             diff_balance: diff_balance.into(),
-            diff_data: match diff_data {
-                Some(bytes) => FfiOption::from_value(bytes.into()),
-                None => FfiOption::from_none(),
-            },
+            diff_data: diff_data.map_or_else(FfiOption::from_none, |bytes| {
+                FfiOption::from_value(bytes.into())
+            }),
         }
     }
 }
@@ -362,13 +361,11 @@ impl From<FfiAccountDiff> for AccountDiff {
             diff_balance,
             diff_data,
         } = value;
-        let diff_data = if diff_data.is_some {
+        let diff_data = diff_data.is_some.then(|| {
             let boxed = unsafe { Box::from_raw(diff_data.value) };
             let bytes: Vec<u8> = (*boxed).into();
-            Some(bytes)
-        } else {
-            None
-        };
+            bytes
+        });
         Self {
             id: AccountId { value: id.data },
             diff_balance: diff_balance.into(),
@@ -388,10 +385,9 @@ impl From<AccountDiffOutput> for FfiAccountDiffOutput {
         let AccountDiffOutput { diff, claim } = value;
         Self {
             diff: diff.into(),
-            claim: match claim {
-                Some(claim) => FfiOption::from_value(claim.into()),
-                None => FfiOption::from_none(),
-            },
+            claim: claim.map_or_else(FfiOption::from_none, |claim| {
+                FfiOption::from_value(claim.into())
+            }),
         }
     }
 }
@@ -399,12 +395,10 @@ impl From<AccountDiffOutput> for FfiAccountDiffOutput {
 impl From<FfiAccountDiffOutput> for AccountDiffOutput {
     fn from(value: FfiAccountDiffOutput) -> Self {
         let FfiAccountDiffOutput { diff, claim } = value;
-        let claim = if claim.is_some {
+        let claim = claim.is_some.then(|| {
             let boxed = unsafe { Box::from_raw(claim.value) };
-            Some((*boxed).into())
-        } else {
-            None
-        };
+            (*boxed).into()
+        });
         Self {
             diff: diff.into(),
             claim,

@@ -401,7 +401,7 @@ impl DriveTask {
                 if self.seen.contains(&hash) {
                     gossipsub::MessageAcceptance::Ignore
                 } else {
-                    match self.mempool.try_push((TransactionOrigin::Gossip, tx)) {
+                    match self.mempool.try_push((TransactionOrigin::Gossip, *tx)) {
                         Ok(()) => {
                             // mark seen only on successful pushes, so that if mempool is full we
                             // can later receive the same tx from gossip and try pushing it again
