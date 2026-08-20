@@ -63,10 +63,10 @@ fn main() {
     // Check the clock account is the system clock account
     assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
-    let clock_data = ClockAccountData::from_bytes(&clock_pre.account.data.clone().into_inner());
+    let clock_data = ClockAccountData::from_bytes(&clock_pre.account.data);
     let current_timestamp = clock_data.timestamp;
 
-    let pinata_state = PinataState::from_bytes(&pinata.account.data.clone().into_inner());
+    let pinata_state = PinataState::from_bytes(&pinata.account.data);
 
     // Enforce cooldown: the elapsed time since the last claim must exceed the cooldown period.
     let elapsed = current_timestamp.saturating_sub(pinata_state.last_claim_timestamp);

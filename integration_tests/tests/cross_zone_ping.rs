@@ -53,6 +53,8 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
             }],
             expected_block_signing_pubkey: None,
         }],
+        source_authority: None,
+        source_governance: None,
     };
 
     let ctx = MultiZoneTestContextBuilder::default()

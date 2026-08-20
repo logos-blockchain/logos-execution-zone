@@ -49,6 +49,7 @@ members = [
   "lez/programs/pinata_token",
   "lez/programs/token",
   "lez/programs/vault",
+  "lez/programs/cross_zone_marker",
   "lez/programs/cross_zone_inbox",
   "lez/programs/cross_zone_outbox",
   "lez/programs/bridge_lock",
@@ -106,6 +107,7 @@ programs = { path = "lez/programs", default-features = false, features = [
 ] }
 system_accounts = { path = "lez/system_accounts" }
 clock_core = { path = "lez/programs/clock/core" }
+cross_zone_marker_core = { path = "lez/programs/cross_zone_marker" }
 token_core = { path = "lez/programs/token/core" }
 token_program = { path = "lez/programs/token" }
 amm_core = { path = "lez/programs/amm/core" }

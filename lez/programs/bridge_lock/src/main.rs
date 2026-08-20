@@ -89,7 +89,7 @@ fn lock(
         config_account_id(self_program_id),
         "first account must be the bridge-lock config PDA"
     );
-    let (outbox_program_id, pinned_target) = read_config(&config.account.data.clone().into_inner())
+    let (outbox_program_id, pinned_target) = read_config(&config.account.data)
         .expect("config account holds an outbox and a mint target");
 
     // Value conservation: the forwarded payload must mint exactly what is locked.
@@ -223,8 +223,8 @@ fn init_config(
             "bridge-lock config PDA is owned by another program"
         );
         assert_eq!(
-            config.account.data.clone().into_inner(),
-            config_bytes(outbox_program_id, target_program_id).to_vec(),
+            *config.account.data,
+            config_bytes(outbox_program_id, target_program_id),
             "bridge-lock config already pins a different outbox or mint target"
         );
     }

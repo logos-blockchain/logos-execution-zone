@@ -81,8 +81,8 @@ fn send(
         sender_config_account_id(self_program_id),
         "first account must be the ping-sender config PDA"
     );
-    let outbox_program_id = read_outbox(&config.account.data.clone().into_inner())
-        .expect("config account holds an outbox program id");
+    let outbox_program_id =
+        read_outbox(&config.account.data).expect("config account holds an outbox program id");
 
     let call = ChainedCall::new(
         outbox_program_id,
@@ -136,8 +136,8 @@ fn init_config(
             "ping-sender config PDA is owned by another program"
         );
         assert_eq!(
-            config.account.data.clone().into_inner(),
-            outbox_bytes(outbox_program_id).to_vec(),
+            *config.account.data,
+            outbox_bytes(outbox_program_id),
             "ping-sender config already pins a different outbox"
         );
     }
