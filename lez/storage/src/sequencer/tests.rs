@@ -27,7 +27,7 @@ fn dbio_with_genesis(path: &Path) -> (RocksDBIO, Block) {
     let dbio = RocksDBIO::open_or_create(path).unwrap();
     // The same write any block takes: the first one into an empty store starts
     // its chain.
-    dbio.atomic_update(&genesis, &[], &state_with_balance(100), None)
+    dbio.atomic_update(&genesis, None, &[], &state_with_balance(100), None)
         .unwrap();
     (dbio, genesis)
 }
@@ -75,6 +75,31 @@ fn stored_balance(dbio: &RocksDBIO) -> u128 {
         .expect("the store holds a chain")
         .get_account_by_id(marker_id())
         .balance
+}
+
+/// The channel cursor has to outlive the process: a restart that cannot
+/// recover it has nothing to chain the next publish onto.
+#[test]
+fn channel_cursor_survives_reopening_the_store() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, genesis) = dbio_with_genesis(temp_dir.path());
+
+    assert_eq!(
+        dbio.channel_cursor().unwrap(),
+        None,
+        "a store written without a cursor has none to report"
+    );
+    let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    dbio.atomic_update(&block2, Some([7; 32]), &[], &state_with_balance(200), None)
+        .unwrap();
+    drop(dbio);
+
+    let reopened = RocksDBIO::open_or_create(temp_dir.path()).unwrap();
+    assert_eq!(
+        reopened.channel_cursor().unwrap(),
+        Some([7; 32]),
+        "the cursor must come back after a restart"
+    );
 }
 
 #[test]
@@ -1121,8 +1146,14 @@ fn produced_block_persists_its_publish_checkpoint() {
     let (dbio, genesis) = dbio_with_genesis(temp_dir.path());
 
     let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    dbio.atomic_update(&block2, &[], &state_with_balance(200), Some(b"cp-produced"))
-        .unwrap();
+    dbio.atomic_update(
+        &block2,
+        None,
+        &[],
+        &state_with_balance(200),
+        Some(b"cp-produced"),
+    )
+    .unwrap();
 
     // Storing the block without the checkpoint would let a restart restore a
     // pending set that no longer holds the inscription we just published.
@@ -1152,7 +1183,7 @@ fn produced_block_below_disk_head_pins_meta_and_prunes() {
     // pins the tip meta to the produced block and drops the stale suffix in
     // the same write, mirroring the follow path.
     let block2b = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    dbio.atomic_update(&block2b, &[], &state_with_balance(400), None)
+    dbio.atomic_update(&block2b, None, &[], &state_with_balance(400), None)
         .unwrap();
 
     let stored2 = dbio.get_block(2).unwrap().expect("block 2 is stored");
@@ -1189,7 +1220,7 @@ fn the_first_block_written_starts_the_chain() {
     assert_eq!(dbio.get_meta_first_block_in_db().unwrap(), None);
 
     let genesis = produce_dummy_block(1, None, vec![]);
-    dbio.atomic_update(&genesis, &[], &state_with_balance(100), None)
+    dbio.atomic_update(&genesis, None, &[], &state_with_balance(100), None)
         .expect("seed");
 
     assert_eq!(dbio.get_meta_first_block_in_db().unwrap(), Some(1));
@@ -1202,7 +1233,7 @@ fn the_first_block_written_starts_the_chain() {
 
     // A later block extends the chain rather than restarting it.
     let second = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    dbio.atomic_update(&second, &[], &state_with_balance(100), None)
+    dbio.atomic_update(&second, None, &[], &state_with_balance(100), None)
         .expect("extend");
     assert_eq!(dbio.get_meta_first_block_in_db().unwrap(), Some(1));
     assert_eq!(dbio.get_meta_last_block_in_db().unwrap(), Some(2));

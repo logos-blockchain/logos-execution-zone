@@ -38,7 +38,7 @@ use logos_blockchain_zone_sdk::{
     sequencer::{
         ChannelUpdateTx, DepositInfo, Event, FinalizedOp, FundingConfig, InscriptionInfo,
         PendingTx, SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg,
-        WithdrawInfo, ZoneSequencer,
+        WithdrawInfo, ZoneSequencer, channel_inscriptions,
     },
 };
 use tokio::sync::{mpsc, oneshot, watch};
@@ -52,23 +52,28 @@ use crate::{config::BedrockConfig, task_group::TaskGroup};
 const PUBLISH_INBOX_CAPACITY: usize = 32;
 
 /// Everything one `Event::BlocksProcessed` carries, with inscription payloads
-/// decoded into `(MsgId, Block)` pairs.
+/// decoded into blocks.
 ///
 /// One struct rather than a sink per effect, because the `checkpoint` and
 /// everything it covers must reach the store in a single write.
 pub struct FollowUpdate {
     /// Resume cursor for this event. Persist only together with the effects
-    /// below, never ahead of them.
+    /// below, never ahead of them. Its `last_msg_id` is the channel tip on
+    /// the view this update leaves behind — non-block entries and the rewind
+    /// after an orphan included — and is what the next publish pins on.
     pub checkpoint: SequencerCheckpoint,
-    /// Inscriptions newly on the followed L1 branch, in channel order: they
-    /// extend (or, after a reorg, replace part of) the `head` tier.
-    pub adopted: Vec<(MsgId, Block)>,
-    /// Inscriptions dropped from the branch by an L1 reorg: their blocks are
-    /// reverted from the `head` and their user txs resubmitted to the mempool.
-    pub orphaned: Vec<(MsgId, Block)>,
-    /// Inscriptions whose containing L1 block reached finality: their blocks
-    /// move into the irreversible `final` tier.
-    pub finalized: Vec<(MsgId, Block)>,
+    /// Blocks newly on the followed L1 branch, in channel order; they extend
+    /// or replace part of the `head` tier. Non-block entries (garbage, a
+    /// config op) surface only through the checkpoint's tip. No inscription
+    /// ids ride along: blocks correlate by hash (a re-inscription changes the
+    /// id, never the hash), and the only publishable id is the checkpoint's.
+    pub adopted: Vec<Block>,
+    /// Blocks dropped from the branch by an L1 reorg: reverted from the
+    /// `head`, their user txs resubmitted to the mempool.
+    pub orphaned: Vec<Block>,
+    /// Blocks whose containing L1 block reached finality: they move into the
+    /// irreversible `final` tier.
+    pub finalized: Vec<Block>,
     /// Finalized Bedrock deposit events, to record and mint on L2.
     pub deposits: Vec<DepositInfo>,
     /// Finalized Bedrock withdraw events, to reconcile against local intents.
@@ -147,6 +152,17 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
         withdrawals: Vec<WithdrawArg>,
     ) -> Result<PublishOutcome>;
 
+    /// Publish `block` as an inscription chained on `parent`, rather than on
+    /// whatever the channel tip happens to be when the publish is serviced.
+    ///
+    /// L1 rejects it if the tip moved, which costs the turn and leaves the
+    /// height free.
+    fn publish_block_chained_on(
+        &self,
+        block: &Block,
+        parent: MsgId,
+    ) -> impl Future<Output = Result<PublishOutcome>> + Send;
+
     /// Create the channel and write `block` into it in one Mantle tx. Only valid
     /// while the channel does not exist, and `keys[0]` must be this sequencer's
     /// own key, since creation hands the first turn to index 0.
@@ -199,6 +215,9 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
     /// channel does not exist there. Drives the startup frontier check.
     async fn channel_tip_slot(&self) -> Result<Option<Slot>>;
 
+    /// Live channel tip message id; `None` if the channel does not exist.
+    async fn channel_tip_message(&self) -> Result<Option<MsgId>>;
+
     /// Finalized channel messages from `after_slot` (exclusive) up to LIB, used
     /// for the startup consistency check and reconstruction. Pass `None` to read
     /// from the channel's genesis.
@@ -241,6 +260,14 @@ impl ZoneSdkPublisher {
         resp_rx
             .await
             .map_err(|_closed| anyhow!("Drive task dropped the response"))?
+    }
+
+    /// Reads the live channel state; `None` if the channel does not exist.
+    async fn live_channel_state(&self) -> Result<Option<ChannelState>> {
+        self.node
+            .channel_state(self.channel_id)
+            .await
+            .context("Failed to read channel state")
     }
 
     /// Inscribes raw bytes on the channel. Only a test that provokes an offence
@@ -301,6 +328,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let (command_tx, mut command_rx): (CommandSender, _) =
             mpsc::channel(PUBLISH_INBOX_CAPACITY);
 
+        let channel_id = config.channel_id;
         let driver_cancellation = CancellationToken::new();
         let driver_guard = driver_cancellation.clone().drop_guard();
         let drive_task = tokio::spawn(async move {
@@ -411,8 +439,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     let adopted = channel_update
                                         .adopted
                                         .iter()
-                                        .filter_map(channel_update_inscription)
-                                        .filter_map(block_from_inscription)
+                                        .flat_map(|tx| adopted_blocks(tx, channel_id))
                                         .collect();
                                     let orphaned = channel_update
                                         .orphaned
@@ -431,7 +458,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         match op {
                                             FinalizedOp::Inscription(inscription) => {
                                                 match block_from_inscription(&inscription) {
-                                                    Some(entry) => finalized_blocks.push(entry),
+                                                    Some(block) => finalized_blocks.push(block),
                                                     // A `ChannelConfig` arrives
                                                     // empty and offends nobody.
                                                     None if <Inscription as AsRef<[u8]>>::as_ref(
@@ -515,6 +542,48 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         .await
     }
 
+    async fn publish_block_chained_on(
+        &self,
+        block: &Block,
+        parent: MsgId,
+    ) -> Result<PublishOutcome> {
+        let data = borsh::to_vec(block).context("Failed to serialize block")?;
+        let inscription: Inscription = data
+            .try_into()
+            .context("Block data exceeds maximum allowed size")?;
+
+        let inscribe_op = InscriptionOp {
+            channel_id: self.channel_id,
+            inscription,
+            parent,
+            signer: self.bedrock_signing_key.public_key(),
+        };
+        let msg_id = inscribe_op.id();
+
+        let funded = fund_ops(
+            &self.node,
+            self.funding_key,
+            self.priority_fee,
+            [Op::ChannelInscribe(inscribe_op)],
+        )
+        .await?;
+        let mantle_tx = funded.funded_tx;
+
+        let signature = self
+            .bedrock_signing_key
+            .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
+        let mut ops_proofs: OpsProofs = OpProof::Ed25519Sig(signature).into();
+        if let Some(transfer_proof) = funded.transfer_proof {
+            ops_proofs
+                .try_push(transfer_proof)
+                .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
+        }
+
+        let tx = Box::new(SignedMantleTx::new(mantle_tx, ops_proofs));
+        self.dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
+            .await
+    }
+
     async fn publish_genesis_creating_channel(
         &self,
         block: &Block,
@@ -593,10 +662,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
     async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, Slot)>> {
         Ok(self
-            .node
-            .channel_state(self.channel_id)
-            .await
-            .context("Failed to read channel state")?
+            .live_channel_state()
+            .await?
             .map(|state| (state.accredited_keys.to_vec(), state.tip_slot)))
     }
 
@@ -660,12 +727,14 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
     }
 
     async fn channel_tip_slot(&self) -> Result<Option<Slot>> {
+        Ok(self.live_channel_state().await?.map(|state| state.tip_slot))
+    }
+
+    async fn channel_tip_message(&self) -> Result<Option<MsgId>> {
         Ok(self
-            .node
-            .channel_state(self.channel_id)
-            .await
-            .context("Failed to read channel state")?
-            .map(|state| state.tip_slot))
+            .live_channel_state()
+            .await?
+            .map(|state| state.tip_message))
     }
 
     async fn read_channel_after(
@@ -683,13 +752,32 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
 /// Deserialize an inscription payload into `(this_msg, Block)`. Bad payloads are
 /// logged and skipped.
-fn block_from_inscription(inscription: &InscriptionInfo) -> Option<(MsgId, Block)> {
+fn block_from_inscription(inscription: &InscriptionInfo) -> Option<Block> {
     borsh::from_slice::<Block>(&inscription.payload)
         .inspect_err(|err| {
             warn!("Failed to deserialize block from inscription: {err:?}");
         })
         .ok()
-        .map(|block| (inscription.this_msg, block))
+}
+
+/// Every block an adopted tx carries, in op order. Non-block entries are
+/// dropped: they reach consumers as the checkpoint's tip, not as payloads.
+fn adopted_blocks(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<Block> {
+    let entry = |inscription: &InscriptionInfo| {
+        if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
+            None
+        } else {
+            block_from_inscription(inscription)
+        }
+    };
+    match tx {
+        ChannelUpdateTx::Inscription(info) => entry(info).into_iter().collect(),
+        ChannelUpdateTx::AtomicWithdraw(bundle) => entry(&bundle.inscription).into_iter().collect(),
+        ChannelUpdateTx::Custom(signed_tx) => channel_inscriptions(signed_tx, channel_id)
+            .iter()
+            .filter_map(entry)
+            .collect(),
+    }
 }
 
 /// Channel notes the withdraws bundled with a published tx release; empty for a

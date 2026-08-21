@@ -672,6 +672,7 @@ mod tests {
         storage_ref
             .ask(RecordNewBlock {
                 block: produce_dummy_block(0, None, vec![]),
+                channel_cursor: None,
                 withdrawals: vec![],
                 state: Arc::new(lee::V03State::new()),
                 checkpoint_bytes: None,

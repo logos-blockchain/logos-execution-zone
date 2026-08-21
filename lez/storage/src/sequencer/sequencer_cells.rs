@@ -9,8 +9,8 @@ use crate::{
     error::DbError,
     sequencer::{
         CF_LEE_STATE_NAME, DB_FINAL_BLOCK_META_KEY, DB_FINAL_LEE_STATE_KEY, DB_LEE_STATE_KEY,
-        DB_META_CROSS_ZONE_PEER_FLOOR_KEY, DB_META_CROSS_ZONE_PEER_TIP_KEY,
-        DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCH_COUNT_KEY,
+        DB_META_CHANNEL_CURSOR_KEY, DB_META_CROSS_ZONE_PEER_FLOOR_KEY,
+        DB_META_CROSS_ZONE_PEER_TIP_KEY, DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCH_COUNT_KEY,
         DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCHES_KEY, DB_META_LAST_FINALIZED_BLOCK_ID,
         DB_META_LATEST_BLOCK_META_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCH_COUNT_KEY,
         DB_META_PENDING_CROSS_ZONE_DISPATCH_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY,
@@ -159,6 +159,28 @@ impl SimpleWritableCell for PublishedHighWaterCell {
                 err,
                 Some("Failed to serialize published high water mark".to_owned()),
             )
+        })
+    }
+}
+
+/// The `MsgId` of the newest channel inscription processed, block or not —
+/// the parent the next produced block is pinned on.
+#[derive(Debug, BorshSerialize, BorshDeserialize)]
+pub struct ChannelCursorCell(pub [u8; 32]);
+
+impl SimpleStorableCell for ChannelCursorCell {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_CHANNEL_CURSOR_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for ChannelCursorCell {}
+
+impl SimpleWritableCell for ChannelCursorCell {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize channel cursor".to_owned()))
         })
     }
 }

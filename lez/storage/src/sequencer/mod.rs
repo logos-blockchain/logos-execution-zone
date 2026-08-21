@@ -21,18 +21,18 @@ use crate::{
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     error::DbError,
     sequencer::sequencer_cells::{
-        DeadLetterCrossZoneDispatchCountCell, DeadLetterCrossZoneDispatchesCellOwned,
-        DeadLetterCrossZoneDispatchesCellRef, DeadLetterDispatchRecord, DispatchOrigin,
-        FinalBlockMetaCellOwned, FinalBlockMetaCellRef, FinalLeeStateCellOwned,
-        FinalLeeStateCellRef, LEEStateCellOwned, LEEStateCellRef, LatestBlockMetaCellOwned,
-        LatestBlockMetaCellRef, LegacyPendingCrossZoneDispatchesCellOwned, PeerChainTip,
-        PeerFloorCellOwned, PeerFloorCellRef, PeerTipCell, PeerZoneKey,
-        PendingCrossZoneDispatchCellOwned, PendingCrossZoneDispatchCellRef,
-        PendingCrossZoneDispatchCountCell, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, PendingDepositEventsCellOwned, PendingDepositEventsCellRef,
-        PublishedHighWaterCell, SlashRecordCellOwned, SlashRecordCellRef, UnseenWithdrawCountCell,
-        WithdrawalReconciliationKey, ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned,
-        ZoneSdkCheckpointCellRef,
+        ChannelCursorCell, DeadLetterCrossZoneDispatchCountCell,
+        DeadLetterCrossZoneDispatchesCellOwned, DeadLetterCrossZoneDispatchesCellRef,
+        DeadLetterDispatchRecord, DispatchOrigin, FinalBlockMetaCellOwned, FinalBlockMetaCellRef,
+        FinalLeeStateCellOwned, FinalLeeStateCellRef, LEEStateCellOwned, LEEStateCellRef,
+        LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
+        LegacyPendingCrossZoneDispatchesCellOwned, PeerChainTip, PeerFloorCellOwned,
+        PeerFloorCellRef, PeerTipCell, PeerZoneKey, PendingCrossZoneDispatchCellOwned,
+        PendingCrossZoneDispatchCellRef, PendingCrossZoneDispatchCountCell,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PendingDepositEventsCellOwned,
+        PendingDepositEventsCellRef, PublishedHighWaterCell, SlashRecordCellOwned,
+        SlashRecordCellRef, UnseenWithdrawCountCell, WithdrawalReconciliationKey, ZoneAnchorCell,
+        ZoneAnchorRecord, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -81,6 +81,8 @@ pub const DB_META_UNSEEN_WITHDRAW_COUNT_KEY: &str = "unseen_withdraw_count";
 /// channel. Never decreases, and deliberately survives the block pruning a
 /// head rewind performs.
 pub const DB_META_PUBLISHED_HIGH_WATER_KEY: &str = "published_high_water";
+/// The `MsgId` of the newest channel inscription processed, block or not.
+pub const DB_META_CHANNEL_CURSOR_KEY: &str = "channel_cursor";
 
 /// How many cross-zone deliveries may be pending at once.
 ///
@@ -180,6 +182,10 @@ pub struct StoreUpdate<'update> {
     /// `(block, finalized)` payloads to write.
     pub blocks: &'update [(&'update Block, bool)],
 
+    /// The `MsgId` of the newest inscription this update processed, block or
+    /// not; `None` leaves the stored cursor untouched.
+    pub channel_cursor: Option<[u8; 32]>,
+
     /// Head tip to pin the stored chain to; `None` only for an empty chain.
     pub head_tip: Option<&'update BlockMeta>,
     /// State after the last applied block.
@@ -217,6 +223,7 @@ impl<'update> StoreUpdate<'update> {
         Self {
             checkpoint: None,
             blocks: &[],
+            channel_cursor: None,
             head_tip: None,
             head_state,
             final_snapshot: None,
@@ -579,6 +586,13 @@ impl RocksDBIO {
             return Ok(());
         }
         self.put(&PublishedHighWaterCell(block_id), ())
+    }
+
+    /// The `MsgId` of the newest channel inscription processed, or `None` if
+    /// none was recorded.
+    pub fn channel_cursor(&self) -> DbResult<Option<[u8; 32]>> {
+        self.get_opt::<ChannelCursorCell>(())
+            .map(|val| val.map(|cell| cell.0))
     }
 
     pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
@@ -1400,6 +1414,7 @@ impl RocksDBIO {
         let StoreUpdate {
             checkpoint,
             blocks,
+            channel_cursor,
             head_tip,
             head_state,
             final_snapshot,
@@ -1428,6 +1443,9 @@ impl RocksDBIO {
             && self.published_high_water()?.is_some_and(|mark| mark > cap)
         {
             self.put_batch(&PublishedHighWaterCell(cap), (), &mut batch)?;
+        }
+        if let Some(cursor) = channel_cursor {
+            self.put_batch(&ChannelCursorCell(cursor), (), &mut batch)?;
         }
 
         // Every block payload this update writes, keyed by id so a block that
@@ -1553,6 +1571,7 @@ impl RocksDBIO {
     pub fn atomic_update(
         &self,
         block: &Block,
+        channel_cursor: Option<[u8; 32]>,
         withdrawals: &[WithdrawalReconciliationKey],
         state: &V03State,
         checkpoint: Option<&[u8]>,
@@ -1560,6 +1579,7 @@ impl RocksDBIO {
         self.store_update(&StoreUpdate {
             checkpoint,
             blocks: &[(block, false)],
+            channel_cursor,
             head_tip: Some(&BlockMeta::from(block)),
             new_withdraw_intents: withdrawals,
             ..StoreUpdate::new(state)

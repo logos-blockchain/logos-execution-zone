@@ -169,6 +169,13 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
             return Ok(());
         }
 
+        // The channel moved past our pin, so every publish this turn would be refused.
+        if let Some(tip) = self.sequencer.pin_behind_channel_tip().await {
+            self.sequencer.update_committee_absence().await;
+            info!("Skipping turn: channel tip {tip:?} moved past our pin; catching up first");
+            return Ok(());
+        }
+
         info!("Our turn: producing a block and any committee update");
         let id = self
             .sequencer
