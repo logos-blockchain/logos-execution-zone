@@ -15,6 +15,8 @@ use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
+use crate::status::CrossZoneHalt;
+
 #[derive(Clone)]
 pub struct IndexerStore {
     dbio: Arc<RocksDBIO>,
@@ -128,6 +130,22 @@ impl IndexerStore {
         let checkpoint: Option<SequencerCheckpoint> = serde_json::from_slice(&bytes)
             .context("Failed to deserialize stored tip checkpoint")?;
         Ok(checkpoint)
+    }
+
+    pub fn get_cross_zone_halt(&self) -> Result<Option<CrossZoneHalt>> {
+        let Some(bytes) = self.dbio.get_cross_zone_halt_bytes()? else {
+            return Ok(None);
+        };
+        let halt: Option<CrossZoneHalt> = serde_json::from_slice(&bytes)
+            .context("Failed to deserialize stored cross-zone halt record")?;
+        Ok(halt)
+    }
+
+    pub fn set_cross_zone_halt(&self, halt: &Option<CrossZoneHalt>) -> Result<()> {
+        let bytes =
+            serde_json::to_vec(halt).context("Failed to serialize cross-zone halt record")?;
+        self.dbio.put_cross_zone_halt_bytes(&bytes)?;
+        Ok(())
     }
 
     pub fn get_stall_reason(&self) -> Result<Option<StallReason>> {
@@ -308,6 +326,30 @@ mod stall_reason_tests {
 
         store.set_stall_reason(&None).expect("clear");
         assert!(store.get_stall_reason().expect("get").is_none());
+    }
+
+    #[tokio::test]
+    async fn cross_zone_halt_roundtrips_and_clears() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        assert!(store.get_cross_zone_halt().expect("get").is_none());
+
+        let halt = crate::status::CrossZoneHalt {
+            block_id: 9,
+            block_hash: HashType([0xAB_u8; 32]),
+            src_zone: hex::encode([2_u8; 32]),
+            src_block_id: 5,
+            src_tx_index: 1,
+            verdict: "re-derivation mismatch".to_owned(),
+        };
+        store
+            .set_cross_zone_halt(&Some(halt.clone()))
+            .expect("set halt");
+        assert_eq!(store.get_cross_zone_halt().expect("get"), Some(halt));
+
+        store.set_cross_zone_halt(&None).expect("clear");
+        assert!(store.get_cross_zone_halt().expect("get").is_none());
     }
 }
 

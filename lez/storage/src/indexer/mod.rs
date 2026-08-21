@@ -24,6 +24,8 @@ pub const DB_META_ZONE_SDK_INDEXER_CURSOR_KEY: &str = "zone_sdk_indexer_cursor";
 pub const DB_META_STALL_REASON_KEY: &str = "stall_reason";
 /// Key base for storing the L1 inscription checkpoint of the tip block.
 pub const DB_META_TIP_CHECKPOINT_KEY: &str = "tip_checkpoint";
+/// Key base for storing the persisted cross-zone halt record (opaque JSON bytes).
+pub const DB_META_CROSS_ZONE_HALT_KEY: &str = "cross_zone_halt";
 
 /// Cell name for a breakpoint.
 pub const BREAKPOINT_CELL_NAME: &str = "breakpoint";

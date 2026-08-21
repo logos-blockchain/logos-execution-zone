@@ -11,7 +11,8 @@ use logos_blockchain_core::mantle::{
     ops::{OpId as _, channel::ChannelId},
 };
 use logos_blockchain_zone_sdk::{
-    Deposit, Slot, Withdraw, ZoneBlock, ZoneMessage, adapter,
+    Deposit, Slot, Withdraw, ZoneBlock, ZoneMessage,
+    adapter::{self, NodeHttpClient},
     sequencer::{
         DepositInfo, Event, FinalizedOp, FundingConfig, InscriptionInfo, SequencerCheckpoint,
         WithdrawInfo, ZoneSequencer,
@@ -256,6 +257,20 @@ enum AnchorProbe {
     KeepLooking,
 }
 
+/// An indexer context for spawning.
+#[derive(Clone)]
+pub struct IndexerContext {
+    pub channel_id: ChannelId,
+    pub node: NodeHttpClient,
+}
+
+impl IndexerContext {
+    #[must_use]
+    pub const fn new(channel_id: ChannelId, node: NodeHttpClient) -> Self {
+        Self { channel_id, node }
+    }
+}
+
 #[must_use]
 pub fn checkpoint_eq(
     checkpoint_a: &SequencerCheckpoint,
@@ -353,12 +368,12 @@ where
 pub fn next_messages_own<N>(
     node: N,
     channel_id: ChannelId,
-    sequencer_checkpoint: Option<SequencerCheckpoint>,
+    indexer_checkpoint: Option<SequencerCheckpoint>,
 ) -> impl Stream<Item = (ZoneMessage, SequencerCheckpoint)>
 where
     N: adapter::Node + Clone + Sync + Send + 'static,
 {
-    let mut indexer = new_indexer(channel_id, node, sequencer_checkpoint);
+    let mut indexer = new_indexer(channel_id, node, indexer_checkpoint);
 
     async_stream::stream! {
         loop {

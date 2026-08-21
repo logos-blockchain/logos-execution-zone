@@ -344,6 +344,8 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             last_error: None,
             indexed_block_id,
             stall_reason: None,
+            cross_zone_halt: None,
+            cross_zone_peers: Vec::new(),
         })
     }
 
