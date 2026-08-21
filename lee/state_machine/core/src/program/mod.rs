@@ -284,18 +284,6 @@ impl ChainedCall {
     }
 }
 
-/// Represents the final state of an `Account` after a program execution.
-///
-/// A post state may optionally request that the executing program
-/// becomes the owner of the account (a "claim"). This is used to signal
-/// that the program intends to take ownership of the account.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
-pub struct AccountPostState {
-    account: Account,
-    claim: Option<Claim>,
-}
-
 /// A claim request for an account, indicating that the executing program intends to take ownership
 /// of the account.
 #[derive(
@@ -304,73 +292,15 @@ pub struct AccountPostState {
 pub enum Claim {
     /// The program requests ownership of the account which was authorized by the signer.
     ///
-    /// Note that it's possible to successfully execute program outputting [`AccountPostState`] with
-    /// `is_authorized == false` and `claim == Some(Claim::Authorized)`.
-    /// This will give no error if program had authorization in pre state and may be useful
-    /// if program decides to give up authorization for a chained call.
+    /// Note that it's possible to successfully execute a program with `is_authorized == false`
+    /// and `claim == Some(Claim::Authorized)`. This will give no error if program had
+    /// authorization in pre state and may be useful if program decides to give up authorization
+    /// for a chained call.
     Authorized,
     /// The program requests ownership of the account through a PDA. The program emits the
     /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
     /// account is public or private.
     Pda(PdaSeed),
-}
-
-impl AccountPostState {
-    /// Creates a post state without a claim request.
-    /// The executing program is not requesting ownership of the account.
-    #[must_use]
-    pub const fn new(account: Account) -> Self {
-        Self {
-            account,
-            claim: None,
-        }
-    }
-
-    /// Creates a post state that requests ownership of the account.
-    /// This indicates that the executing program intends to claim the
-    /// account as its own and is allowed to mutate it.
-    #[must_use]
-    pub const fn new_claimed(account: Account, claim: Claim) -> Self {
-        Self {
-            account,
-            claim: Some(claim),
-        }
-    }
-
-    /// Creates a post state that requests ownership of the account
-    /// if the account's program owner is the default program ID.
-    #[must_use]
-    pub fn new_claimed_if_default(account: Account, claim: Claim) -> Self {
-        let is_default_owner = account.program_owner == DEFAULT_PROGRAM_OWNER;
-        Self {
-            account,
-            claim: is_default_owner.then_some(claim),
-        }
-    }
-
-    /// Returns whether this post state requires a claim.
-    #[must_use]
-    pub const fn required_claim(&self) -> Option<Claim> {
-        self.claim
-    }
-
-    /// Returns the underlying account.
-    #[must_use]
-    pub const fn account(&self) -> &Account {
-        &self.account
-    }
-
-    /// Returns the underlying account.
-    #[must_use]
-    pub const fn account_mut(&mut self) -> &mut Account {
-        &mut self.account
-    }
-
-    /// Consumes the post state and returns the underlying account.
-    #[must_use]
-    pub fn into_account(self) -> Account {
-        self.account
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -394,8 +324,8 @@ impl AccountDiffOutput {
         }
     }
 
-    // `AccountDiff` deliberately carries no ownership info, unlike `Account`, so unlike
-    // `AccountPostState::new_claimed_if_default` this needs the pre-state's owner passed in.
+    // `AccountDiff` deliberately carries no ownership info, unlike `Account`, so this needs the
+    // pre-state's owner passed in explicitly.
     #[must_use]
     pub fn new_claimed_if_default(
         diff: AccountDiff,
