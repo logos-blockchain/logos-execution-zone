@@ -2,7 +2,7 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, Balance},
+    account::{AccountId, Balance, Gas},
     program::{PdaSeed, ProgramId},
 };
 
@@ -13,21 +13,13 @@ const FEE_STATE_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/State/0000000/";
 const FEE_ESCROW_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Escrow/000000/";
 const FEE_INBOX_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Inbox/0000000/";
 
-/// A base-fee price, in atomic units.
-///
-/// Base fees, gas, and per-resource fee products fit `u64` by the per-block gas
-/// caps; balances and revenue totals are [`Balance`] (`u128`).
-///
-/// NOTE: The `u64`/`u128` split is deliberate, per the fee spec.
-pub type Fee = u64;
-
 /// Per-block fee summary carried as the fee invocation's instruction and
 /// validated byte-for-byte by the transition. All-zero until fee metering
 /// lands.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BlockFeeSummary {
-    pub gas_used_exec: u64,
-    pub gas_used_stor: u64,
+    pub gas_used_exec: Gas,
+    pub gas_used_stor: Gas,
     pub revenue_base: Balance,
     pub revenue_tip: Balance,
 }

@@ -87,6 +87,11 @@ impl BorshDeserialize for Nonce {
 }
 
 pub type Balance = u128;
+/// A base-fee price or tip, in atomic units; fits `u64` by the per-block gas caps
+/// (balances and totals are [`Balance`], `u128`).
+pub type Fee = u64;
+/// A gas amount — execution or storage work, bounded per block.
+pub type Gas = u64;
 
 /// Account to be used both in public and private contexts.
 #[derive(

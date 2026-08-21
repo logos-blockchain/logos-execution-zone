@@ -1,8 +1,9 @@
 //! Persistent fee market state, stored in the fee-state account's data.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee_core::account::Fee;
 
-use crate::{BlockFeeSummary, Fee, market};
+use crate::{BlockFeeSummary, market};
 
 /// The fee market's persistent state, in the fee-state account's `data`. Escrow
 /// is the escrow *account balance*, deliberately not a field here.

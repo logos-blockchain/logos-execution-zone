@@ -5,10 +5,10 @@
 
 use core::cmp::Ordering;
 
-use crate::Fee;
+use lee_core::account::{Fee, Gas};
 
-pub const TARGET_GAS_EXEC: u64 = 5_000_000;
-pub const MAX_GAS_EXEC: u64 = 10_000_000;
+pub const TARGET_GAS_EXEC: Gas = 5_000_000;
+pub const MAX_GAS_EXEC: Gas = 10_000_000;
 pub const D_EXEC: u64 = 8;
 pub const BASE_FEE_EXEC_MIN: Fee = 8;
 #[expect(
@@ -18,8 +18,8 @@ pub const BASE_FEE_EXEC_MIN: Fee = 8;
 )]
 pub const BASE_FEE_EXEC_MAX: Fee = u64::MAX / MAX_GAS_EXEC;
 
-pub const TARGET_GAS_STOR: u64 = 500_000;
-pub const MAX_GAS_STOR: u64 = 1_000_000;
+pub const TARGET_GAS_STOR: Gas = 500_000;
+pub const MAX_GAS_STOR: Gas = 1_000_000;
 pub const D_STOR: u64 = 8;
 pub const BASE_FEE_STOR_MIN: Fee = 8;
 #[expect(
@@ -54,8 +54,8 @@ const _: () = assert!(MAX_GAS_STOR == 2 * TARGET_GAS_STOR);
 #[must_use]
 pub fn next_base_fee(
     base_fee: Fee,
-    gas_used: u64,
-    target: u64,
+    gas_used: Gas,
+    target: Gas,
     damping: u64,
     lo: Fee,
     hi: Fee,
