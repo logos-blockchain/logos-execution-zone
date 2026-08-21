@@ -1,7 +1,9 @@
 use std::future::Future;
 
 use common::{block::Block, transaction::LeeTransaction};
-use futures::{StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream};
+use futures::{
+    FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
+};
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
@@ -38,7 +40,7 @@ use crate::{
     },
 };
 
-mod fees;
+mod conversions;
 #[cfg(test)]
 mod tests;
 
@@ -98,14 +100,12 @@ impl BlockedAttempts {
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + 'static> ExecutorActor<S, BP> {
-    #[expect(
-        clippy::manual_async_fn,
-        reason = "Explicit Send future works around rust-lang/rust#100013"
-    )]
     pub fn new(
         config: SequencerConfig,
         storage_ref: ActorRef<S>,
     ) -> impl Future<Output = Self> + Send + 'static {
+        sequencer_executor_actor_metrics::init();
+
         async move {
             // TODO: Leave storage_ref as a top-level field only in `ExecutorActor`,
             // while moving `SequencerCore` code into this actor.
@@ -182,11 +182,11 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Acto
     }
 }
 
-impl<BP: BlockPublisherTrait, S: StorageActorTrait> ExecutorActor<BP, S> {
+impl<S: StorageActorTrait, BP: BlockPublisherTrait> ExecutorActor<S, BP> {
     /// Ends a blocked run, reporting the drop to zero only if there was one.
     fn clear_blocked_attempts(&mut self) {
         if self.blocked_attempts.clear() {
-            sequencer_core_metrics::record_publish_blocked_attempts(0);
+            sequencer_executor_actor_metrics::record_publish_blocked_attempts(0);
         }
     }
 }
@@ -227,7 +227,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
         // The channel moved past our pin, so every publish this turn would be refused.
         if let Some(PinBehindTip { pin, tip }) = self.sequencer.pin_behind_channel_tip().await {
             let attempts = self.blocked_attempts.record(tip);
-            sequencer_core_metrics::record_publish_blocked_attempts(attempts);
+            sequencer_executor_actor_metrics::record_publish_blocked_attempts(attempts);
             if attempts >= BLOCKED_ATTEMPTS_BEFORE_WEDGED {
                 warn!(
                     "Skipped {attempts} production attempts behind an unchanging channel tip \
@@ -254,7 +254,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
                 // clears it and the gauge drops to zero, unless it was zero
                 // already.
                 if std::mem::take(&mut self.failed_attempts) != 0 {
-                    sequencer_core_metrics::record_production_failed_attempts(0);
+                    sequencer_executor_actor_metrics::record_production_failed_attempts(0);
                 }
                 log::info!(
                     "Block with id {id} created by {}",
@@ -263,7 +263,9 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
             }
             Err(err) => {
                 self.failed_attempts = self.failed_attempts.saturating_add(1);
-                sequencer_core_metrics::record_production_failed_attempts(self.failed_attempts);
+                sequencer_executor_actor_metrics::record_production_failed_attempts(
+                    self.failed_attempts,
+                );
                 warn!(
                     "Skipping turn: block production failed ({} in a row): {err:#}",
                     self.failed_attempts
@@ -292,12 +294,12 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
         // Advisory (base fees and balances move), but everything it turns
         // away would have been refused by the block builder anyway.
         self.sequencer
-            .with_state(|state| fees::screen(&transaction, state))
+            .with_state(|state| sequencer_core::fees::screen(&transaction, state))
             .await
             .map_err(|err| Error::IncorrectFee(err.into()))?;
 
         self.mempool_handle
-            .try_push((origin, transaction))
+            .try_push((origin.into(), transaction))
             .map_err(|_err| Error::MempoolIsFull)?;
         Ok(())
     }
@@ -389,7 +391,10 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
         GetFeeQuote: GetFeeQuote,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer.with_state(fees::fee_quote).await
+        self.sequencer
+            .with_state(sequencer_core::fees::fee_quote)
+            .map(Into::into)
+            .await
     }
 }
 

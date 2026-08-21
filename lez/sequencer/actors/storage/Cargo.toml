@@ -9,7 +9,16 @@ workspace = true
 
 [features]
 # Adds actor implementation.
-actor = ["dep:storage", "dep:log", "dep:itertools"]
+actor = [
+  "dep:rocksdb",
+  "dep:borsh",
+  "dep:log",
+  "dep:itertools",
+  "dep:strum",
+  "dep:enum-iterator",
+  "dep:num-traits",
+  "dep:zstd",
+]
 # Adds mock actor implementation.
 mock = ["dep:mockall"]
 
@@ -17,12 +26,18 @@ mock = ["dep:mockall"]
 lee_core.workspace = true
 lee.workspace = true
 common.workspace = true
-storage = { workspace = true, optional = true }
 
 kameo.workspace = true
 thiserror.workspace = true
+anyhow.workspace = true
+rocksdb = { workspace = true, optional = true }
+borsh = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
 itertools = { workspace = true, optional = true }
+strum = { workspace = true, optional = true }
+enum-iterator = { workspace = true, optional = true }
+num-traits = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]

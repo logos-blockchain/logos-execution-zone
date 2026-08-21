@@ -69,7 +69,7 @@ pub struct GossipNetwork {
 /// The verdict never affects mesh acceptance: admission is priced off the
 /// local head state, which drifts, so peers legitimately disagree.
 pub type IngestSubmit =
-    Arc<dyn Fn(LeeTransaction) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
+    Arc<dyn Fn(LeeTransaction) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
 
 /// Handle for publishing locally-submitted transactions to the gossip mesh.
 /// `publish` is non-blocking: a full channel drops the transaction rather
@@ -543,7 +543,7 @@ pub fn unscreened_mempool_submit(
         Box::pin(async move {
             mempool
                 .try_push((TransactionOrigin::Gossip, tx))
-                .map_err(|err| format!("mempool full: {err}"))
+                .context("mempool is full")
         })
     })
 }

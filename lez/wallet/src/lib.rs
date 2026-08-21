@@ -30,7 +30,6 @@ use lee_core::{
     program::InstructionData,
 };
 use log::warn;
-pub use sequencer_service_rpc::AdmissionRejection;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
@@ -113,20 +112,6 @@ pub enum ExecutionFailureKind {
     MultiSequencerTransactionSendError,
     #[error("Failed to join a task: {0}")]
     JoinError(#[from] tokio::task::JoinError),
-}
-
-impl ExecutionFailureKind {
-    /// The structured fee-admission rejection behind a sequencer refusal, if
-    /// that is what this failure is, decoded from the JSON-RPC error's `data`
-    /// field.
-    #[must_use]
-    pub fn fee_admission_rejection(&self) -> Option<AdmissionRejection> {
-        let Self::SequencerClientError(sequencer_service_rpc::ClientError::Call(err)) = self else {
-            return None;
-        };
-        let data = err.data()?;
-        serde_json::from_str(data.get()).ok()
-    }
 }
 
 pub struct WalletCore {
@@ -1183,28 +1168,5 @@ mod tests {
         let mn_ret = Mnemonic::from_str(mn_string).unwrap();
 
         assert_eq!(mnemonic, mn_ret);
-    }
-
-    #[test]
-    fn fee_admission_rejection_is_decoded_from_the_rpc_error_data() {
-        use sequencer_service_rpc::{AdmissionRejection, ClientError, ErrorObjectOwned};
-
-        use crate::ExecutionFailureKind;
-
-        let rejection = AdmissionRejection::PayerCannotFund {
-            payer: lee::AccountId::new([7; 32]),
-            balance: 0,
-            fee_reserve: 42,
-        };
-        let failure = ExecutionFailureKind::SequencerClientError(ClientError::Call(
-            ErrorObjectOwned::owned(rejection.code(), rejection.to_string(), Some(&rejection)),
-        ));
-        assert_eq!(failure.fee_admission_rejection(), Some(rejection));
-
-        assert!(
-            ExecutionFailureKind::InsufficientFundsError
-                .fee_admission_rejection()
-                .is_none()
-        );
     }
 }

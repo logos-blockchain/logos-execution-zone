@@ -8,7 +8,6 @@ use crate::{
 pub mod cells;
 pub mod error;
 pub mod indexer;
-pub mod sequencer;
 
 /// Maximal size of stored blocks in base.
 ///

@@ -106,7 +106,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .executor_ref
             .ask(sequencer_executor_actor::protocol::Transaction {
                 transaction: authenticated_tx.clone(),
-                origin: sequencer_core::TransactionOrigin::User,
+                origin: sequencer_executor_actor::protocol::TransactionOrigin::User,
             })
             .await
             .map_err(map_executor_error)
@@ -330,7 +330,6 @@ fn map_executor_error<M>(
             handle_err @ (sequencer_executor_actor::error::Error::BackgroundTaskFinishedUnexpectedly
             | sequencer_executor_actor::error::Error::BlockPublisherFinishedUnexpectedly
             | sequencer_executor_actor::error::Error::StorageRequestFailed(_)
-            | sequencer_executor_actor::error::Error::BlockProductionFailed(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLettersUnavailable(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLetterRequeueFailed(_)) => {
                 internal_error(handle_err)

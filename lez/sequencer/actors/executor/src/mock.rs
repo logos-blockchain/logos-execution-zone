@@ -16,12 +16,14 @@ use lee_core::{
 };
 
 use crate::{
-    Result,
+    ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock, GetBlockRange,
-        GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
-        GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock, Transaction,
+        FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock,
+        GetBlockRange, GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters,
+        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
+        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
+        Transaction,
     },
 };
 
@@ -98,8 +100,22 @@ mockall::mock! {
             msg: GetCrossZoneDeadLetters,
             ctx: &mut Context<Self, Result<GetCrossZoneDeadLettersReply>>
         ) -> Result<GetCrossZoneDeadLettersReply>;
+
+        pub fn handle_requeue_cross_zone_dead_letter(
+            &mut self,
+            msg: RequeueCrossZoneDeadLetter,
+            ctx: &mut Context<Self, Result<RequeueCrossZoneDeadLetterReply>>
+        ) -> Result<RequeueCrossZoneDeadLetterReply>;
+
+        pub fn handle_get_fee_quote(
+            &mut self,
+            msg: GetFeeQuote,
+            ctx: &mut Context<Self, FeeStateQuote>
+        ) -> FeeStateQuote;
     }
 }
+
+impl ExecutorActorTrait for MockExecutorActor {}
 
 impl Actor for MockExecutorActor {
     type Args = Self;
@@ -287,5 +303,29 @@ impl Message<GetCrossZoneDeadLetters> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_cross_zone_dead_letters(msg, ctx)
+    }
+}
+
+impl Message<RequeueCrossZoneDeadLetter> for MockExecutorActor {
+    type Reply = Result<RequeueCrossZoneDeadLetterReply>;
+
+    async fn handle(
+        &mut self,
+        msg: RequeueCrossZoneDeadLetter,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_requeue_cross_zone_dead_letter(msg, ctx)
+    }
+}
+
+impl Message<GetFeeQuote> for MockExecutorActor {
+    type Reply = FeeStateQuote;
+
+    async fn handle(
+        &mut self,
+        msg: GetFeeQuote,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_fee_quote(msg, ctx)
     }
 }

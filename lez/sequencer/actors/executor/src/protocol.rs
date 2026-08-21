@@ -6,14 +6,22 @@ use lee_core::{
     BlockId, Commitment,
     account::{Account, AccountId},
 };
-use sequencer_core::TransactionOrigin;
-pub use sequencer_storage_actor::protocol::DeadLetterRequeue;
+pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
 
 /// The widest range a [`GetBlockRange`] may span.
 pub const MAX_BLOCK_RANGE_LEN: usize = 1024;
 
 #[derive(Copy, Clone)]
 pub struct ProduceBlock;
+
+/// The origin of a transaction.
+#[derive(Clone, Copy)]
+pub enum TransactionOrigin {
+    /// Basic transactions submitted by users via RPC.
+    User,
+    /// Transactions received via p2p gossip from a peer sequencer.
+    Gossip,
+}
 
 pub struct Transaction {
     pub transaction: LeeTransaction,
@@ -123,11 +131,11 @@ pub struct GetCrossZoneDeadLetters;
 #[derive(Reply)]
 pub struct GetCrossZoneDeadLettersReply {
     pub total_retired: u64,
-    pub retained: Vec<sequencer_storage_actor::protocol::DeadLetterDispatchRecord>,
+    pub retained: Vec<sequencer_storage_actor::protocol::DeadLetterDispatch>,
 }
 
 pub struct RequeueCrossZoneDeadLetter {
-    pub message_key: [u8; 32],
+    pub message_key: CrossZoneMessageKey,
 }
 
 #[derive(Reply)]

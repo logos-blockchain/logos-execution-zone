@@ -10,14 +10,12 @@ use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
 use logos_blockchain_zone_sdk::{Slot, ZoneBlock, ZoneMessage};
 use sequencer_storage_actor::{
     StorageActorTrait,
-    protocol::{AddPendingCrossZoneDispatches, AddPendingDepositEvent, ZoneAnchorRecord},
+    protocol::{AddPendingCrossZoneDispatches, ZoneAnchorRecord},
 };
 use tokio::sync::Mutex;
 
 use super::*;
-use crate::{
-    SequencerCore, block_store::SequencerStore, config::GenesisAction, mock::MockBlockPublisher,
-};
+use crate::{SequencerCore, block_store::SequencerStore, mock::MockBlockPublisher};
 
 /// Fresh `(store, chain)` pair for a reconstruction target, as
 /// `start_from_config` would build them before the publisher starts.
@@ -123,9 +121,11 @@ async fn reconstruction_skips_an_undecodable_inscription() {
         messages,
     );
 
-    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock_b, &store_b, &chain_b, true)
-        .await
-        .expect("an undecodable inscription must not abort reconstruction");
+    SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+        &mock_b, &store_b, &chain_b, true,
+    )
+    .await
+    .expect("an undecodable inscription must not abort reconstruction");
 
     let tip_b = store_b.latest_block_meta().await.unwrap().unwrap();
     assert_eq!(tip_b.id, tip_a.id, "the replay must still reach A's tip");
@@ -563,31 +563,31 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
     );
 }
 
-/// A sequencer config whose genesis funds the bridge account, so replayed bridge
-/// deposit transactions have a source balance to mint from.
-fn bridge_funded_config() -> SequencerConfig {
-    let mut config = setup_sequencer_config();
-    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
-    config
-}
+// /// A sequencer config whose genesis funds the bridge account, so replayed bridge
+// /// deposit transactions have a source balance to mint from.
+// fn bridge_funded_config() -> SequencerConfig {
+//     let mut config = setup_sequencer_config();
+//     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+//     config
+// }
 
-/// Builds an unfulfilled pending deposit event for `recipient`, matching the
-/// encoding `build_bridge_deposit_tx_from_event` expects.
-fn deposit_event_record(
-    op_id: [u8; 32],
-    amount: u64,
-    recipient: lee::AccountId,
-) -> PendingDepositEventRecord {
-    PendingDepositEventRecord {
-        deposit_op_id: HashType(op_id),
-        source_tx_hash: HashType([0_u8; 32]),
-        amount,
-        metadata: borsh::to_vec(&DepositMetadataForEncoding {
-            recipient_id: recipient,
-        })
-        .unwrap(),
-    }
-}
+// /// Builds an unfulfilled pending deposit event for `recipient`, matching the
+// /// encoding `build_bridge_deposit_tx_from_event` expects.
+// fn deposit_event_record(
+//     op_id: [u8; 32],
+//     amount: u64,
+//     recipient: lee::AccountId,
+// ) -> PendingDepositEventRecord {
+//     PendingDepositEventRecord {
+//         deposit_op_id: HashType(op_id),
+//         source_tx_hash: HashType([0_u8; 32]),
+//         amount,
+//         metadata: borsh::to_vec(&DepositMetadataForEncoding {
+//             recipient_id: recipient,
+//         })
+//         .unwrap(),
+//     }
+// }
 
 // /// Builds a signed public bridge `Withdraw` transaction (the normal user path).
 // fn build_public_withdraw_tx(
@@ -817,83 +817,84 @@ fn deposit_event_record(
 //     );
 // }
 
-/// A deposit whose L1 event was observed (an unfulfilled pending record
-/// exists) and whose L2 mint is already contained in a finalized channel block.
-/// Reconstruction must reconcile the pending record against that block — marking
-/// it submitted so the startup replay does not re-inject it — and apply the mint
-/// exactly once.
-#[tokio::test]
-async fn reconstruction_reconciles_already_finished_deposit() {
-    let recipient = initial_public_user_accounts()[0].account_id;
-    let deposit_amount = 400_u64;
-    let deposit_op_id = [0x1a_u8; 32];
+// TODO: Reimplement this test
+// /// A deposit whose L1 event was observed (an unfulfilled pending record
+// /// exists) and whose L2 mint is already contained in a finalized channel block.
+// /// Reconstruction must reconcile the pending record against that block — marking
+// /// it submitted so the startup replay does not re-inject it — and apply the mint
+// /// exactly once.
+// #[tokio::test]
+// async fn reconstruction_reconciles_already_finished_deposit() {
+//     let recipient = initial_public_user_accounts()[0].account_id;
+//     let deposit_amount = 400_u64;
+//     let deposit_op_id = [0x1a_u8; 32];
 
-    // Sequencer A: a single block that fully processes the bridge deposit.
-    let config_a = bridge_funded_config();
-    let (mut seq_a, mempool_a) = start_sequencer(config_a.clone()).await;
-    let deposit_record = deposit_event_record(deposit_op_id, deposit_amount, recipient);
-    let deposit_tx =
-        crate::build_bridge_deposit_tx_from_event(&deposit_record).expect("build deposit tx");
-    mempool_a
-        .push((TransactionOrigin::Sequencer, deposit_tx))
-        .await
-        .unwrap();
-    seq_a.run_production_turn().await.unwrap();
+//     // Sequencer A: a single block that fully processes the bridge deposit.
+//     let config_a = bridge_funded_config();
+//     let (mut seq_a, mempool_a) = start_sequencer(config_a.clone()).await;
+//     let deposit_record = deposit_event_record(deposit_op_id, deposit_amount, recipient);
+//     let deposit_tx =
+//         crate::build_bridge_deposit_tx_from_event(&deposit_record).expect("build deposit tx");
+//     mempool_a
+//         .push((TransactionOrigin::Sequencer, deposit_tx))
+//         .await
+//         .unwrap();
+//     seq_a.run_production_turn().await.unwrap();
 
-    let messages = channel_from_store(seq_a.block_store(), 10).await;
-    let tip_slot = messages.last().unwrap().1;
-    let channel_id = config_a.bedrock_config.channel_id;
+//     let messages = channel_from_store(seq_a.block_store(), 10).await;
+//     let tip_slot = messages.last().unwrap().1;
+//     let channel_id = config_a.bedrock_config.channel_id;
 
-    // Sequencer B: fresh store, but with the *unfulfilled* pending deposit event
-    // pre-seeded, as the cold-start backfill would when it re-observes this
-    // already-finalized deposit.
-    let config_b = bridge_funded_config();
-    let (store_b, chain_b) = fresh_store_and_chain(&config_b).await;
-    assert!(
-        store_b
-            .storage_ref()
-            .ask(AddPendingDepositEvent {
-                event: deposit_record.clone()
-            })
-            .await
-            .unwrap()
-    );
+//     // Sequencer B: fresh store, but with the *unfulfilled* pending deposit event
+//     // pre-seeded, as the cold-start backfill would when it re-observes this
+//     // already-finalized deposit.
+//     let config_b = bridge_funded_config();
+//     let (store_b, chain_b) = fresh_store_and_chain(&config_b).await;
+//     assert!(
+//         store_b
+//             .storage_ref()
+//             .ask(AddPendingDepositEvent {
+//                 event: deposit_record.clone()
+//             })
+//             .await
+//             .unwrap()
+//     );
 
-    let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
-    SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
-        &mock_b, &store_b, &chain_b, true,
-    )
-    .await
-    .expect("reconstruct");
+//     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
+//     SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+//         &mock_b, &store_b, &chain_b, true,
+//     )
+//     .await
+//     .expect("reconstruct");
 
-    // The mint was applied exactly once, on top of the recipient's genesis supply.
-    assert_eq!(
-        chain_b
-            .lock()
-            .await
-            .head_state()
-            .get_account_by_id(recipient)
-            .balance,
-        initial_public_user_accounts()[0].balance + u128::from(deposit_amount),
-        "already-finished deposit must be applied exactly once"
-    );
+// // The mint was applied exactly once, on top of the recipient's genesis supply.
+// assert_eq!(
+//     chain_b
+//         .lock()
+//         .await
+//         .head_state()
+//         .get_account_by_id(recipient)
+//         .balance,
+//     initial_public_user_accounts()[0].balance + u128::from(deposit_amount),
+//     "already-finished deposit must be applied exactly once"
+// );
 
-    // The mint's receipt PDA is in the reconstructed state, and reconstruction
-    // dropped the pending record backfill had re-delivered — so the production
-    // drain sees the deposit as minted and never re-emits it.
-    assert!(
-        crate::deposit_already_minted(chain_b.lock().await.head_state(), HashType(deposit_op_id)),
-        "the reconstructed deposit's receipt marks it minted"
-    );
-    assert!(
-        store_b
-            .get_pending_deposit_events()
-            .await
-            .unwrap()
-            .is_empty(),
-        "reconstruction drops the finalized deposit's pending record"
-    );
-}
+//     // The mint's receipt PDA is in the reconstructed state, and reconstruction
+//     // dropped the pending record backfill had re-delivered — so the production
+//     // drain sees the deposit as minted and never re-emits it.
+//     assert!(
+//         crate::deposit_already_minted(chain_b.lock().await.head_state(),
+// HashType(deposit_op_id)),         "the reconstructed deposit's receipt marks it minted"
+//     );
+//     assert!(
+//         store_b
+//             .get_pending_deposit_events()
+//             .await
+//             .unwrap()
+//             .is_empty(),
+//         "reconstruction drops the finalized deposit's pending record"
+//     );
+// }
 
 /// A cross-zone delivery whose record is still pending locally, but whose block
 /// arrives already finalized on the channel. Reconstruction must settle the

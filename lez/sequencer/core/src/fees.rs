@@ -10,8 +10,6 @@ use fee_core::{
 };
 use lee::AccountId;
 
-use crate::protocol::FeeStateQuote;
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("designated payer {payer:?} authorized nothing in this transaction")]
@@ -32,6 +30,20 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// The fee market priced off the head state, for wallets sizing `max_fee`.
+pub struct FeeStateQuote {
+    /// The block height the quoted state settled at, for staleness checks.
+    pub height: u64,
+    pub base_fee_exec: u64,
+    pub base_fee_stor: u64,
+    pub next_base_fee_exec_floor: u64,
+    pub next_base_fee_exec_ceiling: u64,
+    pub next_base_fee_stor_floor: u64,
+    pub next_base_fee_stor_ceiling: u64,
+    pub max_gas_exec: u64,
+    pub max_gas_stor: u64,
+}
 
 /// Screens a submitted transaction against the head state.
 pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
@@ -199,10 +211,8 @@ mod tests {
         let err = screen(&tx, &state).expect_err("no block can execute that much gas");
         assert!(matches!(
             err,
-            Error::FeeCore(FeeError::ExecGasCapExceeded {
-                total,
-            })
-            if total == u128::from(market::MAX_GAS_EXEC + 1)
+            Error::FeeCore(FeeError::GasLimitAboveCap { gas_limit })
+            if gas_limit == market::MAX_GAS_EXEC + 1
         ));
         assert!(settle_verdict(&tx, &state).is_err());
     }

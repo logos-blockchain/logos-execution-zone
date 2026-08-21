@@ -50,6 +50,7 @@ url.workspace = true
 num-bigint.workspace = true
 futures.workspace = true
 libp2p.workspace = true
+thiserror.workspace = true
 
 [features]
 default = []
@@ -63,7 +64,6 @@ test-utils = []
 [dev-dependencies]
 cross_zone = { workspace = true, features = ["test-utils"] }
 sequencer_storage_actor = { workspace = true, features = ["actor", "mock"] }
-storage.workspace = true
 futures.workspace = true
 test_programs.workspace = true
 program_loader_core.workspace = true

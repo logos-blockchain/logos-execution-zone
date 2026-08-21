@@ -10,17 +10,15 @@ workspace = true
 [features]
 # Adds actor implementation.
 actor = [
+  "dep:sequencer_executor_actor_metrics",
   "dep:lee",
   "dep:sequencer_core",
   "dep:mempool",
-  "dep:chain_state",
-  "dep:fee_core",
 
   "dep:tokio",
   "dep:tokio-util",
   "dep:futures",
   "dep:log",
-  "dep:hex",
 ]
 # Adds mock actor implementation.
 mock = ["dep:mockall"]
@@ -29,11 +27,12 @@ mock = ["dep:mockall"]
 common.workspace = true
 lee_core.workspace = true
 sequencer_storage_actor.workspace = true
+sequencer_executor_actor_metrics = { workspace = true, features = [
+  "record",
+], optional = true }
 lee = { workspace = true, optional = true }
 sequencer_core = { workspace = true, optional = true }
 mempool = { workspace = true, optional = true }
-chain_state = { workspace = true, optional = true }
-fee_core = { workspace = true, optional = true }
 
 kameo.workspace = true
 anyhow.workspace = true
@@ -43,7 +42,6 @@ tokio = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
-hex = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]

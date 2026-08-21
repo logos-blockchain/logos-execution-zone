@@ -184,18 +184,14 @@ pub fn run(
                     std::sync::Arc::new(move |transaction| {
                         let executor_submit_ref = submit_ref.clone();
                         Box::pin(async move {
-                            use sequencer_executor_actor::protocol::{SubmitOutcome, Transaction};
+                            use sequencer_executor_actor::protocol::{
+                                Transaction, TransactionOrigin,
+                            };
                             let message = Transaction {
                                 transaction,
-                                origin: sequencer_core::TransactionOrigin::Gossip,
+                                origin: TransactionOrigin::Gossip,
                             };
-                            match executor_submit_ref.ask(message).await {
-                                Ok(SubmitOutcome::Admitted) => Ok(()),
-                                Ok(SubmitOutcome::Rejected(rejection)) => {
-                                    Err(rejection.to_string())
-                                }
-                                Err(err) => Err(format!("submission failed: {err}")),
-                            }
+                            executor_submit_ref.ask(message).await.map_err(Into::into)
                         })
                     });
                 let network = sequencer_core::gossip::GossipNetwork::start(

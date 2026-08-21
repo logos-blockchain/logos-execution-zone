@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::{Context as _, Result};
 use common::block::{Block, BlockMeta};
 use kameo::actor::ActorRef;
@@ -9,15 +7,15 @@ use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
-        CleanPendingBlocksUpTo, DeadLetterDispatchRecord, DeadLetterRequeue, DeleteBlock,
+        CrossZoneMessageKey, DeadLetterDispatch, DeadLetterRequeue, DeleteBlock,
         DeleteZoneCheckpoint, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
         GetAllBlocks, GetBlock, GetChannelCursor, GetDeadLetterDispatchCount,
         GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
         GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetPublishedHighWater, GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
+        GetPublishedHighWater, GetZoneAnchor, GetZoneCheckpointBytes, MsgId,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
-        RecordDispatchFailure, RecordNewBlock, RequeueDeadLetterDispatch, ResetAllBlocksToPending,
-        SetZoneAnchor, SetZoneCheckpointBytes, WithdrawalReconciliationKey, ZoneAnchorRecord,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetZoneAnchor, SetZoneCheckpointBytes,
+        ZoneAnchorRecord,
     },
 };
 
@@ -59,42 +57,6 @@ impl<S: StorageActorTrait> SequencerStore<S> {
             .ask(DeleteBlock { block_id })
             .await
             .map_err(Into::into)
-    }
-
-    pub async fn mark_block_as_finalized(&mut self, block_id: u64) -> Result<()> {
-        self.storage_ref
-            .ask(MarkBlockAsFinalized { block_id })
-            .await
-            .map_err(Into::into)
-    }
-
-    /// Reset every stored block to `Pending` so the next fresh start republishes the whole chain.
-    pub async fn reset_all_blocks_to_pending(&self) -> Result<()> {
-        self.storage_ref
-            .ask(ResetAllBlocksToPending)
-            .await
-            .map_err(Into::into)
-    }
-
-    /// Persists `block` with the effects it covers.
-    pub async fn record_new_block(
-        &mut self,
-        block: Block,
-        channel_cursor: Option<[u8; 32]>,
-        withdrawals: Vec<WithdrawalReconciliationKey>,
-        state: Arc<V03State>,
-        checkpoint_bytes: Option<Vec<u8>>,
-    ) -> Result<()> {
-        self.storage_ref
-            .ask(RecordNewBlock {
-                block,
-                channel_cursor,
-                withdrawals,
-                state,
-                checkpoint_bytes,
-            })
-            .await?;
-        Ok(())
     }
 
     /// The id of the chain's last block, or `None` on a store holding no chain.
@@ -147,7 +109,7 @@ impl<S: StorageActorTrait> SequencerStore<S> {
 
     /// Persists `checkpoint` on its own. Only valid when the effects it covers
     /// are already durable — otherwise it must ride in the same write as them,
-    /// via [`Self::record_new_block`].
+    /// via `ApplyStoreUpdate`.
     pub async fn set_zone_checkpoint(&self, checkpoint: &SequencerCheckpoint) -> Result<()> {
         self.storage_ref
             .ask(SetZoneCheckpointBytes {
@@ -184,7 +146,7 @@ impl<S: StorageActorTrait> SequencerStore<S> {
 
     /// The `MsgId` of the newest channel inscription processed, or `None` if
     /// none was recorded.
-    pub async fn channel_cursor(&self) -> Result<Option<[u8; 32]>> {
+    pub async fn channel_cursor(&self) -> Result<Option<MsgId>> {
         self.storage_ref
             .ask(GetChannelCursor)
             .await
@@ -215,15 +177,6 @@ impl<S: StorageActorTrait> SequencerStore<S> {
             .map_err(Into::into)
     }
 
-    /// Marks every stored pending block at or below `last_finalized` as
-    /// finalized.
-    pub async fn clean_pending_blocks_up_to(&self, last_finalized: BlockId) -> Result<()> {
-        self.storage_ref
-            .ask(CleanPendingBlocksUpTo { last_finalized })
-            .await
-            .map_err(Into::into)
-    }
-
     pub async fn pending_cross_zone_dispatches(
         &self,
     ) -> Result<Vec<PendingCrossZoneDispatchRecord>> {
@@ -235,10 +188,12 @@ impl<S: StorageActorTrait> SequencerStore<S> {
 
     pub async fn drop_settled_cross_zone_dispatches(
         &self,
-        message_keys: Vec<[u8; 32]>,
-    ) -> Result<usize> {
+        message_keys: Vec<CrossZoneMessageKey>,
+    ) -> Result<()> {
         self.storage_ref
-            .ask(DropSettledCrossZoneDispatches { message_keys })
+            .ask(DropSettledCrossZoneDispatches {
+                message_keys: message_keys.into_iter().collect(),
+            })
             .await
             .map_err(Into::into)
     }
@@ -247,7 +202,7 @@ impl<S: StorageActorTrait> SequencerStore<S> {
     /// it once `retire_at` accumulate.
     pub async fn record_dispatch_failure(
         &self,
-        message_key: [u8; 32],
+        message_key: CrossZoneMessageKey,
         retire_at: u32,
         origin: DispatchOrigin,
     ) -> Result<DispatchFailure> {
@@ -261,7 +216,7 @@ impl<S: StorageActorTrait> SequencerStore<S> {
             .map_err(Into::into)
     }
 
-    pub async fn dead_letter_dispatches(&self) -> Result<Vec<DeadLetterDispatchRecord>> {
+    pub async fn dead_letter_dispatches(&self) -> Result<Vec<DeadLetterDispatch>> {
         self.storage_ref
             .ask(GetDeadLetterDispatches)
             .await
@@ -279,7 +234,7 @@ impl<S: StorageActorTrait> SequencerStore<S> {
     /// clean attempt count.
     pub async fn requeue_dead_letter_dispatch(
         &self,
-        message_key: [u8; 32],
+        message_key: CrossZoneMessageKey,
     ) -> Result<DeadLetterRequeue> {
         self.storage_ref
             .ask(RequeueDeadLetterDispatch { message_key })
@@ -304,11 +259,11 @@ pub(crate) fn checkpoint_bytes(checkpoint: &SequencerCheckpoint) -> Result<Vec<u
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{path::Path, sync::Arc};
 
     use common::{HashType, block::HashableBlockData, test_utils::sequencer_sign_key_for_testing};
     use kameo::actor::Spawn as _;
-    use sequencer_storage_actor::StorageActor;
+    use sequencer_storage_actor::{StorageActor, protocol::AtomicUpdate};
     use tempfile::tempdir;
 
     use super::*;
@@ -332,13 +287,10 @@ mod tests {
     ) -> SequencerStore<StorageActor> {
         let storage_ref = StorageActor::spawn(StorageActor::new(path).unwrap());
         storage_ref
-            .ask(RecordNewBlock {
-                block: genesis.clone(),
-                channel_cursor: None,
-                withdrawals: vec![],
-                state: Arc::new(testnet_initial_state::initial_state(true)),
-                checkpoint_bytes: None,
-            })
+            .ask(AtomicUpdate::from_block(
+                genesis.clone(),
+                Arc::new(testnet_initial_state::initial_state(false)),
+            ))
             .await
             .unwrap();
         SequencerStore::new(storage_ref, signing_key).await.unwrap()
@@ -362,7 +314,7 @@ mod tests {
     async fn latest_block_meta_updates_after_new_block() {
         let temp_dir = tempdir().unwrap();
         let signing_key = sequencer_sign_key_for_testing();
-        let mut store = create_store(
+        let store = create_store(
             temp_dir.path(),
             &genesis_block(&signing_key),
             signing_key.clone(),
@@ -375,51 +327,16 @@ mod tests {
         let block_hash = block.header.hash;
 
         store
-            .record_new_block(block.clone(), None, vec![], Arc::new(V03State::new()), None)
+            .storage_ref()
+            .ask(AtomicUpdate::from_block(
+                block.clone(),
+                Arc::new(V03State::new()),
+            ))
             .await
             .unwrap();
 
         // Verify that the latest block meta now equals the new block's hash
         let latest_meta = store.latest_block_meta().await.unwrap().unwrap();
         assert_eq!(latest_meta.hash, block_hash);
-    }
-
-    #[tokio::test]
-    async fn mark_block_finalized() {
-        let temp_dir = tempdir().unwrap();
-        let signing_key = sequencer_sign_key_for_testing();
-        let mut store = create_store(
-            temp_dir.path(),
-            &genesis_block(&signing_key),
-            signing_key.clone(),
-        )
-        .await;
-
-        // Add a new block with Pending status
-        let tx = common::test_utils::produce_dummy_empty_transaction();
-        let block = common::test_utils::produce_dummy_block(1, None, vec![tx]);
-        let block_id = block.header.block_id;
-
-        store
-            .record_new_block(block.clone(), None, vec![], Arc::new(V03State::new()), None)
-            .await
-            .unwrap();
-
-        // Verify initial status is Pending
-        let retrieved_block = store.block_at_id(block_id).await.unwrap().unwrap();
-        assert!(matches!(
-            retrieved_block.bedrock_status,
-            common::block::BedrockStatus::Pending
-        ));
-
-        // Mark block as finalized
-        store.mark_block_as_finalized(block_id).await.unwrap();
-
-        // Verify status is now Finalized
-        let finalized_block = store.block_at_id(block_id).await.unwrap().unwrap();
-        assert!(matches!(
-            finalized_block.bedrock_status,
-            common::block::BedrockStatus::Finalized
-        ));
     }
 }

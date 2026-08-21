@@ -23,7 +23,11 @@ use sequencer_storage_actor::mock::MockStorageActor;
 use tempfile::TempDir;
 use tokio::{sync::mpsc, test, time::timeout};
 
-use crate::{ExecutorActor, actor::BlockedAttempts, protocol};
+use crate::{
+    ExecutorActor,
+    actor::BlockedAttempts,
+    protocol::{self, TransactionOrigin},
+};
 
 fn sequencer_config() -> (SequencerConfig, TempDir) {
     let home = TempDir::new().expect("Failed to create temporary home directory");
@@ -252,7 +256,7 @@ async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let executor = ExecutorActor::spawn(
-        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone()).await,
+        ExecutorActor::<_, MockBlockPublisher>::new(config, storage_ref.clone()).await,
     );
     storage_ref
         .tell(sequencer_storage_actor::mock::Checkpoint)
@@ -291,7 +295,7 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
         executor
             .ask(protocol::Transaction {
                 transaction: tx,
-                origin: sequencer_core::TransactionOrigin::User,
+                origin: TransactionOrigin::User,
             })
             .await?;
     }
@@ -302,7 +306,7 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
         executor
             .ask(protocol::Transaction {
                 transaction: tx,
-                origin: sequencer_core::TransactionOrigin::User
+                origin: TransactionOrigin::User
             })
             .await
             .map_err(SendError::err),
@@ -421,7 +425,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let res = executor
         .ask(protocol::Transaction {
             transaction: tx,
-            origin: sequencer_core::TransactionOrigin::User,
+            origin: TransactionOrigin::User,
         })
         .await;
     assert!(matches!(
