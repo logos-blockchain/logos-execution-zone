@@ -8,8 +8,8 @@ use crate::{
     HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID,
-    PublicKey, PublicMessage, PublicTransaction, Signature, StallReason, Transaction,
-    ValidityWindow, WitnessSet,
+    PublicKey, PublicMessage, PublicTransaction, SequencerCheckpoint, Signature, StallReason,
+    Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -848,17 +848,27 @@ impl From<indexer_core::StallReason> for StallReason {
             block_id,
             block_hash,
             prev_block_hash,
-            l1_slot,
+            checkpoint,
             error,
             first_seen,
             orphans_since,
         } = value;
 
+        let checkpoint = SequencerCheckpoint {
+            last_msg_id: *checkpoint.last_msg_id.as_ref(),
+            // There is no getter
+            lib: hex::decode(checkpoint.lib.to_string())
+                .expect("Must be a valid hex")
+                .try_into()
+                .expect("Must fit 32 bytes"),
+            lib_slot: checkpoint.lib_slot.into_inner(),
+        };
+
         Self {
             block_id,
             block_hash: block_hash.map(Into::into),
             prev_block_hash: prev_block_hash.map(Into::into),
-            l1_slot: l1_slot.into_inner(),
+            checkpoint,
             error: error.into(),
             first_seen,
             orphans_since,

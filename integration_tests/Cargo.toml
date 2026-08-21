@@ -40,9 +40,11 @@ sequencer_stake_core.workspace = true
 programs.workspace = true
 test_programs.workspace = true
 testnet_initial_state.workspace = true
+chain_state.workspace = true
 
 logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
+logos-blockchain-http-api-common.workspace = true
 logos-blockchain-testing-framework.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 testing-framework-app.workspace = true
@@ -52,6 +54,9 @@ testing-framework-core.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 bytesize.workspace = true
+borsh.workspace = true
+reqwest.workspace = true
+futures.workspace = true
 cucumber = { features = [
   "macros",
   "output-junit",

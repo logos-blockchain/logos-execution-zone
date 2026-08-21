@@ -288,7 +288,7 @@ impl SubscriptionService {
     }
 
     fn spawn_respond_subscribers_loop(
-        indexer: IndexerCore,
+        mut indexer: IndexerCore,
         shutdown: CancellationToken,
     ) -> SubscriptionLoopParts {
         let (new_subscription_sender, mut sub_receiver) =
@@ -338,6 +338,7 @@ impl SubscriptionService {
                     }
                 }
             };
+            #[expect(clippy::large_futures, reason = "ToDo: Fix in future refactor")]
             let res: anyhow::Result<()> = run_loop.await;
             if let Err(err) = &res {
                 error!("Subscription service loop has unexpectedly finished with error: {err:#?}");

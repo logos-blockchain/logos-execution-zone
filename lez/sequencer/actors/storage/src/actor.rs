@@ -330,10 +330,12 @@ impl Message<GetZoneAnchor> for StorageActor {
         GetZoneAnchor: GetZoneAnchor,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.dbio()
-            .get_zone_anchor()
-            .map(|anchor| anchor.map(Into::into))
-            .map_err(Into::into)
+        let anchor_bytes = self.dbio().get_zone_anchor_bytes()?;
+        if let Some(bytes) = anchor_bytes {
+            Ok(Some(serde_json::from_slice(&bytes)?))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -345,8 +347,10 @@ impl Message<SetZoneAnchor> for StorageActor {
         SetZoneAnchor { anchor }: SetZoneAnchor,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        let anchor_bytes = serde_json::to_vec(&anchor)?;
+
         self.dbio()
-            .put_zone_anchor(&anchor.into())
+            .put_zone_anchor_bytes(&anchor_bytes)
             .map_err(Into::into)
     }
 }
@@ -431,7 +435,12 @@ impl Message<ApplyStoreUpdate> for StorageActor {
             .iter()
             .map(|(block, finalized)| (block, *finalized))
             .collect::<Vec<_>>();
-        let zone_anchor = zone_anchor.map(Into::into);
+        let zone_anchor_bytes = if let Some(zone_anchor) = zone_anchor {
+            let anchor_bytes = serde_json::to_vec(&zone_anchor)?;
+            Some(anchor_bytes)
+        } else {
+            None
+        };
         let new_deposit_events = new_deposit_events
             .into_iter()
             .map(Into::into)
@@ -459,7 +468,7 @@ impl Message<ApplyStoreUpdate> for StorageActor {
             remove_dispatch_records: &remove_dispatch_records,
             consumed_withdrawals: &consumed_withdrawals,
             new_withdraw_intents: &new_withdraw_intents,
-            zone_anchor: zone_anchor.as_ref(),
+            zone_anchor: zone_anchor_bytes.as_deref(),
         };
         let outcome = self.dbio().store_update(&update)?;
 

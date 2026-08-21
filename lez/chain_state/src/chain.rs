@@ -7,7 +7,7 @@ use common::block::Block;
 use lee::V03State;
 use log::warn;
 use logos_blockchain_core::mantle::ops::channel::MsgId;
-use logos_blockchain_zone_sdk::Slot;
+use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 
 use crate::{
     AcceptOutcome, BlockIngestError, StallReason,
@@ -247,7 +247,7 @@ impl ChainState {
         &mut self,
         this_msg: MsgId,
         block: &Block,
-        l1_slot: Slot,
+        checkpoint: SequencerCheckpoint,
     ) -> AcceptOutcome {
         // Match by `MsgId` or block hash (re-inscriptions, restored entries).
         if let Some(idx) = self.head_position_of(this_msg, block) {
@@ -264,7 +264,7 @@ impl ChainState {
         {
             self.finalize_through(idx);
         }
-        self.apply_finalized_direct(block, l1_slot)
+        self.apply_finalized_direct(block, checkpoint)
     }
 
     /// Moves `head_blocks[0..=idx]` into the final tier (already validated in head).
@@ -284,7 +284,11 @@ impl ChainState {
 
     /// Applies a finalized block straight to the final tier. On success the
     /// finalized chain is authoritative, so head rebases onto it.
-    fn apply_finalized_direct(&mut self, block: &Block, l1_slot: Slot) -> AcceptOutcome {
+    fn apply_finalized_direct(
+        &mut self,
+        block: &Block,
+        checkpoint: SequencerCheckpoint,
+    ) -> AcceptOutcome {
         // A finalized block at or below the final tip is a re-delivery:
         // idempotent. A *different* block at the tip height falls through
         // to validation and parks.
@@ -310,7 +314,7 @@ impl ChainState {
                 AcceptOutcome::Applied
             }
             Err(err) => {
-                self.record_final_stall(block, l1_slot, err.clone());
+                self.record_final_stall(block, checkpoint, err.clone());
                 AcceptOutcome::Parked(err)
             }
         }
@@ -334,9 +338,14 @@ impl ChainState {
     }
 
     /// First stall is stored verbatim; later ones only bump `orphans_since`.
-    fn record_final_stall(&mut self, block: &Block, l1_slot: Slot, error: BlockIngestError) {
+    fn record_final_stall(
+        &mut self,
+        block: &Block,
+        checkpoint: SequencerCheckpoint,
+        error: BlockIngestError,
+    ) {
         self.final_stall = Some(self.final_stall.take().map_or_else(
-            || StallReason::new(Some(&block.header), l1_slot, error),
+            || StallReason::new(Some(&block.header), checkpoint, error),
             StallReason::escalate,
         ));
     }
@@ -348,6 +357,7 @@ mod tests {
         HashType,
         test_utils::{create_transaction_native_token_transfer, produce_dummy_block},
     };
+    use logos_blockchain_zone_sdk::Slot;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
     use super::*;
@@ -356,8 +366,13 @@ mod tests {
         MsgId::from([n; 32])
     }
 
-    fn slot(n: u64) -> Slot {
-        Slot::from(n)
+    fn checkpoint(msg: MsgId, n: u64) -> SequencerCheckpoint {
+        SequencerCheckpoint {
+            last_msg_id: msg,
+            pending_txs: vec![],
+            lib: [1_u8; 32].into(),
+            lib_slot: Slot::from(n),
+        }
     }
 
     /// `head_state` equals `final_state` replayed through `head_blocks`.
@@ -481,7 +496,7 @@ mod tests {
 
         // Finalize through block 2.
         assert!(matches!(
-            chain.apply_finalized(msg(2), &block2, slot(100)),
+            chain.apply_finalized(msg(2), &block2, checkpoint(msg(2), 100)),
             AcceptOutcome::Applied
         ));
         assert_eq!(chain.final_tip().expect("final tip").block_id, 2);
@@ -494,7 +509,7 @@ mod tests {
         let mut chain = ChainState::new(initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
-            chain.apply_finalized(msg(1), &genesis, slot(10)),
+            chain.apply_finalized(msg(1), &genesis, checkpoint(msg(1), 10)),
             AcceptOutcome::Applied
         ));
         assert_eq!(chain.final_tip().expect("final tip").block_id, 1);
@@ -506,12 +521,12 @@ mod tests {
     fn invalid_finalized_block_sets_final_stall() {
         let mut chain = ChainState::new(initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
-        chain.apply_finalized(msg(1), &genesis, slot(10));
+        chain.apply_finalized(msg(1), &genesis, checkpoint(msg(1), 10));
 
         // Skip-ahead finalized block, not in head: parks the final tier.
         let bad = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
         assert!(matches!(
-            chain.apply_finalized(msg(3), &bad, slot(20)),
+            chain.apply_finalized(msg(3), &bad, checkpoint(msg(3), 20)),
             AcceptOutcome::Parked(_)
         ));
         let stall = chain.final_stall().expect("final stall recorded");
@@ -743,8 +758,8 @@ mod tests {
         let mut chain = ChainState::new(initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-        chain.apply_finalized(msg(1), &genesis, slot(10));
-        chain.apply_finalized(msg(2), &block2, slot(20));
+        chain.apply_finalized(msg(1), &genesis, checkpoint(msg(1), 10));
+        chain.apply_finalized(msg(2), &block2, checkpoint(msg(2), 20));
 
         // Finalized is irreversible: an adopted competitor at (or below) the
         // final tip is ignored, not reorged onto.
@@ -820,7 +835,7 @@ mod tests {
         let mut alias = genesis.clone();
         alias.header.block_id = 6;
         assert!(matches!(
-            chain.apply_finalized(msg(66), &alias, slot(10)),
+            chain.apply_finalized(msg(66), &alias, checkpoint(msg(66), 10)),
             AcceptOutcome::Parked(_)
         ));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 1);
@@ -841,7 +856,7 @@ mod tests {
         // Block 2 finalizes re-inscribed under a fresh MsgId: matched by hash,
         // finalized through, and the head above it survives.
         assert!(matches!(
-            chain.apply_finalized(msg(42), &block2, slot(5)),
+            chain.apply_finalized(msg(42), &block2, checkpoint(msg(42), 5)),
             AcceptOutcome::Applied
         ));
         assert_eq!(chain.final_tip().expect("final tip").block_id, 2);
@@ -867,7 +882,7 @@ mod tests {
         let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![tx3]);
         chain.apply_adopted(msg(3), &block3);
 
-        chain.apply_finalized(msg(2), &block2, slot(10));
+        chain.apply_finalized(msg(2), &block2, checkpoint(msg(2), 10));
 
         // Head still reflects both transfers
         assert_eq!(chain.head_state().get_account_by_id(to).balance, 20020);
@@ -905,13 +920,13 @@ mod tests {
     fn repeated_invalid_finalized_bumps_orphans_since() {
         let mut chain = ChainState::new(initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
-        chain.apply_finalized(msg(1), &genesis, slot(10));
+        chain.apply_finalized(msg(1), &genesis, checkpoint(msg(1), 10));
 
         let bad3 = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
-        chain.apply_finalized(msg(3), &bad3, slot(20));
+        chain.apply_finalized(msg(3), &bad3, checkpoint(msg(3), 20));
         let bad5 = produce_dummy_block(5, Some(bad3.header.hash), vec![]);
         assert!(matches!(
-            chain.apply_finalized(msg(5), &bad5, slot(30)),
+            chain.apply_finalized(msg(5), &bad5, checkpoint(msg(5), 30)),
             AcceptOutcome::Parked(_)
         ));
 
@@ -924,16 +939,16 @@ mod tests {
     fn valid_finalized_successor_clears_final_stall() {
         let mut chain = ChainState::new(initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
-        chain.apply_finalized(msg(1), &genesis, slot(10));
+        chain.apply_finalized(msg(1), &genesis, checkpoint(msg(1), 10));
 
         let bad = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
-        chain.apply_finalized(msg(3), &bad, slot(20));
+        chain.apply_finalized(msg(3), &bad, checkpoint(msg(3), 20));
         assert!(chain.final_stall().is_some());
 
         // The valid successor of the frozen final tip finalizes: stall clears.
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
-            chain.apply_finalized(msg(2), &block2, slot(30)),
+            chain.apply_finalized(msg(2), &block2, checkpoint(msg(2), 30)),
             AcceptOutcome::Applied
         ));
         assert!(chain.final_stall().is_none());
@@ -955,7 +970,7 @@ mod tests {
 
         let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
         assert!(matches!(
-            chain.apply_finalized(msg(3), &block3, slot(10)),
+            chain.apply_finalized(msg(3), &block3, checkpoint(msg(3), 10)),
             AcceptOutcome::Applied
         ));
         assert_eq!(chain.final_tip().expect("final tip").block_id, 3);
@@ -972,16 +987,16 @@ mod tests {
         let mut chain = ChainState::new(initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-        chain.apply_finalized(msg(1), &genesis, slot(10));
-        chain.apply_finalized(msg(2), &block2, slot(20));
+        chain.apply_finalized(msg(1), &genesis, checkpoint(msg(1), 10));
+        chain.apply_finalized(msg(2), &block2, checkpoint(msg(2), 20));
 
         // Below the tip, and at the tip with a matching hash: idempotent.
         assert!(matches!(
-            chain.apply_finalized(msg(41), &genesis, slot(30)),
+            chain.apply_finalized(msg(41), &genesis, checkpoint(msg(41), 30)),
             AcceptOutcome::AlreadyApplied
         ));
         assert!(matches!(
-            chain.apply_finalized(msg(42), &block2, slot(30)),
+            chain.apply_finalized(msg(42), &block2, checkpoint(msg(42), 30)),
             AcceptOutcome::AlreadyApplied
         ));
         assert!(chain.final_stall().is_none());
@@ -994,14 +1009,14 @@ mod tests {
         let mut chain = ChainState::new(initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-        chain.apply_finalized(msg(1), &genesis, slot(10));
-        chain.apply_finalized(msg(2), &block2, slot(20));
+        chain.apply_finalized(msg(1), &genesis, checkpoint(msg(1), 10));
+        chain.apply_finalized(msg(2), &block2, checkpoint(msg(2), 20));
 
         // A different finalized block at the final height: finalized is
         // irreversible, so this is a genuine stall, not a re-delivery.
         let block2_prime = produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
         assert!(matches!(
-            chain.apply_finalized(msg(22), &block2_prime, slot(30)),
+            chain.apply_finalized(msg(22), &block2_prime, checkpoint(msg(22), 30)),
             AcceptOutcome::Parked(_)
         ));
         assert!(chain.final_stall().is_some());
@@ -1018,7 +1033,7 @@ mod tests {
         let mut chain = ChainState::new(initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(msg(1), &genesis);
-        chain.apply_finalized(msg(1), &genesis, slot(10));
+        chain.apply_finalized(msg(1), &genesis, checkpoint(msg(1), 10));
 
         // Head advances on a competing branch…
         let block2a = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
@@ -1029,7 +1044,7 @@ mod tests {
         let tx = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
         let block2b = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
         assert!(matches!(
-            chain.apply_finalized(msg(22), &block2b, slot(20)),
+            chain.apply_finalized(msg(22), &block2b, checkpoint(msg(22), 20)),
             AcceptOutcome::Applied
         ));
 

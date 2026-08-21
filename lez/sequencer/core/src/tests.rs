@@ -9,10 +9,20 @@ use common::{
     transaction::{LeeTransaction, clock_invocation},
 };
 use kameo::actor::Spawn as _;
+use key_protocol::key_management::KeyChain;
 use lee::{
-    Account, AccountId, Data, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
+    Account, AccountId, Data, PrivacyPreservingTransaction, PrivateKey, PublicKey,
+    PublicTransaction, V03State,
+    error::LeeError,
+    execute_and_prove,
+    privacy_preserving_transaction::{Message, circuit::ProgramWithDependencies},
+    program::Program,
 };
-use lee_core::{account::Nonce, program::PdaSeed};
+use lee_core::{
+    Commitment, InputAccountIdentity, Nullifier, NullifierWitness, PrivateWitness, WitnessKind,
+    account::{AccountWithMetadata, Nonce},
+    program::PdaSeed,
+};
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
     mantle::{
@@ -1708,94 +1718,98 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
     );
 }
 
-// #[test]
-// fn private_bridge_withdraw_invocation_is_dropped() {
-//     let sender_keys = KeyChain::new_os_random();
-//     let sender_account_id = AccountId::for_regular_private_account(
-//         &sender_keys.nullifier_public_key,
-//         &sender_keys.viewing_public_key,
-//         0,
-//     );
-//     let sender_private_account = Account {
-//         program_owner: programs::authenticated_transfer().id().into(),
-//         balance: 100,
-//         nonce: Nonce(0xdead_beef),
-//         data: Data::default(),
-//     };
-//     let bridge_account_id = system_accounts::bridge_account_id();
+#[test]
+fn private_bridge_withdraw_invocation_is_dropped() {
+    let sender_keys = KeyChain::new_os_random();
+    let sender_account_id = AccountId::for_regular_private_account(
+        &sender_keys.nullifier_public_key,
+        &sender_keys.viewing_public_key,
+        0,
+    );
+    let sender_private_account = Account {
+        program_owner: programs::authenticated_transfer().id().into(),
+        balance: 100,
+        nonce: Nonce(0xdead_beef),
+        data: Data::default(),
+    };
+    let bridge_account_id = system_accounts::bridge_account_id();
 
-//     let mut state = V03State::new()
-//         .with_public_accounts([(bridge_account_id, system_accounts::bridge_account())])
-//         .with_private_accounts([(
-//             Commitment::new(&sender_account_id, &sender_private_account),
-//             Nullifier::for_account_initialization(&sender_account_id),
-//         )]);
+    let mut state = V03State::new()
+        .with_public_accounts([(bridge_account_id, system_accounts::bridge_account())])
+        .with_private_accounts([(
+            Commitment::new(&sender_account_id, &sender_private_account),
+            Nullifier::for_account_initialization(&sender_account_id),
+        )]);
 
-//     let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
+    let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
 
-//     let sender_pre = AccountWithMetadata::new(
-//         sender_private_account,
-//         true,
-//         (
-//             &sender_keys.nullifier_public_key,
-//             &sender_keys.viewing_public_key,
-//             0,
-//         ),
-//     );
-//     let bridge_pre = AccountWithMetadata::new(
-//         state.get_account_by_id(bridge_account_id),
-//         false,
-//         bridge_account_id,
-//     );
+    let sender_pre = AccountWithMetadata::new(
+        sender_private_account,
+        true,
+        (
+            &sender_keys.nullifier_public_key,
+            &sender_keys.viewing_public_key,
+            0,
+        ),
+    );
+    let bridge_pre = AccountWithMetadata::new(
+        state.get_account_by_id(bridge_account_id),
+        false,
+        bridge_account_id,
+    );
 
-//     let instruction = Program::serialize_instruction(bridge_core::Instruction::Withdraw {
-//         amount: 1,
-//         bedrock_account_pk: [0; 32],
-//     })
-//     .unwrap();
+    let instruction = Program::serialize_instruction(bridge_core::Instruction::Withdraw {
+        amount: 1,
+        bedrock_account_pk: [0; 32],
+    })
+    .unwrap();
 
-//     let program_with_deps = ProgramWithDependencies::new(
-//         programs::bridge(),
-//         [(
-//             programs::authenticated_transfer().id(),
-//             programs::authenticated_transfer(),
-//         )]
-//         .into(),
-//     );
+    let program_with_deps = ProgramWithDependencies::new(
+        programs::bridge(),
+        [(
+            programs::authenticated_transfer().id(),
+            programs::authenticated_transfer(),
+        )]
+        .into(),
+    );
 
-//     let (output, proof) = execute_and_prove(
-//         vec![sender_pre, bridge_pre],
-//         instruction,
-//         vec![
-//             InputAccountIdentity::PrivateAuthorizedUpdate {
-//                 vpk: sender_keys.viewing_public_key.clone(),
-//                 random_seed: [0; 32],
-//                 view_tag: 0,
-//                 nsk: sender_keys.private_key_holder.nullifier_secret_key,
-//                 membership_proof: state
-//                     .get_proof_for_commitment(&sender_commitment)
-//                     .expect("sender commitment must be in state"),
-//                 identifier: 0,
-//             },
-//             InputAccountIdentity::Public,
-//         ],
-//         &program_with_deps,
-//     )
-//     .expect("Execution should succeed");
+    let (output, proof) = execute_and_prove(
+        vec![sender_pre, bridge_pre],
+        instruction,
+        vec![
+            InputAccountIdentity::Private(PrivateWitness {
+                vpk: sender_keys.viewing_public_key.clone(),
+                random_seed: [0; 32],
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.private_key_holder.authorization_secret_key),
+                },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_keys.private_key_holder.nullifier_secret_key(),
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender commitment must be in state"),
+                },
+                identifier: 0,
+            }),
+            InputAccountIdentity::Public,
+        ],
+        &program_with_deps,
+    )
+    .expect("Execution should succeed");
 
-//     let message = Message::try_from_circuit_output(vec![bridge_account_id], vec![], output)
-//         .expect("Message construction should succeed");
-//     let witness_set =
-//         lee::privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
-//     let tx =
-//         LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(message,
-// witness_set));     let res = tx.execute_check_on_state(&mut state, 1, 0);
+    let message = Message::from_circuit_output(vec![], output);
+    let witness_set =
+        lee::privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
+    let tx =
+        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(message, witness_set));
+    let res = tx.execute_check_on_state(&mut state, 1, 0);
 
-//     assert!(
-//         matches!(res, Err(LeeError::InvalidInput(_))),
-//         "Bridge withdraw invocation should be rejected in private execution"
-//     );
-// }
+    assert!(
+        matches!(res, Err(LeeError::InvalidInput(_))),
+        "Bridge withdraw invocation should be rejected in private execution"
+    );
+}
 
 /// Builds a [`V03State`] with the clock program and `program` registered, the three clock
 /// accounts initialized, and the clock advanced to `clock_timestamp` so that reads of the

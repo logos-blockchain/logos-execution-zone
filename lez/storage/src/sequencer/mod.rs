@@ -31,7 +31,8 @@ use crate::{
         PendingCrossZoneDispatchCountCell, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, PendingDepositEventsCellOwned, PendingDepositEventsCellRef,
         PublishedHighWaterCell, UnseenWithdrawCountCell, WithdrawalReconciliationKey,
-        ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
+        ZoneAnchorCellOwned, ZoneAnchorCellRef, ZoneSdkCheckpointCellOwned,
+        ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -200,7 +201,7 @@ pub struct StoreUpdate<'update> {
     pub new_withdraw_intents: &'update [WithdrawalReconciliationKey],
 
     /// Advance the channel-read anchor.
-    pub zone_anchor: Option<&'update ZoneAnchorRecord>,
+    pub zone_anchor: Option<&'update [u8]>,
 }
 
 impl<'update> StoreUpdate<'update> {
@@ -566,12 +567,12 @@ impl RocksDBIO {
         self.put(&PublishedHighWaterCell(block_id), ())
     }
 
-    pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
-        Ok(self.get_opt::<ZoneAnchorCell>(())?.map(|cell| cell.0))
+    pub fn get_zone_anchor_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self.get_opt::<ZoneAnchorCellOwned>(())?.map(|cell| cell.0))
     }
 
-    pub fn put_zone_anchor(&self, anchor: &ZoneAnchorRecord) -> DbResult<()> {
-        self.put(&ZoneAnchorCell(*anchor), ())
+    pub fn put_zone_anchor_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&ZoneAnchorCellRef(bytes), ())
     }
 
     pub fn get_pending_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
@@ -1406,7 +1407,7 @@ impl RocksDBIO {
             self.put_batch(&ZoneSdkCheckpointCellRef(bytes), (), &mut batch)?;
         }
         if let Some(anchor) = zone_anchor {
-            self.put_batch(&ZoneAnchorCell(*anchor), (), &mut batch)?;
+            self.put_batch(&ZoneAnchorCellRef(anchor), (), &mut batch)?;
         }
 
         // Every block payload this update writes, keyed by id so a block that

@@ -10,6 +10,8 @@ use common::{
 };
 use lee::V03State;
 use lee_core::BlockId;
+use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
+use serde::{Deserialize, Serialize};
 use storage::sequencer::{self as db, sequencer_cells as db_cells};
 
 use crate::Result;
@@ -203,44 +205,22 @@ impl From<db_cells::WithdrawalReconciliationKey> for WithdrawalReconciliationKey
 ///
 /// `slot` is the raw L1 inscription slot; the caller converts to and from the
 /// zone-sdk `Slot`, which does not derive borsh and so cannot be stored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZoneAnchorRecord {
-    pub slot: u64,
+    pub checkpoint: SequencerCheckpoint,
     pub block_id: u64,
     pub hash: HashType,
 }
 
-impl From<ZoneAnchorRecord> for db_cells::ZoneAnchorRecord {
-    fn from(
-        ZoneAnchorRecord {
-            slot,
-            block_id,
-            hash,
-        }: ZoneAnchorRecord,
-    ) -> Self {
-        Self {
-            slot,
-            block_id,
-            hash,
-        }
+impl PartialEq for ZoneAnchorRecord {
+    fn eq(&self, other: &Self) -> bool {
+        chain_state::consistency::checkpoint_eq(&self.checkpoint, &other.checkpoint)
+            && self.block_id == other.block_id
+            && self.hash == other.hash
     }
 }
 
-impl From<db_cells::ZoneAnchorRecord> for ZoneAnchorRecord {
-    fn from(
-        db_cells::ZoneAnchorRecord {
-            slot,
-            block_id,
-            hash,
-        }: db_cells::ZoneAnchorRecord,
-    ) -> Self {
-        Self {
-            slot,
-            block_id,
-            hash,
-        }
-    }
-}
+impl Eq for ZoneAnchorRecord {}
 
 /// An L1 deposit event observed but not yet seen finalized.
 ///

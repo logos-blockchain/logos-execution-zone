@@ -15,12 +15,16 @@ lee_core.workspace = true
 lee.workspace = true
 common.workspace = true
 storage.workspace = true
+chain_state.workspace = true
 
 kameo.workspace = true
 thiserror.workspace = true
 log.workspace = true
 mockall = { workspace = true, optional = true }
 itertools.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+logos-blockchain-zone-sdk.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -122,7 +122,7 @@ unsafe fn setup_indexer(
     // The block stream writes each parsed block into the store as a side effect
     // of being polled, so we spawn a task that simply drains it. There are no
     // subscribers — queries read the store directly via `core()`.
-    let ingest_core = core.clone();
+    let mut ingest_core = core.clone();
     let ingest_handle = runtime.spawn(async move {
         let mut block_stream = std::pin::pin!(ingest_core.subscribe_parse_block_stream());
         while let Some(result) = block_stream.next().await {

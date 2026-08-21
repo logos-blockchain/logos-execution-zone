@@ -34,7 +34,6 @@ pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage,
     adapter::{Node as _, NodeHttpClient},
-    indexer::ZoneIndexer,
     sequencer::{
         ChannelUpdateTx, DepositInfo, Event, FinalizedOp, FundingConfig, InscriptionInfo,
         PendingTx, SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg,
@@ -191,8 +190,8 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
     /// from the channel's genesis.
     async fn read_channel_after(
         &self,
-        after_slot: Option<Slot>,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + '_>;
+        checkpoint: Option<SequencerCheckpoint>,
+    ) -> impl Stream<Item = (ZoneMessage, SequencerCheckpoint)> + Send + '_;
 }
 
 /// Real block publisher backed by zone-sdk's `ZoneSequencer`.
@@ -208,7 +207,6 @@ pub struct ZoneSdkPublisher {
     // Stops the drive task when the last clone is dropped, and lets a shutdown
     // path wait until it has actually stopped.
     drive_task: TaskGroup,
-    indexer: ZoneIndexer<NodeHttpClient>,
     bedrock_signing_key: Ed25519Key,
     funding_key: ZkPublicKey,
     priority_fee: u64,
@@ -251,7 +249,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             ..ZoneSdkSequencerConfig::new(FundingConfig {
                 funding_pk: config.funding_key,
                 max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-                priority_fee: config.priority_fee,
+                priority_fee_percent: config.priority_fee,
             })
         };
 
@@ -373,6 +371,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                 }
                             },
                         event = sequencer.next_event() => {
+                            log::info!("========================== Received event {event:#?}");
+
                             match event {
                                 Event::BlocksProcessed {
                                     checkpoint,
@@ -445,7 +445,6 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
         Ok(Self {
             channel_id: config.channel_id,
-            indexer: ZoneIndexer::new(config.channel_id, node.clone()),
             node,
             command_tx,
             turn_rx,
@@ -598,16 +597,12 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             .map(|state| state.tip_slot))
     }
 
+    /// Creates indexer in-place, then reads channel after checkpoint.
     async fn read_channel_after(
         &self,
-        after_slot: Option<Slot>,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + '_> {
-        let stream = self
-            .indexer
-            .next_messages(after_slot)
-            .await
-            .context("Failed to start channel read stream")?;
-        Ok(stream)
+        checkpoint: Option<SequencerCheckpoint>,
+    ) -> impl Stream<Item = (ZoneMessage, SequencerCheckpoint)> + Send + '_ {
+        chain_state::consistency::next_messages_own(self.node.clone(), self.channel_id, checkpoint)
     }
 }
 
@@ -661,7 +656,7 @@ async fn fund_ops(
         change_public_key: funding_key,
         funding_public_keys: vec![funding_key],
         max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-        priority_fee,
+        priority_fee_percent: priority_fee,
     })
     .await
     .context("Failed to fund channel transaction")

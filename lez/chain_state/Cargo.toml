@@ -21,6 +21,9 @@ log.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+num-bigint.workspace = true
+ed25519-dalek.workspace = true
+async-stream.workspace = true
 
 [dev-dependencies]
 testnet_initial_state.workspace = true

@@ -163,6 +163,8 @@ pub struct IndexerStatus {
 
 #[cfg(test)]
 mod tests {
+    use logos_blockchain_zone_sdk::{node_types::MsgId, sequencer::SequencerCheckpoint};
+
     use super::*;
 
     #[test]
@@ -256,7 +258,12 @@ mod tests {
                 block_id: Some(42),
                 block_hash: None,
                 prev_block_hash: None,
-                l1_slot: Slot::from(0),
+                checkpoint: SequencerCheckpoint {
+                    last_msg_id: MsgId::from([0_u8; 32]),
+                    pending_txs: vec![],
+                    lib: [1_u8; 32].into(),
+                    lib_slot: Slot::from(0),
+                },
                 error: BlockIngestError::StateTransition {
                     tx_index: 0,
                     reason: String::default(),

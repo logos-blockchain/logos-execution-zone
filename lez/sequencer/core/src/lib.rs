@@ -26,7 +26,7 @@ use logos_blockchain_core::mantle::ops::channel::Ed25519PublicKey;
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use logos_blockchain_zone_sdk::{
     Slot, ZoneMessage,
-    sequencer::{DepositInfo, WithdrawArg},
+    sequencer::{DepositInfo, SequencerCheckpoint, WithdrawArg},
 };
 use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
@@ -444,9 +444,6 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             .await
             .context("Failed to read zone anchor")?;
 
-        let after_slot = anchor_record
-            .and_then(|record| record.slot.checked_sub(1))
-            .map(Slot::from);
         let channel_tip_slot = publisher
             .channel_tip_slot()
             .await
@@ -472,6 +469,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             .context("Failed to read latest block meta")?
             .map(|meta| meta.id);
         let had_checkpoint_before_start = !is_fresh_start;
+
         if let Some(local_tip) = local_tip
             && had_checkpoint_before_start
             && channel_tip_slot.is_none()
@@ -493,15 +491,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         // With a recorded anchor, probe the channel for positive evidence of a
         // different chain: the frontier upfront (a missing/behind channel serves
         // no messages to scan), then the anchor block as messages stream in.
-        let mut consistency_check = anchor_record.map(|record| {
-            let anchor = Anchor::new(
-                Slot::from(record.slot),
-                Some((record.block_id, record.hash)),
-            );
+        let mut consistency_check = anchor_record.clone().map(|record| {
+            let anchor = Anchor::new(record.checkpoint, Some((record.block_id, record.hash)));
             let mut check = AnchorConsistencyCheck::new(anchor);
             check.check_frontier(channel_tip_slot);
             check
         });
+
         if let Some(ChainConsistency::Inconsistent(mismatch)) = consistency_check
             .as_ref()
             .and_then(AnchorConsistencyCheck::verdict)
@@ -512,11 +508,11 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         // Verify each message against the anchor and replay the
         // blocks (applying the ones we miss, checking the ones we hold).
         let messages = publisher
-            .read_channel_after(after_slot)
-            .await
-            .context("Failed to read channel history for reconstruction")?;
+            .read_channel_after(anchor_record.map(|an| an.checkpoint))
+            .await;
         let mut messages = std::pin::pin!(messages);
-        while let Some((message, slot)) = messages.next().await {
+        while let Some((message, checkpoint)) = messages.next().await {
+            let slot = checkpoint.lib_slot;
             if let Some(check) = &mut consistency_check
                 && let Some(ChainConsistency::Inconsistent(mismatch)) =
                     check.observe(&message, slot)
@@ -537,7 +533,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             // follow events interleave safely — both paths apply idempotently
             // and persist under this same lock.
             let mut chain = chain.lock().await;
-            Self::apply_reconstructed_block(store.storage_ref(), &mut chain, &block, slot).await?;
+            Self::apply_reconstructed_block(store.storage_ref(), &mut chain, &block, checkpoint)
+                .await?;
         }
 
         // The channel exists once it has a tip; only when it has none is this
@@ -556,7 +553,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         storage_ref: &ActorRef<S>,
         chain: &mut ChainState,
         block: &Block,
-        slot: Slot,
+        checkpoint: SequencerCheckpoint,
     ) -> Result<()> {
         let tip = storage_ref
             .ask(GetLatestBlockMeta)
@@ -566,7 +563,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let block_hash = block.header.hash;
 
         let record = ZoneAnchorRecord {
-            slot: slot.into_inner(),
+            checkpoint: checkpoint.clone(),
             block_id,
             hash: block_hash,
         };
@@ -611,7 +608,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         // Above the final tier the head is reorg-able, so finalized history
         // wins: `apply_finalized` finalizes the matching prefix and rebases the
         // head onto what the channel settled. Validation happens inside it.
-        match chain.apply_finalized(MsgId::from(block.header.hash.0), block, slot) {
+        match chain.apply_finalized(MsgId::from(block.header.hash.0), block, checkpoint) {
             AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied => {}
             AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
                 return Err(anyhow!(
@@ -639,6 +636,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         // itself landed.
         let head_tip = chain.head_tip().map(|head| BlockMeta::from(&head));
         let final_meta = chain.final_tip().map(|meta| BlockMeta::from(&meta));
+
         storage_ref
             .ask(ApplyStoreUpdate {
                 blocks: vec![(block.clone(), true)],
@@ -1595,7 +1593,16 @@ async fn apply_follow_update<S: StorageActorTrait>(
             // logos-blockchain PR #3147 surfaces it as `FinalizedTx.l1_slot` —
             // wire it through `FollowUpdate::finalized` once the zone-sdk pin is
             // bumped past that (a separate PR).
-            match chain.apply_finalized(*this_msg, block, Slot::from(0)) {
+            match chain.apply_finalized(
+                *this_msg,
+                block,
+                SequencerCheckpoint {
+                    last_msg_id: [0; 32].into(),
+                    pending_txs: vec![],
+                    lib: [0; 32].into(),
+                    lib_slot: Slot::from(0),
+                },
+            ) {
                 AcceptOutcome::Applied => {
                     to_persist.push((block, true));
                     irreversible.push(block);
@@ -2432,3 +2439,5 @@ pub fn load_or_create_stake_signing_key(path: &Path) -> Result<lee::PrivateKey> 
 #[cfg(test)]
 #[cfg(feature = "mock")]
 mod tests;
+
+//     tests::reconstruction::fails_when_channel_serves_a_divergent_block

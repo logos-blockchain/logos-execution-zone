@@ -5,6 +5,7 @@ edition = "2024"
 license = { workspace = true }
 
 [dependencies]
+authenticated_transfer_core.workspace = true
 bridge_core.workspace = true
 vault_core.workspace = true
 lee_core.workspace = true
