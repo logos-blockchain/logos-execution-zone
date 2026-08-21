@@ -129,13 +129,13 @@ impl ValidatedStateDiff {
                 == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
             {
                 // Runs `Deploy` as native Rust instead of interpreting a guest ELF.
-                let loader_core::Instruction::Deploy { bytecode } =
+                let program_loader_core::Instruction::Deploy { bytecode } =
                     risc0_zkvm::serde::from_slice(&chained_call.instruction_data).map_err(|e| {
                         LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
                     })?;
                 let deploy_pre_states = chained_call.pre_states.clone();
                 let post_states = std::panic::catch_unwind(|| {
-                    loader_core::execute_deploy(program_id, deploy_pre_states, bytecode)
+                    program_loader_core::execute_deploy(program_id, deploy_pre_states, bytecode)
                 })
                 .map_err(|_panic_payload| {
                     LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())

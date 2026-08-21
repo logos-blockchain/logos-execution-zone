@@ -69,5 +69,5 @@ lee = { workspace = true, features = ["test-utils"] }
 key_protocol.workspace = true
 token_core.workspace = true
 ping_core.workspace = true
-loader_core.workspace = true
+program_loader_core.workspace = true
 risc0-binfmt.workspace = true
