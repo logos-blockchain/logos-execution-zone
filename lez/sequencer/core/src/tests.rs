@@ -3672,7 +3672,7 @@ fn deploy_transaction(target: AccountId, bytecode: Vec<u8>) -> PublicTransaction
         loader_id.into(),
         vec![target],
         vec![],
-        loader_core::Instruction::Deploy { bytecode },
+        program_loader_core::Instruction::Deploy { bytecode },
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
@@ -3686,7 +3686,8 @@ fn loader_deploys_program() {
 
     let bytecode = test_programs::claimer().elf().to_vec();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
-    let target = loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
+    let target =
+        program_loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
 
     assert_eq!(state.get_account_by_id(target), Account::default());
 
@@ -3701,7 +3702,7 @@ fn loader_deploys_program() {
         RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
     );
 
-    let program_data = loader_core::ProgramData::try_from(&deployed.data)
+    let program_data = program_loader_core::ProgramData::try_from(&deployed.data)
         .expect("deployed account data should decode as ProgramData");
     assert_eq!(program_data.image_id, image_id);
     assert_eq!(program_data.segment_number, 0);
@@ -3716,7 +3717,8 @@ fn loader_rejects_redeploying_an_already_deployed_program() {
 
     let bytecode = test_programs::claimer().elf().to_vec();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
-    let target = loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
+    let target =
+        program_loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
 
     let tx = deploy_transaction(target, bytecode.clone());
     state
@@ -3774,14 +3776,15 @@ fn loader_rejects_wrong_number_of_accounts() {
 
     let bytecode = test_programs::claimer().elf().to_vec();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
-    let target = loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
+    let target =
+        program_loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
     let extra = AccountId::new([9; 32]);
 
     let message = lee::public_transaction::Message::try_new(
         loader_id.into(),
         vec![target, extra],
         vec![],
-        loader_core::Instruction::Deploy { bytecode },
+        program_loader_core::Instruction::Deploy { bytecode },
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
@@ -3818,10 +3821,11 @@ fn loader_deploys_program_via_chained_call() {
 
     let bytecode = test_programs::claimer().elf().to_vec();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
-    let target = loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
+    let target =
+        program_loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
 
     let inner_instruction_data =
-        lee::program::Program::serialize_instruction(loader_core::Instruction::Deploy {
+        lee::program::Program::serialize_instruction(program_loader_core::Instruction::Deploy {
             bytecode: bytecode.clone(),
         })
         .unwrap();
@@ -3846,7 +3850,7 @@ fn loader_deploys_program_via_chained_call() {
         RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
     );
 
-    let program_data = loader_core::ProgramData::try_from(&deployed.data)
+    let program_data = program_loader_core::ProgramData::try_from(&deployed.data)
         .expect("deployed account data should decode as ProgramData");
     assert_eq!(program_data.image_id, image_id);
     assert_eq!(program_data.elf_segment, bytecode);

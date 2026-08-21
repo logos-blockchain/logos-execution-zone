@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use hex_literal::hex;
 use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
 use serde::{Deserialize, Serialize};
 
@@ -19,10 +20,12 @@ pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
 /// `program_owner` for program `Account`s.
 pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
 
-pub const RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new([
-    89, 158, 44, 108, 43, 137, 255, 57, 188, 48, 148, 179, 39, 111, 31, 202, 167, 23, 56, 0, 167,
-    29, 152, 150, 161, 186, 155, 209, 69, 138, 145, 201,
-]);
+/// Reserved `AccountId` for the native "Deploy" dispatch shortcut.
+///
+/// `SHA256("/LEE/v0.3/AccountId/State/" || "DeploymentProgram")`, each padded to 32 bytes.
+pub const RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new(hex!(
+    "599e2c6c2b89ff39bc3094b3276f1fcaa7173800a71d9896a1ba9bd1458a91c9"
+));
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
