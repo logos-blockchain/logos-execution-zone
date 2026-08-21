@@ -1,0 +1,122 @@
+on:
+  push:
+    branches:
+      - main
+      - dev
+    paths-ignore:
+      - "**.md"
+      - "!.github/workflows/*.yml"
+
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "!.github/workflows/*.yml"
+
+name: Cucumber integration tests
+
+concurrency:
+  group: ${{ github.workflow }}@${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  packages: read
+
+jobs:
+  ci-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-image.yml
+
+  cucumber:
+    needs: ci-image
+    name: Run cucumber integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build the Cucumber test target first so compile time is separate from
+      # the individual scenario suite timings below.
+      - name: Build cucumber tests
+        id: build_cucumber
+        uses: ./.github/actions/run-in-ci-image
+        with:
+          image: ${{ needs.ci-image.outputs.image }}
+          env: |
+            RUSTFLAGS=-A single-use-lifetimes
+            RISC0_DEV_MODE=1
+          run: >-
+            env -u GITHUB_ACTIONS -u CI
+            cargo test -p integration_tests --features cucumber
+            --test cucumber --no-run
+
+      # Feature: Smoke (@smoke_ci)
+      - name: Run cucumber suite - smoke
+        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@smoke_ci"
+          suite_name: smoke
+          artifact_subdir: "LEZ integration environment"
+          max_concurrent_scenarios: "1"
+          image: ${{ needs.ci-image.outputs.image }}
+
+      # Feature: Authenticated transfers (@auth_transfer_ci)
+      - name: Run cucumber suite - authenticated transfers
+        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@auth_transfer_ci"
+          suite_name: auth-transfer
+          artifact_subdir: "Authenticated transfers"
+          max_concurrent_scenarios: "1"
+          image: ${{ needs.ci-image.outputs.image }}
+
+      # Feature: Indexer state (@indexer_state_ci)
+      - name: Run cucumber suite - indexer state
+        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@indexer_state_ci"
+          suite_name: indexer-state
+          artifact_subdir: "LEZ indexer state consistency"
+          max_concurrent_scenarios: "1"
+          image: ${{ needs.ci-image.outputs.image }}
+
+      # Feature: Multi sequencer (@multi_sequencer_ci)
+      - name: Run cucumber suite - multi sequencer
+        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@multi_sequencer_ci"
+          suite_name: multi-sequencer
+          artifact_subdir: "LEZ multi-sequencer committee convergence"
+          max_concurrent_scenarios: "1"
+          image: ${{ needs.ci-image.outputs.image }}
+
+      - name: Upload cucumber JUnit results
+        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: cucumber-junit-${{ runner.os }}
+          path: ${{ github.workspace }}/integration_tests/cucumber_tests/temp/cucumber-output-junit.xml
+          if-no-files-found: warn

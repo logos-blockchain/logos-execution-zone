@@ -286,93 +286,93 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                 )]
                 {
                     tokio::select! {
-                            // Drain external commands by calling the borrowing
-                            // handle — `&mut sequencer` is only available here.
-                            Some(command) = command_rx.recv() => match command {
-                                Command::Publish { inscription: data_bounded, withdrawals, resp: resp_tx } => {
-                                    let data_byte_size = data_bounded.len();
-                                    let withdraw_count = withdrawals.len();
-                                    let published = if withdrawals.is_empty() {
-                                        sequencer.handle()
-                                            .publish(data_bounded)
-                                            .await
-                                            .context("Failed to publish block")
-                                    } else {
-                                        sequencer.handle()
-                                            .publish_atomic_withdraw(data_bounded, withdrawals)
-                                            .await
-                                            .context("Failed to publish block with withdrawals")
-                                    };
-
-                                    let msg_result = published.map(|(result, checkpoint)| PublishOutcome {
-                                        this_msg: result.tx.inscription().this_msg,
-                                        checkpoint,
-                                        released_notes: released_notes(&result.tx),
-                                    });
-                                    match &msg_result {
-                                        Ok(_) if withdraw_count == 0 => {
-                                            log::info!("Published block with the size of {data_byte_size} bytes");
-                                        }
-                                        Ok(_) => {
-                                            log::info!(
-                                                "Published block with the size of {data_byte_size} bytes and {withdraw_count} bridge withdrawals",
-                                            );
-                                        }
-                                        Err(e) => warn!("zone-sdk publish failed: {e:?}"),
-                                    }
-                                    let _dontcare = resp_tx.send(msg_result);
-                                }
-                                Command::SubmitChannelConfig {
-                                    new_keys,
-                                    resp: resp_tx,
-                                } => {
-                                    // zone-sdk funds from the node wallet, signs,
-                                    // and enqueues this as its own independent
-                                    // Mantle tx onto the drive loop's in-flight
-                                    // pool — no manual bundling with any block
-                                    // inscription.
-                                    let result = sequencer
-                                        .handle()
-                                        .channel_config(
-                                            new_keys,
-                                            SlotTimeframe::from(
-                                                system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
-                                            ),
-                                            SlotTimeout::from(
-                                                system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                                            ),
-                                            system_accounts::DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD,
-                                            system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
-                                        )
+                        // Drain external commands by calling the borrowing
+                        // handle — `&mut sequencer` is only available here.
+                        Some(command) = command_rx.recv() => match command {
+                            Command::Publish { inscription: data_bounded, withdrawals, resp: resp_tx } => {
+                                let data_byte_size = data_bounded.len();
+                                let withdraw_count = withdrawals.len();
+                                let published = if withdrawals.is_empty() {
+                                    sequencer.handle()
+                                        .publish(data_bounded)
                                         .await
-                                        .map(|_| ())
-                                        .context("Failed to submit channel-config update");
+                                        .context("Failed to publish block")
+                                } else {
+                                    sequencer.handle()
+                                        .publish_atomic_withdraw(data_bounded, withdrawals)
+                                        .await
+                                        .context("Failed to publish block with withdrawals")
+                                };
 
-                                    match &result {
-                                        Ok(()) => info!("Submitted committee channel-config update"),
-                                        Err(err) => {
-                                            warn!("Channel-config update submission failed: {err:?}");
-                                        }
+                                let msg_result = published.map(|(result, checkpoint)| PublishOutcome {
+                                    this_msg: result.tx.inscription().this_msg,
+                                    checkpoint,
+                                    released_notes: released_notes(&result.tx),
+                                });
+                                match &msg_result {
+                                    Ok(_) if withdraw_count == 0 => {
+                                        log::info!("Published block with the size of {data_byte_size} bytes");
                                     }
+                                    Ok(_) => {
+                                        log::info!(
+                                            "Published block with the size of {data_byte_size} bytes and {withdraw_count} bridge withdrawals",
+                                        );
+                                    }
+                                    Err(e) => warn!("zone-sdk publish failed: {e:?}"),
+                                }
+                                let _dontcare = resp_tx.send(msg_result);
+                            }
+                            Command::SubmitChannelConfig {
+                                new_keys,
+                                resp: resp_tx,
+                            } => {
+                                // zone-sdk funds from the node wallet, signs,
+                                // and enqueues this as its own independent
+                                // Mantle tx onto the drive loop's in-flight
+                                // pool — no manual bundling with any block
+                                // inscription.
+                                let result = sequencer
+                                    .handle()
+                                    .channel_config(
+                                        new_keys,
+                                        SlotTimeframe::from(
+                                            system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+                                        ),
+                                        SlotTimeout::from(
+                                            system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+                                        ),
+                                        system_accounts::DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD,
+                                        system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
+                                    )
+                                    .await
+                                    .map(|_| ())
+                                    .context("Failed to submit channel-config update");
 
-                                    let _dontcare = resp_tx.send(result);
-                                }
-                                Command::SubmitSignedTx { tx, msg_id, resp: resp_tx } => {
-                                    let submitted = sequencer
-                                        .handle()
-                                        .submit_signed_tx(*tx, msg_id)
-                                        .context("Failed to submit pre-built channel transaction");
-                                    let msg_result = submitted.map(|(result, checkpoint)| PublishOutcome {
-                                        this_msg: result.tx.inscription().this_msg,
-                                        checkpoint,
-                                        released_notes: released_notes(&result.tx),
-                                    });
-                                    if let Err(e) = &msg_result {
-                                        warn!("zone-sdk rejected the pre-built transaction: {e:?}");
+                                match &result {
+                                    Ok(()) => info!("Submitted committee channel-config update"),
+                                    Err(err) => {
+                                        warn!("Channel-config update submission failed: {err:?}");
                                     }
-                                    let _dontcare = resp_tx.send(msg_result);
                                 }
-                            },
+
+                                let _dontcare = resp_tx.send(result);
+                            }
+                            Command::SubmitSignedTx { tx, msg_id, resp: resp_tx } => {
+                                let submitted = sequencer
+                                    .handle()
+                                    .submit_signed_tx(*tx, msg_id)
+                                    .context("Failed to submit pre-built channel transaction");
+                                let msg_result = submitted.map(|(result, checkpoint)| PublishOutcome {
+                                    this_msg: result.tx.inscription().this_msg,
+                                    checkpoint,
+                                    released_notes: released_notes(&result.tx),
+                                });
+                                if let Err(e) = &msg_result {
+                                    warn!("zone-sdk rejected the pre-built transaction: {e:?}");
+                                }
+                                let _dontcare = resp_tx.send(msg_result);
+                            }
+                        },
                         event = sequencer.next_event() => {
                             match event {
                                 Event::BlocksProcessed {

@@ -46,7 +46,7 @@ pub enum StepError {
     #[error("Deployment failed: {message}")]
     DeploymentFailed { message: String },
     /// An operational deployment error with its original source preserved.
-    #[error("Deployment failed: {source}")]
+    #[error("Deployment failed")]
     DeploymentFailedSource {
         /// Original deployment error.
         #[source]
@@ -56,7 +56,7 @@ pub enum StepError {
     #[error("Query failed: {message}")]
     QueryFailed { message: String },
     /// An operational query error with its original source preserved.
-    #[error("Query failed: {source}")]
+    #[error("Query failed")]
     QueryFailedSource {
         /// Original query error.
         #[source]
@@ -72,7 +72,7 @@ pub enum StepError {
     #[error("Runtime teardown failed: {message}")]
     TeardownFailed { message: String },
     /// An operational teardown error with its original source preserved.
-    #[error("Runtime teardown failed: {source}")]
+    #[error("Runtime teardown failed")]
     TeardownFailedSource {
         /// Original teardown error.
         #[source]

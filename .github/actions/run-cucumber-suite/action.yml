@@ -1,0 +1,57 @@
+name: Run cucumber suite
+description: Run a tagged cucumber suite and upload suite artifacts on failure
+
+inputs:
+  suite_tag:
+    description: Cucumber tag expression
+    required: true
+  suite_name:
+    description: Short suite name used in step output and artifact naming
+    required: true
+  artifact_subdir:
+    description: Subdirectory under integration_tests/cucumber_tests/temp/cucumber_artefacts
+    required: true
+  max_concurrent_scenarios:
+    description: Maximum number of concurrent scenarios to run
+    required: false
+    default: "1"
+  image:
+    description: LEZ CI image reference from the ci-image workflow
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Run cucumber - ${{ inputs.suite_tag }}
+      id: run_suite
+      continue-on-error: true
+      uses: ./.github/actions/run-in-ci-image
+      with:
+        image: ${{ inputs.image }}
+        env: |
+          RUSTFLAGS=-A single-use-lifetimes
+          RISC0_DEV_MODE=1
+          RUST_LOG=info,logos_blockchain_chain_leader_service=trace,risc0_zkvm::host::server::exec::executor=off
+          CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL=true
+          MAX_CUCUMBER_CONCURRENT_SCENARIOS=${{ inputs.max_concurrent_scenarios }}
+
+        # The pinned Logos TF revision has no matching downloadable node binary.
+        # Until #773, unset CI markers so TF uses its source-build provider.
+        run: >-
+          env -u GITHUB_ACTIONS -u CI
+          cargo test -p integration_tests --features cucumber
+          --test cucumber -- --tags "${{ inputs.suite_tag }}"
+
+    - name: Upload cucumber logs on failure
+      if: ${{ steps.run_suite.outcome == 'failure' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-${{ inputs.suite_name }}
+        include-hidden-files: true
+        path: ${{ github.workspace }}/integration_tests/cucumber_tests/temp/cucumber_artefacts/${{ inputs.artifact_subdir }}/**
+
+    - name: Fail suite
+      if: ${{ steps.run_suite.outcome == 'failure' }}
+      shell: bash
+      run: exit 1

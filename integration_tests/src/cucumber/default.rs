@@ -57,11 +57,11 @@ pub fn create_scenario_output_dir() -> Result<PathBuf> {
 }
 
 /// Get the number of retries for failed scenarios from the `CUCUMBER_RETRIES`
-/// environment variable. Retries are opt-in: an unset variable and an explicit
-/// zero both disable retries.
+/// environment variable. If the variable is not set, defaults to 2 retries. If
+/// the variable is set to 0, returns None.
 pub fn get_retries() -> Result<Option<usize>> {
     std::env::var_os(CUCUMBER_RETRIES).map_or_else(
-        || Ok(None),
+        || Ok(Some(2)),
         |raw_retries| {
             let retries_value = raw_retries.to_string_lossy();
             let retries = retries_value.parse::<usize>().with_context(|| {
