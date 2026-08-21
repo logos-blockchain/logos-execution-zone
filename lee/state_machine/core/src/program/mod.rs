@@ -743,10 +743,7 @@ pub enum CallKind {
 /// The latter goes via that program's own `update_from_diff`.
 pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
-    UpdateFromDiff {
-        pre_state: Account,
-        diff_data: Data,
-    },
+    UpdateFromDiff { pre_state: Account, diff_data: Data },
 }
 
 /// Journal committed by an `UpdateFromDiff` invocation.
