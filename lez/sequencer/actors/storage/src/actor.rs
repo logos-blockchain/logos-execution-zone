@@ -24,16 +24,15 @@ use crate::{
         AddPendingCrossZoneDispatches, AddPendingDepositEvent, ApplyStoreUpdate,
         CleanPendingBlocksUpTo, ConsumeUnseenWithdrawCount, DbDump, DeadLetterDispatchRecord,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes,
-        MarkBlockAsFinalized,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
+        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetChannelCursor,
+        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
+        GetZoneCheckpointBytes, MarkBlockAsFinalized, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
         RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        PutSlashRecordBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
-        StoreUpdateOutcome,
+        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
         ZoneAnchorRecord,
     },
 };
@@ -126,6 +125,7 @@ impl Message<RecordNewBlock> for StorageActor {
         &mut self,
         RecordNewBlock {
             block,
+            channel_cursor,
             withdrawals,
             state,
             checkpoint_bytes,
@@ -133,8 +133,13 @@ impl Message<RecordNewBlock> for StorageActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let withdrawals = withdrawals.into_iter().map(Into::into).collect::<Vec<_>>();
-        self.dbio()
-            .atomic_update(&block, &withdrawals, &state, checkpoint_bytes.as_deref())?;
+        self.dbio().atomic_update(
+            &block,
+            channel_cursor,
+            &withdrawals,
+            &state,
+            checkpoint_bytes.as_deref(),
+        )?;
 
         self.tx_index.update_from_block(&block);
         Ok(())
@@ -330,7 +335,9 @@ impl Message<PutSlashRecordBytes> for StorageActor {
         PutSlashRecordBytes { bytes }: PutSlashRecordBytes,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.dbio().put_slash_record_bytes(&bytes).map_err(Into::into)
+        self.dbio()
+            .put_slash_record_bytes(&bytes)
+            .map_err(Into::into)
     }
 }
 
@@ -374,6 +381,18 @@ impl Message<SetZoneAnchor> for StorageActor {
         self.dbio()
             .put_zone_anchor(&anchor.into())
             .map_err(Into::into)
+    }
+}
+
+impl Message<GetChannelCursor> for StorageActor {
+    type Reply = Result<Option<[u8; 32]>>;
+
+    async fn handle(
+        &mut self,
+        GetChannelCursor: GetChannelCursor,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.dbio().channel_cursor().map_err(Into::into)
     }
 }
 
@@ -441,6 +460,7 @@ impl Message<ApplyStoreUpdate> for StorageActor {
         let ApplyStoreUpdate {
             checkpoint,
             blocks,
+            channel_cursor,
             head_tip,
             head_state,
             final_snapshot,
@@ -475,6 +495,7 @@ impl Message<ApplyStoreUpdate> for StorageActor {
         let update = storage::sequencer::StoreUpdate {
             checkpoint: checkpoint.as_deref(),
             blocks: &blocks,
+            channel_cursor,
             head_tip: head_tip.as_ref(),
             head_state: &head_state,
             final_snapshot: final_snapshot

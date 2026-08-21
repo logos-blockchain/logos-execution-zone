@@ -11,12 +11,13 @@ use sequencer_storage_actor::{
     protocol::{
         CleanPendingBlocksUpTo, DeadLetterDispatchRecord, DeleteBlock, DeleteZoneCheckpoint,
         DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetBlock,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, GetZoneAnchor, GetZoneCheckpointBytes,
-        MarkBlockAsFinalized, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RaisePublishedHighWater, RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending,
-        SetZoneAnchor, SetZoneCheckpointBytes, WithdrawalReconciliationKey, ZoneAnchorRecord,
+        GetChannelCursor, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
+        GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
+        RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetZoneAnchor,
+        SetZoneCheckpointBytes, WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
 
@@ -79,6 +80,7 @@ impl<S: StorageActorTrait> SequencerStore<S> {
     pub async fn record_new_block(
         &mut self,
         block: Block,
+        channel_cursor: Option<[u8; 32]>,
         withdrawals: Vec<WithdrawalReconciliationKey>,
         state: Arc<V03State>,
         checkpoint_bytes: Option<Vec<u8>>,
@@ -86,6 +88,7 @@ impl<S: StorageActorTrait> SequencerStore<S> {
         self.storage_ref
             .ask(RecordNewBlock {
                 block,
+                channel_cursor,
                 withdrawals,
                 state,
                 checkpoint_bytes,
@@ -175,6 +178,15 @@ impl<S: StorageActorTrait> SequencerStore<S> {
     pub async fn published_high_water(&self) -> Result<Option<u64>> {
         self.storage_ref
             .ask(GetPublishedHighWater)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// The `MsgId` of the newest channel inscription processed, or `None` if
+    /// none was recorded.
+    pub async fn channel_cursor(&self) -> Result<Option<[u8; 32]>> {
+        self.storage_ref
+            .ask(GetChannelCursor)
             .await
             .map_err(Into::into)
     }
@@ -310,6 +322,7 @@ mod tests {
         storage_ref
             .ask(RecordNewBlock {
                 block: genesis.clone(),
+                channel_cursor: None,
                 withdrawals: vec![],
                 state: Arc::new(testnet_initial_state::initial_state()),
                 checkpoint_bytes: None,
@@ -350,7 +363,7 @@ mod tests {
         let block_hash = block.header.hash;
 
         store
-            .record_new_block(block.clone(), vec![], Arc::new(V03State::new()), None)
+            .record_new_block(block.clone(), None, vec![], Arc::new(V03State::new()), None)
             .await
             .unwrap();
 
@@ -376,7 +389,7 @@ mod tests {
         let block_id = block.header.block_id;
 
         store
-            .record_new_block(block.clone(), vec![], Arc::new(V03State::new()), None)
+            .record_new_block(block.clone(), None, vec![], Arc::new(V03State::new()), None)
             .await
             .unwrap();
 

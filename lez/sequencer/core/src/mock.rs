@@ -1,4 +1,10 @@
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::Result;
 use common::block::Block;
@@ -32,6 +38,11 @@ pub struct MockBlockPublisher {
     messages: Vec<(ZoneMessage, Slot)>,
     /// Canned signer; `None` means nothing can be attributed.
     inscription_signer: Option<Ed25519PublicKey>,
+    /// Last entry a publish left the channel at, for the pinned-parent check.
+    channel_tip: Arc<Mutex<Option<MsgId>>>,
+    /// When set, fails every publish, as zone-sdk does for an atomic withdraw
+    /// at this revision.
+    publish_fails: Arc<AtomicBool>,
 }
 
 impl MockBlockPublisher {
@@ -50,6 +61,8 @@ impl MockBlockPublisher {
             tip_slot,
             messages,
             inscription_signer: None,
+            channel_tip: Arc::new(Mutex::new(None)),
+            publish_fails: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -58,6 +71,32 @@ impl MockBlockPublisher {
     pub const fn with_inscription_signer(mut self, signer: Ed25519PublicKey) -> Self {
         self.inscription_signer = Some(signer);
         self
+    }
+
+    /// Makes every later publish fail.
+    pub fn fail_publishes(&self) {
+        self.publish_fails.store(true, Ordering::Relaxed);
+    }
+
+    /// Moves the canned channel tip, as an L1 reorg dropping inscriptions does.
+    pub fn set_channel_tip(&self, tip: Option<MsgId>) {
+        *self.channel_tip.lock().expect("channel tip lock poisoned") = tip;
+    }
+
+    /// Records `block` as the channel tip and reports what its publish produced.
+    fn landed(&self, block: &Block, released_notes: Vec<NoteId>) -> Result<PublishOutcome> {
+        anyhow::ensure!(
+            !self.publish_fails.load(Ordering::Relaxed),
+            "Canned publish failure for block {}",
+            block.header.block_id
+        );
+        let this_msg = mock_msg_of(block);
+        *self.channel_tip.lock().expect("channel tip lock poisoned") = Some(this_msg);
+        Ok(PublishOutcome {
+            this_msg,
+            checkpoint: checkpoint_at(this_msg),
+            released_notes,
+        })
     }
 }
 
@@ -83,6 +122,8 @@ impl BlockPublisherTrait for MockBlockPublisher {
             tip_slot: Some(Slot::from(0)),
             messages: Vec::new(),
             inscription_signer: None,
+            channel_tip: Arc::new(Mutex::new(None)),
+            publish_fails: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -94,11 +135,22 @@ impl BlockPublisherTrait for MockBlockPublisher {
         // Deterministic per-block id so head dedup behaves in tests.
         //
         // TODO: should we allow more "mockability" here?
-        Ok(PublishOutcome {
-            this_msg: MsgId::from(block.header.hash.0),
-            checkpoint: mock_checkpoint(),
-            released_notes: mock_released_notes(&withdrawals),
-        })
+        self.landed(block, mock_released_notes(&withdrawals))
+    }
+
+    /// Mirrors L1: the inscription only lands while `parent` is still the tip.
+    async fn publish_block_chained_on(
+        &self,
+        block: &Block,
+        parent: MsgId,
+    ) -> Result<PublishOutcome> {
+        let tip = *self.channel_tip.lock().expect("channel tip lock poisoned");
+        anyhow::ensure!(
+            tip.is_none_or(|tip| tip == parent),
+            "Block {} is chained on an entry that is no longer the channel tip",
+            block.header.block_id
+        );
+        self.landed(block, Vec::new())
     }
 
     async fn publish_genesis_creating_channel(
@@ -142,6 +194,10 @@ impl BlockPublisherTrait for MockBlockPublisher {
         Ok(self.tip_slot)
     }
 
+    async fn channel_tip_message(&self) -> Result<Option<MsgId>> {
+        Ok(*self.channel_tip.lock().expect("channel tip lock poisoned"))
+    }
+
     async fn read_channel_after(
         &self,
         after_slot: Option<Slot>,
@@ -170,15 +226,30 @@ pub(crate) fn mock_released_notes(withdrawals: &[WithdrawArg]) -> Vec<NoteId> {
         .collect()
 }
 
-/// A zeroed checkpoint, for [`MockBlockPublisher::publish_block`] and for tests
-/// building a [`crate::block_publisher::FollowUpdate`]. Tests only assert *that*
-/// a checkpoint was persisted alongside its effects, never what is in it.
+/// The `MsgId` the mock assigns a published block: its hash, so tests can
+/// recompute it. Real ids hash the inscription op (parent, payload, signer)
+/// and change on re-inscription — never derivable from the block.
 #[must_use]
-pub(crate) fn mock_checkpoint() -> SequencerCheckpoint {
+pub(crate) fn mock_msg_of(block: &Block) -> MsgId {
+    MsgId::from(block.header.hash.0)
+}
+
+/// A checkpoint reporting `tip` as the channel tip, as the sdk builds one for
+/// each publish outcome and follow update.
+#[must_use]
+pub(crate) fn checkpoint_at(tip: MsgId) -> SequencerCheckpoint {
     SequencerCheckpoint {
-        last_msg_id: MsgId::from([0; 32]),
+        last_msg_id: tip,
         pending_txs: Vec::new(),
         lib: HeaderId::from([0; 32]),
         lib_slot: Slot::from(0),
     }
+}
+
+/// [`checkpoint_at`] a zeroed tip, for follow updates whose tests never
+/// publish pinned on what they leave behind.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn mock_checkpoint() -> SequencerCheckpoint {
+    checkpoint_at(MsgId::from([0; 32]))
 }

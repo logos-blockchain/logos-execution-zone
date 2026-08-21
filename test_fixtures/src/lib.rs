@@ -718,6 +718,12 @@ impl ZoneTestContextBuilder {
             .await
             .context("Encountered an error while waiting for genesis to be published")?;
 
+        // Followers must not start before the channel exists on Bedrock, or
+        // they race a second channel-create.
+        wait_until_channel_exists(bedrock_addr, mn_config.bedrock_channel)
+            .await
+            .context("Encountered an error while waiting for the channel to land on Bedrock")?;
+
         log::info!("Passed wait untill genesis");
 
         sequencer_addrs.push(leader_addr);
@@ -1071,6 +1077,35 @@ async fn wait_until_genesis(client: &SequencerClient) -> Result<()> {
     tokio::time::timeout(std::time::Duration::from_secs(360), wait)
         .await
         .with_context(|| "Timed out waiting for genesis")?
+}
+
+async fn wait_until_channel_exists(
+    bedrock_addr: SocketAddr,
+    channel_id: ChannelId,
+) -> Result<()> {
+    log::info!("Waiting for the channel to land on Bedrock");
+
+    let bedrock_config = sequencer_core::config::BedrockConfig {
+        channel_id,
+        node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
+        funding_key: config::bedrock_funding_key(),
+        auth: None,
+        priority_fee: sequencer_core::config::default_priority_fee(),
+    };
+    let wait = async {
+        loop {
+            if sequencer_core::block_publisher::read_channel_state(&bedrock_config)
+                .await?
+                .is_some()
+            {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(360), wait)
+        .await
+        .with_context(|| "Timed out waiting for the channel to land on Bedrock")?
 }
 
 #[expect(clippy::too_many_arguments, reason = "No need to repackage fields")]

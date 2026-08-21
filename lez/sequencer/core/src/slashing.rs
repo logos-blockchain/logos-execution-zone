@@ -9,10 +9,10 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
+use kameo::actor::ActorRef;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use log::{error, warn};
 use logos_blockchain_zone_sdk::Slot;
-use kameo::actor::ActorRef;
 use sequencer_stake_core::{SequencerKey, SlashApproval};
 use sequencer_storage_actor::{
     StorageActorTrait,
@@ -112,7 +112,6 @@ impl SlashRecord {
             .copied()
             .collect()
     }
-
 }
 
 fn encoded(offences: &Offences) -> Vec<u8> {
@@ -147,7 +146,9 @@ pub(crate) async fn attribute_offences<BP: BlockPublisherTrait, S: StorageActorT
             "Inscription at slot {slot} attributed to {}",
             hex::encode(offender)
         );
-        record.attribute(storage_ref, inscription, slot, offender).await;
+        record
+            .attribute(storage_ref, inscription, slot, offender)
+            .await;
     }
 
     Ok(())
@@ -251,6 +252,9 @@ mod tests {
     use super::*;
     use crate::mock::MockBlockPublisher;
 
+    const INSCRIPTION: [u8; 32] = [7; 32];
+    const SLOT: u64 = 42;
+
     /// A storage actor that holds no record and accepts every write.
     fn storage() -> ActorRef<MockStorageActor> {
         let mut mock = MockStorageActor::new();
@@ -260,9 +264,6 @@ mod tests {
             .returning(|_, _| Ok(()));
         MockStorageActor::spawn(mock)
     }
-
-    const INSCRIPTION: [u8; 32] = [7; 32];
-    const SLOT: u64 = 42;
 
     fn offender_signing_key() -> Ed25519Key {
         Ed25519Key::from_bytes(&[3; 32])
