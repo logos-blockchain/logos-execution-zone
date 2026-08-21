@@ -37,6 +37,9 @@ pub const PROGRAM_LOADER_ACCOUNT_ID: AccountId = AccountId::new(hex!(
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
+/// The `[0; 8]` sentinel `ProgramData::current_image_id` holds while unfinalized.
+pub const UNFINALIZED_IMAGE_ID: [u32; 8] = [0; 8];
+
 pub type ProgramId = [u32; 8];
 
 /// The account-data layout of a program's header account, deployed via the `Deploy` native
@@ -50,28 +53,47 @@ pub type ProgramId = [u32; 8];
 /// primitive available today is whole-account equality, so what's bundled into one account sets
 /// the floor for how cheap that authentication can be.
 ///
-/// `image_id` is read fresh from this account on every dispatch/verification rather than
-/// re-derived from the account's address, specifically so that upgrading a program (writing a
-/// new `image_id` into the same, stable `AccountId`) is the entire upgrade mechanism — no
-/// separate "which version" bookkeeping needed.
+/// Splits genesis (fixed forever) from current (mutable) state so a program can be upgraded —
+/// bytecode rewritten, authority rotated — without its address ever moving:
+/// - `genesis_image_id`/`genesis_update_auth` are the sole inputs to header/segment PDA address
+///   derivation (see `program_loader_core::header_account_id`/`segment_account_id`),
+///   chosen once at the program's first-ever `Deploy` and never touched again.
+/// - `current_image_id`/`update_auth`/`program_version` are live, mutable state: `current_image_id`
+///   is `[0; 8]` while unfinalized (initial multi-transaction deploy in progress, or an upgrade's
+///   segment writes have landed but `Finalize` hasn't run yet) — `V03State::get_program` trusts a
+///   non-sentinel `current_image_id` directly rather than re-deriving it from the segments on every
+///   read, so it is only ever written by `program_loader_core::execute_deploy`'s atomic single-tx
+///   fast path or by a signed `Finalize`. `update_auth` starts equal to `genesis_update_auth` and
+///   may diverge after a co-signed `RotateUpdateAuth`.
 ///
 /// Lives here rather than in `program_loader_core` so that `V03State::get_program` — a generic,
 /// program-agnostic lookup — can decode it without depending on a specific program's crate.
 /// `program_loader_core` re-exports this type.
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramData {
-    pub image_id: ProgramId,
-    /// How many bytecode segment accounts follow, so a reader knows how many to fetch without
-    /// probing (see `program_loader_core::segment_account_id`).
-    ///
-    /// Caller-declared on every `Deploy` transaction (a transaction covering only part of the
-    /// program can't derive it from its own fragment), so this is only trustworthy once
-    /// `V03State::get_program` has cross-checked every segment's bytes actually reconstruct to
-    /// `image_id` — not something a single transaction's own execution verifies for a partial
-    /// batch. See `program_loader_core::execute_deploy` for exactly what is and isn't checked
-    /// when.
+    pub genesis_image_id: ProgramId,
+    /// `None` means immutable: the program was deployed with no upgrade authority at all, and
+    /// `update_auth` below is (and forever stays) `None` too, since there's no genesis authority
+    /// to ever assign a first `update_auth` from.
+    pub genesis_update_auth: Option<AccountId>,
+    /// `[0; 8]` sentinel while unfinalized. See the struct doc for exactly when this is (and
+    /// isn't) written.
+    pub current_image_id: ProgramId,
+    /// How many bytecode segment accounts currently exist, so a reader knows exactly how many
+    /// `program_loader_core::segment_account_id(genesis_image_id, 0..segment_count,
+    /// genesis_update_auth)` accounts to fetch without probing. May change across an upgrade (a
+    /// new version can have more or fewer segments than the one it replaces).
     pub segment_count: u32,
-    pub update_auth: AccountId,
+    /// Current authority for writing segments, triggering `Finalize`, or co-signing a further
+    /// `RotateUpdateAuth`. `None` means no one can ever authorize a future write — either the
+    /// program was deployed immutably (`genesis_update_auth` is also `None`), or a prior
+    /// `RotateUpdateAuth` deliberately renounced authority for good. Not an address-derivation
+    /// input — see `genesis_update_auth`.
+    pub update_auth: Option<AccountId>,
+    /// `0` until the first successful `Finalize` (or the atomic single-tx fast path), which sets
+    /// it to `1`; every subsequent `Finalize` increments it by one. Never reset by anything,
+    /// including `RotateUpdateAuth` — it tracks bytecode changes, not authority changes.
+    pub program_version: u64,
 }
 
 impl TryFrom<&crate::account::Data> for ProgramData {

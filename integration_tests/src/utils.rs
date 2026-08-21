@@ -331,7 +331,7 @@ pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, Vec<AccountId>) {
     let plan = program_loader_core::plan_deploy(
         PROGRAM_LOADER_ACCOUNT_ID,
         image_id,
-        AccountId::default(),
+        None,
         &user_elf,
     );
     (
@@ -368,10 +368,12 @@ pub fn deploy_transaction(
         account_ids,
         vec![],
         program_loader_core::Instruction::Deploy {
-            image_id,
+            genesis: Some(program_loader_core::Genesis {
+                image_id,
+                update_auth: None,
+            }),
             segment_count: u32::try_from(segments.len()).expect("segment count fits in u32"),
             first_segment: 0,
-            update_auth: AccountId::default(),
         },
     )
     .expect("deploy instruction data should always be serializable")
