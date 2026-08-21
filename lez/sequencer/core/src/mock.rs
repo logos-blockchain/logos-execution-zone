@@ -98,8 +98,8 @@ impl BlockPublisherTrait for MockBlockPublisher {
         self.publish_block(block, Vec::new()).await
     }
 
-    async fn accredited_keys(&self) -> Result<Vec<Ed25519PublicKey>> {
-        Ok(Vec::new())
+    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, Slot)>> {
+        Ok(self.tip_slot.map(|slot| (Vec::new(), slot)))
     }
 
     async fn submit_channel_config(&self, _new_keys: Vec<Ed25519PublicKey>) -> Result<()> {

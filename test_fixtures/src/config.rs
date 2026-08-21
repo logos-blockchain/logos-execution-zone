@@ -332,6 +332,12 @@ fn founding_stake_owner_seed(index: usize) -> [u8; 32] {
     seed
 }
 
+/// Key owning sequencer `index`'s founding stake.
+pub fn founding_stake_owner_key(index: usize) -> Result<PrivateKey> {
+    PrivateKey::try_new(founding_stake_owner_seed(index))
+        .context("Failed to build the founding stake ownership key")
+}
+
 /// Genesis entries staking every sequencer in `sequencer_signing_keys`, so the
 /// creator opens the channel already accrediting all of them.
 pub fn genesis_sequencer_stakes(sequencer_signing_keys: &[[u8; 32]]) -> Result<Vec<GenesisAction>> {
@@ -342,8 +348,7 @@ pub fn genesis_sequencer_stakes(sequencer_signing_keys: &[[u8; 32]]) -> Result<V
             let public_key = Ed25519Key::from_bytes(signing_key).public_key();
             let sequencer_key = SequencerKey::new(public_key.to_bytes())
                 .context("Sequencer signing key is not a valid Ed25519 point")?;
-            let owner = PrivateKey::try_new(founding_stake_owner_seed(index))
-                .context("Failed to build the founding stake ownership key")?;
+            let owner = founding_stake_owner_key(index)?;
             Ok(GenesisAction::StakeSequencer {
                 sequencer_key,
                 ownership_public_key: PublicKey::new_from_private_key(&owner),

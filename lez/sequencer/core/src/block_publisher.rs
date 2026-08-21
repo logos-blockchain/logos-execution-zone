@@ -155,8 +155,9 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
     ) -> Result<PublishOutcome>;
 
     /// Live (adopted, possibly not yet finalized) accredited-key snapshot for
-    /// this channel, read directly from the connected Bedrock node.
-    async fn accredited_keys(&self) -> Result<Vec<Ed25519PublicKey>>;
+    /// this channel with the slot its tip sits at, from one read of the
+    /// connected Bedrock node. `None` if the channel does not exist.
+    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, Slot)>>;
 
     /// Submit a committee `ChannelConfigOp` as its own, independent Mantle
     /// tx (not bundled with any block publish). `new_keys` is the full
@@ -551,14 +552,13 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             .await
     }
 
-    async fn accredited_keys(&self) -> Result<Vec<Ed25519PublicKey>> {
+    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, Slot)>> {
         Ok(self
             .node
             .channel_state(self.channel_id)
             .await
             .context("Failed to read channel state")?
-            .map(|state| state.accredited_keys.to_vec())
-            .unwrap_or_default())
+            .map(|state| (state.accredited_keys.to_vec(), state.tip_slot)))
     }
 
     async fn submit_channel_config(&self, new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
