@@ -371,6 +371,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                 }
                             },
                         event = sequencer.next_event() => {
+                            log::info!("========================== Received event {event:#?}");
+
                             match event {
                                 Event::BlocksProcessed {
                                     checkpoint,

@@ -122,6 +122,8 @@ impl SequencerSetup {
     }
 
     async fn setup_owned(self, home: PathBuf) -> Result<SequencerHandle> {
+        log::info!("======================================== Sequencer setup have config {self:#?}");
+
         let Self {
             partial,
             bedrock_addr,
