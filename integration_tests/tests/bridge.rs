@@ -10,7 +10,8 @@ use borsh::BorshSerialize;
 use common::transaction::LeeTransaction;
 use futures::StreamExt as _;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, get_account,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
+    utils::{account_balance, get_account},
     wait_for_indexer_to_catch_up,
 };
 use lee::{

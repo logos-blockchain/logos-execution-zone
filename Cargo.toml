@@ -138,11 +138,14 @@ tokio = { version = "1.50", features = [
   "fs",
 ] }
 tokio-util = "0.7.18"
+async-trait = "0.1"
+trait-variant = "0.1.2"
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
 risc0-build = "3.0.5"
 kameo = "0.22.2"
 kameo_actors = "0.8.1"
 anyhow = "1.0.98"
+cucumber = { default-features = false, version = "=0.22.0" }
 derive_more = "2.1.1"
 num_cpus = "1.13.1"
 openssl = { version = "0.10", features = ["vendored"] }
@@ -163,6 +166,8 @@ metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 lru = "0.16.3"
 thiserror = "2.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 sha2 = "0.10.8"
 ed25519-dalek = { version = "2.2.0", default-features = false }
 hex = "0.4.3"
@@ -214,6 +219,10 @@ logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blo
 logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4a0564b71b825d19ab1446e4b089aebc2ee8167a" }
 logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4a0564b71b825d19ab1446e4b089aebc2ee8167a" }
 logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4a0564b71b825d19ab1446e4b089aebc2ee8167a" }
+
+logos-blockchain-testing-framework = { package = "testing-framework", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "4a0564b71b825d19ab1446e4b089aebc2ee8167a" }
+testing-framework-app = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "db880d61155db3a4f32177ef16b0f1e4bf22b1f6" }
+testing-framework-core = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "db880d61155db3a4f32177ef16b0f1e4bf22b1f6" }
 
 keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
 

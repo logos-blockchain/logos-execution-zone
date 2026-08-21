@@ -502,16 +502,8 @@ where
         return Ok(check.finish());
     }
 
-    let mut zone_indexer = ZoneSequencer::init(
-        channel_id,
-        signing_key_placeholder().into(),
-        node.clone(),
-        funding_placeholder(),
-        Some(anchor.checkpoint.clone()),
-    );
-
     let scan = async {
-        let stream = next_messages(&mut zone_indexer);
+        let stream = next_messages_own(node.clone(), channel_id, Some(anchor.checkpoint.clone()));
         let mut stream = std::pin::pin!(stream);
 
         while let Some((

@@ -75,9 +75,9 @@ impl BlockPublisherTrait for MockBlockPublisher {
         })
     }
 
-    async fn publish_block<'blk, 'pbl: 'blk>(
-        &'pbl self,
-        block: &'blk Block,
+    async fn publish_block(
+        &self,
+        block: &Block,
         withdrawals: Vec<WithdrawArg>,
     ) -> Result<PublishOutcome> {
         // Deterministic per-block id so head dedup behaves in tests.
