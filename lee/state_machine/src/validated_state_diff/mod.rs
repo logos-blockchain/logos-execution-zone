@@ -165,13 +165,13 @@ impl ValidatedStateDiff {
                 // like every guest program in this codebase, relying here on `catch_unwind` to
                 // play the same role the zkVM executor plays for a real guest: converting a
                 // rejected input into a graceful `Err` instead of unwinding past this call.
-                let loader_core::Instruction::Deploy { bytecode } =
+                let program_loader_core::Instruction::Deploy { bytecode } =
                     borsh::from_slice(&chained_call.instruction_data).map_err(|e| {
                         LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
                     })?;
                 let deploy_pre_states = real_pre_states.clone();
                 let post_states = std::panic::catch_unwind(|| {
-                    loader_core::execute_deploy(program_id, deploy_pre_states, bytecode)
+                    program_loader_core::execute_deploy(program_id, deploy_pre_states, bytecode)
                 })
                 .map_err(|_panic_payload| {
                     LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())

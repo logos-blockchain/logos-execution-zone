@@ -18,6 +18,7 @@ bytesize.workspace = true
 base58.workspace = true
 ml-kem = { workspace = true }
 chacha20 = { version = "0.10" }
+hex-literal = "1.0.0"
 
 [dev-dependencies]
 serde_json.workspace = true

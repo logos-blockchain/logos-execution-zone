@@ -21,7 +21,7 @@ hex.workspace = true
 k256.workspace = true
 risc0-binfmt = "3.0.2"
 log.workspace = true
-loader_core.workspace = true
+program_loader_core.workspace = true
 
 [build-dependencies]
 build_utils.workspace = true
