@@ -122,43 +122,61 @@ impl ValidatedStateDiff {
             let mut program_output = if chained_call.program_account_id
                 == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
             {
-                // Runs `Deploy` as native Rust instead of interpreting a guest ELF — see
                 // `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc comment for why.
-                // `execute_deploy` validates its input via `assert!`/`.expect(...)`, exactly
-                // like every guest program in this codebase, relying here on `catch_unwind` to
-                // play the same role the zkVM executor plays for a real guest: converting a
-                // rejected input into a graceful `Err` instead of unwinding past this call.
-                let program_loader_core::Instruction::Deploy {
-                    image_id,
-                    segment_count,
-                    first_segment,
-                    update_auth,
-                } = risc0_zkvm::serde::from_slice(&chained_call.instruction_data).map_err(|e| {
-                    LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
-                })?;
-                // The bytecode itself travels via the transaction's own `raw_payload`, not
-                // `instruction_data` and not `chained_call.raw_payload` (which no guest can ever
-                // set) — see `Message::raw_payload`'s doc comment for why. Deploy only ever runs
-                // natively, so a chained call into it (at any depth) can still reach the
-                // top-level payload here, without any intermediary guest ever having to carry the
-                // bytecode through its own execution.
-                let bytecode = message.raw_payload.clone().ok_or_else(|| {
-                    LeeError::InvalidInput("Deploy requires a raw_payload".into())
-                })?;
-                let post_states = std::panic::catch_unwind(|| {
-                    program_loader_core::execute_deploy(
-                        chained_call.program_account_id,
-                        &chained_call.pre_states,
-                        &bytecode,
-                        image_id,
-                        segment_count,
-                        first_segment,
-                        update_auth,
-                    )
+                let instruction: program_loader_core::Instruction =
+                    risc0_zkvm::serde::from_slice(&chained_call.instruction_data).map_err(|e| {
+                        LeeError::InvalidInput(format!("invalid loader instruction: {e}"))
+                    })?;
+                // Every loader instruction validates its input via `assert!`/`.expect(...)`,
+                // exactly like every guest program in this codebase, relying here on
+                // `catch_unwind` to play the same role the zkVM executor plays for a real guest:
+                // converting a rejected input into a graceful `Err` instead of unwinding past
+                // this call.
+                let post_states = std::panic::catch_unwind(|| -> Result<_, LeeError> {
+                    match instruction {
+                        program_loader_core::Instruction::Deploy {
+                            genesis,
+                            segment_count,
+                            first_segment,
+                        } => {
+                            // The bytecode itself travels via the transaction's own
+                            // `raw_payload`, not `instruction_data` and not
+                            // `chained_call.raw_payload` (which no guest can ever set) — see
+                            // `Message::raw_payload`'s doc comment for why. Deploy only ever
+                            // runs natively, so a chained call into it (at any depth) can still
+                            // reach the top-level payload here, without any intermediary guest
+                            // ever having to carry the bytecode through its own execution.
+                            let bytecode = message.raw_payload.clone().ok_or_else(|| {
+                                LeeError::InvalidInput("Deploy requires a raw_payload".into())
+                            })?;
+                            Ok(program_loader_core::execute_deploy(
+                                chained_call.program_account_id,
+                                &chained_call.pre_states,
+                                &bytecode,
+                                genesis,
+                                segment_count,
+                                first_segment,
+                            ))
+                        }
+                        program_loader_core::Instruction::Finalize => {
+                            Ok(program_loader_core::finalize(
+                                chained_call.program_account_id,
+                                &chained_call.pre_states,
+                            ))
+                        }
+                        program_loader_core::Instruction::RotateUpdateAuth { new_update_auth } => {
+                            Ok(program_loader_core::rotate_update_auth(
+                                &chained_call.pre_states,
+                                new_update_auth,
+                            ))
+                        }
+                    }
                 })
                 .map_err(|_panic_payload| {
-                    LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
-                })?;
+                    LeeError::ProgramExecutionFailed(
+                        "loader instruction rejected the given input".into(),
+                    )
+                })??;
                 ProgramOutput::new(
                     chained_call.program_account_id,
                     caller_data.caller_account_id,

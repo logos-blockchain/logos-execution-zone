@@ -7,6 +7,7 @@ use lee_core::{
     account::{Account, AccountId, Data},
     program::{
         PROGRAM_STORAGE_OWNER, ProgramData, ProgramId, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        UNFINALIZED_IMAGE_ID,
     },
 };
 
@@ -205,12 +206,12 @@ impl V03State {
     }
 
     /// Seeds a program directly into state in the exact `1 + segment_count`-account shape a live
-    /// `Deploy` dispatch (with a default `update_auth`, i.e. no upgrade authority) would produce
-    /// for the same `image_id` (see [`Self::get_program`] and
+    /// `Deploy` dispatch (with no upgrade authority, i.e. immutable) would produce for the same
+    /// `image_id` (see [`Self::get_program`] and
     /// [`program_loader_core::immutable_deploy_account_id`]), skipping only the dispatch/proving
     /// machinery genesis has no signer to drive.
     pub(crate) fn insert_program(&mut self, program: &Program) {
-        let update_auth = AccountId::default();
+        let update_auth = None;
         let user_elf = program_loader_core::extract_user_elf(program.elf())
             .expect("program.elf() must already be a valid two-ELF ProgramBinary");
         let plan = program_loader_core::plan_deploy(
@@ -220,7 +221,27 @@ impl V03State {
             &user_elf,
         );
 
-        let to_account = |planned: program_loader_core::PlannedAccount| {
+        let segment_count = u32::try_from(plan.segments.len()).expect("segment count fits in u32");
+        // Mirrors execute_deploy's atomic single-tx fast path: a genesis-seeded program is always
+        // self-contained and immutable, so it's live (finalized) immediately, at version 1.
+        let header_data = ProgramData {
+            genesis_image_id: program.id(),
+            genesis_update_auth: update_auth,
+            current_image_id: program.id(),
+            segment_count,
+            update_auth,
+            program_version: 1,
+        };
+        let header_account = (
+            plan.header.account_id,
+            Account {
+                program_owner: RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+                data: Data::from(&header_data),
+                ..Account::default()
+            },
+        );
+
+        let to_segment_account = |planned: program_loader_core::PlannedAccount| {
             (
                 planned.account_id,
                 Account {
@@ -232,9 +253,8 @@ impl V03State {
         };
 
         self.public_state.extend(
-            std::iter::once(plan.header)
-                .chain(plan.segments)
-                .map(to_account),
+            std::iter::once(header_account)
+                .chain(plan.segments.into_iter().map(to_segment_account)),
         );
     }
 
@@ -363,14 +383,20 @@ impl V03State {
         let Ok(header) = ProgramData::try_from(&account.data) else {
             return Ok(None);
         };
+        // Unfinalized (an in-progress initial deploy, or an upgrade whose segment writes have
+        // landed but Finalize hasn't run yet) is indistinguishable from absent to every caller —
+        // same as a missing segment below, since both mean "not currently dispatchable."
+        if header.current_image_id == UNFINALIZED_IMAGE_ID {
+            return Ok(None);
+        }
 
         let mut user_elf = Vec::new();
         for segment_number in 0..header.segment_count {
             let segment_account_id = program_loader_core::deploy_segment_account_id(
                 RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
-                header.image_id,
+                header.genesis_image_id,
                 segment_number,
-                header.update_auth,
+                header.genesis_update_auth,
             );
             let Some(segment) = self.get_account_by_id_ref(segment_account_id) else {
                 return Ok(None);
@@ -381,18 +407,12 @@ impl V03State {
             user_elf.extend_from_slice(&segment.data);
         }
 
-        let real_image_id = program_loader_core::compute_image_id(&user_elf)
-            .map_err(LeeError::InvalidProgramBytecode)?;
-        if real_image_id != header.image_id {
-            return Err(LeeError::InvalidProgramBytecode(anyhow::anyhow!(
-                "reconstructed elf for {program_account_id} has image_id {real_image_id:?}, \
-                 header declares {:?}",
-                header.image_id
-            )));
-        }
-
+        // current_image_id is trusted directly once non-sentinel: it's only ever written by
+        // execute_deploy's atomic single-tx fast path (which verifies it against the bytes right
+        // there) or by a signed Finalize (same verification) — never independently re-derived
+        // from the segments on every read here, unlike the pre-upgrade design.
         Ok(Some((
-            header.image_id,
+            header.current_image_id,
             program_loader_core::reconstruct_program_binary(&user_elf),
         )))
     }

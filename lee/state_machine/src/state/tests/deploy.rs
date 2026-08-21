@@ -1,6 +1,6 @@
 use lee_core::{
     account::Data,
-    program::{ProgramData, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID},
+    program::{ProgramData, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, UNFINALIZED_IMAGE_ID},
 };
 
 use super::*;
@@ -18,7 +18,7 @@ fn insert_program_matches_plan_deploy() {
     let plan = program_loader_core::plan_deploy(
         RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
         program.id(),
-        AccountId::default(),
+        None,
         &user_elf,
     );
     assert!(
@@ -68,31 +68,24 @@ fn get_program_returns_none_for_a_missing_segment() {
     assert_eq!(result, None);
 }
 
-/// A corrupted segment's reconstructed `image_id` won't match the header's claim —
-/// `get_program` must reject that distinguishably from plain absence.
+/// A header whose `current_image_id` is still the `UNFINALIZED_IMAGE_ID` sentinel (an in-progress
+/// initial deploy, or an upgrade whose segment writes landed but `Finalize` hasn't run yet) is
+/// treated as absent by `get_program` — trusted directly once non-sentinel, not re-derived from
+/// the segments on every read, so an unfinalized program can't be distinguished from one that was
+/// never deployed at all.
 #[test]
-fn get_program_rejects_a_corrupted_segment() {
+fn get_program_returns_none_while_unfinalized() {
     let program = crate::test_methods::claimer();
     let mut state = V03State::new();
     state.insert_program(&program);
 
-    let first_segment_account_id = program_loader_core::deploy_segment_account_id(
-        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
-        program.id(),
-        0,
-        AccountId::default(),
-    );
-    let mut first_segment = state.public_state[&first_segment_account_id].clone();
-    let mut corrupted = first_segment.data.to_vec();
-    corrupted[0] ^= 0xFF;
-    first_segment.data = corrupted.try_into().unwrap();
-    state
-        .public_state
-        .insert(first_segment_account_id, first_segment);
+    let header_account_id = program.deployed_account_id();
+    let mut header_account = state.public_state[&header_account_id].clone();
+    let mut header_data = ProgramData::try_from(&header_account.data).unwrap();
+    header_data.current_image_id = UNFINALIZED_IMAGE_ID;
+    header_account.data = Data::from(&header_data);
+    state.public_state.insert(header_account_id, header_account);
 
-    let result = state.get_program(program.deployed_account_id());
-    assert!(
-        matches!(result, Err(LeeError::InvalidProgramBytecode(_))),
-        "expected a bytecode-mismatch error, got: {result:?}"
-    );
+    let result = state.get_program(header_account_id).unwrap();
+    assert_eq!(result, None);
 }

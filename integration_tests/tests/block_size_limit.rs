@@ -168,11 +168,15 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
                 if public_tx.message.program_account_id != RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID {
                     return None;
                 }
-                let program_loader_core::Instruction::Deploy { .. } =
+                if !matches!(
                     risc0_zkvm::serde::from_slice::<program_loader_core::Instruction, u32>(
                         &public_tx.message.instruction_data,
                     )
-                    .ok()?;
+                    .ok()?,
+                    program_loader_core::Instruction::Deploy { .. }
+                ) {
+                    return None;
+                }
                 // `raw_payload` carries only `user_elf` (see `Message::raw_payload`'s doc
                 // comment); `Program::new` needs the full two-ELF `ProgramBinary` blob.
                 let user_elf = public_tx.message.raw_payload.clone()?;
