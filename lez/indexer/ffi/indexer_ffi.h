@@ -196,50 +196,6 @@ typedef struct FfiPublicTransactionBody {
 } FfiPublicTransactionBody;
 
 /**
- * Account data structure - C-compatible version of lee Account.
- *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
- * byte arrays since C doesn't have native u128 support.
- */
-typedef struct FfiAccount {
-  struct FfiBytes32 program_owner;
-  /**
-   * Balance as little-endian [u8; 16].
-   */
-  struct FfiU128 balance;
-  /**
-   * Pointer to account data bytes.
-   */
-  uint8_t *data;
-  /**
-   * Length of account data.
-   */
-  uintptr_t data_len;
-  /**
-   * Capacity of account data.
-   */
-  uintptr_t data_cap;
-  /**
-   * Nonce as little-endian [u8; 16].
-   */
-  struct FfiU128 nonce;
-} FfiAccount;
-
-typedef struct FfiAccountWithMetadata {
-  struct FfiAccount account;
-  bool is_authorized;
-  FfiAccountId account_id;
-} FfiAccountWithMetadata;
-
-typedef struct FfiVec_FfiAccountWithMetadata {
-  struct FfiAccountWithMetadata *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiAccountWithMetadata;
-
-typedef struct FfiVec_FfiAccountWithMetadata FfiPublicPreStateList;
-
-/**
  * C-compatible tagged `BalanceDiff`: `is_sub` selects `Sub` over `Add`.
  */
 typedef struct FfiBalanceDiff {
@@ -321,7 +277,6 @@ typedef struct FfiVec_FfiPrivateAction {
 typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
 
 typedef struct FfiPrivacyPreservingMessage {
-  FfiPublicPreStateList public_pre_states;
   FfiPublicDiffList public_diffs;
   FfiNonceList nonces;
   FfiPrivateActionList private_actions;
@@ -388,6 +343,36 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
   FfiBlockOpt *value;
   enum OperationStatus error;
 } PointerResult_FfiBlockOpt__OperationStatus;
+
+/**
+ * Account data structure - C-compatible version of lee Account.
+ *
+ * Note: `balance` and `nonce` are u128 values represented as little-endian
+ * byte arrays since C doesn't have native u128 support.
+ */
+typedef struct FfiAccount {
+  struct FfiProgramId program_owner;
+  /**
+   * Balance as little-endian [u8; 16].
+   */
+  struct FfiU128 balance;
+  /**
+   * Pointer to account data bytes.
+   */
+  uint8_t *data;
+  /**
+   * Length of account data.
+   */
+  uintptr_t data_len;
+  /**
+   * Capacity of account data.
+   */
+  uintptr_t data_cap;
+  /**
+   * Nonce as little-endian [u8; 16].
+   */
+  struct FfiU128 nonce;
+} FfiAccount;
 
 /**
  * Simple wrapper around a pointer to a value or an error.

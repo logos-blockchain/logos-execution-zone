@@ -1,8 +1,10 @@
+use std::collections::HashSet;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction,
     PublicDiff,
-    account::{AccountWithMetadata, Nonce},
+    account::Nonce,
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
 pub use lee_core::{EncryptedAccountData, ViewTag};
@@ -14,7 +16,8 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    pub public_pre_states: Vec<AccountWithMetadata>,
+    /// Raw, per-call, unaggregated diffs for public accounts. See
+    /// `PrivacyPreservingCircuitOutput::public_diffs`.
     pub public_diffs: Vec<PublicDiff>,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,
@@ -46,7 +49,6 @@ impl std::fmt::Debug for Message {
             })
             .collect();
         f.debug_struct("Message")
-            .field("public_pre_states", &self.public_pre_states)
             .field("public_diffs", &self.public_diffs)
             .field("nonces", &self.nonces)
             .field("private_actions", &private_actions)
@@ -61,7 +63,6 @@ impl Message {
     #[must_use]
     pub fn from_circuit_output(nonces: Vec<Nonce>, output: PrivacyPreservingCircuitOutput) -> Self {
         Self {
-            public_pre_states: output.public_pre_states,
             public_diffs: output.public_diffs,
             nonces,
             private_actions: output.private_actions,
@@ -87,15 +88,17 @@ impl Message {
             .collect()
     }
 
-    /// The unique set of public accounts this transaction touches — sourced from
-    /// `public_pre_states`, not `public_diffs`, since a diff can legitimately repeat an account
-    /// (multiple calls touching the same account within one transaction), while a pre-state is
-    /// witnessed exactly once per account.
+    /// The unique set of public accounts this transaction touches. `public_diffs` can
+    /// legitimately repeat an account (multiple calls touching the same account within one
+    /// transaction), so this dedups — callers rely on "each affected account listed once" (see
+    /// `PrivacyPreservingTransaction::affected_public_account_ids`).
     #[must_use]
     pub fn public_account_ids(&self) -> Vec<AccountId> {
-        self.public_pre_states
+        let mut seen = HashSet::new();
+        self.public_diffs
             .iter()
-            .map(|pre| pre.account_id)
+            .map(|diff| diff.account_id)
+            .filter(|id| seen.insert(*id))
             .collect()
     }
 
@@ -120,7 +123,7 @@ pub mod tests {
     use lee_core::{
         Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Nullifier,
         NullifierPublicKey, PrivateAccountKind, PrivateAction, PublicDiff, SharedSecretKey,
-        account::{Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Nonce},
+        account::{Account, AccountDiff, AccountId, BalanceDiff, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
         program::{AccountDiffOutput, BlockValidityWindow, TimestampValidityWindow},
     };
@@ -151,11 +154,6 @@ pub mod tests {
 
         let public_account_id = AccountId::new([1; 32]);
         Message {
-            public_pre_states: vec![AccountWithMetadata::new(
-                Account::default(),
-                false,
-                public_account_id,
-            )],
             public_diffs: vec![PublicDiff {
                 account_id: public_account_id,
                 executing_program_id: [1, 2, 3, 4, 5, 6, 7, 8],
@@ -185,7 +183,6 @@ pub mod tests {
     #[test]
     fn hash_privacy_pinned() {
         let msg = Message {
-            public_pre_states: vec![],
             public_diffs: vec![],
             nonces: vec![Nonce(5)],
             private_actions: vec![],
@@ -201,7 +198,6 @@ pub mod tests {
         let unbounded_window_bytes: &[u8] = &[0, 0];
 
         let expected_borsh_vec: Vec<u8> = [
-            empty_vec_bytes, // public_pre_states
             empty_vec_bytes, // public_diffs
             nonces_bytes,
             empty_vec_bytes,        // private_actions

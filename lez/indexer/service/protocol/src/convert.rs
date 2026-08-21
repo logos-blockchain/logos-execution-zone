@@ -3,11 +3,11 @@
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountDiff, AccountDiffOutput, AccountId, AccountWithMetadata, BalanceDiff,
-    BedrockStatus, Block, BlockBody, BlockHeader, BlockIngestError, Ciphertext, Claim, Commitment,
-    CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData, EphemeralPublicKey, HashType,
-    IndexerStatus, IndexerSyncState, Nullifier, PdaSeed, PeerHealth, PeerStatus,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
+    Account, AccountDiff, AccountDiffOutput, AccountId, BalanceDiff, BedrockStatus, Block,
+    BlockBody, BlockHeader, BlockIngestError, Ciphertext, Claim, Commitment, CommitmentSetDigest,
+    CrossZoneHalt, Data, EncryptedAccountData, EphemeralPublicKey, HashType, IndexerStatus,
+    IndexerSyncState, Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicDiff,
     PublicKey, PublicMessage, PublicTransaction, Signature, StallReason, Transaction,
     ValidityWindow, WitnessSet,
@@ -281,38 +281,6 @@ impl From<PublicMessage> for lee::public_transaction::Message {
     }
 }
 
-impl From<lee_core::account::AccountWithMetadata> for AccountWithMetadata {
-    fn from(value: lee_core::account::AccountWithMetadata) -> Self {
-        let lee_core::account::AccountWithMetadata {
-            account,
-            is_authorized,
-            account_id,
-        } = value;
-        Self {
-            account: account.into(),
-            is_authorized,
-            account_id: account_id.into(),
-        }
-    }
-}
-
-impl TryFrom<AccountWithMetadata> for lee_core::account::AccountWithMetadata {
-    type Error = lee_core::account::data::DataTooBigError;
-
-    fn try_from(value: AccountWithMetadata) -> Result<Self, Self::Error> {
-        let AccountWithMetadata {
-            account,
-            is_authorized,
-            account_id,
-        } = value;
-        Ok(Self {
-            account: account.try_into()?,
-            is_authorized,
-            account_id: account_id.into(),
-        })
-    }
-}
-
 impl From<lee_core::account::BalanceDiff> for BalanceDiff {
     fn from(value: lee_core::account::BalanceDiff) -> Self {
         match value {
@@ -458,7 +426,6 @@ impl From<lee_core::PrivateAction> for PrivateAction {
 impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
     fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
         let lee::privacy_preserving_transaction::message::Message {
-            public_pre_states,
             public_diffs,
             nonces,
             private_actions,
@@ -467,7 +434,6 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             signer_account_ids,
         } = value;
         Self {
-            public_pre_states: public_pre_states.into_iter().map(Into::into).collect(),
             public_diffs: public_diffs.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             private_actions: private_actions.into_iter().map(Into::into).collect(),
@@ -494,7 +460,6 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 
     fn try_from(value: PrivacyPreservingMessage) -> Result<Self, Self::Error> {
         let PrivacyPreservingMessage {
-            public_pre_states,
             public_diffs,
             nonces,
             private_actions,
@@ -503,16 +468,10 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             signer_account_ids,
         } = value;
 
-        let public_pre_states = public_pre_states
-            .into_iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?;
         let public_diffs = public_diffs.into_iter().map(Into::into).collect();
         let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
-            public_pre_states,
             public_diffs,
             nonces: nonces
                 .iter()

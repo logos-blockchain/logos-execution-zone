@@ -21,9 +21,6 @@ use crate::{
 const TOKEN_PROGRAM_ID: ProgramId = [15; 8];
 const AMM_PROGRAM_ID: ProgramId = [42; 8];
 
-/// Builds the `AccountDiff` a program must have emitted to turn `pre` into `expected_post`, for
-/// asserting against `AccountDiffOutput::diff()` in tests that (pre-diff-native-refactor) used to
-/// compare full post-state `Account`s directly.
 struct BalanceForTests;
 struct ChainedCallForTests;
 struct IdForTests;
@@ -1930,6 +1927,9 @@ impl AccountsForExeTests {
     }
 }
 
+/// Builds the `AccountDiff` a program must have emitted to turn `pre` into `expected_post`, for
+/// asserting against `AccountDiffOutput::diff()` in tests that (pre-diff-native-refactor) used to
+/// compare full post-state `Account`s directly.
 fn expected_diff(pre: &AccountWithMetadata, expected_post: &Account) -> AccountDiff {
     let diff_balance = if expected_post.balance >= pre.account.balance {
         BalanceDiff::Add(expected_post.balance - pre.account.balance)

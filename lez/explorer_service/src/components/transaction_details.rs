@@ -68,8 +68,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         witness_set,
     } = tx;
     let PrivacyPreservingMessage {
-        public_pre_states,
-        public_diffs: _,
+        public_diffs,
         nonces,
         private_actions,
         block_validity_window,
@@ -77,10 +76,14 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         signer_account_ids: _,
     } = message;
     let private_action_count = private_actions.len();
-    let public_account_ids: Vec<_> = public_pre_states
-        .into_iter()
-        .map(|pre_state| pre_state.account_id)
-        .collect();
+    let public_account_ids: Vec<_> = {
+        let mut seen = std::collections::HashSet::new();
+        public_diffs
+            .into_iter()
+            .map(|diff| diff.account_id)
+            .filter(|id| seen.insert(*id))
+            .collect()
+    };
     let public_account_count = public_account_ids.len();
     let WitnessSet {
         signatures_and_public_keys: _,

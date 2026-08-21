@@ -438,7 +438,6 @@ fn privacy_garbage_proof_is_rejected() {
     ));
     let commitment = Commitment::new(&account_id, &Account::default());
     let message = Message {
-        public_pre_states: vec![],
         public_diffs: vec![],
         nonces: vec![],
         private_actions: vec![PrivateAction {
@@ -534,7 +533,7 @@ fn privacy_transaction_survives_public_state_changing_after_proving() {
                 },
             }),
         ],
-        &program.clone().into(),
+        &program.into(),
     )
     .expect("execute_and_prove should succeed");
 

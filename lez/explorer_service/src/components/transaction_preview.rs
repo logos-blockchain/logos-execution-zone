@@ -38,9 +38,14 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
                 message,
                 witness_set: _,
             } = tx;
+            let public_account_count: std::collections::HashSet<_> = message
+                .public_diffs
+                .iter()
+                .map(|diff| diff.account_id)
+                .collect();
             format!(
                 "{} public accounts, {} commitments",
-                message.public_pre_states.len(),
+                public_account_count.len(),
                 message.private_actions.len()
             )
         }

@@ -360,7 +360,6 @@ impl ValidatedStateDiff {
         let witness_set = &tx.witness_set;
         let commitments = message.commitments();
         let nullifiers = message.nullifiers();
-        let public_account_ids = message.public_account_ids();
 
         // 1. Commitments or nullifiers are non empty
         ensure!(
@@ -368,12 +367,6 @@ impl ValidatedStateDiff {
             LeeError::InvalidInput(
                 "Empty commitments and empty nullifiers found in message".into(),
             )
-        );
-
-        // 2. Check there are no duplicate account_ids in the public_account_ids list.
-        ensure!(
-            n_unique(&public_account_ids) == public_account_ids.len(),
-            LeeError::InvalidInput("Duplicate account_ids found in message".into())
         );
 
         // Check there are no duplicate nullifiers in the new_nullifiers list
@@ -388,7 +381,7 @@ impl ValidatedStateDiff {
             LeeError::InvalidInput("Duplicate commitments found in message".into())
         );
 
-        // 3. Nonce checks and Valid signatures
+        // 2. Nonce checks and Valid signatures
         // Check exactly one nonce is provided for each signature
         ensure!(
             message.nonces.len() == witness_set.signatures_and_public_keys.len(),
@@ -434,13 +427,13 @@ impl ValidatedStateDiff {
             )
         );
 
-        // 4. Proof verification
+        // 3. Proof verification
         check_privacy_preserving_circuit_proof_is_valid(&witness_set.proof, message)?;
 
-        // 5. Commitment freshness
+        // 4. Commitment freshness
         state.check_commitments_are_new(&commitments)?;
 
-        // 6. Nullifier uniqueness
+        // 5. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
         // Replay each public diff against live state, one at a time — never trusting anything
@@ -619,18 +612,15 @@ fn authenticate_public_transaction_signers(
     Ok(signer_account_ids)
 }
 
-/// Verifies the proof against exactly what the circuit witnessed and output — deliberately *not*
-/// reconciled against live sequencer state for public accounts. Reconciling `public_pre_states`
-/// against live state here is exactly the race condition `AccountDiff` exists to avoid: it would
-/// tie this proof's validity to a specific public-account snapshot, invalidating it the moment
-/// that account changes before this transaction is processed. Materialization (which *does* use
-/// live state) happens separately, later, via `message.public_diffs`.
+/// Verifies the proof against exactly what the circuit witnessed and output. Public account
+/// pre-states are a circuit-internal secret witness never committed to the journal at all, so
+/// there is nothing here to reconcile against live state in the first place. Materialization
+/// (which *does* use live state) happens separately, later, via `message.public_diffs`.
 fn check_privacy_preserving_circuit_proof_is_valid(
     proof: &Proof,
     message: &Message,
 ) -> Result<(), LeeError> {
     let output = PrivacyPreservingCircuitOutput {
-        public_pre_states: message.public_pre_states.clone(),
         public_diffs: message.public_diffs.clone(),
         private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,

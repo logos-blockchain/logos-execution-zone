@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{AccountId, AccountWithMetadata, Data},
+    account::{AccountId, Data},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     program::{
         AccountDiffOutput, BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput,
@@ -194,9 +194,6 @@ pub struct PublicDiff {
 #[derive(Serialize, Deserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
 pub struct PrivacyPreservingCircuitOutput {
-    /// What the circuit witnessed as each public account's pre-state, used only to check the
-    /// proof is internally consistent — never reconciled against live state.
-    pub public_pre_states: Vec<AccountWithMetadata>,
     pub public_diffs: Vec<PublicDiff>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
@@ -240,35 +237,13 @@ mod tests {
     use super::*;
     use crate::{
         Commitment, Nullifier,
-        account::{Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Nonce},
+        account::{Account, AccountDiff, AccountId, BalanceDiff},
         encryption::{Ciphertext, EphemeralPublicKey},
     };
 
     #[test]
     fn privacy_preserving_circuit_output_to_bytes_is_compatible_with_from_slice() {
         let output = PrivacyPreservingCircuitOutput {
-            public_pre_states: vec![
-                AccountWithMetadata::new(
-                    Account {
-                        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-                        balance: 12_345_678_901_234_567_890,
-                        data: b"test data".to_vec().try_into().unwrap(),
-                        nonce: Nonce(0xFFFF_FFFF_FFFF_FFFE),
-                    },
-                    true,
-                    AccountId::new([0; 32]),
-                ),
-                AccountWithMetadata::new(
-                    Account {
-                        program_owner: [9, 9, 9, 8, 8, 8, 7, 7].into(),
-                        balance: 123_123_123_456_456_567_112,
-                        data: b"test data".to_vec().try_into().unwrap(),
-                        nonce: Nonce(9_999_999_999_999_999_999_999),
-                    },
-                    false,
-                    AccountId::new([1; 32]),
-                ),
-            ],
             public_diffs: vec![
                 PublicDiff {
                     account_id: AccountId::new([0; 32]),

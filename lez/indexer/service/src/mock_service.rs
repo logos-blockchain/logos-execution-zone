@@ -9,9 +9,9 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use indexer_service_protocol::{
-    Account, AccountDiff, AccountDiffOutput, AccountId, AccountWithMetadata, BalanceDiff,
-    BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment, CommitmentSetDigest, Data,
-    EncryptedAccountData, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
+    Account, AccountDiff, AccountDiffOutput, AccountId, BalanceDiff, BedrockStatus, Block,
+    BlockBody, BlockHeader, BlockId, Commitment, CommitmentSetDigest, Data, EncryptedAccountData,
+    HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
     ProgramDeploymentTransaction, ProgramId, PublicDiff, PublicMessage, PublicTransaction,
     Signature, Transaction, ValidityWindow, WitnessSet,
@@ -305,9 +305,9 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                     Transaction::Public(pub_tx) => pub_tx.message.account_ids.contains(&account_id),
                     Transaction::PrivacyPreserving(priv_tx) => priv_tx
                         .message
-                        .public_pre_states
+                        .public_diffs
                         .iter()
-                        .any(|pre_state| pre_state.account_id == account_id),
+                        .any(|diff| diff.account_id == account_id),
                     Transaction::ProgramDeployment(_) => false,
                 })
                 .cloned()
@@ -389,16 +389,6 @@ fn mock_privacy_preserving_tx(
     Transaction::PrivacyPreserving(PrivacyPreservingTransaction {
         hash: tx_hash,
         message: PrivacyPreservingMessage {
-            public_pre_states: vec![AccountWithMetadata {
-                account: Account {
-                    program_owner: AccountId { value: [1_u8; 32] },
-                    balance: 500,
-                    data: Data(vec![0xdd, 0xee]),
-                    nonce: block_id as u128,
-                },
-                is_authorized: true,
-                account_id: public_account_id,
-            }],
             public_diffs: vec![PublicDiff {
                 account_id: public_account_id,
                 executing_program_id: ProgramId([1_u32; 8]),

@@ -1,7 +1,7 @@
 use indexer_service_protocol::{
-    AccountDiff, AccountDiffOutput, AccountId, AccountWithMetadata, BalanceDiff, Ciphertext, Claim,
-    Commitment, CommitmentSetDigest, EncryptedAccountData, EphemeralPublicKey, HashType, Nullifier,
-    PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
+    AccountDiff, AccountDiffOutput, AccountId, BalanceDiff, Ciphertext, Claim, Commitment,
+    CommitmentSetDigest, EncryptedAccountData, EphemeralPublicKey, HashType, Nullifier, PdaSeed,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicDiff,
     PublicKey, PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow,
     WitnessSet,
@@ -10,11 +10,9 @@ use indexer_service_protocol::{
 use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature,
     FfiU128, FfiVec,
-    account::FfiAccount,
     vectors::{
         FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList,
-        FfiProgramDeploymentMessage, FfiProof, FfiPublicDiffList, FfiPublicPreStateList,
-        FfiSignaturePubKeyList, FfiVecU8,
+        FfiProgramDeploymentMessage, FfiProof, FfiPublicDiffList, FfiSignaturePubKeyList, FfiVecU8,
     },
 };
 
@@ -159,10 +157,6 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PrivacyPreservingMessage {
-                public_pre_states: {
-                    let std_vec: Vec<_> = value.message.public_pre_states.into();
-                    std_vec.into_iter().map(Into::into).collect()
-                },
                 public_diffs: {
                     let std_vec: Vec<_> = value.message.public_diffs.into();
                     std_vec.into_iter().map(Into::into).collect()
@@ -219,46 +213,6 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         .collect()
                 },
                 proof: Some(Proof(value.proof.into())),
-            },
-        }
-    }
-}
-
-#[repr(C)]
-pub struct FfiAccountWithMetadata {
-    pub account: FfiAccount,
-    pub is_authorized: bool,
-    pub account_id: FfiAccountId,
-}
-
-impl From<AccountWithMetadata> for FfiAccountWithMetadata {
-    fn from(value: AccountWithMetadata) -> Self {
-        let AccountWithMetadata {
-            account,
-            is_authorized,
-            account_id,
-        } = value;
-        let account: lee::Account = account.try_into().expect("Source is in blocks, must fit");
-        Self {
-            account: account.into(),
-            is_authorized,
-            account_id: account_id.into(),
-        }
-    }
-}
-
-impl From<FfiAccountWithMetadata> for AccountWithMetadata {
-    fn from(value: FfiAccountWithMetadata) -> Self {
-        let FfiAccountWithMetadata {
-            account,
-            is_authorized,
-            account_id,
-        } = value;
-        Self {
-            account: account.into(),
-            is_authorized,
-            account_id: AccountId {
-                value: account_id.data,
             },
         }
     }
@@ -470,7 +424,6 @@ impl From<PrivateAction> for FfiPrivateAction {
 
 #[repr(C)]
 pub struct FfiPrivacyPreservingMessage {
-    pub public_pre_states: FfiPublicPreStateList,
     pub public_diffs: FfiPublicDiffList,
     pub nonces: FfiNonceList,
     pub private_actions: FfiPrivateActionList,
@@ -482,7 +435,6 @@ pub struct FfiPrivacyPreservingMessage {
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
     fn from(value: PrivacyPreservingMessage) -> Self {
         let PrivacyPreservingMessage {
-            public_pre_states,
             public_diffs,
             nonces,
             private_actions,
@@ -492,11 +444,6 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
         } = value;
 
         Self {
-            public_pre_states: public_pre_states
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
             public_diffs: public_diffs
                 .into_iter()
                 .map(Into::into)

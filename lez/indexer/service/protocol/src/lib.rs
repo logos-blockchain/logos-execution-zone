@@ -255,13 +255,6 @@ pub struct PublicMessage {
 
 pub type InstructionData = Vec<u32>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct AccountWithMetadata {
-    pub account: Account,
-    pub is_authorized: bool,
-    pub account_id: AccountId,
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum BalanceDiff {
     Add(u128),
@@ -319,7 +312,6 @@ pub struct PrivateAction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PrivacyPreservingMessage {
-    pub public_pre_states: Vec<AccountWithMetadata>,
     pub public_diffs: Vec<PublicDiff>,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,

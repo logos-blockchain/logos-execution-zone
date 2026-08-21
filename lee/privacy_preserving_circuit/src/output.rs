@@ -24,7 +24,6 @@ pub fn compute_circuit_output(
         states_iter,
     ) = execution_state.into_parts();
     let mut output = PrivacyPreservingCircuitOutput {
-        public_pre_states: Vec::new(),
         public_diffs,
         private_actions: Vec::new(),
         block_validity_window,
@@ -43,7 +42,9 @@ pub fn compute_circuit_output(
     {
         match account_identity {
             InputAccountIdentity::Public => {
-                output.public_pre_states.push(pre_state);
+                // No longer exported: `pre_state` for public accounts is now witness-only. This
+                // account's effect is captured entirely by `execution_state`'s `public_diffs`
+                // (already merged into `output` above via `into_parts`).
             }
             InputAccountIdentity::Private(PrivateWitness {
                 vpk,
