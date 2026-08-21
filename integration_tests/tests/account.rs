@@ -4,7 +4,10 @@
 )]
 
 use anyhow::{Context as _, Result};
-use integration_tests::{TestContext, get_account, new_account, private_mention};
+use integration_tests::{
+    TestContext, private_mention,
+    utils::{get_account, new_account},
+};
 use key_protocol::key_management::KeyChain;
 use lee::Data;
 use lee_core::account::Nonce;
@@ -26,7 +29,7 @@ async fn get_existing_account() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
@@ -146,7 +149,7 @@ async fn import_private_account() -> Result<()> {
         0,
     ));
     let account = lee::Account {
-        program_owner: programs::authenticated_transfer().id(),
+        program_owner: programs::authenticated_transfer().id().into(),
         balance: 777,
         data: Data::default(),
         nonce: Nonce::default(),
@@ -210,7 +213,7 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;
 
     let initial_account = lee::Account {
-        program_owner: programs::authenticated_transfer().id(),
+        program_owner: programs::authenticated_transfer().id().into(),
         balance: 100,
         data: Data::default(),
         nonce: Nonce::default(),
@@ -229,7 +232,7 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     .await?;
 
     let updated_account = lee::Account {
-        program_owner: programs::authenticated_transfer().id(),
+        program_owner: programs::authenticated_transfer().id().into(),
         balance: 999,
         data: Data::default(),
         nonce: Nonce::default(),

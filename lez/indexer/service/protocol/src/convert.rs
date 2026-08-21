@@ -4,11 +4,12 @@ use lee_core::account::Nonce;
 
 use crate::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockIngestError, Ciphertext,
-    Commitment, CommitmentSetDigest, Data, EncryptedAccountData, EphemeralPublicKey, HashType,
-    IndexerStatus, IndexerSyncState, Nullifier, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
-    ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
-    PublicTransaction, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData, EphemeralPublicKey,
+    HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
+    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID,
+    PublicKey, PublicMessage, PublicTransaction, Signature, StallReason, Transaction,
+    ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -741,12 +742,68 @@ impl TryFrom<ValidityWindow> for lee_core::program::ValidityWindow<u64> {
 
 impl From<indexer_core::status::IndexerSyncState> for IndexerSyncState {
     fn from(value: indexer_core::status::IndexerSyncState) -> Self {
+        // `Unknown` is a decode-side fallback for clients only; converting
+        // from the core enum is exhaustive and never produces it.
         match value {
             indexer_core::status::IndexerSyncState::Starting => Self::Starting,
             indexer_core::status::IndexerSyncState::Syncing => Self::Syncing,
             indexer_core::status::IndexerSyncState::CaughtUp => Self::CaughtUp,
             indexer_core::status::IndexerSyncState::Error => Self::Error,
             indexer_core::status::IndexerSyncState::Stalled => Self::Stalled,
+            indexer_core::status::IndexerSyncState::Halted => Self::Halted,
+        }
+    }
+}
+
+impl From<indexer_core::status::CrossZoneHalt> for CrossZoneHalt {
+    fn from(value: indexer_core::status::CrossZoneHalt) -> Self {
+        let indexer_core::status::CrossZoneHalt {
+            block_id,
+            block_hash,
+            src_zone,
+            src_block_id,
+            src_tx_index,
+            verdict,
+        } = value;
+
+        Self {
+            block_id,
+            block_hash: block_hash.into(),
+            src_zone,
+            src_block_id,
+            src_tx_index,
+            verdict,
+        }
+    }
+}
+
+impl From<indexer_core::status::PeerHealth> for PeerHealth {
+    fn from(value: indexer_core::status::PeerHealth) -> Self {
+        match value {
+            indexer_core::status::PeerHealth::Live => Self::Live,
+            indexer_core::status::PeerHealth::Lagging => Self::Lagging,
+            indexer_core::status::PeerHealth::Holed => Self::Holed,
+            indexer_core::status::PeerHealth::Halted => Self::Halted,
+        }
+    }
+}
+
+impl From<indexer_core::status::PeerStatus> for PeerStatus {
+    fn from(value: indexer_core::status::PeerStatus) -> Self {
+        let indexer_core::status::PeerStatus {
+            zone,
+            verified_tip_block_id,
+            cursor_slot,
+            stuck_slot_attempts,
+            health,
+        } = value;
+
+        Self {
+            zone,
+            verified_tip_block_id,
+            cursor_slot,
+            stuck_slot_attempts,
+            health: health.into(),
         }
     }
 }
@@ -815,6 +872,8 @@ impl From<indexer_core::status::IndexerStatus> for IndexerStatus {
             sync,
             indexed_block_id,
             stall_reason,
+            cross_zone_halt,
+            cross_zone_peers,
         } = value;
 
         Self {
@@ -822,6 +881,8 @@ impl From<indexer_core::status::IndexerStatus> for IndexerStatus {
             last_error: sync.last_error,
             indexed_block_id,
             stall_reason: stall_reason.map(Into::into),
+            cross_zone_halt: cross_zone_halt.map(Into::into),
+            cross_zone_peers: cross_zone_peers.into_iter().map(Into::into).collect(),
         }
     }
 }

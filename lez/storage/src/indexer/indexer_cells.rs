@@ -7,7 +7,7 @@ use crate::{
     error::DbError,
     indexer::{
         ACC_NUM_CELL_NAME, BLOCK_HASH_CELL_NAME, BREAKPOINT_CELL_NAME, CF_ACC_META,
-        CF_BREAKPOINT_NAME, CF_HASH_TO_ID, CF_TX_TO_ID,
+        CF_BREAKPOINT_NAME, CF_HASH_TO_ID, CF_TX_TO_ID, DB_META_CROSS_ZONE_HALT_KEY,
         DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, DB_META_STALL_REASON_KEY,
         DB_META_TIP_SLOT_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY, TX_HASH_CELL_NAME,
     },
@@ -279,11 +279,47 @@ impl SimpleWritableCell for StallReasonCellRef<'_> {
     }
 }
 
+/// Opaque JSON bytes for the indexer's persisted cross-zone halt record.
+#[derive(BorshDeserialize)]
+pub struct CrossZoneHaltCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for CrossZoneHaltCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_CROSS_ZONE_HALT_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for CrossZoneHaltCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct CrossZoneHaltCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for CrossZoneHaltCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_CROSS_ZONE_HALT_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for CrossZoneHaltCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize cross-zone halt cell".to_owned()),
+            )
+        })
+    }
+}
+
 #[cfg(test)]
 mod uniform_tests {
     use crate::{
         cells::SimpleStorableCell as _,
-        indexer::indexer_cells::{BreakpointCellOwned, BreakpointCellRef},
+        indexer::indexer_cells::{
+            BreakpointCellOwned, BreakpointCellRef, CrossZoneHaltCellOwned, CrossZoneHaltCellRef,
+        },
     };
 
     #[test]
@@ -293,6 +329,18 @@ mod uniform_tests {
         assert_eq!(
             BreakpointCellRef::key_constructor(1000).unwrap(),
             BreakpointCellOwned::key_constructor(1000).unwrap()
+        );
+    }
+
+    #[test]
+    fn cross_zone_halt_ref_and_owned_is_aligned() {
+        assert_eq!(
+            CrossZoneHaltCellRef::CELL_NAME,
+            CrossZoneHaltCellOwned::CELL_NAME
+        );
+        assert_eq!(
+            CrossZoneHaltCellRef::CF_NAME,
+            CrossZoneHaltCellOwned::CF_NAME
         );
     }
 }

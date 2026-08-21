@@ -19,7 +19,7 @@ fn main() {
 
     let account_pre = &pre.account;
     let mut account_post = account_pre.clone();
-    account_post.program_owner = [0, 1, 2, 3, 4, 5, 6, 7];
+    account_post.program_owner = [0, 1, 2, 3, 4, 5, 6, 7].into();
 
     ProgramOutput::new(
         self_program_id,

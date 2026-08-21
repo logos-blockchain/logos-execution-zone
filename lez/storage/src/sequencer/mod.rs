@@ -10,23 +10,25 @@ use common::{
     block::{BedrockStatus, Block, BlockMeta},
 };
 use lee::V03State;
+use log::info;
 use rocksdb::{
-    BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, IteratorMode, MultiThreaded,
-    Options, WriteBatch,
+    BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, Direction, IteratorMode,
+    MultiThreaded, Options, WriteBatch,
 };
 
 use crate::{
-    CF_BLOCK_NAME, CF_META_NAME, DB_META_FIRST_BLOCK_IN_DB_KEY, DBIO, DbResult,
+    CF_BLOCK_NAME, CF_META_NAME, DBIO, DbResult,
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     error::DbError,
     sequencer::sequencer_cells::{
         DeadLetterCrossZoneDispatchCountCell, DeadLetterCrossZoneDispatchesCellOwned,
         DeadLetterCrossZoneDispatchesCellRef, DeadLetterDispatchRecord, DispatchOrigin,
         FinalBlockMetaCellOwned, FinalBlockMetaCellRef, FinalLeeStateCellOwned,
-        FinalLeeStateCellRef, LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell,
-        LatestBlockMetaCellOwned, LatestBlockMetaCellRef, PeerChainTip, PeerFloorCellOwned,
-        PeerFloorCellRef, PeerTipCell, PeerZoneKey, PendingCrossZoneDispatchRecord,
-        PendingCrossZoneDispatchesCellOwned, PendingCrossZoneDispatchesCellRef,
+        FinalLeeStateCellRef, LEEStateCellOwned, LEEStateCellRef, LatestBlockMetaCellOwned,
+        LatestBlockMetaCellRef, LegacyPendingCrossZoneDispatchesCellOwned, PeerChainTip,
+        PeerFloorCellOwned, PeerFloorCellRef, PeerTipCell, PeerZoneKey,
+        PendingCrossZoneDispatchCellOwned, PendingCrossZoneDispatchCellRef,
+        PendingCrossZoneDispatchCountCell, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, PendingDepositEventsCellOwned, PendingDepositEventsCellRef,
         PublishedHighWaterCell, UnseenWithdrawCountCell, WithdrawalReconciliationKey,
         ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
@@ -54,8 +56,13 @@ pub const DB_META_CROSS_ZONE_PEER_FLOOR_KEY: &str = "cross_zone_peer_floor";
 /// Key base for storing the last peer block a cross-zone watcher delivered
 /// from, as an id and hash pair. Keyed per peer zone.
 pub const DB_META_CROSS_ZONE_PEER_TIP_KEY: &str = "cross_zone_peer_tip";
-/// Key base for storing cross-zone deliveries the watcher has recorded but
-/// which are not yet known to be irreversibly delivered.
+/// Key base for storing one cross-zone delivery the watcher has recorded but
+/// which is not yet known to be irreversibly delivered. Keyed per message.
+pub const DB_META_PENDING_CROSS_ZONE_DISPATCH_KEY: &str = "pending_cross_zone_dispatch";
+/// Key base for counting the pending cross-zone dispatch records.
+pub const DB_META_PENDING_CROSS_ZONE_DISPATCH_COUNT_KEY: &str = "pending_cross_zone_dispatch_count";
+/// Key base under which older stores held the whole pending set as one borsh
+/// blob; kept only for migration on open.
 pub const DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY: &str = "pending_cross_zone_dispatches";
 /// Key base for storing cross-zone deliveries this node has given up on.
 pub const DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCHES_KEY: &str = "dead_letter_cross_zone_dispatches";
@@ -74,11 +81,10 @@ pub const DB_META_PUBLISHED_HIGH_WATER_KEY: &str = "published_high_water";
 
 /// How many cross-zone deliveries may be pending at once.
 ///
-/// The whole list is a single value, read on every block and rewritten on every
-/// change, and what fills it is chosen by peer zones rather than by us. Refusing
-/// to record past this bound turns "a peer decides how large our store gets"
-/// into "a peer's messages wait", since a watcher that cannot record holds its
-/// delivery floor and reads the slot again later.
+/// What fills the pending set is chosen by peer zones rather than by us.
+/// Refusing to record past this bound turns "a peer decides how large our
+/// store gets" into "a peer's messages wait", since a watcher that cannot
+/// record holds its delivery floor and reads the slot again later.
 pub const MAX_PENDING_CROSS_ZONE_DISPATCHES: usize = 4096;
 
 /// How many given-up-on cross-zone deliveries are kept for inspection.
@@ -238,13 +244,11 @@ pub struct StoreUpdateOutcome {
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,
     /// Serializes the read-modify-write cycles over the pending cross-zone
-    /// dispatch list.
+    /// dispatch records and their count cell.
     ///
-    /// The list is a single value holding the whole `Vec`, and three tasks
-    /// rewrite it: the watcher recording a delivery, the production loop
-    /// counting a failed attempt, and the publisher's drive task settling
-    /// finalized deliveries. Rocksdb makes the write atomic, not the cycle, so
-    /// without this the writer that read first silently drops the others.
+    /// Three tasks mutate them (watcher, production loop, publisher drive);
+    /// rocksdb makes each staged batch atomic, not the cycle, so without this
+    /// two interleaved writers drift the count away from the entries.
     pending_records: Mutex<()>,
 }
 
@@ -258,42 +262,23 @@ impl RocksDBIO {
     /// Held across a pending-record read-modify-write. See
     /// [`RocksDBIO::pending_records`].
     ///
-    /// A poisoned lock is recovered rather than propagated: the records behind
-    /// it are a plain `Vec` that a panicking writer cannot leave half-written,
-    /// since the write is a single rocksdb put.
+    /// Poison is recovered: every mutation is one rocksdb write, so a panic
+    /// tears nothing.
     fn lock_pending_records(&self) -> MutexGuard<'_, ()> {
         self.pending_records
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub fn open(path: &Path) -> DbResult<Self> {
-        let db_opts = Options::default();
-        Self::open_inner(path, &db_opts)
-    }
-
-    pub fn create(path: &Path, genesis_block: &Block, genesis_state: &V03State) -> DbResult<Self> {
+    /// Opens the database at `path`, creating an empty one when there is none.
+    ///
+    /// An empty one holds no chain: every read of the first or last block fails
+    /// until [`Self::write_genesis`] seeds it.
+    pub fn open_or_create(path: &Path) -> DbResult<Self> {
         let mut db_opts = Options::default();
         db_opts.create_missing_column_families(true);
         db_opts.create_if_missing(true);
-        let dbio = Self::open_inner(path, &db_opts)?;
-
-        let is_start_set = dbio.get_meta_is_first_block_set()?;
-        if !is_start_set {
-            let block_id = genesis_block.header.block_id;
-            // TODO: Shouldn't this be atomic (batched)?
-            dbio.put_meta_first_block_in_db(genesis_block)?;
-            dbio.put_meta_is_first_block_set()?;
-            dbio.put_meta_last_block_in_db(block_id)?;
-            dbio.put_meta_last_finalized_block_id(None)?;
-            dbio.put_meta_latest_block_meta(&BlockMeta {
-                id: genesis_block.header.block_id,
-                hash: genesis_block.header.hash,
-            })?;
-            dbio.put_lee_state_in_db(genesis_state)?;
-        }
-
-        Ok(dbio)
+        Self::open_inner(path, &db_opts)
     }
 
     /// Dump every key/value pair across all column families into a [`DbDump`]. Column families are
@@ -357,6 +342,7 @@ impl RocksDBIO {
                 Some("Failed to write dump restore batch".to_owned()),
             )
         })?;
+        dbio.migrate_legacy_pending_dispatches()?;
 
         Ok(dbio)
     }
@@ -384,7 +370,75 @@ impl RocksDBIO {
             db,
             pending_records: Mutex::new(()),
         };
+        dbio.migrate_legacy_pending_dispatches()?;
         Ok(dbio)
+    }
+
+    /// Rewrites a legacy whole-vector pending-dispatch blob into per-message
+    /// entries plus the count cell, then drops the blob, in one batch.
+    ///
+    /// Runs on every open, and again after a dump restore, since a restored
+    /// dump lands after the open-time pass. Without the legacy key it is a
+    /// no-op read.
+    fn migrate_legacy_pending_dispatches(&self) -> DbResult<()> {
+        let legacy = self
+            .get_opt::<LegacyPendingCrossZoneDispatchesCellOwned>(())
+            .map_err(|err| {
+                DbError::db_interaction_error(format!(
+                    "Legacy pending-dispatch blob at key {DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY:?} does not decode; delete that key to start without it: {err}"
+                ))
+            })?;
+        let Some(legacy) = legacy else {
+            return Ok(());
+        };
+        let records = legacy.0;
+
+        let mut batch = WriteBatch::default();
+        self.del_batch::<LegacyPendingCrossZoneDispatchesCellOwned>((), &mut batch)?;
+        // Folded additively: a restored blob may land on a store that already
+        // migrated and drained, so writing the blob's own length (or zero, for
+        // an empty blob) would clobber the live count and the cap would stop
+        // bounding what the store holds.
+        let mut inserted: u64 = 0;
+        if !records.is_empty() {
+            for record in &records {
+                if self
+                    .get_opt::<PendingCrossZoneDispatchCellOwned>(record.message_key)?
+                    .is_some()
+                {
+                    continue;
+                }
+                self.put_batch(
+                    &PendingCrossZoneDispatchCellRef(record),
+                    record.message_key,
+                    &mut batch,
+                )?;
+                inserted = inserted.saturating_add(1);
+            }
+            if inserted > 0 {
+                let existing = self
+                    .get_opt::<PendingCrossZoneDispatchCountCell>(())?
+                    .map_or(0, |cell| cell.0);
+                self.put_batch(
+                    &PendingCrossZoneDispatchCountCell(existing.saturating_add(inserted)),
+                    (),
+                    &mut batch,
+                )?;
+            }
+        }
+        self.db.write(batch).map_err(|rerr| {
+            DbError::rocksdb_cast_message(
+                rerr,
+                Some("Failed to migrate legacy pending cross-zone dispatches".to_owned()),
+            )
+        })?;
+
+        if inserted > 0 {
+            info!(
+                "Migrated {inserted} pending cross-zone dispatch record(s) into per-message entries"
+            );
+        }
+        Ok(())
     }
 
     pub fn destroy(path: &Path) -> DbResult<()> {
@@ -424,20 +478,20 @@ impl RocksDBIO {
 
     // Meta
 
-    pub fn get_meta_first_block_in_db(&self) -> DbResult<u64> {
-        self.get::<FirstBlockCell>(()).map(|cell| cell.0)
+    /// The id of the chain's first block, or `None` when this database holds no
+    /// chain yet — nothing has written a genesis into it.
+    pub fn get_meta_first_block_in_db(&self) -> DbResult<Option<u64>> {
+        Ok(self.get_opt::<FirstBlockCell>(())?.map(|cell| cell.0))
     }
 
-    pub fn get_meta_last_block_in_db(&self) -> DbResult<u64> {
-        self.get::<LastBlockCell>(()).map(|cell| cell.0)
+    /// The id of the chain's last block, or `None` when this database holds no
+    /// chain yet.
+    pub fn get_meta_last_block_in_db(&self) -> DbResult<Option<u64>> {
+        Ok(self.get_opt::<LastBlockCell>(())?.map(|cell| cell.0))
     }
 
     pub fn get_meta_is_first_block_set(&self) -> DbResult<bool> {
         Ok(self.get_opt::<FirstBlockSetCell>(())?.is_some())
-    }
-
-    pub fn put_lee_state_in_db(&self, state: &V03State) -> DbResult<()> {
-        self.put(&LEEStateCellRef(state), ())
     }
 
     pub fn put_lee_state_in_db_batch(
@@ -448,42 +502,6 @@ impl RocksDBIO {
         self.put_batch(&LEEStateCellRef(state), (), batch)
     }
 
-    pub fn put_meta_first_block_in_db(&self, block: &Block) -> DbResult<()> {
-        let cf_meta = self.meta_column();
-        self.db
-            .put_cf(
-                &cf_meta,
-                borsh::to_vec(&DB_META_FIRST_BLOCK_IN_DB_KEY).map_err(|err| {
-                    DbError::borsh_cast_message(
-                        err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_owned()),
-                    )
-                })?,
-                borsh::to_vec(&block.header.block_id).map_err(|err| {
-                    DbError::borsh_cast_message(
-                        err,
-                        Some("Failed to serialize first block id".to_owned()),
-                    )
-                })?,
-            )
-            .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
-
-        let mut batch = WriteBatch::default();
-        self.put_block(block, true, &mut batch)?;
-        self.db.write(batch).map_err(|rerr| {
-            DbError::rocksdb_cast_message(
-                rerr,
-                Some("Failed to write first block in db".to_owned()),
-            )
-        })?;
-
-        Ok(())
-    }
-
-    pub fn put_meta_last_block_in_db(&self, block_id: u64) -> DbResult<()> {
-        self.put(&LastBlockCell(block_id), ())
-    }
-
     fn put_meta_last_block_in_db_batch(
         &self,
         block_id: u64,
@@ -492,16 +510,13 @@ impl RocksDBIO {
         self.put_batch(&LastBlockCell(block_id), (), batch)
     }
 
-    pub fn put_meta_last_finalized_block_id(&self, block_id: Option<u64>) -> DbResult<()> {
-        self.put(&LastFinalizedBlockIdCell(block_id), ())
-    }
-
-    pub fn put_meta_is_first_block_set(&self) -> DbResult<()> {
-        self.put(&FirstBlockSetCell(true), ())
-    }
-
-    fn put_meta_latest_block_meta(&self, block_meta: &BlockMeta) -> DbResult<()> {
-        self.put(&LatestBlockMetaCellRef(block_meta), ())
+    fn put_meta_first_block_in_db_batch(
+        &self,
+        block_id: u64,
+        batch: &mut WriteBatch,
+    ) -> DbResult<()> {
+        self.put_batch(&FirstBlockCell(block_id), (), batch)?;
+        self.put_batch(&FirstBlockSetCell(true), (), batch)
     }
 
     fn put_meta_latest_block_meta_batch(
@@ -703,27 +718,62 @@ impl RocksDBIO {
         self.del::<PeerFloorCellOwned>(peer_zone)
     }
 
+    /// Every pending cross-zone dispatch record, in message-key byte order:
+    /// no insertion order survives. Lock-free, so a read racing a mutation
+    /// sees either side.
     pub fn get_pending_cross_zone_dispatches(
         &self,
     ) -> DbResult<Vec<PendingCrossZoneDispatchRecord>> {
+        let prefix = Self::pending_dispatch_key_prefix()?;
+        let cf_meta = self.meta_column();
+
+        let mut records = Vec::new();
+        for item in self
+            .db
+            .iterator_cf(&cf_meta, IteratorMode::From(&prefix, Direction::Forward))
+        {
+            let (key, value) = item.map_err(|rerr| {
+                DbError::rocksdb_cast_message(
+                    rerr,
+                    Some("Failed to scan pending cross-zone dispatches".to_owned()),
+                )
+            })?;
+            // Keys sharing the prefix are one contiguous range, so the first
+            // stranger ends the scan.
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            records.push(
+                borsh::from_slice::<PendingCrossZoneDispatchRecord>(&value).map_err(|err| {
+                    DbError::borsh_cast_message(
+                        err,
+                        Some("Failed to deserialize pending cross-zone dispatch".to_owned()),
+                    )
+                })?,
+            );
+        }
+        Ok(records)
+    }
+
+    /// The byte prefix every per-message pending-dispatch key starts with: a
+    /// borsh `(name, message_key)` tuple key opens with the length-prefixed
+    /// name alone, which no other meta cell's key shares (asserted in the cell
+    /// tests).
+    fn pending_dispatch_key_prefix() -> DbResult<Vec<u8>> {
+        borsh::to_vec(&DB_META_PENDING_CROSS_ZONE_DISPATCH_KEY).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize pending cross-zone dispatch key prefix".to_owned()),
+            )
+        })
+    }
+
+    /// The persisted pending-record count; see
+    /// [`PendingCrossZoneDispatchCountCell`].
+    fn get_pending_cross_zone_dispatch_count(&self) -> DbResult<u64> {
         Ok(self
-            .get_opt::<PendingCrossZoneDispatchesCellOwned>(())?
-            .map_or_else(Vec::new, |cell| cell.0))
-    }
-
-    fn put_pending_cross_zone_dispatches(
-        &self,
-        records: &[PendingCrossZoneDispatchRecord],
-    ) -> DbResult<()> {
-        self.put(&PendingCrossZoneDispatchesCellRef(records), ())
-    }
-
-    fn put_pending_cross_zone_dispatches_batch(
-        &self,
-        records: &[PendingCrossZoneDispatchRecord],
-        batch: &mut WriteBatch,
-    ) -> DbResult<()> {
-        self.put_batch(&PendingCrossZoneDispatchesCellRef(records), (), batch)
+            .get_opt::<PendingCrossZoneDispatchCountCell>(())?
+            .map_or(0, |cell| cell.0))
     }
 
     /// Records every delivery one peer block carries, in a single write.
@@ -731,14 +781,13 @@ impl RocksDBIO {
     /// Returns how many were new. Ones already recorded are skipped, so a slot
     /// the watcher re-reads is not double-tracked.
     ///
-    /// Batched rather than one call per delivery because the whole list is one
-    /// value: recording a block's messages one at a time rewrites the list once
-    /// per message, which is quadratic in a block that carries many.
+    /// All-or-nothing per peer block: recording is what lets the caller move
+    /// its delivery floor past the block, so either every delivery becomes
+    /// durable or none does and the floor holds.
     ///
-    /// Fails without writing anything if the list would exceed
-    /// [`MAX_PENDING_CROSS_ZONE_DISPATCHES`]. The caller's floor then stays put
-    /// and the slot is read again later, which is the difference between
-    /// backpressure and an unbounded list a peer controls the size of.
+    /// Fails without writing anything if the pending set would exceed
+    /// [`MAX_PENDING_CROSS_ZONE_DISPATCHES`]; see the cap for why refusal is
+    /// backpressure.
     pub fn add_pending_cross_zone_dispatches(
         &self,
         dispatches: Vec<PendingCrossZoneDispatchRecord>,
@@ -748,30 +797,52 @@ impl RocksDBIO {
         }
 
         let _pending = self.lock_pending_records();
-        let mut records = self.get_pending_cross_zone_dispatches()?;
-        let before = records.len();
 
+        // Deduped against the store by point-get, never a scan, and against the
+        // offer itself, which may repeat a key.
+        let mut offered_keys = std::collections::HashSet::<[u8; 32]>::new();
+        let mut new_records: Vec<PendingCrossZoneDispatchRecord> = Vec::new();
         for dispatch in dispatches {
-            if records
-                .iter()
-                .any(|record| record.message_key == dispatch.message_key)
+            if !offered_keys.insert(dispatch.message_key) {
+                continue;
+            }
+            if self
+                .get_opt::<PendingCrossZoneDispatchCellOwned>(dispatch.message_key)?
+                .is_some()
             {
                 continue;
             }
-            records.push(dispatch);
+            new_records.push(dispatch);
         }
 
-        let accepted = records.len().saturating_sub(before);
+        let accepted = new_records.len();
         if accepted == 0 {
             return Ok(0);
         }
-        if records.len() > MAX_PENDING_CROSS_ZONE_DISPATCHES {
+
+        let before = self.get_pending_cross_zone_dispatch_count()?;
+        let after = before.saturating_add(u64::try_from(accepted).expect("accepted fits u64"));
+        if after > u64::try_from(MAX_PENDING_CROSS_ZONE_DISPATCHES).expect("cap fits u64") {
             return Err(DbError::db_interaction_error(format!(
                 "Refusing to hold more than {MAX_PENDING_CROSS_ZONE_DISPATCHES} pending cross-zone deliveries; {before} already pending"
             )));
         }
 
-        self.put_pending_cross_zone_dispatches(&records)?;
+        let mut batch = WriteBatch::default();
+        for record in &new_records {
+            self.put_batch(
+                &PendingCrossZoneDispatchCellRef(record),
+                record.message_key,
+                &mut batch,
+            )?;
+        }
+        self.put_batch(&PendingCrossZoneDispatchCountCell(after), (), &mut batch)?;
+        self.db.write(batch).map_err(|rerr| {
+            DbError::rocksdb_cast_message(
+                rerr,
+                Some("Failed to record pending cross-zone dispatches".to_owned()),
+            )
+        })?;
         Ok(accepted)
     }
 
@@ -793,30 +864,23 @@ impl RocksDBIO {
         origin: DispatchOrigin,
     ) -> DbResult<DispatchFailure> {
         let _pending = self.lock_pending_records();
-        let mut records = self.get_pending_cross_zone_dispatches()?;
-        let Some(position) = records
-            .iter()
-            .position(|record| record.message_key == message_key)
-        else {
+        let Some(held) = self.get_opt::<PendingCrossZoneDispatchCellOwned>(message_key)? else {
             return Ok(DispatchFailure::Absent);
         };
 
-        let failed_attempts = {
-            let record = &mut records[position];
-            record.failed_attempts = record.failed_attempts.saturating_add(1);
-            record.failed_attempts
-        };
+        let mut pending = held.0;
+        pending.failed_attempts = pending.failed_attempts.saturating_add(1);
+        let failed_attempts = pending.failed_attempts;
         if failed_attempts < retire_at {
-            self.put_pending_cross_zone_dispatches(&records)?;
+            self.put(&PendingCrossZoneDispatchCellRef(&pending), message_key)?;
             return Ok(DispatchFailure::Retried { failed_attempts });
         }
 
-        let retired = records.remove(position);
         let dead_letter = DeadLetterDispatchRecord {
             message_key,
             origin,
             failed_attempts,
-            transaction_bytes: u32::try_from(retired.transaction.len()).unwrap_or(u32::MAX),
+            transaction_bytes: u32::try_from(pending.transaction.len()).unwrap_or(u32::MAX),
         };
 
         // One entry per delivery, not per retirement. A watcher rebuilding a
@@ -838,12 +902,20 @@ impl RocksDBIO {
         let count = self
             .get_dead_letter_cross_zone_dispatch_count()?
             .saturating_add(1);
+        let pending_count = self
+            .get_pending_cross_zone_dispatch_count()?
+            .saturating_sub(1);
 
         // One batch: a crash between the two halves either loses the message
         // silently or leaves the drain retrying a delivery already recorded as
         // given up on.
         let mut batch = WriteBatch::default();
-        self.put_pending_cross_zone_dispatches_batch(&records, &mut batch)?;
+        self.del_batch::<PendingCrossZoneDispatchCellOwned>(message_key, &mut batch)?;
+        self.put_batch(
+            &PendingCrossZoneDispatchCountCell(pending_count),
+            (),
+            &mut batch,
+        )?;
         self.put_batch(
             &DeadLetterCrossZoneDispatchesCellRef(&dead_letters),
             (),
@@ -888,19 +960,8 @@ impl RocksDBIO {
         }
 
         let _pending = self.lock_pending_records();
-        let to_remove: std::collections::HashSet<&[u8; 32]> = message_keys.iter().collect();
-        let mut records = self.get_pending_cross_zone_dispatches()?;
-        let before = records.len();
-        records.retain(|record| !to_remove.contains(&record.message_key));
-        let removed = before.saturating_sub(records.len());
-
-        // Both lists in one batch, as in `record_dispatch_failure`: nothing
-        // recomputes these keys on a later pass to fix a torn write.
         let mut batch = WriteBatch::default();
-        if removed > 0 {
-            self.put_pending_cross_zone_dispatches_batch(&records, &mut batch)?;
-        }
-        self.stage_reconciled_dead_letters(&to_remove, &mut batch)?;
+        let removed = self.stage_removed_dispatches(message_keys, &mut batch)?;
         if !batch.is_empty() {
             self.db.write(batch).map_err(|rerr| {
                 DbError::rocksdb_cast_message(
@@ -942,10 +1003,11 @@ impl RocksDBIO {
 
     /// Drops the pending records of deliveries that just became irreversible,
     /// staged into `batch` so they go with the update that made them so.
+    /// Callers hold the pending-record lock; the count cell is staged here.
     ///
-    /// Removal only, unlike [`Self::stage_pending_deposit_events`]: a delivery is
-    /// recorded by the watcher through
-    /// [`Self::add_pending_cross_zone_dispatch`], on its own task and outside
+    /// Removal only, unlike [`Self::stage_pending_deposit_events`]: a delivery
+    /// is recorded by the watcher through
+    /// [`Self::add_pending_cross_zone_dispatches`], on its own task and outside
     /// any store update, so nothing ever adds one here.
     fn stage_removed_dispatches(
         &self,
@@ -956,18 +1018,34 @@ impl RocksDBIO {
             return Ok(0);
         }
 
-        let to_remove: std::collections::HashSet<&[u8; 32]> = remove_keys.iter().collect();
-        let mut records = self.get_pending_cross_zone_dispatches()?;
-        let before = records.len();
-        records.retain(|record| !to_remove.contains(&record.message_key));
-        let removed = before.saturating_sub(records.len());
+        // Point-gets before the deletes: only a key that is actually held may
+        // decrement the count, and a repeated key may do so only once.
+        let mut staged = std::collections::HashSet::<&[u8; 32]>::new();
+        for key in remove_keys {
+            if staged.contains(&key) {
+                continue;
+            }
+            if self
+                .get_opt::<PendingCrossZoneDispatchCellOwned>(*key)?
+                .is_none()
+            {
+                continue;
+            }
+            self.del_batch::<PendingCrossZoneDispatchCellOwned>(*key, batch)?;
+            staged.insert(key);
+        }
 
+        let removed = staged.len();
         if removed > 0 {
-            self.put_pending_cross_zone_dispatches_batch(&records, batch)?;
+            let count = self
+                .get_pending_cross_zone_dispatch_count()?
+                .saturating_sub(u64::try_from(removed).expect("removed fits u64"));
+            self.put_batch(&PendingCrossZoneDispatchCountCell(count), (), batch)?;
         }
 
         // The ordinary case: another sequencer carried a delivery this node gave
         // up on into a block that just became irreversible.
+        let to_remove: std::collections::HashSet<&[u8; 32]> = remove_keys.iter().collect();
         self.stage_reconciled_dead_letters(&to_remove, batch)?;
         Ok(removed)
     }
@@ -1107,22 +1185,6 @@ impl RocksDBIO {
         Ok(unmatched.is_empty())
     }
 
-    pub fn put_block(&self, block: &Block, first: bool, batch: &mut WriteBatch) -> DbResult<()> {
-        if !first {
-            // A produced block is the new head tip by construction: pin the
-            // tip meta and drop any stale higher blocks a preceding reorg left
-            // behind (mirrors `store_followed_blocks`).
-            let last_curr_block = self.get_meta_last_block_in_db()?;
-            for stale_id in block.header.block_id.saturating_add(1)..=last_curr_block {
-                self.delete_block_payload(stale_id, batch)?;
-            }
-            self.put_meta_last_block_in_db_batch(block.header.block_id, batch)?;
-            self.put_meta_latest_block_meta_batch(&BlockMeta::from(block), batch)?;
-        }
-
-        self.put_block_payload(block, batch)
-    }
-
     /// Stages deletion of a block payload into `batch`.
     fn delete_block_payload(&self, block_id: u64, batch: &mut WriteBatch) -> DbResult<()> {
         let cf_block = self.block_column();
@@ -1175,8 +1237,10 @@ impl RocksDBIO {
         self.put_batch(&FinalBlockMetaCellRef(meta), (), batch)
     }
 
-    pub fn get_lee_state(&self) -> DbResult<V03State> {
-        self.get::<LEEStateCellOwned>(()).map(|val| val.0)
+    /// The state after the last applied block, or `None` when this database
+    /// holds no chain yet.
+    pub fn get_lee_state(&self) -> DbResult<Option<V03State>> {
+        Ok(self.get_opt::<LEEStateCellOwned>(())?.map(|val| val.0))
     }
 
     pub fn delete_block(&self, block_id: u64) -> DbResult<()> {
@@ -1213,6 +1277,15 @@ impl RocksDBIO {
         let mut batch = WriteBatch::default();
         for block in to_write.values() {
             self.put_block_payload(block, &mut batch)?;
+        }
+
+        // The lowest block written to a store that holds no chain starts one.
+        // Nothing else records where a chain begins, and without it every read
+        // that walks from the first block has no lower bound.
+        if let Some((first_id, _)) = to_write.first_key_value()
+            && self.get_meta_first_block_in_db()?.is_none()
+        {
+            self.put_meta_first_block_in_db_batch(*first_id, &mut batch)?;
         }
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
@@ -1324,7 +1397,9 @@ impl RocksDBIO {
             zone_anchor,
         } = *update;
 
-        let last_block_in_db = self.get_meta_last_block_in_db()?;
+        // 0 stands in for "no chain yet": nothing to sweep above the new tip,
+        // and any tip this update pins is a change.
+        let last_block_in_db = self.get_meta_last_block_in_db()?.unwrap_or(0);
         let mut batch = WriteBatch::default();
 
         if let Some(bytes) = checkpoint {
@@ -1368,6 +1443,15 @@ impl RocksDBIO {
         }
         for block in to_write.values() {
             self.put_block_payload(block, &mut batch)?;
+        }
+
+        // The lowest block written to a store that holds no chain starts one.
+        // Nothing else records where a chain begins, and without it every read
+        // that walks from the first block has no lower bound.
+        if let Some((first_id, _)) = to_write.first_key_value()
+            && self.get_meta_first_block_in_db()?.is_none()
+        {
+            self.put_meta_first_block_in_db_batch(*first_id, &mut batch)?;
         }
 
         let accepted_deposits = self.stage_pending_deposit_events(
@@ -1415,7 +1499,7 @@ impl RocksDBIO {
         Ok(outcome)
     }
 
-    pub fn get_all_blocks(&self) -> impl Iterator<Item = DbResult<Block>> {
+    pub fn get_all_blocks(&self) -> impl Iterator<Item = DbResult<Block>> + '_ {
         let cf_block = self.block_column();
         self.db
             .iterator_cf(&cf_block, rocksdb::IteratorMode::Start)

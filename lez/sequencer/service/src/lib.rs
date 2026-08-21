@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{future::Future, net::SocketAddr};
 
 use anyhow::{Context as _, Result};
 use futures::never::Never;
@@ -9,6 +9,7 @@ pub use sequencer_core::config::*;
 use sequencer_core::load_or_create_signing_key;
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_rpc_server_actor::RpcServerActor;
+use sequencer_storage_actor::StorageActor;
 use tokio::select;
 
 use crate::actor_handle::ActorHandle;
@@ -29,6 +30,7 @@ pub struct SequencerHandle {
     scheduler: ActorHandle<Scheduler>,
     rpc_server: ActorHandle<RpcServerActor>,
     executor: ActorHandle<ExecutorActor<BlockPublisher>>,
+    storage: ActorHandle<StorageActor>,
     addr: SocketAddr,
     /// Held for its lifetime: dropping it stops the gossip drive task.
     /// `None` when gossip is unconfigured.
@@ -40,6 +42,7 @@ impl SequencerHandle {
         scheduler: ActorHandle<Scheduler>,
         rpc_server: ActorHandle<RpcServerActor>,
         executor: ActorHandle<ExecutorActor<BlockPublisher>>,
+        storage: ActorHandle<StorageActor>,
         addr: SocketAddr,
         gossip: Option<sequencer_core::gossip::GossipNetwork>,
     ) -> Self {
@@ -47,6 +50,7 @@ impl SequencerHandle {
             scheduler,
             rpc_server,
             executor,
+            storage,
             addr,
             gossip,
         }
@@ -59,6 +63,7 @@ impl SequencerHandle {
             scheduler,
             rpc_server,
             executor,
+            storage,
             addr: _,
             gossip: _,
         } = self;
@@ -67,6 +72,7 @@ impl SequencerHandle {
         scheduler.shutdown().await;
         rpc_server.shutdown().await;
         executor.shutdown().await;
+        storage.shutdown().await;
     }
 
     /// Wait for any of the sequencer tasks to fail and return the error.
@@ -79,6 +85,7 @@ impl SequencerHandle {
             executor,
             rpc_server,
             scheduler,
+            storage,
             addr: _,
             gossip: _,
         } = self;
@@ -91,6 +98,9 @@ impl SequencerHandle {
                 Err(err)
             }
             Err(err) = scheduler.failed() => {
+                Err(err)
+            }
+            Err(err) = storage.failed() => {
                 Err(err)
             }
         }
@@ -106,11 +116,15 @@ impl SequencerHandle {
             executor,
             rpc_server,
             scheduler,
+            storage,
             addr: _,
             gossip: _,
         } = self;
 
-        executor.is_healthy() && rpc_server.is_healthy() && scheduler.is_healthy()
+        executor.is_healthy()
+            && rpc_server.is_healthy()
+            && scheduler.is_healthy()
+            && storage.is_healthy()
     }
 
     #[must_use]
@@ -128,78 +142,91 @@ impl SequencerHandle {
     }
 }
 
-pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<SequencerHandle> {
-    let block_timeout = config.block_create_timeout;
-    let max_block_size = config.max_block_size;
+#[expect(
+    clippy::manual_async_fn,
+    reason = "Explicit Send future works around rust-lang/rust#100013"
+)]
+pub fn run(
+    config: SequencerConfig,
+    listen_addr: SocketAddr,
+) -> impl Future<Output = Result<SequencerHandle>> + Send + 'static {
+    async move {
+        let block_timeout = config.block_create_timeout;
+        let max_block_size = config.max_block_size;
 
-    // Captured before `config` moves into the executor; gossip needs them after.
-    let gossip_config = config.gossip.clone();
-    let bedrock_config = config.bedrock_config.clone();
-    let sequencer_home = config.home.clone();
+        let gossip_config = config.gossip.clone();
+        let bedrock_config = config.bedrock_config.clone();
+        let sequencer_home = config.home.clone();
 
-    let executor = ExecutorActor::new(config).await;
-    let mempool_handle = executor.mempool_handle();
-    let executor_ref = ExecutorActor::spawn(executor);
-    info!("Executor Actor spawned");
+        let storage =
+            StorageActor::new(&config.db_path()).context("Failed to initialize Storage Actor")?;
+        let storage_ref = StorageActor::spawn(storage);
+        info!("Storage Actor spawned");
 
-    // Gossip is constructed only when configured; a `None` config means no
-    // sockets and no tasks. Startup failure here is a hard error
-    // (misconfiguration); after startup, gossip never halts the node.
-    let gossip_network = match gossip_config {
-        None => None,
-        Some(gossip_config) => {
-            // The node's L1 bedrock signing key is deliberately reused as the
-            // libp2p identity; `GossipNetwork::start` derives the keypair.
-            let signing_key =
-                load_or_create_signing_key(&sequencer_home.join("bedrock_signing_key"))?;
-            let channel_id = *bedrock_config.channel_id.as_ref();
-            let network = sequencer_core::gossip::GossipNetwork::start(
-                gossip_config,
-                channel_id,
-                signing_key,
-                mempool_handle,
-                max_block_size.as_u64(),
-            )
-            .await
-            .context("Failed to start sequencer gossip network")?;
-            info!("Gossip network started as {}", network.local_peer_id());
-            Some(network)
-        }
-    };
-    let tx_publisher = gossip_network
-        .as_ref()
-        .map(sequencer_core::gossip::GossipNetwork::tx_publisher);
+        let executor = ExecutorActor::new(config, storage_ref.clone()).await;
+        let mempool_handle = executor.mempool_handle();
+        let executor_ref = ExecutorActor::spawn(executor);
+        info!("Executor Actor spawned");
 
-    let rpc_server = RpcServerActor::new(
-        executor_ref.clone(),
-        listen_addr,
-        max_block_size,
-        tx_publisher,
-    )
-    .await?;
-    let addr = rpc_server.addr();
-    let rpc_server_ref = RpcServerActor::spawn(rpc_server);
-    info!("RPC Server Actor spawned");
+        // TODO: Should be a separate actor
+        let gossip_network = match gossip_config {
+            None => None,
+            Some(gossip_config) => {
+                // The node's L1 bedrock signing key is deliberately reused as the
+                // libp2p identity; `GossipNetwork::start` derives the keypair.
+                let signing_key =
+                    load_or_create_signing_key(&sequencer_home.join("bedrock_signing_key"))?;
+                let channel_id = *bedrock_config.channel_id.as_ref();
+                let network = sequencer_core::gossip::GossipNetwork::start(
+                    gossip_config,
+                    channel_id,
+                    signing_key,
+                    mempool_handle,
+                    max_block_size.as_u64(),
+                )
+                .await
+                .context("Failed to start sequencer gossip network")?;
+                info!("Gossip network started as {}", network.local_peer_id());
+                Some(network)
+            }
+        };
+        let tx_publisher = gossip_network
+            .as_ref()
+            .map(sequencer_core::gossip::GossipNetwork::tx_publisher);
 
-    let scheduler_ref = Scheduler::spawn(Scheduler::new());
-    scheduler_ref
-        .tell(
-            SetInterval::new(
-                executor_ref.downgrade(),
-                block_timeout,
-                sequencer_executor_actor::protocol::ProduceBlock,
-            )
-            .start_delay(block_timeout)
-            .set_missed_tick_behaviour(tokio::time::MissedTickBehavior::Delay),
+        let rpc_server = RpcServerActor::new(
+            listen_addr,
+            max_block_size,
+            executor_ref.clone(),
+            tx_publisher,
         )
-        .await?;
-    info!("Block production scheduler started");
+        .await
+        .context("Failed to initialize RPC Server Actor")?;
+        let addr = rpc_server.addr();
+        let rpc_server_ref = RpcServerActor::spawn(rpc_server);
+        info!("RPC Server Actor spawned");
 
-    Ok(SequencerHandle::new(
-        ActorHandle::new(scheduler_ref),
-        ActorHandle::new(rpc_server_ref),
-        ActorHandle::new(executor_ref),
-        addr,
-        gossip_network,
-    ))
+        let scheduler_ref = Scheduler::spawn(Scheduler::new());
+        scheduler_ref
+            .tell(
+                SetInterval::new(
+                    executor_ref.downgrade(),
+                    block_timeout,
+                    sequencer_executor_actor::protocol::ProduceBlock,
+                )
+                .start_delay(block_timeout)
+                .set_missed_tick_behaviour(tokio::time::MissedTickBehavior::Delay),
+            )
+            .await?;
+        info!("Block production scheduler started");
+
+        Ok(SequencerHandle::new(
+            ActorHandle::new(scheduler_ref),
+            ActorHandle::new(rpc_server_ref),
+            ActorHandle::new(executor_ref),
+            ActorHandle::new(storage_ref),
+            addr,
+            gossip_network,
+        ))
+    }
 }

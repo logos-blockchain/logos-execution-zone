@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
@@ -60,6 +60,7 @@ pub struct SequencerPartialConfig {
     pub max_block_size: ByteSize,
     pub mempool_max_size: usize,
     pub block_create_timeout: Duration,
+    pub priority_fee: u64,
 }
 
 impl Default for SequencerPartialConfig {
@@ -69,6 +70,7 @@ impl Default for SequencerPartialConfig {
             max_block_size: ByteSize::mib(1),
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(10),
+            priority_fee: sequencer_core::config::default_priority_fee(),
         }
     }
 }
@@ -124,6 +126,7 @@ pub fn sequencer_config(
         max_block_size,
         mempool_max_size,
         block_create_timeout,
+        priority_fee,
     } = partial;
 
     Ok(SequencerConfig {
@@ -141,7 +144,7 @@ pub fn sequencer_config(
                 .context("Failed to convert bedrock addr to URL")?,
             funding_key,
             auth: None,
-            priority_fee: sequencer_core::config::default_priority_fee(),
+            priority_fee,
         },
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
@@ -263,6 +266,7 @@ pub fn indexer_config(
 ) -> Result<IndexerConfig> {
     Ok(IndexerConfig {
         consensus_info_polling_interval: Duration::from_secs(1),
+        cross_zone_accept_unverified: Vec::new(),
         bedrock_config: ClientConfig {
             addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
@@ -270,6 +274,7 @@ pub fn indexer_config(
         },
         channel_id,
         cross_zone,
+        peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
         bridge_lock_holdings: Vec::new(),
         allow_chain_reset: false,
     })
@@ -371,4 +376,39 @@ pub fn bedrock_funding_key() -> ZkPublicKey {
 
     let bytes = hex::decode(PUBLIC_KEY_HEX).expect("Fixed funding key must be valid hex");
     ZkPublicKey::from(BigUint::from_bytes_le(&bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_priority_fee_matches_sequencer_default() {
+        assert_eq!(
+            SequencerPartialConfig::default().priority_fee,
+            sequencer_core::config::default_priority_fee()
+        );
+    }
+
+    #[test]
+    fn custom_priority_fee_reaches_bedrock_config() {
+        let priority_fee = 1_000;
+        let config = sequencer_config(
+            SequencerPartialConfig {
+                priority_fee,
+                ..SequencerPartialConfig::default()
+            },
+            PathBuf::from("test-sequencer"),
+            SocketAddr::from(([127, 0, 0, 1], 1234)),
+            bedrock_channel_id(),
+            bedrock_funding_key(),
+            Vec::new(),
+            None,
+            None,
+            None,
+        )
+        .expect("custom priority fee should produce a valid sequencer config");
+
+        assert_eq!(config.bedrock_config.priority_fee, priority_fee);
+    }
 }

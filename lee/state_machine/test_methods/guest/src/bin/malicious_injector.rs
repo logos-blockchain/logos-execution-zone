@@ -60,7 +60,7 @@ fn main() {
     // Victim has not signed anything — this flag is forged entirely by P1's logic.
     let victim = AccountWithMetadata {
         account: Account {
-            program_owner: victim_program_owner,
+            program_owner: victim_program_owner.into(),
             balance: victim_balance,
             data: Data::default(),
             nonce: Nonce(victim_nonce),
@@ -75,7 +75,7 @@ fn main() {
     // on the recipient — a check that would block the transfer.
     let recipient = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id,
+            program_owner: auth_transfer_id.into(),
             balance: 0,
             data: Data::default(),
             nonce: Nonce(0),

@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -18,7 +18,7 @@ use common::{
 use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
-use itertools::Itertools as _;
+use kameo::actor::ActorRef;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
@@ -32,17 +32,17 @@ use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
 use num_bigint::BigUint;
-pub use storage::error::DbError;
-// Re-exported because `cross_zone_dead_letters` returns it and the service
-// crate does not depend on `storage`, so it could not otherwise name the type.
-pub use storage::sequencer::sequencer_cells::DeadLetterDispatchRecord;
-use storage::sequencer::{
-    DispatchFailure, RocksDBIO, StoreUpdate,
-    sequencer_cells::{
-        DispatchOrigin, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        WithdrawalReconciliationKey, ZoneAnchorRecord,
+use sequencer_storage_actor::{
+    StorageActor, StorageActorTrait,
+    protocol::{
+        ApplyStoreUpdate, DeadLetterDispatchRecord, DispatchFailure, DispatchOrigin,
+        DropSettledCrossZoneDispatches, GetBlock, GetDeadLetterDispatches, GetFirstBlockId,
+        GetLatestBlockMeta, GetPendingCrossZoneDispatches, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, RecordNewBlock, SetZoneAnchor, WithdrawalReconciliationKey,
+        ZoneAnchorRecord,
     },
 };
+use tokio::sync::Mutex;
 use tokio_retry::{Retry, strategy::FixedInterval};
 
 use crate::{
@@ -123,11 +123,14 @@ struct DepositMetadata {
     recipient_id: lee::AccountId,
 }
 
-pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
+pub struct SequencerCore<
+    BP: BlockPublisherTrait = ZoneSdkPublisher,
+    S: StorageActorTrait = StorageActor,
+> {
     /// Two-tier chain state: production builds on its head; the publisher's
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
-    store: SequencerStore,
+    store: SequencerStore<S>,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
     block_publisher: BP,
@@ -139,86 +142,24 @@ pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
     last_committee_submission_slot: Option<Slot>,
 }
 
-impl<BP: BlockPublisherTrait> SequencerCore<BP> {
+impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     const CHANNEL_PROBE_RETRIES: usize = 29;
     const CHANNEL_PROBE_RETRY_DELAY: Duration = Duration::from_secs(2);
     /// Channel slots between committee-config submissions; a margin over
     /// observed Bedrock confirmation lag.
     const COMMITTEE_SUBMISSION_COOLDOWN: SlotCount = 10;
 
-    /// Starts the sequencer using the provided configuration.
-    /// If an existing database is found, the sequencer state is loaded from it and
-    /// assumed to represent the correct latest state consistent with Bedrock-finalized data.
-    /// If no database is found, the sequencer performs a fresh start from genesis,
-    /// initializing its state with the accounts defined in the configuration file.
-    fn open_or_create_store(
-        config: &SequencerConfig,
-        bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
-    ) -> (SequencerStore, lee::V03State) {
-        let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-        let db_path = config.db_path();
-
-        if db_path.exists() {
-            let store = SequencerStore::open_db(&db_path, signing_key).unwrap_or_else(|err| {
-                panic!(
-                    "Failed to open database at {} with error: {err}",
-                    db_path.display()
-                )
-            });
-            let state = store
-                .get_lee_state()
-                .expect("Failed to read state from store");
-            (store, state)
-        } else {
-            let legacy = config.home.join("rocksdb");
-            if legacy.exists() {
-                warn!(
-                    "Ignoring pre-channel-suffix database at {}; rename it to {} to resume it",
-                    legacy.display(),
-                    db_path.display()
-                );
-            }
-            warn!(
-                "Database not found at {}, starting from genesis",
-                db_path.display()
-            );
-
-            let (genesis_state, genesis_txs) = build_genesis_state(config, bootstrap_sequencer_key);
-
-            let hashable_data = HashableBlockData {
-                block_id: GENESIS_BLOCK_ID,
-                transactions: genesis_txs,
-                prev_block_hash: HashType([0; 32]),
-                timestamp: 0,
-            };
-            let genesis_block = hashable_data.into_pending_block(&signing_key);
-
-            let store = SequencerStore::create_db_with_genesis(
-                &db_path,
-                &genesis_block,
-                &genesis_state,
-                signing_key,
-            )
-            .expect("Failed to create database with genesis block");
-
-            // Incrementing count for genesis.
-            sequencer_core_metrics::increment_blocks_produced_total();
-
-            (store, genesis_state)
-        }
-    }
-
     /// Rebuilds the two-tier [`ChainState`]: the final tier from the persisted
     /// final snapshot (pre-genesis state when absent), the head tier by replaying
     /// every stored block above it, so a post-restart orphan can still revert.
-    fn restore_chain_state(
+    async fn restore_chain_state(
         config: &SequencerConfig,
-        store: &SequencerStore,
+        store: &SequencerStore<S>,
         stored_head_state: &lee::V03State,
     ) -> ChainState {
         let final_snapshot = store
-            .dbio()
             .get_final_snapshot()
+            .await
             .expect("Failed to read final snapshot from store");
         let (final_state, final_tip) = match final_snapshot {
             Some((state, meta)) => (state, Some(Tip::from(meta))),
@@ -229,9 +170,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         let mut head_blocks = store
             .get_all_blocks()
-            .filter_ok(|block| block.header.block_id > boundary)
-            .collect::<Result<Vec<_>, _>>()
-            .expect("Failed to read blocks from store while restoring chain state");
+            .await
+            .expect("Failed to read blocks from store while restoring chain state")
+            .into_iter()
+            .filter(|block| block.header.block_id > boundary)
+            .collect::<Vec<_>>();
         head_blocks.sort_unstable_by_key(|block| block.header.block_id);
 
         let mut chain = ChainState::from_final(final_state, final_tip);
@@ -252,8 +195,43 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         chain
     }
 
+    /// Seeds the storage actor's database with this zone's genesis when it
+    /// holds no chain yet.
+    async fn seed_genesis_if_absent(
+        storage_ref: &ActorRef<S>,
+        signing_key: &lee::PrivateKey,
+        bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
+        config: &SequencerConfig,
+    ) {
+        let first_block_id = storage_ref
+            .ask(GetFirstBlockId)
+            .await
+            .expect("Failed to read the first block id");
+        if first_block_id.is_some() {
+            return;
+        }
+
+        let (block, state) = genesis_block_and_state(signing_key, bootstrap_sequencer_key, config);
+        storage_ref
+            .ask(RecordNewBlock {
+                block,
+                withdrawals: Vec::new(),
+                state: Arc::new(state),
+                checkpoint_bytes: None,
+            })
+            .await
+            .expect("Failed to seed the database with the genesis block");
+
+        sequencer_core_metrics::increment_blocks_produced_total();
+    }
+
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Slop has won the battle, but our war is not over"
+    )]
     pub async fn start_from_config(
         config: SequencerConfig,
+        storage_ref: ActorRef<S>,
     ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
         sequencer_core_metrics::init();
 
@@ -287,8 +265,18 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             info!("Channel does not exist yet; starting it as channel creator");
         }
         let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
+        let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+        Self::seed_genesis_if_absent(&storage_ref, &signing_key, bootstrap_sequencer_key, &config)
+            .await;
 
-        let (store, state) = Self::open_or_create_store(&config, bootstrap_sequencer_key);
+        let store = SequencerStore::new(storage_ref, signing_key)
+            .await
+            .expect("Failed to open sequencer store");
+        let state = store
+            .get_lee_state()
+            .await
+            .expect("Failed to read state from store")
+            .expect("Store holds a chain but no state");
 
         assert!(
             committee_discovery::config_is_readable(&state),
@@ -296,12 +284,13 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
              one this sequencer can operate on"
         );
 
-        let chain = Arc::new(Mutex::new(Self::restore_chain_state(
-            &config, &store, &state,
-        )));
+        let chain = Arc::new(Mutex::new(
+            Self::restore_chain_state(&config, &store, &state).await,
+        ));
 
         let initial_checkpoint = store
             .get_zone_checkpoint()
+            .await
             .expect("Failed to load zone-sdk checkpoint");
         let is_fresh_start = initial_checkpoint.is_none();
 
@@ -313,7 +302,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             bedrock_signing_key,
             config.retry_pending_blocks_timeout,
             initial_checkpoint,
-            Self::on_follow(store.dbio(), Arc::clone(&chain), mempool_handle.clone()),
+            Self::on_follow(
+                store.storage_ref().clone(),
+                Arc::clone(&chain),
+                mempool_handle.clone(),
+            ),
         )
         .await
         .expect("Failed to initialize Block Publisher");
@@ -328,7 +321,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     &config.bedrock_config,
                     cross_zone,
                     config.block_create_timeout,
-                    &store.dbio(),
+                    store.storage_ref(),
                 )
             });
         // Before producing, verify our local state still belongs to the chain
@@ -347,10 +340,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // store written before the mark existed starts in.
         if let Some(tip) = store
             .latest_block_meta()
+            .await
             .expect("Failed to read latest block meta")
         {
             store
                 .raise_published_high_water(tip.id)
+                .await
                 .expect("Failed to seed published high water mark");
         }
 
@@ -361,9 +356,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         if is_fresh_start && channel_absent {
             let mut pending_blocks = store
                 .get_all_blocks()
-                .filter_ok(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
-                .collect::<Result<Vec<_>, _>>()
-                .expect("Failed to read blocks from store while republishing on fresh start");
+                .await
+                .expect("Failed to read blocks from store while republishing on fresh start")
+                .into_iter()
+                .filter(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
+                .collect::<Vec<_>>();
             pending_blocks.sort_unstable_by_key(|block| block.header.block_id);
 
             assert!(
@@ -397,6 +394,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 last_checkpoint = Some(outcome.checkpoint);
                 store
                     .raise_published_high_water(block.header.block_id)
+                    .await
                     .expect("Failed to persist published high water mark");
             }
 
@@ -406,6 +404,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             if let Some(checkpoint) = last_checkpoint {
                 store
                     .set_zone_checkpoint(&checkpoint)
+                    .await
                     .expect("Failed to persist checkpoint after republishing on fresh start");
             }
         }
@@ -420,8 +419,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             last_committee_submission_slot: None,
         };
 
-        sequencer_core_metrics::record_chain_height(sequencer_core.chain_height());
-        record_dead_letter_gauge(&sequencer_core.store.dbio());
+        sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
+        record_dead_letter_gauge(sequencer_core.store.storage_ref()).await;
 
         (sequencer_core, mempool_handle)
     }
@@ -436,12 +435,13 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// this sequencer is the one that must bootstrap-publish its own blocks.
     async fn verify_and_reconstruct(
         publisher: &BP,
-        store: &SequencerStore,
+        store: &SequencerStore<S>,
         chain: &Mutex<ChainState>,
         is_fresh_start: bool,
     ) -> Result<bool> {
         let anchor_record = store
             .get_zone_anchor()
+            .await
             .context("Failed to read zone anchor")?;
 
         let after_slot = anchor_record
@@ -468,6 +468,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // channel activity in a prior run.
         let local_tip = store
             .latest_block_meta()
+            .await
             .context("Failed to read latest block meta")?
             .map(|meta| meta.id);
         let had_checkpoint_before_start = !is_fresh_start;
@@ -535,8 +536,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             // Locked per message (not across the stream `await`): concurrent
             // follow events interleave safely — both paths apply idempotently
             // and persist under this same lock.
-            let mut chain = chain.lock().expect("chain state mutex poisoned");
-            Self::apply_reconstructed_block(store, &mut chain, &block, slot)?;
+            let mut chain = chain.lock().await;
+            Self::apply_reconstructed_block(store.storage_ref(), &mut chain, &block, slot).await?;
         }
 
         // The channel exists once it has a tip; only when it has none is this
@@ -551,14 +552,15 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// blocks we already hold, ignored when it conflicts at a height the final
     /// tier already settled, a validated continuation otherwise. Advances the
     /// persisted anchor to the block's slot.
-    fn apply_reconstructed_block(
-        store: &SequencerStore,
+    async fn apply_reconstructed_block(
+        storage_ref: &ActorRef<S>,
         chain: &mut ChainState,
         block: &Block,
         slot: Slot,
     ) -> Result<()> {
-        let tip = store
-            .latest_block_meta()
+        let tip = storage_ref
+            .ask(GetLatestBlockMeta)
+            .await
             .context("Failed to read latest block meta")?;
         let block_id = block.header.block_id;
         let block_hash = block.header.hash;
@@ -576,14 +578,16 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // downstream would ever remove them.
         if let Some(tip) = &tip
             && block_id <= tip.id
-            && let Some(stored) = store
-                .get_block_at_id(block_id)
+            && let Some(stored) = storage_ref
+                .ask(GetBlock { block_id })
+                .await
                 .context("Failed to read stored block")?
             && stored.header.hash == block_hash
         {
-            settle_reconstructed_deliveries(store, &stored);
-            store
-                .set_zone_anchor(&record)
+            settle_reconstructed_deliveries(storage_ref, &stored).await;
+            storage_ref
+                .ask(SetZoneAnchor { anchor: record })
+                .await
                 .context("Failed to persist zone anchor")?;
             return Ok(());
         }
@@ -628,24 +632,29 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .collect();
         // The same for the deliveries it carries: the inbox has seen them, so
         // the drain would skip them anyway, and the records are owed nothing.
-        let finalized_dispatch_keys = settled_dispatch_keys(&store.dbio(), block);
+        let finalized_dispatch_keys = settled_dispatch_keys(storage_ref, block).await;
 
         // The tip meta stays pinned to the head tip even when the reconstructed
         // block lands below it, and the anchor only advances if the block
         // itself landed.
         let head_tip = chain.head_tip().map(|head| BlockMeta::from(&head));
         let final_meta = chain.final_tip().map(|meta| BlockMeta::from(&meta));
-        store
-            .dbio()
-            .store_update(&StoreUpdate {
-                blocks: &[(block, true)],
-                head_tip: head_tip.as_ref(),
-                final_snapshot: final_meta.as_ref().map(|meta| (chain.final_state(), meta)),
-                remove_deposit_records: &finalized_deposit_ids,
-                remove_dispatch_records: &finalized_dispatch_keys,
-                zone_anchor: Some(&record),
-                ..StoreUpdate::new(chain.head_state())
+        storage_ref
+            .ask(ApplyStoreUpdate {
+                blocks: vec![(block.clone(), true)],
+                head_tip,
+                head_state: chain.share_head_state(),
+                final_snapshot: final_meta.map(|meta| (chain.share_final_state(), meta)),
+                remove_deposit_records: finalized_deposit_ids,
+                remove_dispatch_records: finalized_dispatch_keys,
+                zone_anchor: Some(record),
+                checkpoint: None,
+                finalized_up_to: None,
+                new_deposit_events: Vec::new(),
+                consumed_withdrawals: Vec::new(),
+                new_withdraw_intents: Vec::new(),
             })
+            .await
             .context("Failed to persist reconstructed block")?;
 
         Ok(())
@@ -653,12 +662,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
     /// Publisher sink adapter over [`apply_follow_update`].
     fn on_follow(
-        dbio: Arc<RocksDBIO>,
+        storage_ref: ActorRef<S>,
         chain: Arc<Mutex<ChainState>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     ) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
-            apply_follow_update(&dbio, &chain, &mempool_handle, update);
+            let storage_ref = storage_ref.clone();
+            let chain = Arc::clone(&chain);
+            let mempool_handle = mempool_handle.clone();
+            Box::pin(async move {
+                apply_follow_update(&storage_ref, &chain, &mempool_handle, update).await;
+            })
         })
     }
 
@@ -674,6 +688,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             committee_update,
         } = self
             .build_block_from_mempool(live_accredited_keys.as_deref())
+            .await
             .context("Failed to build block from mempool transactions")?;
 
         let block_publisher::PublishOutcome {
@@ -690,6 +705,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // block below, so this height must never be published again.
         self.store
             .raise_published_high_water(block.header.block_id)
+            .await
             .context("Failed to persist published high water mark")?;
 
         // Independent Mantle tx, not bundled with the block above — join/exit
@@ -701,14 +717,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .map(withdrawal_reconciliation_key)
             .collect();
 
-        self.record_produced_block(
-            this_msg,
-            &block,
-            &withdrawal_reconciliation_keys,
-            &checkpoint,
-        )?;
+        let block_id = block.header.block_id;
+        self.record_produced_block(this_msg, block, withdrawal_reconciliation_keys, &checkpoint)
+            .await?;
 
-        Ok(block.header.block_id)
+        Ok(block_id)
     }
 
     /// Live committee snapshot for gating `FinalizeUnstake` inclusion and
@@ -792,29 +805,30 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// `Parked` when the head reorged to a different parent), the canonical
     /// block is persisted by the follow path instead, and our invalidated
     /// inscription comes back via `orphaned`.
-    fn record_produced_block(
+    async fn record_produced_block(
         &mut self,
         this_msg: MsgId,
-        block: &Block,
-        withdrawal_reconciliation_keys: &[WithdrawalReconciliationKey],
+        block: Block,
+        withdrawal_reconciliation_keys: Vec<WithdrawalReconciliationKey>,
         checkpoint: &block_publisher::SequencerCheckpoint,
     ) -> Result<()> {
         let checkpoint_bytes = block_store::checkpoint_bytes(checkpoint)?;
 
-        let mut chain = self.chain.lock().expect("chain state mutex poisoned");
-        match chain.apply_produced(this_msg, block) {
+        let mut chain = self.chain.lock().await;
+        match chain.apply_produced(this_msg, &block) {
             AcceptOutcome::Applied => {
-                // Persisted under the lock so disk writes land in apply order
-                // with the follow path.
-                self.store.update(
-                    block,
-                    withdrawal_reconciliation_keys,
-                    chain.head_state(),
-                    Some(&checkpoint_bytes),
-                )?;
+                let block_id = block.header.block_id;
+                self.store
+                    .record_new_block(
+                        block,
+                        withdrawal_reconciliation_keys,
+                        chain.share_head_state(),
+                        Some(checkpoint_bytes),
+                    )
+                    .await?;
 
                 sequencer_core_metrics::increment_blocks_produced_total();
-                sequencer_core_metrics::record_chain_height(block.header.block_id);
+                sequencer_core_metrics::record_chain_height(block_id);
             }
             // Neither branch persists anything, checkpoint included: the
             // inscription it holds as pending belongs to a block that is not
@@ -910,7 +924,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         true
     }
 
-    fn build_block_from_mempool(
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Slop has won the battle, but our war is not over"
+    )]
+    async fn build_block_from_mempool(
         &mut self,
         live_accredited_keys: Option<&[sequencer_stake_core::SequencerKey]>,
     ) -> Result<BlockWithMeta> {
@@ -923,8 +941,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let mut settled = Vec::new();
         let recorded_dispatches: Vec<_> = self
             .store
-            .dbio()
-            .get_pending_cross_zone_dispatches()
+            .pending_cross_zone_dispatches()
+            .await
             .context("Failed to load pending cross-zone dispatches")?
             .into_iter()
             .filter_map(
@@ -958,7 +976,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             pending_dispatches,
             finalize_unstake_txs,
         ) = {
-            let chain = self.chain.lock().expect("chain state mutex poisoned");
+            let chain = self.chain.lock().await;
             let tip = chain.head_tip();
             let height = tip.as_ref().map_or(GENESIS_BLOCK_ID, |head| {
                 head.block_id
@@ -998,8 +1016,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         if !settled.is_empty() {
             if let Err(err) = self
                 .store
-                .dbio()
-                .drop_settled_cross_zone_dispatches(&settled)
+                .drop_settled_cross_zone_dispatches(settled.clone())
+                .await
             {
                 // Only bookkeeping: the deliveries themselves are irreversible,
                 // and the next turn tries again.
@@ -1010,7 +1028,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
             // A settled delivery may be one this node had given up on, which
             // takes its dead letter with it.
-            record_dead_letter_gauge(&self.store.dbio());
+            record_dead_letter_gauge(self.store.storage_ref()).await;
         }
 
         let mut valid_transactions = Vec::new();
@@ -1029,6 +1047,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let pending_deposits: VecDeque<LeeTransaction> = self
             .store
             .get_pending_deposit_events()
+            .await
             .context("Failed to load pending deposit events")?
             .into_iter()
             .filter(|record| !deposit_already_minted(&working_state, record.deposit_op_id))
@@ -1109,7 +1128,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                         "Sequencer-drained transaction {tx_hash} cannot fit in any block under the \
                          {max_block_size} byte limit; giving up on it rather than stalling production",
                     );
-                    self.count_dispatch_failure(&tx);
+                    self.count_dispatch_failure(&tx).await;
                     continue;
                 }
 
@@ -1164,7 +1183,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 // A failed transaction is simply left out of the block, except a
                 // dispatch: that one is re-fed from the store every turn, so one
                 // that can never execute would fail on every block for ever.
-                self.count_dispatch_failure(&tx);
+                self.count_dispatch_failure(&tx).await;
             }
 
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
@@ -1209,23 +1228,18 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
     /// Reads the current head state under the lock without cloning it, so callers
     /// reuse `V03State`'s own API (accounts, nonces, proofs) with no whole-state copy.
-    pub fn with_state<R>(&self, f: impl FnOnce(&lee::V03State) -> R) -> R {
-        f(self
-            .chain
-            .lock()
-            .expect("chain state mutex poisoned")
-            .head_state())
+    pub async fn with_state<R>(&self, f: impl FnOnce(&lee::V03State) -> R) -> R {
+        f(self.chain.lock().await.head_state())
     }
 
-    pub const fn block_store(&self) -> &SequencerStore {
+    pub const fn block_store(&self) -> &SequencerStore<S> {
         &self.store
     }
 
-    #[must_use]
-    pub fn chain_height(&self) -> u64 {
+    pub async fn chain_height(&self) -> u64 {
         self.chain
             .lock()
-            .expect("chain state mutex poisoned")
+            .await
             .head_tip()
             .map_or(0, |tip| tip.block_id)
     }
@@ -1240,20 +1254,20 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// [`StoreUpdate::finalized_up_to`]. Kept on the type for tests.
     // TODO: Delete blocks instead of marking them as finalized. Current
     // approach is used because we still have `GetBlockDataRequest`.
-    pub fn clean_finalized_blocks_from_db(&self, last_finalized_block_id: u64) -> Result<()> {
+    pub async fn clean_finalized_blocks_from_db(&self, last_finalized_block_id: u64) -> Result<()> {
         log::info!("Clearing pending blocks up to id: {last_finalized_block_id}");
         self.store
-            .dbio()
-            .clean_pending_blocks_up_to(last_finalized_block_id)?;
+            .clean_pending_blocks_up_to(last_finalized_block_id)
+            .await?;
         Ok(())
     }
 
     /// Returns the list of stored pending blocks.
-    pub fn get_pending_blocks(&self) -> Result<Vec<Block>> {
+    pub async fn get_pending_blocks(&self) -> Result<Vec<Block>> {
         Ok(self
             .store
             .get_all_blocks()
-            .collect::<block_store::DbResult<Vec<Block>>>()?
+            .await?
             .into_iter()
             .filter(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
             .collect())
@@ -1300,7 +1314,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// can equally be a property of the moment, so give up only after several.
     /// Giving up moves the record to the dead letter: a peer cannot grow the
     /// pending list with deliveries that never execute, and it stays findable.
-    fn count_dispatch_failure(&self, tx: &LeeTransaction) {
+    async fn count_dispatch_failure(&self, tx: &LeeTransaction) {
         let Some(message) = extract_cross_zone_dispatch(tx) else {
             return;
         };
@@ -1316,12 +1330,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         };
         match self
             .store
-            .dbio()
             .record_dispatch_failure(key, RETIRE_DISPATCH_AFTER_FAILURES, origin)
+            .await
         {
             Ok(DispatchFailure::Retired(record)) => {
                 sequencer_core_metrics::increment_cross_zone_dispatches_retired_total();
-                record_dead_letter_gauge(&self.store.dbio());
+                record_dead_letter_gauge(self.store.storage_ref()).await;
                 error!(
                     "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter.",
                     hex::encode(key),
@@ -1354,10 +1368,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// Retained is read first so the pair can only skew towards a total that
     /// leads its list, an ordinary evicted or settled state. The other order
     /// would report entries against a total of zero.
-    pub fn cross_zone_dead_letters(&self) -> Result<(u64, Vec<DeadLetterDispatchRecord>), DbError> {
-        let dbio = self.store.dbio();
-        let retained = dbio.get_dead_letter_cross_zone_dispatches()?;
-        let total = dbio.get_dead_letter_cross_zone_dispatch_count()?;
+    pub async fn cross_zone_dead_letters(&self) -> Result<(u64, Vec<DeadLetterDispatchRecord>)> {
+        let retained = self.store.dead_letter_dispatches().await?;
+        let total = self.store.dead_letter_dispatch_count().await?;
         Ok((total, retained))
     }
 
@@ -1382,11 +1395,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     }
 
     /// The height the next produced block would claim.
-    #[must_use]
-    pub fn next_block_height(&self) -> u64 {
+    pub async fn next_block_height(&self) -> u64 {
         self.chain
             .lock()
-            .expect("chain state mutex poisoned")
+            .await
             .head_tip()
             .map_or(GENESIS_BLOCK_ID, |tip| {
                 tip.block_id
@@ -1406,10 +1418,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     ///
     /// This is not a stall — the head recovers by itself once the inscriptions
     /// we are protecting finalize and the final tier rebases onto them.
-    #[must_use]
-    pub fn rewound_below_published(&self) -> Option<u64> {
-        let high_water = self.store.published_high_water().ok().flatten()?;
-        (self.next_block_height() <= high_water).then_some(high_water)
+    pub async fn rewound_below_published(&self) -> Option<u64> {
+        let high_water = self.store.published_high_water().await.ok().flatten()?;
+        (self.next_block_height().await <= high_water).then_some(high_water)
     }
 
     /// Shared handle to the two-tier follow state, for tests to drive the
@@ -1464,8 +1475,8 @@ fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage)
 /// Read from the store because the list falls as well as rises (eviction, and
 /// reconciliation when a delivery settles elsewhere). Costs a read and a decode,
 /// so call it only where one of those can have happened.
-fn record_dead_letter_gauge(dbio: &RocksDBIO) {
-    match dbio.get_dead_letter_cross_zone_dispatches() {
+async fn record_dead_letter_gauge<S: StorageActorTrait>(storage_ref: &ActorRef<S>) {
+    match storage_ref.ask(GetDeadLetterDispatches).await {
         Ok(records) => {
             sequencer_core_metrics::record_cross_zone_dead_letter_dispatches(records.len());
         }
@@ -1487,8 +1498,8 @@ fn record_dead_letter_gauge(dbio: &RocksDBIO) {
 /// relies on a valid successor or a restart. `ChainState` never emits
 /// `AcceptOutcome::RetryableFailure` yet; adding retry parity here is a
 /// follow-up.
-fn apply_follow_update(
-    dbio: &RocksDBIO,
+async fn apply_follow_update<S: StorageActorTrait>(
+    storage_ref: &ActorRef<S>,
     chain: &Mutex<ChainState>,
     mempool_handle: &MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     update: block_publisher::FollowUpdate,
@@ -1522,7 +1533,7 @@ fn apply_follow_update(
     // The lock is held across the persist below so disk writes land in apply
     // order — the produce path persists under this same lock.
     let (resubmit_txs, outcome, head_height) = {
-        let mut chain = chain.lock().expect("chain state mutex poisoned");
+        let mut chain = chain.lock().await;
 
         // An orphan report rewinds the head to the earliest orphaned block and
         // prunes the store above it, which is how a run of our own inscriptions
@@ -1619,6 +1630,7 @@ fn apply_follow_update(
             BlockMeta::from(&tip)
         });
         let head_tip = chain.head_tip().map(|tip| BlockMeta::from(&tip));
+        let head_tip_id = head_tip.as_ref().map_or(0, |tip| tip.id);
 
         // Every block at or below the highest finalized one is irreversible, so
         // stored blocks there can be marked finalized.
@@ -1638,36 +1650,42 @@ fn apply_follow_update(
         // The same for cross-zone deliveries, keyed by message key: a record
         // goes once its own delivery is irreversible, never because another
         // block finalized at its height.
-        let finalized_dispatch_keys: Vec<[u8; 32]> = irreversible
-            .iter()
-            .flat_map(|block| settled_dispatch_keys(dbio, block))
-            .collect();
+        let mut finalized_dispatch_keys: Vec<[u8; 32]> = Vec::new();
+        for block in &irreversible {
+            finalized_dispatch_keys.extend(settled_dispatch_keys(storage_ref, block).await);
+        }
 
         // A persist failure is fatal: the in-memory chain has already advanced,
         // and continuing would leave a permanent gap in the store. The `panic!`
         // ends the drive task, whose cancellation halts the node.
-        let outcome = dbio
-            .store_update(&StoreUpdate {
-                checkpoint: Some(&checkpoint_bytes),
-                blocks: &to_persist,
-                head_tip: head_tip.as_ref(),
-                final_snapshot: final_meta.as_ref().map(|meta| (chain.final_state(), meta)),
+        let outcome = storage_ref
+            .ask(ApplyStoreUpdate {
+                checkpoint: Some(checkpoint_bytes),
+                blocks: to_persist
+                    .into_iter()
+                    .map(|(block, fin)| (block.clone(), fin))
+                    .collect(),
+                head_tip,
+                head_state: chain.share_head_state(),
+                final_snapshot: final_meta.map(|meta| (chain.share_final_state(), meta)),
                 finalized_up_to: last_finalized,
-                new_deposit_events: &deposit_records,
-                remove_deposit_records: &finalized_deposit_ids,
-                remove_dispatch_records: &finalized_dispatch_keys,
-                consumed_withdrawals: &consumed_withdrawals,
-                ..StoreUpdate::new(chain.head_state())
+                new_deposit_events: deposit_records,
+                remove_deposit_records: finalized_deposit_ids,
+                remove_dispatch_records: finalized_dispatch_keys,
+                consumed_withdrawals,
+                new_withdraw_intents: Vec::new(),
+                zone_anchor: None,
             })
+            .await
             .unwrap_or_else(|err| panic!("Failed to persist follow update: {err:#}"));
 
-        (resubmit_txs, outcome, head_tip.map_or(0, |tip| tip.id))
+        (resubmit_txs, outcome, head_tip_id)
     };
 
     sequencer_core_metrics::record_chain_height(head_height);
     // The runtime reconcile path: finalizing another sequencer's block drops the
     // dead letter of a delivery this node gave up on.
-    record_dead_letter_gauge(dbio);
+    record_dead_letter_gauge(storage_ref).await;
 
     if outcome.accepted_deposits > 0 {
         log::info!(
@@ -1698,6 +1716,24 @@ fn apply_follow_update(
             warn!("Dropping orphaned transaction {tx_hash} on resubmit: {err}");
         }
     }
+}
+
+/// The genesis block and state `config` describes.
+fn genesis_block_and_state(
+    signing_key: &lee::PrivateKey,
+    bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
+    config: &SequencerConfig,
+) -> (Block, lee::V03State) {
+    let (genesis_state, genesis_txs) = build_genesis_state(config, bootstrap_sequencer_key);
+    let genesis_block = HashableBlockData {
+        block_id: GENESIS_BLOCK_ID,
+        transactions: genesis_txs,
+        prev_block_hash: HashType([0; 32]),
+        timestamp: 0,
+    }
+    .into_pending_block(signing_key);
+
+    (genesis_block, genesis_state)
 }
 
 /// The pre-genesis state: `testnet_initial_state` plus the bridge-lock holdings,
@@ -1736,13 +1772,13 @@ fn build_genesis_state(
     );
 
     // Config txs seed the config accounts by transaction, so every node
-    // reconstructs them by replaying the genesis block. The wrapped-token minter and
-    // both emitters' pins are initialized on every zone: all three are builtins with
-    // a user-callable InitConfig, so a config PDA left default is claimable by the
-    // first initializer, hijacking the minter or repointing an emitter's outbox. The
-    // inbox allowlist is initialized only on receiving zones; the inbox is
-    // sequencer-only, so its default config PDA is not user-claimable, merely unused
-    // until the zone receives.
+    // reconstructs them by replaying the genesis block. Every program config is
+    // initialized on every zone: each is a builtin with a user-callable InitConfig,
+    // so a config PDA left default is claimable by the first initializer, which
+    // would hijack the minter, repoint an emitter's outbox, or name its own peer
+    // source. The inbox's own config is initialized only on receiving zones; the
+    // inbox is sequencer-only, so its default config PDA is not user-claimable,
+    // merely unused until the zone receives.
     let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx(
         config.cross_zone.as_ref(),
     ));
@@ -2002,7 +2038,7 @@ fn build_supply_account_genesis_transaction(
     let message = Message::try_new(
         faucet_program_id,
         vec![system_accounts::faucet_account_id(), recipient_vault_id],
-        vec![],
+        Vec::new(),
         faucet_core::Instruction::GenesisTransferVault {
             vault_program_id,
             recipient_id: *account_id,
@@ -2010,7 +2046,7 @@ fn build_supply_account_genesis_transaction(
         },
     )
     .expect("Failed to serialize genesis transfer instruction");
-    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
 
     PublicTransaction::new(message, witness_set)
 }
@@ -2022,11 +2058,11 @@ fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTrans
     let message = Message::try_new(
         faucet_program_id,
         vec![system_accounts::faucet_account_id(), bridge_account_id],
-        vec![],
+        Vec::new(),
         faucet_core::Instruction::GenesisTransferDirect { amount: balance },
     )
     .expect("Failed to serialize bridge genesis transfer instruction");
-    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
 
     PublicTransaction::new(message, witness_set)
 }
@@ -2060,7 +2096,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
             recipient_vault_id,
             receipt_id,
         ],
-        vec![],
+        Vec::new(),
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
             vault_program_id,
@@ -2070,7 +2106,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     )
     .context("Failed to build bridge deposit message")?;
 
-    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
     Ok(LeeTransaction::Public(PublicTransaction::new(
         message,
         witness_set,
@@ -2217,8 +2253,14 @@ fn extract_cross_zone_dispatch_key(tx: &LeeTransaction) -> Option<[u8; 32]> {
 /// indexer, which re-derives every delivery and halts, but the local record is
 /// the last copy of what we believed and it is about to be dropped either way.
 /// Saying so in the log is what makes the halt diagnosable.
-fn settled_dispatch_keys(dbio: &RocksDBIO, block: &Block) -> Vec<[u8; 32]> {
-    let recorded = dbio.get_pending_cross_zone_dispatches().unwrap_or_default();
+async fn settled_dispatch_keys<S: StorageActorTrait>(
+    storage_ref: &ActorRef<S>,
+    block: &Block,
+) -> Vec<[u8; 32]> {
+    let recorded = storage_ref
+        .ask(GetPendingCrossZoneDispatches)
+        .await
+        .unwrap_or_default();
     let (keys, forged) = classify_settled_deliveries(&recorded, block);
     for key in forged {
         error!(
@@ -2263,12 +2305,18 @@ fn classify_settled_deliveries(
 ///
 /// A persist failure is only logged: the deliveries are already irreversible, so
 /// the worst case is a record the next drain drops instead.
-fn settle_reconstructed_deliveries(store: &SequencerStore, block: &Block) {
-    let keys = settled_dispatch_keys(&store.dbio(), block);
+async fn settle_reconstructed_deliveries<S: StorageActorTrait>(
+    storage_ref: &ActorRef<S>,
+    block: &Block,
+) {
+    let keys = settled_dispatch_keys(storage_ref, block).await;
     if keys.is_empty() {
         return;
     }
-    if let Err(err) = store.dbio().drop_settled_cross_zone_dispatches(&keys) {
+    if let Err(err) = storage_ref
+        .ask(DropSettledCrossZoneDispatches { message_keys: keys })
+        .await
+    {
         warn!("Failed to settle reconstructed delivery records: {err:#}");
     }
 }

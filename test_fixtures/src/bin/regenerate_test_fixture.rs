@@ -3,11 +3,14 @@
 
 #![expect(clippy::print_stdout, reason = "It's normal in this small cli")]
 
-use std::{path::Path, time::Duration};
+use std::path::Path;
 
 use anyhow::{Context as _, Result};
-use lee::PrivateKey;
-use sequencer_core::block_store::SequencerStore;
+use kameo::actor::Spawn as _;
+use sequencer_storage_actor::{
+    StorageActor,
+    protocol::{DeleteZoneCheckpoint, DumpDb, ResetAllBlocksToPending},
+};
 use test_fixtures::{
     config,
     setup::{
@@ -75,22 +78,28 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
 
     // Shut down gracefully to release the rocksdb lock before reopening the store.
     drop(wallet);
-    drop(sequencer_handle);
+    sequencer_handle.shutdown().await;
 
     let db_path = temp_sequencer_dir
         .path()
         .join(format!("rocksdb-{}", config::bedrock_channel_id()));
-    let store = open_store_with_retry(&db_path)
+    let storage =
+        StorageActor::new(&db_path).context("Failed to reopen sequencer storage after shutdown")?;
+    let storage_ref = StorageActor::spawn(storage);
+    storage_ref
+        .ask(DeleteZoneCheckpoint)
         .await
-        .context("Failed to reopen sequencer store after shutdown")?;
-    store
-        .delete_zone_checkpoint()
         .context("Failed to strip zone-sdk checkpoint from fixture database")?;
-    store
-        .reset_all_blocks_to_pending()
+    storage_ref
+        .ask(ResetAllBlocksToPending)
+        .await
         .context("Failed to reset fixture blocks to pending")?;
-    let dump = store.dump().context("Failed to dump fixture database")?;
-    drop(store);
+    let dump = storage_ref
+        .ask(DumpDb)
+        .await
+        .context("Failed to dump fixture database")?;
+    storage_ref.stop_gracefully().await?;
+    storage_ref.wait_for_shutdown_with_result(|_| ()).await;
 
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
@@ -103,25 +112,4 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         .with_context(|| format!("Failed to write fixture dump to {}", dest.display()))?;
 
     Ok(())
-}
-
-/// Reopen the store, retrying while the shut-down sequencer's aborted tasks are still releasing
-/// their db handles (the process holds the file lock until then). Must `await` between attempts.
-async fn open_store_with_retry(db_path: &Path) -> Result<SequencerStore> {
-    let signing_key = PrivateKey::try_new(config::SEQUENCER_SIGNING_KEY)
-        .expect("Fixed sequencer signing key must be valid");
-
-    let mut last_err = None;
-    for _ in 0..100 {
-        // Let the runtime drop the aborted sequencer tasks before each attempt.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        match SequencerStore::open_db(db_path, signing_key.clone()) {
-            Ok(store) => return Ok(store),
-            Err(err) => last_err = Some(err),
-        }
-    }
-    Err(anyhow::anyhow!(
-        "Failed to open sequencer store at {} after retries: {last_err:?}",
-        db_path.display()
-    ))
 }

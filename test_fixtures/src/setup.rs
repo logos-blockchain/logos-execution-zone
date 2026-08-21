@@ -7,12 +7,10 @@ use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
-use sequencer_core::{
-    block_publisher::ED25519_SECRET_KEY_SIZE,
-    block_store::{DbDump, SequencerStore},
-};
+use sequencer_core::block_publisher::ED25519_SECRET_KEY_SIZE;
 use sequencer_service::{GenesisAction, SequencerHandle};
 use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
+use sequencer_storage_actor::{StorageActor, protocol::DbDump};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::{
@@ -108,15 +106,22 @@ impl SequencerSetup {
         let temp_sequencer_dir =
             tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
 
-        let sequencer_handle = self.setup_at(temp_sequencer_dir.path()).await?;
+        let sequencer_handle = self
+            .setup_owned(temp_sequencer_dir.path().to_owned())
+            .await?;
 
         Ok((sequencer_handle, temp_sequencer_dir))
     }
 
     /// Set up the sequencer in an explicit `home` directory owned by the caller.
     ///
+    /// The caller is responsible for creating and retaining the directory.
     /// Useful for tests that restart the sequencer against the same on-disk store.
     pub async fn setup_at(self, home: &Path) -> Result<SequencerHandle> {
+        self.setup_owned(home.to_owned()).await
+    }
+
+    async fn setup_owned(self, home: PathBuf) -> Result<SequencerHandle> {
         let Self {
             partial,
             bedrock_addr,
@@ -149,15 +154,13 @@ impl SequencerSetup {
             genesis
         } else {
             let dump = load_prebuilt_dump()?;
-            // `SequencerCore::open_or_create_store` looks for the channel-suffixed
-            // db under its home, so the restore has to land on the same name.
+            // The sequencer looks for the channel-suffixed db under its home,
+            // so the restore has to land on the same name.
             let dst = home.join(format!("rocksdb-{channel_id}"));
-            let _store = SequencerStore::restore_db_from_dump(
-                &dst,
-                &dump,
-                lee::PrivateKey::try_new(config::SEQUENCER_SIGNING_KEY)?,
-            )
-            .context("Failed to restore prebuilt sequencer database from dump")?;
+            // Dropped right away: this only writes the database, which the
+            // sequencer opens for itself below.
+            let _storage = StorageActor::restore_from_dump(&dst, &dump)
+                .context("Failed to restore prebuilt sequencer database from dump")?;
             // TODO: Technically not correct, we should reconstruct the genesis transactions
             // from the dump, but this crutch doesn't affect anything for now
             Vec::new()
@@ -165,7 +168,7 @@ impl SequencerSetup {
 
         let config = config::sequencer_config(
             partial,
-            home.to_owned(),
+            home.clone(),
             bedrock_addr,
             channel_id,
             config::bedrock_funding_key(),
@@ -292,23 +295,39 @@ pub async fn setup_indexer(
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
-    debug!(
-        "Using temp indexer home at {}",
-        temp_indexer_dir.path().display()
-    );
+    let handle = setup_indexer_at(
+        bedrock_addr,
+        channel_id,
+        cross_zone,
+        temp_indexer_dir.path(),
+    )
+    .await?;
+
+    Ok((handle, temp_indexer_dir))
+}
+
+/// Set up the indexer in an explicit home directory owned by the caller.
+pub async fn setup_indexer_at(
+    bedrock_addr: SocketAddr,
+    channel_id: ChannelId,
+    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
+    home: &Path,
+) -> Result<IndexerHandle> {
+    std::fs::create_dir_all(home).context("Failed to create indexer home")?;
+
+    debug!("Using indexer home at {}", home.display());
 
     let indexer_config = config::indexer_config(bedrock_addr, channel_id, cross_zone)
         .context("Failed to create Indexer config")?;
 
     indexer_service::run_server(
         indexer_config,
-        temp_indexer_dir.path(),
+        home,
         0,
         tokio_util::sync::CancellationToken::new(),
     )
     .await
     .context("Failed to run Indexer Service")
-    .map(|handle| (handle, temp_indexer_dir))
 }
 
 pub async fn setup_wallet(
@@ -317,20 +336,40 @@ pub async fn setup_wallet(
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
 ) -> Result<(WalletCore, TempDir, String)> {
+    let temp_wallet_dir =
+        tempfile::tempdir().context("Failed to create temp dir for wallet home")?;
+    let (wallet, _state_dir, password) = setup_wallet_at(
+        sequencer_addrs,
+        initial_public_accounts,
+        initial_private_accounts,
+        config_overrides,
+        temp_wallet_dir.path(),
+    )
+    .await?;
+
+    Ok((wallet, temp_wallet_dir, password))
+}
+
+/// Set up the wallet in an explicit home directory owned by the caller.
+pub async fn setup_wallet_at(
+    sequencer_addrs: &[SocketAddr],
+    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_private_accounts: &[InitialPrivateAccountForWallet],
+    config_overrides: WalletConfigOverrides,
+    home: &Path,
+) -> Result<(WalletCore, PathBuf, String)> {
     let config =
         config::wallet_config(sequencer_addrs).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
 
-    let temp_wallet_dir =
-        tempfile::tempdir().context("Failed to create temp dir for wallet home")?;
+    std::fs::create_dir_all(home).context("Failed to create wallet home")?;
 
-    let config_path = temp_wallet_dir.path().join("wallet_config.json");
-    std::fs::write(&config_path, config_serialized)
-        .context("Failed to write wallet config in temp dir")?;
+    let config_path = home.join("wallet_config.json");
+    std::fs::write(&config_path, config_serialized).context("Failed to write wallet config")?;
 
-    let storage_path = temp_wallet_dir.path().join("storage.json");
-    let metrics_path = temp_wallet_dir.path().join("metrics.json");
+    let storage_path = home.join("storage.json");
+    let metrics_path = home.join("metrics.json");
 
     let wallet_password = "test_pass".to_owned();
     let (mut wallet, _mnemonic) = WalletCore::new_init_storage(
@@ -366,7 +405,7 @@ pub async fn setup_wallet(
         .store_persistent_data()
         .context("Failed to store wallet persistent data")?;
 
-    Ok((wallet, temp_wallet_dir, wallet_password))
+    Ok((wallet, home.to_owned(), wallet_password))
 }
 
 pub async fn setup_public_accounts_with_initial_supply(

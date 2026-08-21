@@ -8,9 +8,13 @@ use std::{str::FromStr as _, time::Duration};
 
 use anyhow::{Context as _, Result};
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, assert_public_account_restored,
-    fetch_privacy_preserving_tx, new_account, private_mention, public_mention,
-    restored_private_account, send, send_claiming_new_account, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
+    public_mention,
+    utils::{
+        assert_public_account_restored, new_account, restored_private_account, send,
+        send_claiming_new_account,
+    },
+    verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::AccountId;
@@ -139,11 +143,11 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     assert_eq!(
         acc1.account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(
         acc2.account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
 
     assert_eq!(acc1.account.balance, 100);

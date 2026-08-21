@@ -62,8 +62,10 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
                 src_program_id: programs::ping_sender().id(),
                 target_program_id: receiver_id,
             }],
-            expected_block_signing_pubkey: None,
+            expected_block_signing_pubkeys: Vec::new(),
         }],
+        source_authority: None,
+        source_governance: None,
     };
 
     let (seq_a, _seq_a_home) = SequencerSetup::new(partial, bedrock_addr)

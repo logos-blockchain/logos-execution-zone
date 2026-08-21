@@ -3,7 +3,7 @@ use std::collections::btree_map::Entry;
 use lee_core::{
     account::{AccountId, AccountWithMetadata},
     program::{
-        AccountPostState, ChainedCall, Claim, DEFAULT_PROGRAM_ID, InstructionData, ProgramId,
+        AccountPostState, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramId,
         ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
@@ -98,7 +98,8 @@ fn decode_config(
         "not the sequencer_stake config account"
     );
     assert_eq!(
-        config_account.account.program_owner, self_program_id,
+        config_account.account.program_owner,
+        self_program_id.into(),
         "config account is not owned by sequencer_stake"
     );
     SequencerStakeConfig::from_bytes(config_account.account.data.as_ref())
@@ -133,10 +134,11 @@ fn stake(
 
     // An ownership account stays claimed after a full exit, so what a call is
     // doing follows from the config entry, not from the account's owner.
-    let is_claimed = ownership_account.account.program_owner != DEFAULT_PROGRAM_ID;
+    let is_claimed = ownership_account.account.program_owner != DEFAULT_PROGRAM_OWNER;
     if is_claimed {
         assert_eq!(
-            ownership_account.account.program_owner, self_program_id,
+            ownership_account.account.program_owner,
+            self_program_id.into(),
             "not a sequencer_stake ownership account"
         );
         let record = StakeRecord::from_bytes(ownership_account.account.data.as_ref())
@@ -207,7 +209,7 @@ fn stake(
     // chained-call pre-states reflect state as of when each call runs
     let mut ownership_account_claimed = ownership_account;
     ownership_account_claimed.account = ownership_account_data;
-    ownership_account_claimed.account.program_owner = self_program_id;
+    ownership_account_claimed.account.program_owner = self_program_id.into();
 
     let mover_call = ChainedCall {
         program_id: mover_program_id,
@@ -267,7 +269,8 @@ fn unstake_request(
         "must sign for the ownership account"
     );
     assert_eq!(
-        ownership_account.account.program_owner, self_program_id,
+        ownership_account.account.program_owner,
+        self_program_id.into(),
         "not a sequencer_stake ownership account"
     );
 
@@ -335,7 +338,8 @@ fn finalize_unstake(
         );
 
     assert_eq!(
-        ownership_account.account.program_owner, self_program_id,
+        ownership_account.account.program_owner,
+        self_program_id.into(),
         "not a sequencer_stake ownership account"
     );
 

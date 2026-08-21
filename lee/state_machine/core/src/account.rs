@@ -1,7 +1,4 @@
-use std::{
-    fmt::{Display, Write as _},
-    str::FromStr,
-};
+use std::{fmt::Display, str::FromStr};
 
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -11,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use thiserror::Error;
 
-use crate::{NullifierSecretKey, program::ProgramId};
+use crate::NullifierSecretKey;
 
 pub mod data;
 
@@ -117,32 +114,13 @@ pub struct AccountDiff {
 
 /// Account to be used both in public and private contexts.
 #[derive(
-    Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+    Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct Account {
-    pub program_owner: ProgramId,
+    pub program_owner: AccountId,
     pub balance: Balance,
     pub data: Data,
     pub nonce: Nonce,
-}
-
-impl std::fmt::Debug for Account {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let program_owner_hex = self
-            .program_owner
-            .iter()
-            .flat_map(|n| n.to_le_bytes())
-            .fold(String::new(), |mut acc, bytes| {
-                write!(acc, "{bytes:02x}").expect("writing to string should not fail");
-                acc
-            });
-        f.debug_struct("Account")
-            .field("program_owner", &program_owner_hex)
-            .field("balance", &self.balance)
-            .field("data", &self.data)
-            .field("nonce", &self.nonce)
-            .finish()
-    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -281,14 +259,14 @@ mod tests {
     fn default_program_owner_account_data_creation() {
         let new_acc = Account::default();
 
-        assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_ID);
+        assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_ID.into());
     }
 
     #[cfg(feature = "host")]
     #[test]
     fn account_with_metadata_constructor() {
         let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
             balance: 1337,
             data: b"testing_account_with_metadata_constructor"
                 .to_vec()

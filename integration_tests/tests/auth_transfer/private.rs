@@ -3,9 +3,13 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance,
-    assert_private_commitment_in_state, fetch_privacy_preserving_tx, get_account, new_account,
-    private_mention, public_mention, send, sync_private, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
+    public_mention,
+    utils::{
+        account_balance, assert_private_commitment_in_state, get_account, new_account, send,
+        sync_private,
+    },
+    verify_commitment_is_in_state,
 };
 use lee::{
     AccountId, execute_and_prove, privacy_preserving_transaction::circuit::ProgramWithDependencies,
@@ -382,7 +386,7 @@ async fn initialize_private_account() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(account.balance, 0);
     assert!(account.data.is_empty());
@@ -461,7 +465,7 @@ async fn initialize_private_account_using_label() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
 
     log::info!("Successfully initialized private account using label");

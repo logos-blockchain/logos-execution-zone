@@ -1,7 +1,7 @@
-use std::{fs::File, io::BufReader, path::Path, time::Duration};
+use std::{fs::File, io::BufReader, num::NonZeroU32, path::Path, time::Duration};
 
 use anyhow::{Context as _, Result};
-use common::config::BasicAuth;
+use common::{HashType, config::BasicAuth};
 use cross_zone_inbox_core::CrossZoneConfig;
 use humantime_serde;
 use lee::AccountId;
@@ -25,6 +25,23 @@ pub struct IndexerConfig {
     /// Cross-zone configuration. `None` disables the indexer's cross-zone handling.
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,
+    /// Hex hashes of local blocks accepted without cross-zone verification: a
+    /// listed block skips verification entirely, so listing a hash clears a
+    /// dead-peer retry loop as well as a forged verdict. This accepts the
+    /// sequencer's word for the listed blocks only; every other block stays
+    /// verified. Acceptance can permanently consume the real message's
+    /// delivery slot if the sequencer forged under true source coordinates,
+    /// and the unverified marks are memory only, so an unlisted replay of the
+    /// same dispatch after a restart halts again.
+    #[serde(default)]
+    pub cross_zone_accept_unverified: Vec<HashType>,
+    /// Peer-block bodies the cross-zone verifier keeps behind each peer's
+    /// verified tip. Omitted means 1024. `u32::MAX` is effectively unbounded:
+    /// the escape hatch for a deployment whose dispatches routinely reach
+    /// further back than any fixed window, paid for in unbounded memory. Zero
+    /// is unrepresentable and rejected at config parse.
+    #[serde(default = "default_peer_block_cache_window")]
+    pub peer_block_cache_window: NonZeroU32,
     /// Bridge-lock holdings to seed into genesis, mirroring the sequencer's
     /// `SupplyBridgeLockHolding` actions. They are not produced by any
     /// transaction, so the indexer must seed them to match the sequencer's state.
@@ -61,4 +78,9 @@ impl IndexerConfig {
             )
         })
     }
+}
+
+/// The window applied when the config omits `peer_block_cache_window`.
+pub(crate) const fn default_peer_block_cache_window() -> NonZeroU32 {
+    NonZeroU32::new(1024).expect("1024 is nonzero")
 }
