@@ -561,7 +561,7 @@ fn metering_transfer_fixture() -> (V03State, crate::PublicTransaction) {
 fn budgeted_execution_reports_cycles_and_matching_diff() {
     // The same tx through both entry points: identical diff, nonzero cycles.
     let (state, tx) = metering_transfer_fixture();
-    let (diff, outcome) = ValidatedStateDiff::from_public_transaction_with_budget(
+    let (diff, outcome) = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
         &tx,
         &state,
         1,
@@ -579,7 +579,8 @@ fn budgeted_execution_reports_cycles_and_matching_diff() {
 #[test]
 fn exhausted_budget_surfaces_out_of_gas() {
     let (state, tx) = metering_transfer_fixture();
-    let result = ValidatedStateDiff::from_public_transaction_with_budget(&tx, &state, 1, 0, 1_024);
+    let result =
+        ValidatedStateDiff::from_public_transaction_with_cycle_budget(&tx, &state, 1, 0, 1_024);
     assert!(matches!(result, Err(LeeError::OutOfGas { budget: 1_024 })));
 }
 
@@ -616,7 +617,7 @@ fn chained_calls_share_one_budget() {
     let witness_set = WitnessSet::for_message(&message, &[&from_key]);
     let tx = crate::PublicTransaction::new(message, witness_set);
 
-    let full_cycles = ValidatedStateDiff::from_public_transaction_with_budget(
+    let full_cycles = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
         &tx,
         &state,
         1,
@@ -633,8 +634,13 @@ fn chained_calls_share_one_budget() {
     // boundary budget (`full_cycles - 1`) can still complete. A quarter of the
     // chain's total is decisively insufficient.
     let starved_budget = full_cycles >> 2;
-    let starved =
-        ValidatedStateDiff::from_public_transaction_with_budget(&tx, &state, 1, 0, starved_budget);
+    let starved = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
+        &tx,
+        &state,
+        1,
+        0,
+        starved_budget,
+    );
     assert!(matches!(starved, Err(LeeError::OutOfGas { .. })));
 }
 

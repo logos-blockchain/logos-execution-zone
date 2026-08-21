@@ -67,7 +67,7 @@ impl ExecutionOutcome {
 }
 
 impl ValidatedStateDiff {
-    /// [`Self::from_public_transaction_with_budget`] at the default budget,
+    /// [`Self::from_public_transaction_with_cycle_budget`] at the default budget,
     /// discarding the metered outcome.
     pub fn from_public_transaction(
         tx: &PublicTransaction,
@@ -75,7 +75,7 @@ impl ValidatedStateDiff {
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
-        Self::from_public_transaction_with_budget(
+        Self::from_public_transaction_with_cycle_budget(
             tx,
             state,
             block_id,
@@ -88,7 +88,7 @@ impl ValidatedStateDiff {
     /// Validates and executes `tx` under `cycle_budget`, shared by every call
     /// in the chain: each nested session is limited to the remaining budget, so
     /// the chain cannot exceed the budget in aggregate.
-    pub fn from_public_transaction_with_budget(
+    pub fn from_public_transaction_with_cycle_budget(
         tx: &PublicTransaction,
         state: &V03State,
         block_id: BlockId,
