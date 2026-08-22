@@ -746,15 +746,11 @@ pub enum ProgramCall<T> {
     UpdateFromDiff { pre_state: Account, diff_data: Data },
 }
 
-/// Journal committed by an `UpdateFromDiff` invocation.
+/// Journal of an `UpdateFromDiff` invocation; this is an inner receipt consumed by the
+/// privacy-preserving circuit.
 ///
-/// Binds `pre_state`/`diff_data` alongside the result `data` — not just for the caller's benefit
-/// (a direct, unproven caller like `Program::execute_update_from_diff` already knows what it
-/// sent), but so that anyone verifying this journal via `env::verify` (e.g. the
-/// privacy-preserving circuit, recursively composing this receipt into its own proof) can
-/// confirm the result was produced *from these specific inputs*, not just "some execution of
-/// this program in `UpdateFromDiff` mode." Without this, a journal carrying only `data` would
-/// let an unrelated valid receipt be substituted for this account's materialization.
+/// Binds `pre_state`/`diff_data` to the result `data` so the privacy-preserving circuit can
+/// confirm `data`'s construction.
 #[derive(Serialize, Deserialize)]
 pub struct UpdateFromDiffOutput {
     pub pre_state: Account,
@@ -963,11 +959,11 @@ fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> boo
 }
 
 /// Commits an `update_from_diff` result to the journal, bound to the inputs that produced it.
-pub fn write_update_from_diff_output(pre_state: &Account, diff_data: &Data, data: &Data) {
+pub fn write_update_from_diff_output(pre_state: Account, diff_data: Data, data: Data) {
     env::commit(&UpdateFromDiffOutput {
-        pre_state: pre_state.clone(),
-        diff_data: diff_data.clone(),
-        data: data.clone(),
+        pre_state,
+        diff_data,
+        data,
     });
 }
 
