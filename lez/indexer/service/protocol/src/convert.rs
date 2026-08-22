@@ -7,10 +7,9 @@ use crate::{
     BlockBody, BlockHeader, BlockIngestError, Ciphertext, Claim, Commitment, CommitmentSetDigest,
     CrossZoneHalt, Data, EncryptedAccountData, EphemeralPublicKey, HashType, IndexerStatus,
     IndexerSyncState, Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction,
-    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicDiff,
-    PublicKey, PublicMessage, PublicTransaction, Signature, StallReason, Transaction,
-    ValidityWindow, WitnessSet,
+    PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
+    ProgramDeploymentTransaction, ProgramId, Proof, PublicDiff, PublicKey, PublicMessage,
+    PublicTransaction, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================

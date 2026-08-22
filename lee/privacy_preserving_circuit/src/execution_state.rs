@@ -738,6 +738,13 @@ fn match_caller_seed_as_private_pda(
 /// Either the account is a public PDA in which case the public mask should be changed, or
 /// it is a regular account. For PDAs, we assert the family bindings. For regular accounts,
 /// add to global authorization set.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each parameter is independently required context (family/global-authorization \
+              state, caller identity, the account under judgment, and whether it's public/a \
+              real signer); bundling them into a struct wouldn't reduce complexity, only \
+              relocate it"
+)]
 fn authorize_first_sight_without_pda_witness(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     globally_authorized: &mut HashSet<AccountId>,

@@ -865,11 +865,12 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
     )
     .expect("a caller's pda_seeds must authorize a public PDA it delegates at first sight");
 
-    // The callee ran with the PDA authorized (auth_asserting_noop did not panic), while
-    // the journal exports the credential view: a seed grant is not a signer-backed claim.
-    assert_eq!(output.public_actions.len(), 1);
-    assert_eq!(output.public_actions[0].pre.account_id, pda);
-    assert!(!output.public_actions[0].pre.is_authorized);
+    // The callee ran with the PDA authorized (auth_asserting_noop did not panic). The
+    // pre-state's is_authorized view is no longer exported to the journal at all (removed
+    // along with public_pre_states — nothing left to audit once it isn't part of the proven
+    // output), so only the touched account's identity is left to check here.
+    assert_eq!(output.public_diffs.len(), 1);
+    assert_eq!(output.public_diffs[0].account_id, pda);
 }
 
 #[test]
@@ -904,40 +905,44 @@ fn public_pda_first_sight_grant_does_not_extend_to_sibling_calls() {
 }
 
 #[test]
-fn public_account_first_sight_authorization_is_exported_to_the_journal() {
+fn public_account_first_sight_authorization_without_signer_backing_is_rejected() {
     let seed = PdaSeed::new([77; 32]);
 
-    let output = undeclaring_public_delegation(
+    // Regression pin for the forgery PR3's signer check closes: `undeclaring_pda_delegator`
+    // self-declares `is_authorized = true` on a plain public account (not the seed's derived
+    // PDA, so no caller-seed match either) with no backing signer. Once `public_pre_states`
+    // stopped being exported, the circuit's signer-set check became the only thing standing
+    // between a self-reported claim and the proof succeeding — it must reject this.
+    let result = undeclaring_public_delegation(
         AccountId::new([9; 32]),
         Some(seed),
         true,
         crate::test_methods::auth_asserting_noop(),
         false,
-    )
-    .expect("a first-sight authorization claim on a plain public account must prove");
+    );
 
-    assert!(output.public_actions[0].pre.is_authorized);
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
 
 #[test]
-fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
+fn wrong_seed_public_pda_first_sight_without_signer_backing_is_rejected() {
     let seed = PdaSeed::new([77; 32]);
     let wrong_seed = PdaSeed::new([88; 32]);
     let delegator_id = crate::test_methods::undeclaring_pda_delegator().id();
     let pda = AccountId::for_public_pda(&delegator_id, &seed);
 
-    let output = undeclaring_public_delegation(
+    // An unmatched seed falls back to the credential-claim path, which is subject to the same
+    // signer-backing requirement as any other first-sighted public account — regression pin,
+    // see `public_account_first_sight_authorization_without_signer_backing_is_rejected`.
+    let result = undeclaring_public_delegation(
         pda,
         Some(wrong_seed),
         true,
         crate::test_methods::auth_asserting_noop(),
         false,
-    )
-    .expect("an unmatched seed must fall back to the credential-claim path");
+    );
 
-    // In-circuit this is indistinguishable from a signer's claim; the exported `true`
-    // is what the verifier audits (and rejects — the id is not a signer).
-    assert!(output.public_actions[0].pre.is_authorized);
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
 
 /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
