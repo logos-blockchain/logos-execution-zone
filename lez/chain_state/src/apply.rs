@@ -163,11 +163,9 @@ pub fn apply_block_to_state(
                 )
                 .map_err(|err| state_transition(err.into()))?
         } else {
-            let (_, events) = transaction
-                .clone()
+            transaction
                 .execute_on_state(state, block.header.block_id, block.header.timestamp)
-                .map_err(|err| state_transition(err.into()))?;
-            events
+                .map_err(|err| state_transition(err.into()))?
         };
         collect_tx_events(&mut block_events, tx_index, transaction, events);
     }

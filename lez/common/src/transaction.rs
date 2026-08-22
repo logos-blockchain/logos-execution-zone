@@ -143,18 +143,17 @@ impl LeeTransaction {
     /// The indexer replays blocks the sequencer already validated and inscribed on Bedrock,
     /// so it trusts those inscriptions and re-derives state without re-validating them.
     ///
-    /// Alongside the state, returns a vector of events the transaction emitted.
+    /// Returns the events the transaction emitted.
     pub fn execute_on_state(
-        self,
+        &self,
         state: &mut V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<(Self, Vec<TransactionEvent>), lee::error::LeeError> {
+    ) -> Result<Vec<TransactionEvent>, lee::error::LeeError> {
         let diff = self
             .compute_state_diff(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
-        let events = state.apply_state_diff(diff);
-        Ok((self, events))
+        Ok(state.apply_state_diff(diff))
     }
 
     fn validate_bridge_account_modification(
