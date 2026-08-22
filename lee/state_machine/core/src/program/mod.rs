@@ -259,6 +259,33 @@ impl AccountId {
         )
     }
 
+    /// Derives the [`AccountId`] for a shadow program from its `image_id` alone.
+    ///
+    /// A shadow program is one that has never been deployed anywhere, public or private — no PDA
+    /// claim, no commitment, ever. This is a pure function of `image_id`: unlike
+    /// [`AccountId::for_public_pda`]/[`AccountId::for_private_pda`], there's no seed, update
+    /// authority, or registration event to derive from, since none exists. Identical bytecode
+    /// from different provers intentionally collides on the same address — that's natural
+    /// deduplication, not a concern, since shadow programs can only ever operate on private
+    /// accounts (enforced elsewhere) and account authorization already governs access.
+    #[must_use]
+    pub fn for_shadow_program(image_id: &ProgramId) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const SHADOW_PROGRAM_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Shadow/\x00\x00\x00\x00\x00";
+
+        let mut bytes = [0_u8; 64];
+        bytes[0..32].copy_from_slice(SHADOW_PROGRAM_PREFIX);
+        let image_id_bytes: &[u8] =
+            bytemuck::try_cast_slice(image_id).expect("ProgramId should be castable to &[u8]");
+        bytes[32..64].copy_from_slice(image_id_bytes);
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+
     /// Derives an [`AccountId`] for a private PDA from the owning program's dispatch address,
     /// seed, nullifier public key, and identifier.
     ///

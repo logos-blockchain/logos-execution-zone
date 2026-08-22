@@ -270,6 +270,51 @@ fn for_private_pda_differs_from_public_pda() {
     assert_ne!(private_id, public_id);
 }
 
+#[test]
+fn for_shadow_program_matches_pinned_value() {
+    let image_id: ProgramId = [1, 2, 3, 4, 5, 6, 7, 8];
+    let expected = AccountId::new([
+        174, 205, 130, 154, 106, 227, 163, 213, 46, 71, 49, 245, 199, 22, 203, 205, 13, 109, 236,
+        148, 159, 162, 140, 162, 209, 40, 88, 0, 109, 131, 184, 45,
+    ]);
+    assert_eq!(AccountId::for_shadow_program(&image_id), expected);
+}
+
+/// Two different `image_id`s never collide.
+#[test]
+fn for_shadow_program_differs_for_different_image_id() {
+    let image_id_a: ProgramId = [1; 8];
+    let image_id_b: ProgramId = [2; 8];
+    assert_ne!(
+        AccountId::for_shadow_program(&image_id_a),
+        AccountId::for_shadow_program(&image_id_b),
+    );
+}
+
+/// A pure function of `image_id` alone: the same `image_id` always derives the same address, from
+/// anyone, at any time - this is the whole mechanism that makes identical bytecode from different
+/// provers intentionally collide (see `for_shadow_program`'s doc comment).
+#[test]
+fn for_shadow_program_is_deterministic() {
+    let image_id: ProgramId = [7; 8];
+    assert_eq!(
+        AccountId::for_shadow_program(&image_id),
+        AccountId::for_shadow_program(&image_id),
+    );
+}
+
+/// Domain-separated from every other `AccountId` derivation in this module, so a shadow address
+/// can never collide with a public/private PDA even if the raw bytes happen to coincide.
+#[test]
+fn for_shadow_program_differs_from_public_pda() {
+    let image_id: ProgramId = [1; 8];
+    let seed = PdaSeed::new([2; 32]);
+    assert_ne!(
+        AccountId::for_shadow_program(&image_id),
+        AccountId::for_public_pda(&AccountId::from(image_id), &seed),
+    );
+}
+
 #[cfg(feature = "host")]
 #[test]
 fn private_account_kind_header_round_trips() {

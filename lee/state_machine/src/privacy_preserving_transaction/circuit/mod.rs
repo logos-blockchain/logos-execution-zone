@@ -1,9 +1,9 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput, ProgramImageClaim,
+    PrivacyPreservingCircuitOutput, ProgramImageClaim, ShadowProgramWitness,
     account::{AccountId, AccountWithMetadata},
     program::{ChainedCall, InstructionData, ProgramOutput},
 };
@@ -47,10 +47,15 @@ pub struct ProgramWithDependencies {
     /// `program_loader_core::immutable_deploy_account_id(program.id())`, matching how every
     /// genesis-seeded builtin is actually dispatched; override via
     /// [`Self::with_program_account_id`] for a program deployed to a different PDA (e.g. a
-    /// `Deploy` with a non-default `update_auth`).
+    /// `Deploy` with a non-default `update_auth`), or [`Self::as_shadow_program`] for one that's
+    /// never been deployed anywhere at all.
     pub program_account_id: AccountId,
     // TODO: avoid having a copy of the bytecode of each dependency.
     pub dependencies: HashMap<AccountId, Program>,
+    /// `account_id`s (of `program` itself, or of a dependency) resolved as shadow programs
+    /// instead of `ProgramImageClaim::Public` claims. Populated by
+    /// [`Self::as_shadow_program`]/[`Self::with_shadow_dependency`].
+    pub shadow_account_ids: HashSet<AccountId>,
 }
 
 impl ProgramWithDependencies {
@@ -61,6 +66,7 @@ impl ProgramWithDependencies {
             program,
             program_account_id,
             dependencies,
+            shadow_account_ids: HashSet::new(),
         }
     }
 
@@ -69,6 +75,24 @@ impl ProgramWithDependencies {
     #[must_use]
     pub const fn with_program_account_id(mut self, program_account_id: AccountId) -> Self {
         self.program_account_id = program_account_id;
+        self
+    }
+
+    /// Marks `program` itself as a shadow program: dispatched at
+    /// `AccountId::for_shadow_program(program.id())`, resolved via a fresh
+    /// [`ShadowProgramWitness`] instead of a public claim.
+    #[must_use]
+    pub fn as_shadow_program(mut self) -> Self {
+        self.program_account_id = AccountId::for_shadow_program(&self.program.id());
+        self.shadow_account_ids.insert(self.program_account_id);
+        self
+    }
+
+    /// Marks the dependency already inserted at `account_id` (which must be
+    /// `AccountId::for_shadow_program(dependency.id())`) as a shadow program.
+    #[must_use]
+    pub fn with_shadow_dependency(mut self, account_id: AccountId) -> Self {
+        self.shadow_account_ids.insert(account_id);
         self
     }
 }
@@ -107,28 +131,43 @@ pub fn execute_and_prove_with_padded_inputs(
         program: initial_program,
         program_account_id: initial_program_account_id,
         dependencies,
+        shadow_account_ids,
     } = program_with_dependencies;
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
 
+    let all_programs_by_account_id =
+        std::iter::once((*initial_program_account_id, initial_program)).chain(
+            dependencies
+                .iter()
+                .map(|(account_id, program)| (*account_id, program)),
+        );
+
     // Real `image_id`s for every program in this call graph whose address doesn't already
     // determine it — i.e. every `Deploy`-created program, PDA-addressed rather than
-    // bijection-addressed. A legacy program needs no claim at all: `ProgramId::from(account_id)`
-    // is already exact for it, by construction, with nothing to authenticate. See
-    // `ProgramImageClaim` and `execution_state.rs`'s matching bijection fallback.
-    let program_image_claims: Vec<ProgramImageClaim> =
-        std::iter::once((*initial_program_account_id, initial_program.id()))
-            .chain(
-                dependencies
-                    .iter()
-                    .map(|(account_id, program)| (*account_id, program.id())),
-            )
-            .filter(|(account_id, image_id)| *account_id != AccountId::from(*image_id))
-            .map(|(account_id, image_id)| ProgramImageClaim::Public {
-                account_id,
-                image_id,
-            })
-            .collect();
+    // bijection-addressed — and isn't resolved as a shadow program instead. A legacy program
+    // needs no claim at all: `ProgramId::from(account_id)` is already exact for it, by
+    // construction, with nothing to authenticate.
+    let program_image_claims: Vec<ProgramImageClaim> = all_programs_by_account_id
+        .clone()
+        .filter(|(account_id, _)| !shadow_account_ids.contains(account_id))
+        .map(|(account_id, program)| (account_id, program.id()))
+        .filter(|(account_id, image_id)| *account_id != AccountId::from(*image_id))
+        .map(|(account_id, image_id)| ProgramImageClaim::Public {
+            account_id,
+            image_id,
+        })
+        .collect();
+
+    // Every program resolved as shadow instead — this carries the full elf rather than just a
+    // claimed image_id, since nothing about a shadow program's identity is ever committed to.
+    let shadow_program_witnesses: Vec<ShadowProgramWitness> = all_programs_by_account_id
+        .filter(|(account_id, _)| shadow_account_ids.contains(account_id))
+        .map(|(account_id, program)| ShadowProgramWitness {
+            account_id,
+            full_binary: program.elf().to_vec(),
+        })
+        .collect();
 
     let initial_call = ChainedCall {
         program_account_id: *initial_program_account_id,
@@ -187,6 +226,7 @@ pub fn execute_and_prove_with_padded_inputs(
         program_id: program_with_dependencies.program.id(),
         dummy_inputs,
         program_image_claims,
+        shadow_program_witnesses,
     };
 
     env_builder.write(&circuit_input).unwrap();

@@ -457,6 +457,60 @@ fn private_pda_claim_succeeds() {
     assert!(output.public_actions.is_empty());
 }
 
+/// Same as `private_pda_claim_succeeds`, but the claiming program has never been deployed
+/// anywhere, public or private, and is dispatched as a shadow program instead. Its identity is
+/// established fresh, in this one proof, from its elf supplied as a witness (see
+/// `AccountId::for_shadow_program`/`ShadowProgramWitness`).
+///
+/// The PDA formula itself is unaffected, since `for_private_pda` is keyed by the program's real
+/// image id either way. What's actually exercised here is that the shadow-resolved dispatch
+/// address flows correctly into the same `Claim::Pda` ownership mechanics every other program
+/// uses, and that a shadow program never appears in the circuit's output: `program_image_claims`
+/// stays empty, and exactly one private action is produced, so no extra commitment for the
+/// program's own identity is ever emitted.
+#[test]
+fn shadow_program_claims_a_private_pda_it_legitimately_owns() {
+    let program = crate::test_methods::pda_claimer();
+    let keys = test_private_account_keys_1();
+    let npk = keys.npk();
+    let seed = PdaSeed::new([42; 32]);
+
+    let account_id = AccountId::for_private_pda(
+        &AccountId::for_shadow_program(&program.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        u128::MAX,
+    );
+    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let program_with_deps = ProgramWithDependencies::from(program).as_shadow_program();
+
+    let result = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction(seed).unwrap(),
+        vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            identifier: u128::MAX,
+            kind: WitnessKind::Pda { binding: None },
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
+        &program_with_deps,
+    );
+
+    let (output, _proof) = result.expect("shadow program's private PDA claim should succeed");
+    assert_eq!(output.private_actions.len(), 1);
+    assert!(output.public_actions.is_empty());
+    assert!(
+        output.program_image_claims.is_empty(),
+        "a shadow program must never appear in the circuit's program_image_claims output"
+    );
+}
+
 /// An npk is supplied that does not match the `pre_state`'s `account_id` under
 /// `AccountId::for_private_pda(program, claim_seed, npk)`. The claim equality check rejects.
 #[test]

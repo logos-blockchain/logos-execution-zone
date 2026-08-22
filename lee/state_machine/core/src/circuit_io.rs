@@ -74,6 +74,26 @@ pub struct PrivacyPreservingCircuitInput {
     /// Real `image_id`s for every `Deploy`-created program invoked in the call graph, keyed by
     /// account id. See [`ProgramImageClaim`].
     pub program_image_claims: Vec<ProgramImageClaim>,
+    /// Identities of every shadow program invoked in the call graph.
+    pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
+}
+
+/// A shadow program's identity, established fresh in this one proof from a real ELF supplied as a
+/// private witness.
+///
+/// Unlike [`ProgramImageClaim`], this is never echoed into the circuit's output and never anchored
+/// against anything in chain state — a shadow program has never been deployed anywhere, public or
+/// private, and never will be. The circuit proves `account_id ==
+/// AccountId::for_shadow_program(image_id)` where `image_id` comes from
+/// actually decoding and hashing `full_binary` right here, every single time — there is no cheaper
+/// path, since nothing before this moment ever attested to this ELF.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ShadowProgramWitness {
+    pub account_id: AccountId,
+    /// The full two-ELF `ProgramBinary` blob (same format `Program::elf()` produces elsewhere in
+    /// this codebase) - decoded and hashed in-circuit, so a shadow program isn't constrained to
+    /// this repo's pinned kernel the way a `Deploy`-created program is.
+    pub full_binary: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

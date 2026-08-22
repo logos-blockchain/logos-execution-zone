@@ -9310,6 +9310,7 @@ name = "privacy_preserving_circuit_program"
 version = "0.1.0"
 dependencies = [
  "lee_core",
+ "risc0-binfmt",
  "risc0-zkvm",
 ]
 

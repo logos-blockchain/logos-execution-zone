@@ -44,6 +44,39 @@ fn proof_inner_roundtrip() {
     assert_eq!(Proof::from_inner(vec![0xFF]).into_inner(), vec![0xFF_u8]);
 }
 
+/// Two independent provers wrapping the identical bytecode as a shadow program derive the exact
+/// same dispatch address - accepted as natural deduplication, not a concern. No proving needed:
+/// this is a property of `ProgramWithDependencies::as_shadow_program`'s own construction, not of
+/// circuit execution.
+#[test]
+fn as_shadow_program_is_deterministic_across_independent_callers() {
+    let program_a = crate::test_methods::pda_claimer();
+    let program_b = crate::test_methods::pda_claimer();
+    assert_eq!(
+        ProgramWithDependencies::from(program_a)
+            .as_shadow_program()
+            .program_account_id,
+        ProgramWithDependencies::from(program_b)
+            .as_shadow_program()
+            .program_account_id,
+    );
+}
+
+/// Different bytecode never collides.
+#[test]
+fn as_shadow_program_differs_for_different_programs() {
+    let claimer = crate::test_methods::pda_claimer();
+    let noop = crate::test_methods::auth_asserting_noop();
+    assert_ne!(
+        ProgramWithDependencies::from(claimer)
+            .as_shadow_program()
+            .program_account_id,
+        ProgramWithDependencies::from(noop)
+            .as_shadow_program()
+            .program_account_id,
+    );
+}
+
 #[test]
 fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() {
     let recipient_keys = test_private_account_keys_1();

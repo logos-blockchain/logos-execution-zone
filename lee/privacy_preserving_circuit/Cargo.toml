@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 lee_core.workspace = true
+risc0-binfmt.workspace = true
 risc0-zkvm.workspace = true
 
 [dev-dependencies]
