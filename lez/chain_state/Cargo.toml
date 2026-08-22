@@ -10,7 +10,7 @@ workspace = true
 [dependencies]
 common.workspace = true
 lee.workspace = true
-lee_core.workspace = true
+lee_core = { workspace = true, features = ["host"] }
 logos-blockchain-core.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 
