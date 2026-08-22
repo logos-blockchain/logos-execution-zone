@@ -3,7 +3,7 @@ use std::ffi::{CString, c_char};
 use indexer_service_protocol::{AccountId, EventRecord};
 
 use crate::{
-    IndexerServiceFFI, MAX_EVENT_QUERY_BLOCK_SPAN,
+    IndexerServiceFFI,
     api::{
         PointerResult,
         types::{
@@ -441,8 +441,9 @@ pub unsafe extern "C" fn query_transactions_by_account(
 /// Resolution mirrors the `getEvents` RPC: a non-null `tx_hash` makes this a point
 /// lookup and the block range is ignored; otherwise the range from `from_block` to
 /// `to_block` (defaulting to the current tip when none) is read, capped at
-/// `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded. `program_id`
-/// and `selector` are exact-match filters applied to the result.
+/// `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded, as are bounds
+/// past the indexed tip and queries outside the indexer's event-filter history.
+/// `program_id` and `selector` are exact-match filters applied to the result.
 ///
 /// # Arguments
 ///
@@ -486,47 +487,75 @@ pub unsafe extern "C" fn query_events(
     let selector = unsafe { selector.as_ref() }.map(|s| indexer_service_protocol::Selector(s.data));
 
     let records = if let Some(tx_hash) = unsafe { tx_hash.as_ref() } {
-        indexer
-            .core()
-            .store
-            .block_id_by_tx_hash(tx_hash.data)
-            .and_then(|resolved| {
-                resolved.map_or(Ok(Vec::new()), |block_id| {
-                    indexer
-                        .core()
-                        .store
-                        .get_events_for_block(block_id)
-                        .map(|row| {
-                            row.and_then(|groups| {
-                                groups
-                                    .into_iter()
-                                    .find(|group| group.tx_hash.0 == tx_hash.data)
-                            })
-                            .map(|group| EventRecord::from_tx_events(block_id, group))
-                            .unwrap_or_default()
+        // Coverage is judged at the transaction's height, resolved BEFORE the events
+        // read: a filtered-out tx has no events row, and gating on the row's presence
+        // would serve an empty result for exactly the dropped domains.
+        match indexer.core().store.block_id_by_tx_hash(tx_hash.data) {
+            Err(e) => Err(e),
+            Ok(None) => {
+                log::error!("query_events: no indexed transaction has the requested hash");
+                return PointerResult::from_error(OperationStatus::InvalidArgument);
+            }
+            Ok(Some(block_id)) => {
+                if !indexer_core::event_filter::covered_over_range(
+                    indexer.core().store.filter_segments(),
+                    block_id,
+                    block_id,
+                    program_id.map(|id| id.0),
+                    selector.map(|s| s.0),
+                ) {
+                    log::error!(
+                        "query_events: the requested events at block {block_id} are outside this \
+                         indexer's event-filter history"
+                    );
+                    return PointerResult::from_error(OperationStatus::InvalidArgument);
+                }
+                indexer
+                    .core()
+                    .store
+                    .get_events_for_block(block_id)
+                    .map(|row| {
+                        row.and_then(|groups| {
+                            groups
+                                .into_iter()
+                                .find(|group| group.tx_hash.0 == tx_hash.data)
                         })
-                })
-            })
+                        .map(|group| EventRecord::from_tx_events(block_id, group))
+                        .unwrap_or_default()
+                    })
+            }
+        }
     } else {
+        let tip = match indexer.core().store.get_last_block_id() {
+            Ok(tip) => tip.unwrap_or(0),
+            Err(e) => {
+                log::error!("Failed to read the indexed tip for query_events: {e:#}");
+                return PointerResult::from_error(OperationStatus::ClientError);
+            }
+        };
         if to_block.is_some && to_block.value.is_null() {
             log::error!("query_events to_block is flagged present but its value pointer is null");
             return PointerResult::from_error(OperationStatus::InvalidArgument);
         }
-        let to_block = match to_block.is_some.then(|| unsafe { *to_block.value }) {
-            Some(to_block) => to_block,
-            None => match indexer.core().store.get_last_block_id() {
-                Ok(tip) => tip.unwrap_or(0),
-                Err(e) => {
-                    log::error!("Failed to query events: {e:#}");
-                    return PointerResult::from_error(OperationStatus::ClientError);
+        let to_block = to_block.is_some.then(|| unsafe { *to_block.value });
+        let (from_block, to_block) =
+            match indexer_service_protocol::resolve_event_block_range(from_block, to_block, tip) {
+                Ok(range) => range,
+                Err(err) => {
+                    log::error!("query_events: {err}");
+                    return PointerResult::from_error(OperationStatus::InvalidArgument);
                 }
-            },
-        };
-        // Same bound as the RPC surface, from the shared constant.
-        let span = to_block.saturating_sub(from_block).saturating_add(1);
-        if span > MAX_EVENT_QUERY_BLOCK_SPAN {
+            };
+        if !indexer_core::event_filter::covered_over_range(
+            indexer.core().store.filter_segments(),
+            from_block,
+            to_block,
+            program_id.map(|id| id.0),
+            selector.map(|s| s.0),
+        ) {
             log::error!(
-                "query_events block span {span} exceeds the maximum of {MAX_EVENT_QUERY_BLOCK_SPAN}"
+                "query_events: the requested events over blocks {from_block}..={to_block} are \
+                 outside this indexer's event-filter history"
             );
             return PointerResult::from_error(OperationStatus::InvalidArgument);
         }

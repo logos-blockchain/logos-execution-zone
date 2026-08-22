@@ -686,8 +686,9 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
  * Resolution mirrors the `getEvents` RPC: a non-null `tx_hash` makes this a point
  * lookup and the block range is ignored; otherwise the range from `from_block` to
  * `to_block` (defaulting to the current tip when none) is read, capped at
- * `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded. `program_id`
- * and `selector` are exact-match filters applied to the result.
+ * `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded, as are bounds
+ * past the indexed tip and queries outside the indexer's event-filter history.
+ * `program_id` and `selector` are exact-match filters applied to the result.
  *
  * # Arguments
  *
