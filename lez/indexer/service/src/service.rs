@@ -21,6 +21,12 @@ use log::{debug, error, warn};
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
+// Bounds the bytes one getEvents response can carry, measured as serialized:
+// base64 inflates `data` by 4/3 and the fixed fields cost a flat allowance. Kept
+// under the transport's response cap so this limit is the one that binds.
+const MAX_EVENT_QUERY_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const EVENT_RECORD_BASE_BYTES: usize = 256;
+
 pub struct IndexerService {
     subscription_service: SubscriptionService,
     indexer: IndexerCore,
@@ -220,7 +226,8 @@ impl indexer_service_rpc::RpcServer for IndexerService {
                     filter.program_id,
                     filter.selector,
                 )?;
-                self.indexer
+                let records = self
+                    .indexer
                     .store
                     .get_events_for_block(block_id)
                     .map_err(db_error)?
@@ -230,7 +237,8 @@ impl indexer_service_rpc::RpcServer for IndexerService {
                             .find(|group| group.tx_hash.0 == tx_hash.0)
                     })
                     .map(|group| EventRecord::from_tx_events(block_id, group))
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                collect_within_budget(records, &filter, MAX_EVENT_QUERY_RESPONSE_BYTES)?
             }
             EventQuery::ByRange {
                 from_block,
@@ -243,25 +251,24 @@ impl indexer_service_rpc::RpcServer for IndexerService {
                     filter.program_id,
                     filter.selector,
                 )?;
-                let mut records = vec![];
-                for (block_id, groups) in self
+                let groups = self
                     .indexer
                     .store
                     .get_events_range(from_block, to_block)
-                    .map_err(db_error)?
-                {
-                    for group in groups {
-                        records.extend(EventRecord::from_tx_events(block_id, group));
-                    }
-                }
-                records
+                    .map_err(db_error)?;
+                collect_within_budget(
+                    groups.into_iter().flat_map(|(block_id, groups)| {
+                        groups
+                            .into_iter()
+                            .flat_map(move |group| EventRecord::from_tx_events(block_id, group))
+                    }),
+                    &filter,
+                    MAX_EVENT_QUERY_RESPONSE_BYTES,
+                )?
             }
         };
 
-        Ok(records
-            .into_iter()
-            .filter(|record| record.matches_fields(filter.program_id, filter.selector))
-            .collect())
+        Ok(records)
     }
 
     async fn get_status(&self) -> Result<IndexerStatus, ErrorObjectOwned> {
@@ -662,6 +669,51 @@ pub(crate) fn matches_subscription_filter(
             .is_none_or(|tx_hash| tx_hash == record.tx_hash)
 }
 
+// The response is filtered and charged against the budget as it is built, so an
+// over-budget query fails before materializing the response; the store's own
+// span-bounded scan has already happened by then.
+const fn record_charge(record: &EventRecord) -> usize {
+    let EventRecord {
+        block_id: _,
+        tx_index: _,
+        tx_hash: _,
+        program_id: _,
+        selector: _,
+        data,
+    } = record;
+    EVENT_RECORD_BASE_BYTES.saturating_add(data.len().div_ceil(3).saturating_mul(4))
+}
+
+pub(crate) fn collect_within_budget(
+    records: impl IntoIterator<Item = EventRecord>,
+    filter: &GetEventsFilter,
+    budget: usize,
+) -> Result<Vec<EventRecord>, ErrorObjectOwned> {
+    let mut spent = 0_usize;
+    let mut kept = Vec::new();
+    for record in records {
+        if !record.matches_fields(filter.program_id, filter.selector) {
+            continue;
+        }
+        spent = spent.saturating_add(record_charge(&record));
+        if spent > budget {
+            return Err(response_too_large_error(budget));
+        }
+        kept.push(record);
+    }
+    Ok(kept)
+}
+
+fn response_too_large_error(budget: usize) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(
+        ErrorCode::InvalidParams.code(),
+        "EventResponseTooLarge".to_owned(),
+        Some(format!(
+            "matching events exceed {budget} response bytes; narrow the block range or filter"
+        )),
+    )
+}
+
 // Coverage is judged against the filters the store was WRITTEN under: a query
 // they do not fully cover would be answered from a knowingly incomplete store.
 // Subscriptions are forward-only, so they check the live filter.
@@ -920,5 +972,73 @@ mod tests {
         let err = check_event_coverage(&EventFilter::default(), Some(ProgramId([7; 8])), None)
             .unwrap_err();
         assert_eq!(err.message(), "UncoveredEventQuery");
+    }
+
+    #[test]
+    fn byte_budget_admits_at_cap_and_rejects_one_past() {
+        let sized = |data_len: usize| EventRecord {
+            data: vec![0; data_len],
+            ..record(1, 7, 1)
+        };
+        let per_record = record_charge(&sized(4));
+        let filter = GetEventsFilter::default();
+
+        let at_cap = collect_within_budget(
+            vec![sized(4), sized(4)],
+            &filter,
+            per_record.saturating_mul(2),
+        )
+        .unwrap();
+        assert_eq!(at_cap.len(), 2);
+
+        let err = collect_within_budget(
+            vec![sized(4), sized(4)],
+            &filter,
+            per_record.saturating_mul(2).saturating_sub(1),
+        )
+        .unwrap_err();
+        assert_eq!(err.message(), "EventResponseTooLarge");
+    }
+
+    #[test]
+    fn byte_budget_charges_only_matching_records() {
+        let matching = EventRecord {
+            data: vec![0; 4],
+            ..record(1, 7, 1)
+        };
+        let other = EventRecord {
+            data: vec![0; 1024],
+            ..record(1, 8, 1)
+        };
+        let filter = GetEventsFilter {
+            program_id: Some(ProgramId([7; 8])),
+            ..GetEventsFilter::default()
+        };
+
+        let kept = collect_within_budget(
+            vec![other, matching.clone()],
+            &filter,
+            record_charge(&matching),
+        )
+        .unwrap();
+        assert_eq!(kept, vec![matching]);
+    }
+
+    #[test]
+    fn record_charge_upper_bounds_the_serialized_record() {
+        for data_len in 0..=8_usize {
+            let record = EventRecord {
+                block_id: u64::MAX,
+                tx_index: u32::MAX,
+                tx_hash: HashType([0xFF; 32]),
+                program_id: ProgramId([u32::MAX; 8]),
+                selector: Selector([0xFF; 8]),
+                data: vec![0xFF; data_len],
+            };
+            // +1 covers the array separator; this bound is what keeps the byte
+            // budget binding below the transport's response cap.
+            let serialized = serde_json::to_string(&record).expect("serialize").len();
+            assert!(record_charge(&record) >= serialized.saturating_add(1));
+        }
     }
 }
