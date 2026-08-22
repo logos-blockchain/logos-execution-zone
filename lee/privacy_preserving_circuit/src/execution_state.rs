@@ -140,8 +140,11 @@ impl ExecutionState {
         // dependency below.
         let initial_program_account_id = program_image_claims
             .iter()
-            .find(|claim| claim.image_id == program_id)
-            .map_or_else(|| AccountId::from(program_id), |claim| claim.account_id);
+            .find(|claim| claim.image_id() == program_id)
+            .map_or_else(
+                || AccountId::from(program_id),
+                ProgramImageClaim::account_id,
+            );
 
         let initial_call = ChainedCall {
             program_account_id: initial_program_account_id,
@@ -175,10 +178,10 @@ impl ExecutionState {
             // for how that claim gets anchored to real chain state (by the sequencer, not here).
             let current_program_id = program_image_claims
                 .iter()
-                .find(|claim| claim.account_id == chained_call.program_account_id)
+                .find(|claim| claim.account_id() == chained_call.program_account_id)
                 .map_or_else(
                     || ProgramId::from(chained_call.program_account_id),
-                    |claim| claim.image_id,
+                    ProgramImageClaim::image_id,
                 );
 
             // Check that instruction data in chained call is the instruction data in program output

@@ -106,6 +106,7 @@ impl ValidatedStateDiff {
         let mut chained_calls =
             VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
         let mut chain_calls_counter = 0;
+        let mut new_commitments: Vec<Commitment> = Vec::new();
 
         while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
             ensure!(
@@ -133,51 +134,55 @@ impl ValidatedStateDiff {
                 // `catch_unwind` to play the same role the zkVM executor plays for a real guest:
                 // converting a rejected input into a graceful `Err` instead of unwinding past
                 // this call.
-                let post_states = std::panic::catch_unwind(|| -> Result<_, LeeError> {
-                    match instruction {
-                        program_loader_core::Instruction::Deploy {
-                            genesis,
-                            segment_count,
-                            first_segment,
-                        } => {
-                            // The bytecode itself travels via the transaction's own
-                            // `raw_payload`, not `instruction_data` and not
-                            // `chained_call.raw_payload` (which no guest can ever set). Deploy
-                            // only ever runs natively, so a chained call into it (at any depth)
-                            // can still reach the top-level payload here, without any
-                            // intermediary guest ever having to carry the bytecode through its
-                            // own execution.
-                            let bytecode = message.raw_payload.clone().ok_or_else(|| {
-                                LeeError::InvalidInput("Deploy requires a raw_payload".into())
-                            })?;
-                            Ok(program_loader_core::execute_deploy(
-                                chained_call.program_account_id,
-                                &chained_call.pre_states,
-                                &bytecode,
+                let (post_states, new_commitment) =
+                    std::panic::catch_unwind(|| -> Result<_, LeeError> {
+                        match instruction {
+                            program_loader_core::Instruction::Deploy {
                                 genesis,
                                 segment_count,
                                 first_segment,
-                            ))
-                        }
-                        program_loader_core::Instruction::Finalize => {
-                            Ok(program_loader_core::finalize(
+                            } => {
+                                // The bytecode itself travels via the transaction's own
+                                // `raw_payload`, not `instruction_data` and not
+                                // `chained_call.raw_payload` (which no guest can ever set). Deploy
+                                // only ever runs natively, so a chained call into it (at any depth)
+                                // can still reach the top-level payload here, without any
+                                // intermediary guest ever having to carry the bytecode through its
+                                // own execution.
+                                let bytecode = message.raw_payload.clone().ok_or_else(|| {
+                                    LeeError::InvalidInput("Deploy requires a raw_payload".into())
+                                })?;
+                                Ok(program_loader_core::execute_deploy(
+                                    chained_call.program_account_id,
+                                    &chained_call.pre_states,
+                                    &bytecode,
+                                    genesis,
+                                    segment_count,
+                                    first_segment,
+                                ))
+                            }
+                            program_loader_core::Instruction::Finalize => Ok((
+                                program_loader_core::finalize(
+                                    chained_call.program_account_id,
+                                    &chained_call.pre_states,
+                                ),
+                                None,
+                            )),
+                            program_loader_core::Instruction::RotateUpdateAuth {
+                                new_update_auth,
+                            } => Ok(program_loader_core::rotate_update_auth(
                                 chained_call.program_account_id,
                                 &chained_call.pre_states,
-                            ))
-                        }
-                        program_loader_core::Instruction::RotateUpdateAuth { new_update_auth } => {
-                            Ok(program_loader_core::rotate_update_auth(
-                                &chained_call.pre_states,
                                 new_update_auth,
-                            ))
+                            )),
                         }
-                    }
-                })
-                .map_err(|_panic_payload| {
-                    LeeError::ProgramExecutionFailed(
-                        "loader instruction rejected the given input".into(),
-                    )
-                })??;
+                    })
+                    .map_err(|_panic_payload| {
+                        LeeError::ProgramExecutionFailed(
+                            "loader instruction rejected the given input".into(),
+                        )
+                    })??;
+                new_commitments.extend(new_commitment);
                 ProgramOutput::new(
                     chained_call.program_account_id,
                     caller_data.caller_account_id,
@@ -394,10 +399,12 @@ impl ValidatedStateDiff {
             );
         }
 
+        state.check_commitments_are_new(&new_commitments)?;
+
         Ok(Self(StateDiff {
             signer_account_ids,
             public_diff: state_diff,
-            new_commitments: vec![],
+            new_commitments,
             new_nullifiers: vec![],
             program: None,
         }))
@@ -586,22 +593,39 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     public_pre_states: &[AccountWithMetadata],
     message: &Message,
 ) -> Result<(), LeeError> {
-    // Anchor each claimed image_id to real chain state: reconstruct the claims using the
-    // program's *actual* current image_id (via `get_program`), not the message's own claim. If
-    // the claim was wrong, the reconstructed journal won't match what the receipt actually
-    // committed to, and `proof.is_valid_for` below fails — the same mechanism `public_actions`
-    // already relies on for authenticating account content against real state.
+    // Anchor each claim to real chain state, reconstructing it independently rather than trusting
+    // the message's own claim. If the claim was wrong, the reconstructed journal won't match what
+    // the receipt actually committed to, and `proof.is_valid_for` below fails — the same mechanism
+    // `public_actions` already relies on for authenticating account content against real state.
     let program_image_claims = message
         .program_image_claims
         .iter()
-        .map(|claim| {
-            let (image_id, _elf) = state.get_program(claim.account_id)?.ok_or_else(|| {
-                LeeError::InvalidInput(format!("Unknown program {}", claim.account_id))
-            })?;
-            Ok(ProgramImageClaim {
-                account_id: claim.account_id,
-                image_id,
-            })
+        .map(|claim| match claim {
+            ProgramImageClaim::Public { account_id, .. } => {
+                let (image_id, _elf) = state.get_program(*account_id)?.ok_or_else(|| {
+                    LeeError::InvalidInput(format!("Unknown program {account_id}"))
+                })?;
+                Ok(ProgramImageClaim::Public {
+                    account_id: *account_id,
+                    image_id,
+                })
+            }
+            ProgramImageClaim::Private {
+                account_id,
+                program_data,
+            } => {
+                let commitment = program_loader_core::immutable_mirror_commitment(
+                    RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+                    program_data,
+                );
+                ensure!(
+                    state.get_proof_for_commitment(&commitment).is_some(),
+                    LeeError::InvalidInput(format!(
+                        "no private commitment matching the claimed program_data for {account_id}"
+                    ))
+                );
+                Ok(*claim)
+            }
         })
         .collect::<Result<Vec<_>, LeeError>>()?;
 

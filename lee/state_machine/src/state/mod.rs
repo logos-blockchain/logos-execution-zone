@@ -495,6 +495,10 @@ impl V03State {
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert(account_id, account);
     }
+
+    pub fn force_insert_commitment(&mut self, commitment: Commitment) {
+        self.private_state.0.extend(&[commitment]);
+    }
 }
 
 #[cfg(test)]

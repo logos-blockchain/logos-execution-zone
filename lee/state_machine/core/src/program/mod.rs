@@ -65,7 +65,9 @@ pub type ProgramId = [u32; 8];
 /// Lives here rather than in `program_loader_core` so `V03State::get_program` — a generic,
 /// program-agnostic lookup — can decode it without depending on a specific program's crate.
 /// `program_loader_core` re-exports this type.
-#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 pub struct ProgramData {
     pub genesis_image_id: ProgramId,
     /// `None` means immutable: deployed with no upgrade authority at all, and `update_auth`

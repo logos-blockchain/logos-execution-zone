@@ -31,15 +31,19 @@ impl From<ProgramId> for [u32; 8] {
 impl From<lee_core::ProgramImageClaim> for ProgramImageClaim {
     fn from(value: lee_core::ProgramImageClaim) -> Self {
         Self {
-            account_id: value.account_id.into(),
-            image_id: value.image_id.into(),
+            account_id: value.account_id().into(),
+            image_id: value.image_id().into(),
         }
     }
 }
 
 impl From<ProgramImageClaim> for lee_core::ProgramImageClaim {
+    /// This flat wire type can only ever represent `lee_core::ProgramImageClaim::Public` — it has
+    /// no `program_data` field to reconstruct a `Private` claim from. Unused today (this
+    /// direction has no real call site; the indexer only ever displays claims, never resubmits
+    /// them), kept for API symmetry with the other direction.
     fn from(value: ProgramImageClaim) -> Self {
-        Self {
+        Self::Public {
             account_id: value.account_id.into(),
             image_id: value.image_id.into(),
         }

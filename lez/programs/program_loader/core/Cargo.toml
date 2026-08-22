@@ -8,7 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-lee_core.workspace = true
+lee_core = { workspace = true, features = ["host"] }
 serde = { workspace = true, default-features = false }
 borsh.workspace = true
 bytemuck.workspace = true

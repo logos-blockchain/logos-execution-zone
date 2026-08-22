@@ -6,24 +6,57 @@ use crate::{
     Nullifier, NullifierPublicKey, NullifierSecretKey,
     account::{Account, AccountId, AccountWithMetadata},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
+    program::{
+        BlockValidityWindow, PdaSeed, ProgramData, ProgramId, ProgramOutput,
+        TimestampValidityWindow,
+    },
 };
 
-/// A claim that `account_id`'s program account currently has `image_id`.
+/// A claim that `account_id`'s program account currently has a given `image_id`.
 ///
 /// Supplied by the prover as circuit input (untrusted), used inside the circuit for
 /// `env::verify` in place of a `Deploy`-created program's address (which, unlike a legacy
-/// program's, doesn't encode its image id), and echoed unchanged into the circuit's output.
-/// Anchoring `image_id` to `account_id` is **not** enforced inside the circuit — it's enforced
-/// by the sequencer, which independently checks every claim against real chain state
-/// (`V03State::get_program`) before accepting the proof. A side effect of this, for now: every
-/// program invoked anywhere in a private transaction's call graph is publicly visible via this
-/// claim list.
+/// program's, doesn't encode its image id), and echoed unchanged into the circuit's output —
+/// the circuit never interprets *how* a claim was authenticated, only its `image_id()`.
+/// Anchoring the claim to real chain state is **not** enforced inside the circuit — it's enforced
+/// by the sequencer, which independently reconstructs every claim before accepting the proof.
 #[derive(Serialize, Deserialize, Clone, Copy, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct ProgramImageClaim {
-    pub account_id: AccountId,
-    pub image_id: ProgramId,
+pub enum ProgramImageClaim {
+    /// Anchored against real, live public chain state (`V03State::get_program(account_id)`). A
+    /// side effect of this, for now: every publicly-anchored program invoked anywhere in a
+    /// private transaction's call graph is publicly visible via this claim list.
+    Public {
+        account_id: AccountId,
+        image_id: ProgramId,
+    },
+    /// Anchored against a private commitment mirroring a permanently-immutable program's
+    /// finalized `ProgramData`, via `program_loader_core::immutable_mirror_commitment`. Only ever
+    /// exists for a program whose `update_auth` became permanently `None`; the sequencer's
+    /// reconstruction proves membership (`V03State::get_proof_for_commitment`) instead of doing a
+    /// public lookup, so which program this is stays hidden unless the caller chooses to reveal
+    /// it.
+    Private {
+        account_id: AccountId,
+        program_data: ProgramData,
+    },
+}
+
+impl ProgramImageClaim {
+    #[must_use]
+    pub const fn account_id(&self) -> AccountId {
+        match self {
+            Self::Public { account_id, .. } | Self::Private { account_id, .. } => *account_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn image_id(&self) -> ProgramId {
+        match self {
+            Self::Public { image_id, .. } => *image_id,
+            Self::Private { program_data, .. } => program_data.current_image_id,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -291,7 +324,7 @@ mod tests {
             }],
             block_validity_window: (1..).into(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-            program_image_claims: vec![ProgramImageClaim {
+            program_image_claims: vec![ProgramImageClaim::Public {
                 account_id: AccountId::new([3; 32]),
                 image_id: [4; 8],
             }],

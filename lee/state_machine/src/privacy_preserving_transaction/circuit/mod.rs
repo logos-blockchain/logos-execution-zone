@@ -124,7 +124,7 @@ pub fn execute_and_prove_with_padded_inputs(
                     .map(|(account_id, program)| (*account_id, program.id())),
             )
             .filter(|(account_id, image_id)| *account_id != AccountId::from(*image_id))
-            .map(|(account_id, image_id)| ProgramImageClaim {
+            .map(|(account_id, image_id)| ProgramImageClaim::Public {
                 account_id,
                 image_id,
             })

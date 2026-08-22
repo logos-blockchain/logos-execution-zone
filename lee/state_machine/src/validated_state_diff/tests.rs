@@ -549,3 +549,167 @@ fn privacy_garbage_proof_is_rejected() {
         Ok(_) => panic!("garbage proof was accepted instead of rejected"),
     }
 }
+
+/// A `ProgramImageClaim::Private` whose `program_data` doesn't match any commitment actually in
+/// state must be rejected — and rejected at the claim check itself, before proof verification
+/// even runs (so this needs no real proof to test).
+#[test]
+fn private_claim_with_no_matching_commitment_is_rejected() {
+    use lee_core::{
+        Commitment, EncryptedAccountData, Nullifier, PrivateAction, ProgramImageClaim,
+        account::Account,
+        encryption::{Ciphertext, EphemeralPublicKey},
+        program::{BlockValidityWindow, ProgramData, TimestampValidityWindow},
+    };
+
+    use crate::{
+        PrivacyPreservingTransaction,
+        privacy_preserving_transaction::{
+            circuit::Proof, message::Message, witness_set::WitnessSet,
+        },
+    };
+
+    let state = V03State::new();
+
+    let claimed_account_id = AccountId::from(&PublicKey::new_from_private_key(
+        &PrivateKey::try_new([3_u8; 32]).unwrap(),
+    ));
+    // No commitment for this program_data has ever been inserted into state.
+    let program_data = ProgramData {
+        genesis_image_id: [1, 2, 3, 4, 5, 6, 7, 8],
+        genesis_update_auth: None,
+        current_image_id: [9, 10, 11, 12, 13, 14, 15, 16],
+        segment_count: 1,
+        update_auth: None,
+        program_version: 1,
+    };
+
+    let padding_account_id = AccountId::from(&PublicKey::new_from_private_key(
+        &PrivateKey::try_new([13_u8; 32]).unwrap(),
+    ));
+    let padding_commitment = Commitment::new(&padding_account_id, &Account::default());
+    let message = Message {
+        public_actions: vec![],
+        nonces: vec![],
+        private_actions: vec![PrivateAction {
+            nullifier: Nullifier::for_account_initialization(&padding_account_id),
+            root: [0; 32],
+            commitment: padding_commitment,
+            encrypted_post_state: EncryptedAccountData {
+                ciphertext: Ciphertext::from_inner(vec![]),
+                epk: EphemeralPublicKey(vec![]),
+                view_tag: 0,
+            },
+        }],
+        block_validity_window: BlockValidityWindow::new_unbounded(),
+        timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        program_image_claims: vec![ProgramImageClaim::Private {
+            account_id: claimed_account_id,
+            program_data,
+        }],
+    };
+
+    let garbage_proof = Proof::from_inner(vec![0xff_u8; 64]);
+    let witness_set = WitnessSet::for_message(&message, garbage_proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    let result = ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0);
+
+    match result {
+        Err(LeeError::InvalidInput(msg)) => assert!(
+            msg.contains("no private commitment matching"),
+            "expected a 'no private commitment matching' error, got: {msg}"
+        ),
+        Err(other) => {
+            panic!("expected InvalidInput about a missing private commitment, got: {other:?}")
+        }
+        Ok(_) => panic!("a Private claim with no matching commitment was accepted"),
+    }
+}
+
+/// A `ProgramImageClaim::Private` whose `program_data` matches a commitment genuinely present in
+/// state must pass its own check — proved here by using a deliberately garbage proof and
+/// confirming the resulting error is specifically `InvalidPrivacyPreservingProof` (proof
+/// verification), not the "no private commitment matching" error the claim check itself would
+/// produce. No real circuit proving needed: the claim check runs, and fails for the right reason,
+/// before the proof is ever actually verified.
+#[test]
+fn private_claim_matching_a_real_commitment_passes_verification() {
+    use lee_core::{
+        Commitment, EncryptedAccountData, Nullifier, PrivateAction, ProgramImageClaim,
+        account::Account,
+        encryption::{Ciphertext, EphemeralPublicKey},
+        program::{
+            BlockValidityWindow, ProgramData, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+            TimestampValidityWindow,
+        },
+    };
+
+    use crate::{
+        PrivacyPreservingTransaction,
+        privacy_preserving_transaction::{
+            circuit::Proof, message::Message, witness_set::WitnessSet,
+        },
+    };
+
+    let mut state = V03State::new();
+
+    let claimed_account_id = AccountId::from(&PublicKey::new_from_private_key(
+        &PrivateKey::try_new([4_u8; 32]).unwrap(),
+    ));
+    let program_data = ProgramData {
+        genesis_image_id: [1, 2, 3, 4, 5, 6, 7, 8],
+        genesis_update_auth: None,
+        current_image_id: [9, 10, 11, 12, 13, 14, 15, 16],
+        segment_count: 1,
+        update_auth: None,
+        program_version: 1,
+    };
+    // Exactly what execute_deploy's atomic-immutable fast path / rotate_update_auth's
+    // renouncement branch would have emitted for this program_data - inserted directly here since
+    // neither emission path needs a proof either.
+    state.force_insert_commitment(program_loader_core::immutable_mirror_commitment(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        &program_data,
+    ));
+
+    let padding_account_id = AccountId::from(&PublicKey::new_from_private_key(
+        &PrivateKey::try_new([14_u8; 32]).unwrap(),
+    ));
+    let padding_commitment = Commitment::new(&padding_account_id, &Account::default());
+    let message = Message {
+        public_actions: vec![],
+        nonces: vec![],
+        private_actions: vec![PrivateAction {
+            nullifier: Nullifier::for_account_initialization(&padding_account_id),
+            root: [0; 32],
+            commitment: padding_commitment,
+            encrypted_post_state: EncryptedAccountData {
+                ciphertext: Ciphertext::from_inner(vec![]),
+                epk: EphemeralPublicKey(vec![]),
+                view_tag: 0,
+            },
+        }],
+        block_validity_window: BlockValidityWindow::new_unbounded(),
+        timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        program_image_claims: vec![ProgramImageClaim::Private {
+            account_id: claimed_account_id,
+            program_data,
+        }],
+    };
+
+    let garbage_proof = Proof::from_inner(vec![0xff_u8; 64]);
+    let witness_set = WitnessSet::for_message(&message, garbage_proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    let result = ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0);
+
+    match result {
+        Err(LeeError::InvalidPrivacyPreservingProof) => {}
+        Err(other) => panic!(
+            "expected the Private claim to pass its own check and fail only at proof \
+             verification (InvalidPrivacyPreservingProof), got: {other:?}"
+        ),
+        Ok(_) => panic!("a garbage proof was accepted"),
+    }
+}

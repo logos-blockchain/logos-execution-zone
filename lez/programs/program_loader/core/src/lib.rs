@@ -1,7 +1,12 @@
 pub use lee_core::program::{PdaSeed, ProgramData, UNFINALIZED_IMAGE_ID};
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramId},
+    Commitment, NullifierPublicKey,
+    account::{Account, AccountId, AccountWithMetadata, Data, Nonce},
+    encryption::ViewingPublicKey,
+    program::{
+        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramId,
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +30,16 @@ const KERNEL_ELF: &[u8] = include_bytes!("kernel.bin");
 /// Comfortably under `DATA_MAX_LENGTH` (100 KiB), with headroom for future per-segment framing;
 /// yields 4-6 segments for a typical 340-490 KB `user_elf`.
 pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
+
+/// Sentinel nullifier public key for the private commitment mirroring a permanently-immutable
+/// program's finalized [`ProgramData`].
+///
+/// Not a real key: nobody ever authorizes a write against this commitment (the program can never
+/// change again, by construction) and nobody needs to discover it by scanning (its content mirrors
+/// data that was already public). It exists solely to satisfy [`AccountId::for_private_pda`]'s
+/// signature for deterministic address derivation — this account is never referenced through
+/// `WitnessKind`/nullifier-witness proving, so its "ownership" is never exercised.
+const IMMUTABLE_MIRROR_NPK: NullifierPublicKey = NullifierPublicKey([0; 32]);
 
 #[derive(Serialize, Deserialize)]
 pub enum Instruction {
@@ -381,6 +396,70 @@ fn pass_through_signer(target: &AccountWithMetadata) -> AccountPostState {
     }
 }
 
+/// Sentinel viewing public key paired with [`IMMUTABLE_MIRROR_NPK`] — same rationale, not a real
+/// key. `ViewingPublicKey` is `Vec`-backed (a real ML-KEM-768 key is 1184 bytes), so this can't be
+/// a `const`.
+fn immutable_mirror_vpk() -> ViewingPublicKey {
+    ViewingPublicKey::from_bytes(vec![0_u8; ViewingPublicKey::LEN])
+        .expect("a zero-filled buffer of the correct length always parses")
+}
+
+/// Derives the `AccountId` of the private commitment mirroring a permanently-immutable program's
+/// finalized `ProgramData`. Reuses [`AccountId::for_private_pda`] purely as a deterministic address
+/// formula — same seed [`deploy_header_pda_seed`] computes for the public header — not for its
+/// usual owned/spendable-private-account machinery, since `IMMUTABLE_MIRROR_NPK` isn't a real key.
+fn immutable_mirror_account_id(
+    loader_account_id: AccountId,
+    genesis_image_id: ProgramId,
+    genesis_update_auth: Option<AccountId>,
+) -> AccountId {
+    AccountId::for_private_pda(
+        &loader_account_id,
+        &deploy_header_pda_seed(genesis_image_id, 0, genesis_update_auth),
+        &IMMUTABLE_MIRROR_NPK,
+        &immutable_mirror_vpk(),
+        0,
+    )
+}
+
+/// Builds the `Commitment` mirroring a permanently-immutable program's finalized `ProgramData`
+/// into private state.
+///
+/// Called only at the exact moment a program's `update_auth` becomes permanently `None` — either
+/// [`execute_deploy`]'s atomic self-contained-immutable fast path, or [`rotate_update_auth`]'s
+/// renouncement branch. No proof, nullifier, or ciphertext is needed: `ProgramData` isn't
+/// confidential (it mirrors data that was already public in the header account), so every
+/// validating node can independently recompute this exact commitment, the same way they already
+/// recompute `image_id` and segment concatenation.
+///
+/// `final_program_data` is mirrored byte-for-byte as the committed `Account`'s `data` — matching
+/// exactly what the public header account looks like at this moment, including `program_owner`
+/// (claimed accounts get `program_owner` set to the executing program's id — the loader's reserved
+/// address, for native `Deploy`-family dispatch).
+///
+/// Also called by `check_privacy_preserving_circuit_proof_is_valid` (in `lee`) to independently
+/// recompute the same commitment when verifying a [`lee_core::ProgramImageClaim::Private`] claim
+/// — both call sites must stay in lockstep, since the whole point is that any validating node can
+/// recompute the exact same commitment from public/claimed inputs alone.
+#[must_use]
+pub fn immutable_mirror_commitment(
+    loader_account_id: AccountId,
+    final_program_data: &ProgramData,
+) -> Commitment {
+    let account_id = immutable_mirror_account_id(
+        loader_account_id,
+        final_program_data.genesis_image_id,
+        final_program_data.genesis_update_auth,
+    );
+    let mirrored_account = Account {
+        program_owner: RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        balance: 0,
+        data: Data::from(final_program_data),
+        nonce: Nonce(0),
+    };
+    Commitment::new(&account_id, &mirrored_account)
+}
+
 /// Executes one `Deploy` transaction — a whole deployment or upgrade in one shot, or one batch of
 /// a multi-transaction one.
 ///
@@ -416,6 +495,9 @@ fn pass_through_signer(target: &AccountWithMetadata) -> AccountPostState {
 ///
 /// Called natively from dispatch's `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut — `Deploy`
 /// has no guest binary of its own.
+///
+/// Returns a private [`Commitment`] alongside the post-states when this exact call is what makes
+/// the program permanently immutable — the atomic fast path, with `genesis_update_auth: None`.
 #[must_use]
 pub fn execute_deploy(
     self_account_id: AccountId,
@@ -424,7 +506,7 @@ pub fn execute_deploy(
     genesis: Option<Genesis>,
     segment_count: u32,
     first_segment: u32,
-) -> Vec<AccountPostState> {
+) -> (Vec<AccountPostState>, Option<Commitment>) {
     let (header_target, rest) = pre_states
         .split_first()
         .expect("Deploy requires at least a header account");
@@ -534,7 +616,7 @@ pub fn execute_deploy(
     // pre_states must get a matching entry here too.
     let update_auth_post_state = update_auth_target.map(pass_through_signer);
 
-    let header_post_state = if header_is_fresh {
+    let (header_post_state, new_commitment) = if header_is_fresh {
         let (current_image_id, program_version) = fast_path_real_image_id
             .map_or((UNFINALIZED_IMAGE_ID, 0), |real_image_id| {
                 (real_image_id, 1)
@@ -547,26 +629,33 @@ pub fn execute_deploy(
             update_auth: genesis_update_auth,
             program_version,
         };
-        AccountPostState::new_claimed(
+        // Only the atomic fast path ever finalizes a fresh header directly (program_version 1
+        // here rather than 0); if it was also declared immutable from birth, it just became
+        // permanently immutable in this same transaction.
+        let new_commitment = (fast_path_real_image_id.is_some() && genesis_update_auth.is_none())
+            .then(|| immutable_mirror_commitment(self_account_id, &header_data));
+        let post_state = AccountPostState::new_claimed(
             Account {
                 data: Data::from(&header_data),
                 ..Account::default()
             },
             Claim::Pda(plan.header.seed),
-        )
+        );
+        (post_state, new_commitment)
     } else {
         let header_data = ProgramData {
             segment_count,
             current_image_id: UNFINALIZED_IMAGE_ID,
             ..existing.expect("existing is always Some when header_is_fresh is false")
         };
-        AccountPostState::new(Account {
+        let post_state = AccountPostState::new(Account {
             data: Data::from(&header_data),
             ..header_target.account.clone()
-        })
+        });
+        (post_state, None)
     };
 
-    std::iter::once(header_post_state)
+    let post_states = std::iter::once(header_post_state)
         .chain(update_auth_post_state)
         .chain(
             segment_targets
@@ -593,7 +682,8 @@ pub fn execute_deploy(
                     }
                 }),
         )
-        .collect()
+        .collect();
+    (post_states, new_commitment)
 }
 
 /// Executes a `Finalize` transaction.
@@ -704,13 +794,19 @@ pub fn finalize(
 /// `is_authorized`. A `None` `new_update_auth` renounces authority for good and needs only the
 /// current authority's signature, since there's no new account to co-sign on the other end.
 ///
+/// Renouncing (`new_update_auth: None`) requires the program to be finalized first
+/// (`current_image_id != UNFINALIZED_IMAGE_ID`) — renouncing mid-upgrade would permanently strand
+/// it with no authority left to ever `Finalize`.
+///
 /// Called natively from dispatch's `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut, same as
-/// [`execute_deploy`].
+/// [`execute_deploy`]. Returns a private [`Commitment`] alongside the post-states when this call
+/// renounces.
 #[must_use]
 pub fn rotate_update_auth(
+    self_account_id: AccountId,
     pre_states: &[AccountWithMetadata],
     new_update_auth: Option<AccountId>,
-) -> Vec<AccountPostState> {
+) -> (Vec<AccountPostState>, Option<Commitment>) {
     let (header_target, rest) = pre_states
         .split_first()
         .expect("RotateUpdateAuth requires at least a header account");
@@ -723,6 +819,13 @@ pub fn rotate_update_auth(
     let required_current_signer = existing
         .update_auth
         .expect("RotateUpdateAuth requires an existing update_auth to rotate away from");
+    if new_update_auth.is_none() {
+        assert_ne!(
+            existing.current_image_id, UNFINALIZED_IMAGE_ID,
+            "renouncing update_auth requires a finalized program - renouncing mid-upgrade would \
+             permanently strand it with no authority left to ever Finalize"
+        );
+    }
 
     let (current_auth_target, rest) = rest
         .split_first()
@@ -764,18 +867,23 @@ pub fn rotate_update_auth(
         },
     );
 
+    let final_program_data = ProgramData {
+        update_auth: new_update_auth,
+        ..existing
+    };
+    let new_commitment = new_update_auth
+        .is_none()
+        .then(|| immutable_mirror_commitment(self_account_id, &final_program_data));
     let header_post_state = AccountPostState::new(Account {
-        data: Data::from(&ProgramData {
-            update_auth: new_update_auth,
-            ..existing
-        }),
+        data: Data::from(&final_program_data),
         ..header_target.account.clone()
     });
 
-    std::iter::once(header_post_state)
+    let post_states = std::iter::once(header_post_state)
         .chain(std::iter::once(pass_through_signer(current_auth_target)))
         .chain(new_auth_post_state)
-        .collect()
+        .collect();
+    (post_states, new_commitment)
 }
 
 #[cfg(test)]
@@ -977,7 +1085,7 @@ mod tests {
         let mut pre_states = vec![header_target(&plan, Account::default())];
         pre_states.extend(fresh_segment_targets(&plan));
 
-        let post_states = execute_deploy(
+        let (post_states, _new_commitment) = execute_deploy(
             LOADER_ID,
             &pre_states,
             &user_elf,
@@ -998,7 +1106,7 @@ mod tests {
         let mut pre_states = vec![header_target(&plan, Account::default())];
         pre_states.extend(fresh_segment_targets(&plan));
 
-        let post_states = execute_deploy(
+        let (post_states, new_commitment) = execute_deploy(
             LOADER_ID,
             &pre_states,
             &user_elf,
@@ -1010,6 +1118,13 @@ mod tests {
         assert_eq!(header_data.genesis_image_id, image_id);
         assert_eq!(header_data.current_image_id, image_id);
         assert_eq!(header_data.program_version, 1);
+        // Immutable from birth: this same transaction is the one that makes it permanently
+        // immutable, so it must emit the private mirror commitment right here.
+        assert_eq!(
+            new_commitment,
+            Some(immutable_mirror_commitment(LOADER_ID, &header_data)),
+            "an atomic immutable deploy must emit the private mirror matching its own header data"
+        );
     }
 
     #[test]
@@ -1024,7 +1139,7 @@ mod tests {
         let mut pre_states = vec![header_target(&plan, Account::default())];
         pre_states.extend(fresh_segment_targets(&plan));
 
-        let post_states = execute_deploy(
+        let (post_states, new_commitment) = execute_deploy(
             LOADER_ID,
             &pre_states,
             &user_elf,
@@ -1037,6 +1152,11 @@ mod tests {
         assert_eq!(header_data.update_auth, Some(REAL_UPDATE_AUTH));
         assert_eq!(header_data.current_image_id, image_id);
         assert_eq!(header_data.program_version, 1);
+        assert!(
+            new_commitment.is_none(),
+            "a program deployed with a real update_auth is still upgradeable - no private mirror \
+             should be emitted"
+        );
     }
 
     #[test]
@@ -1063,7 +1183,7 @@ mod tests {
         let mut pre_states1 = vec![header_target(&batch1_plan, Account::default())];
         pre_states1.push(signer(REAL_UPDATE_AUTH, true));
         pre_states1.extend(fresh_segment_targets(&batch1_plan));
-        let post1 = execute_deploy(
+        let (post1, _new_commitment1) = execute_deploy(
             LOADER_ID,
             &pre_states1,
             first_bytes,
@@ -1090,7 +1210,7 @@ mod tests {
         let mut pre_states2 = vec![header_target(&batch2_plan, header_after_batch1)];
         pre_states2.push(signer(REAL_UPDATE_AUTH, true));
         pre_states2.extend(fresh_segment_targets(&batch2_plan));
-        let post2 = execute_deploy(
+        let (post2, _new_commitment2) = execute_deploy(
             LOADER_ID,
             &pre_states2,
             second_bytes,
@@ -1132,7 +1252,7 @@ mod tests {
         let mut pre_states1 = vec![header_target(&batch1_plan, Account::default())];
         pre_states1.push(signer(update_auth, true));
         pre_states1.extend(fresh_segment_targets(&batch1_plan));
-        let post1 = execute_deploy(
+        let (post1, _new_commitment1) = execute_deploy(
             LOADER_ID,
             &pre_states1,
             first_bytes,
@@ -1154,7 +1274,7 @@ mod tests {
         let mut pre_states2 = vec![header_target(&batch2_plan, header_after_batch1)];
         pre_states2.push(signer(update_auth, true));
         pre_states2.extend(fresh_segment_targets(&batch2_plan));
-        let post2 = execute_deploy(
+        let (post2, _new_commitment2) = execute_deploy(
             LOADER_ID,
             &pre_states2,
             second_bytes,
@@ -1231,7 +1351,7 @@ mod tests {
 
         let mut pre_states = vec![header_target(&plan, Account::default())];
         pre_states.extend(fresh_segment_targets(&plan));
-        let deploy_post = execute_deploy(
+        let (deploy_post, _new_commitment) = execute_deploy(
             LOADER_ID,
             &pre_states,
             &user_elf,
@@ -1278,7 +1398,7 @@ mod tests {
         let segment_count = u32::try_from(plan.segments.len()).unwrap();
         let mut pre_states = vec![header_target(&plan, Account::default())];
         pre_states.extend(fresh_segment_targets(&plan));
-        let post = execute_deploy(
+        let (post, _new_commitment) = execute_deploy(
             LOADER_ID,
             &pre_states,
             &user_elf,
@@ -1325,7 +1445,7 @@ mod tests {
             is_authorized: false,
             account_id: plan.segments[0].account_id,
         });
-        let upgrade_post = execute_deploy(
+        let (upgrade_post, _new_commitment) = execute_deploy(
             LOADER_ID,
             &upgrade_pre_states,
             &new_user_elf,
@@ -1399,7 +1519,8 @@ mod tests {
             signer(REAL_UPDATE_AUTH, true),
             signer(OTHER_UPDATE_AUTH, true),
         ];
-        let rotate_post = rotate_update_auth(&rotate_pre_states, Some(OTHER_UPDATE_AUTH));
+        let (rotate_post, _new_commitment) =
+            rotate_update_auth(LOADER_ID, &rotate_pre_states, Some(OTHER_UPDATE_AUTH));
         let rotated = ProgramData::try_from(&rotate_post[0].account().data).unwrap();
         assert_eq!(rotated.update_auth, Some(OTHER_UPDATE_AUTH));
         assert_eq!(rotated.genesis_update_auth, Some(REAL_UPDATE_AUTH));
@@ -1432,7 +1553,58 @@ mod tests {
             clippy::let_underscore_must_use,
             reason = "should_panic test - the panic is the assertion, return value unused"
         )]
-        let _ = rotate_update_auth(&rotate_pre_states, Some(OTHER_UPDATE_AUTH));
+        let _ = rotate_update_auth(LOADER_ID, &rotate_pre_states, Some(OTHER_UPDATE_AUTH));
+    }
+
+    #[test]
+    #[should_panic(expected = "renouncing update_auth requires a finalized program")]
+    fn rotate_update_auth_to_none_requires_a_finalized_program() {
+        let program = test_programs::claimer();
+        let image_id = program.id();
+        let (plan, unfinalized_header_account, _segment_accounts) =
+            deploy_unfinalized_across_two_batches(program.elf(), image_id, REAL_UPDATE_AUTH);
+
+        let rotate_pre_states = vec![
+            AccountWithMetadata {
+                account: unfinalized_header_account,
+                is_authorized: false,
+                account_id: plan.header.account_id,
+            },
+            signer(REAL_UPDATE_AUTH, true),
+        ];
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "should_panic test - the panic is the assertion, return value unused"
+        )]
+        let _ = rotate_update_auth(LOADER_ID, &rotate_pre_states, None);
+    }
+
+    #[test]
+    fn rotate_update_auth_to_none_emits_immutable_mirror_commitment() {
+        let program = test_programs::claimer();
+        let image_id = program.id();
+        let (plan, live_header_account, _segment_accounts) =
+            deploy_and_finalize_in_one_shot(program.elf(), image_id, REAL_UPDATE_AUTH);
+
+        let rotate_pre_states = vec![
+            AccountWithMetadata {
+                account: live_header_account,
+                is_authorized: false,
+                account_id: plan.header.account_id,
+            },
+            signer(REAL_UPDATE_AUTH, true),
+        ];
+        let (rotate_post, new_commitment) = rotate_update_auth(LOADER_ID, &rotate_pre_states, None);
+        let renounced = ProgramData::try_from(&rotate_post[0].account().data).unwrap();
+        assert_eq!(renounced.update_auth, None);
+        assert_eq!(renounced.genesis_update_auth, Some(REAL_UPDATE_AUTH));
+        // Renouncing is the one moment this program becomes permanently immutable, so this exact
+        // call must emit the private mirror matching the now-final header data.
+        assert_eq!(
+            new_commitment,
+            Some(immutable_mirror_commitment(LOADER_ID, &renounced)),
+            "renouncing must emit the private mirror matching the now-permanently-immutable header"
+        );
     }
 
     #[test]
