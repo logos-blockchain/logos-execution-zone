@@ -4,7 +4,8 @@ use lee_core::{
     program::{AccountPostState, Claim, ProgramId},
 };
 
-const DEPLOY_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/LoaderDeploySeed/00000";
+const DEPLOY_SEED_DOMAIN_SEPARATOR: AccountId =
+    AccountId::new(*b"/LEZ/v0.3/LoaderDeploySeed/00000");
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum Instruction {
@@ -54,7 +55,7 @@ pub fn deploy_pda_seed(
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 32 + 32 + 4 + 32];
-    bytes[0..32].copy_from_slice(&DEPLOY_SEED_DOMAIN_SEPARATOR);
+    bytes[0..32].copy_from_slice(DEPLOY_SEED_DOMAIN_SEPARATOR.as_ref());
     let image_id_bytes: &[u8] =
         bytemuck::try_cast_slice(&image_id).expect("ProgramId should be castable to &[u8]");
     bytes[32..64].copy_from_slice(image_id_bytes);
