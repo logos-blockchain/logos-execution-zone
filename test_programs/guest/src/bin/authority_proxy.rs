@@ -15,13 +15,17 @@ type Instruction = (ProgramId, InstructionData, Option<PdaSeed>);
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (target_program_id, target_instruction_data, pda_seed),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
+
+    // See `record`'s doc comment in ping_receiver: exact round-trip to the actual image id,
+    // needed by `AccountId::for_public_pda` below.
+    let self_program_id = ProgramId::from(self_account_id);
 
     let mut call_pre_states = pre_states.clone();
     if let Some(seed) = pda_seed {
@@ -34,7 +38,7 @@ fn main() {
     }
 
     let chained_call = ChainedCall {
-        program_id: target_program_id,
+        program_account_id: target_program_id.into(),
         instruction_data: target_instruction_data,
         pre_states: call_pre_states,
         pda_seeds: pda_seed.into_iter().collect(),
@@ -46,8 +50,8 @@ fn main() {
         .collect();
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         pre_states,
         post_states,

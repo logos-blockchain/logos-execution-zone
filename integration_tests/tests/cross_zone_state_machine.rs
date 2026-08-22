@@ -218,7 +218,7 @@ fn signed_tx(
     key: &PrivateKey,
 ) -> PublicTransaction {
     let message =
-        Message::new_preserialized(program, accounts, vec![nonce.into()], instruction_data);
+        Message::new_preserialized(program.into(), accounts, vec![nonce.into()], instruction_data);
     let witness = WitnessSet::for_message(&message, &[key]);
     PublicTransaction::new(message, witness)
 }
@@ -234,7 +234,7 @@ fn via_proxy(
     instruction_data: Vec<u8>,
 ) -> PublicTransaction {
     let message = Message::try_new(
-        proxy_id,
+        proxy_id.into(),
         vec![config, authority],
         vec![],
         (target, instruction_data, delegated),
@@ -263,7 +263,7 @@ fn chained_via_inbox(
         l1_inclusion_witness: None,
     };
     let message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         dispatch_accounts(inbox_id, &msg, vec![config_id, authority]),
         vec![],
         InboxInstruction::Dispatch(msg),
@@ -1279,7 +1279,7 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
         l1_inclusion_witness: None,
     };
     let message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         dispatch_accounts(
             inbox_id,
             &msg,
@@ -1336,7 +1336,7 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
     // The message says ping_sender; the marker names bridge_lock, which the
     // receiver also would not accept. The inbox must refuse it first.
     let message = Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         vec![
             inbox_config_account_id(inbox_id),
             inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
