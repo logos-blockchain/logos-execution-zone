@@ -76,36 +76,6 @@ fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
 }
 
 #[test]
-fn parent_events_precede_chained_callee_events() {
-    let account_id = AccountId::new([1; 32]);
-    let mut state = V03State::new().with_test_programs();
-    let emitter_id = crate::test_methods::event_emitter().id();
-
-    let callee_instruction_data = Program::serialize_instruction(EmitterInstruction {
-        events: vec![emitted(1), emitted(2)],
-        chain: vec![],
-    })
-    .unwrap();
-
-    let tx = program_transaction(
-        emitter_id,
-        account_id,
-        EmitterInstruction {
-            events: vec![emitted(0)],
-            chain: vec![(emitter_id, callee_instruction_data)],
-        },
-    );
-
-    let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
-
-    assert_eq!(
-        payloads(&events),
-        vec![vec![0; 4], vec![1; 4], vec![2; 4]],
-        "a parent's events must all precede its callee's"
-    );
-}
-
-#[test]
 fn chained_events_follow_depth_first_pre_order() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
@@ -207,6 +177,35 @@ fn program_that_emits_nothing_yields_no_events() {
     let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     assert!(events.is_empty());
+}
+
+#[test]
+fn emitted_events_leave_state_untouched() {
+    let account_id = AccountId::new([1; 32]);
+    let emitter_id = crate::test_methods::event_emitter().id();
+
+    let run = |events: Vec<ProgramEvent>| {
+        let mut state = V03State::new().with_test_programs();
+        let tx = program_transaction(
+            emitter_id,
+            account_id,
+            EmitterInstruction {
+                events,
+                chain: vec![],
+            },
+        );
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+        state
+    };
+
+    let silent = run(vec![]);
+    let emitting = run(vec![emitted(0), emitted(1)]);
+
+    assert_eq!(
+        borsh::to_vec(&silent).unwrap(),
+        borsh::to_vec(&emitting).unwrap(),
+        "event emission must not perturb state"
+    );
 }
 
 #[test]
