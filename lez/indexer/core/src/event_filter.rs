@@ -1,15 +1,16 @@
 use std::collections::{HashMap, HashSet};
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use common::transaction::TxEvents;
 use lee_core::program::{ProgramId, TransactionEvent};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum EventFilter {
     Archival,
     Sources(HashMap<ProgramId, SelectorFilter>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum SelectorFilter {
     All,
     Only(HashSet<[u8; 8]>),

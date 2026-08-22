@@ -6,8 +6,8 @@ use crate::{
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
         AccNumTxCell, BlockEventsCellOwned, BlockHashToBlockIdMapCell, BreakpointCellOwned,
-        CrossZoneHaltCellOwned, LastObservedL1LibHeaderCell, StallReasonCellOwned, TipSlotCell,
-        TxHashToBlockIdMapCell, ZoneSdkIndexerCursorCellOwned,
+        CrossZoneHaltCellOwned, EventFilterSegmentsCellOwned, LastObservedL1LibHeaderCell,
+        StallReasonCellOwned, TipSlotCell, TxHashToBlockIdMapCell, ZoneSdkIndexerCursorCellOwned,
     },
 };
 
@@ -84,6 +84,12 @@ impl RocksDBIO {
     pub fn get_zone_sdk_indexer_cursor_bytes(&self) -> DbResult<Option<Vec<u8>>> {
         Ok(self
             .get_opt::<ZoneSdkIndexerCursorCellOwned>(())?
+            .map(|cell| cell.0))
+    }
+
+    pub fn get_event_filter_segments_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self
+            .get_opt::<EventFilterSegmentsCellOwned>(())?
             .map(|cell| cell.0))
     }
 

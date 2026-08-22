@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, ensure};
 use chain_state::{
     AcceptOutcome, BlockIngestError, StallReason, Tip, apply_block_to_state, validate_against_tip,
 };
@@ -22,7 +22,7 @@ use crate::{event_filter::EventFilter, status::CrossZoneHalt};
 pub struct IndexerStore {
     dbio: Arc<RocksDBIO>,
     current_state: Arc<RwLock<V03State>>,
-    event_filter: EventFilter,
+    filter_segments: Vec<(EventFilter, u64)>,
 }
 
 impl IndexerStore {
@@ -47,12 +47,30 @@ impl IndexerStore {
         let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
 
         let current_state = dbio.final_state()?;
+        let filter_segments = reconcile_filter_segments(&dbio, event_filter)?;
 
         Ok(Self {
             dbio: Arc::new(dbio),
             current_state: Arc::new(RwLock::new(current_state)),
-            event_filter,
+            filter_segments,
         })
+    }
+
+    /// The filter ingest currently applies — the last recorded segment.
+    #[must_use]
+    pub fn live_filter(&self) -> &EventFilter {
+        &self
+            .filter_segments
+            .last()
+            .expect("reconcile seeds at least one segment")
+            .0
+    }
+
+    /// Applied filters with the height each took effect at, oldest first; the
+    /// events column only holds what the filter of its era kept.
+    #[must_use]
+    pub fn filter_segments(&self) -> &[(EventFilter, u64)] {
+        &self.filter_segments
     }
 
     pub fn last_observed_l1_lib_header(&self) -> Result<Option<HeaderId>> {
@@ -288,7 +306,7 @@ impl IndexerStore {
         };
         // The retained events come from the same application that produced `scratch`,
         // and are written in the same `put_block` batch as the block and that state.
-        let events = self.event_filter.filter_block(events);
+        let events = self.live_filter().filter_block(events);
 
         let mut stored = block.clone();
         stored.bedrock_status = BedrockStatus::Finalized;
@@ -305,6 +323,45 @@ impl IndexerStore {
         }
         Ok(AcceptOutcome::Applied)
     }
+}
+
+// A filter change takes effect at the next ingested block: rows up to the old
+// tip were written under the previous filter and stay attributed to it.
+fn reconcile_filter_segments(
+    dbio: &RocksDBIO,
+    configured: EventFilter,
+) -> Result<Vec<(EventFilter, u64)>> {
+    let mut segments: Vec<(EventFilter, u64)> = match dbio.get_event_filter_segments_bytes()? {
+        Some(bytes) => borsh::from_slice(&bytes)?,
+        None => Vec::new(),
+    };
+    ensure!(
+        segments.is_sorted_by(|left, right| left.1 < right.1),
+        "persisted event-filter segments are not strictly ascending"
+    );
+    let seam = dbio
+        .get_meta_last_block_id_in_db()?
+        .map_or(0, |tip| tip.saturating_add(1));
+    ensure!(
+        segments.last().is_none_or(|(_, from)| *from <= seam),
+        "persisted event-filter segments start beyond the next block to ingest"
+    );
+    let change = match segments.last_mut() {
+        Some((filter, _)) if *filter == configured => None,
+        Some((filter, from)) if *from == seam => {
+            *filter = configured;
+            Some("replaced the last")
+        }
+        _ => {
+            segments.push((configured, seam));
+            Some("appended a new")
+        }
+    };
+    if let Some(change) = change {
+        dbio.put_event_filter_segments_bytes(&borsh::to_vec(&segments)?)?;
+        log::info!("Event filter changed: {change} segment, effective from block {seam}");
+    }
+    Ok(segments)
 }
 
 #[cfg(test)]
@@ -698,6 +755,183 @@ mod tests {
         assert_eq!(store.get_events_for_block(1).unwrap(), None);
         assert_eq!(store.get_events_for_block(2).unwrap(), None);
         assert!(store.get_events_range(1, 2).unwrap().is_empty());
+    }
+
+    #[test]
+    fn fresh_open_records_the_configured_filter_from_genesis() {
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
+
+        assert_eq!(store.filter_segments(), &[(EventFilter::Archival, 0)]);
+    }
+
+    #[tokio::test]
+    async fn unchanged_filter_reopen_keeps_a_single_segment() {
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
+        seed_emitted_events(&store).await;
+        assert_eq!(store.get_last_block_id().unwrap(), Some(3));
+        drop(store);
+
+        let reopened = open_with(home.as_ref(), EventFilter::Archival);
+
+        assert_eq!(reopened.filter_segments(), &[(EventFilter::Archival, 0)]);
+    }
+
+    #[test]
+    fn same_seam_filter_change_replaces_the_last_segment() {
+        let home = tempdir().unwrap();
+        drop(open_with(home.as_ref(), EventFilter::Archival));
+        let reopened = open_default(home.as_ref());
+
+        assert_eq!(reopened.filter_segments(), &[(EventFilter::default(), 0)]);
+    }
+
+    #[tokio::test]
+    async fn filter_change_after_ingest_appends_a_segment_at_the_seam() {
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
+        seed_emitted_events(&store).await;
+        let tip = store.get_last_block_id().unwrap().unwrap();
+        drop(store);
+
+        let reopened = open_default(home.as_ref());
+
+        assert_eq!(
+            reopened.filter_segments(),
+            &[
+                (EventFilter::Archival, 0),
+                (EventFilter::default(), tip.saturating_add(1)),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn sources_segment_survives_reopen_regardless_of_insertion_order() {
+        let filter = |entries: Vec<(ProgramId, SelectorFilter)>| {
+            EventFilter::Sources(entries.into_iter().collect())
+        };
+        let a = ([1; 8], SelectorFilter::All);
+        let b = (
+            [2; 8],
+            SelectorFilter::Only(HashSet::from([[3; 8], [4; 8]])),
+        );
+
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), filter(vec![a.clone(), b.clone()]));
+        seed_emitted_events(&store).await;
+        drop(store);
+
+        let reopened = open_with(home.as_ref(), filter(vec![b.clone(), a.clone()]));
+
+        assert_eq!(reopened.filter_segments(), &[(filter(vec![a, b]), 0)]);
+    }
+
+    #[tokio::test]
+    async fn append_then_same_seam_change_replaces_only_the_appended_segment() {
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
+        seed_emitted_events(&store).await;
+        let seam = store
+            .get_last_block_id()
+            .unwrap()
+            .unwrap()
+            .saturating_add(1);
+        drop(store);
+
+        let widened = EventFilter::Sources(HashMap::from([([1; 8], SelectorFilter::All)]));
+        drop(open_with(home.as_ref(), widened));
+        let reopened = open_default(home.as_ref());
+
+        assert_eq!(
+            reopened.filter_segments(),
+            &[(EventFilter::Archival, 0), (EventFilter::default(), seam),]
+        );
+    }
+
+    #[tokio::test]
+    async fn wipe_resets_the_segment_history() {
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
+        seed_emitted_events(&store).await;
+        drop(store);
+
+        RocksDBIO::destroy(home.as_ref()).unwrap();
+
+        let reopened = open_with(home.as_ref(), EventFilter::Archival);
+
+        assert_eq!(reopened.filter_segments(), &[(EventFilter::Archival, 0)]);
+    }
+
+    #[tokio::test]
+    async fn reaccepted_block_after_filter_change_keeps_its_original_events() {
+        let home = tempdir().unwrap();
+        let before = {
+            let store = open_with(home.as_ref(), EventFilter::Archival);
+            seed_emitted_events(&store).await;
+            store.get_events_for_block(3).unwrap().unwrap()
+        };
+
+        let reopened = open_default(home.as_ref());
+        assert_eq!(
+            reopened.filter_segments(),
+            &[(EventFilter::Archival, 0), (EventFilter::default(), 4)]
+        );
+
+        let replayed = reopened.get_block_at_id(3).unwrap().unwrap();
+        assert!(matches!(
+            reopened
+                .accept_block(&replayed, Slot::from(0))
+                .await
+                .unwrap(),
+            AcceptOutcome::AlreadyApplied
+        ));
+
+        assert_eq!(reopened.get_events_for_block(3).unwrap().unwrap(), before);
+    }
+
+    #[test]
+    fn tampered_segment_bytes_refuse_to_open() {
+        let home = tempdir().unwrap();
+        drop(open_with(home.as_ref(), EventFilter::Archival));
+
+        let initial_state = testnet_initial_state::initial_state();
+        let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
+        dbio.put_event_filter_segments_bytes(b"garbage").unwrap();
+        drop(dbio);
+
+        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
+    }
+
+    #[test]
+    fn non_ascending_segments_refuse_to_open() {
+        let home = tempdir().unwrap();
+        drop(open_with(home.as_ref(), EventFilter::Archival));
+
+        let bad: Vec<(EventFilter, u64)> =
+            vec![(EventFilter::Archival, 5), (EventFilter::Archival, 0)];
+        let initial_state = testnet_initial_state::initial_state();
+        let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
+        dbio.put_event_filter_segments_bytes(&borsh::to_vec(&bad).unwrap())
+            .unwrap();
+        drop(dbio);
+
+        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
+    }
+
+    #[test]
+    fn segments_beyond_the_next_block_refuse_to_open() {
+        let home = tempdir().unwrap();
+        drop(open_with(home.as_ref(), EventFilter::Archival));
+
+        let ahead: Vec<(EventFilter, u64)> = vec![(EventFilter::Archival, 1)];
+        let initial_state = testnet_initial_state::initial_state();
+        let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
+        dbio.put_event_filter_segments_bytes(&borsh::to_vec(&ahead).unwrap())
+            .unwrap();
+        drop(dbio);
+
+        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
     }
 }
 
