@@ -7,10 +7,10 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use arc_swap::ArcSwap;
 use futures::StreamExt as _;
-use indexer_core::{IndexerCore, config::IndexerConfig};
+use indexer_core::{IndexerCore, config::IndexerConfig, event_filter::EventFilter};
 use indexer_service_protocol::{
     Account, AccountId, Block, BlockId, EventRecord, EventSubscriptionFilter, GetEventsFilter,
-    HashType, IndexerStatus, Transaction, resolve_event_block_range,
+    HashType, IndexerStatus, ProgramId, Selector, Transaction, resolve_event_block_range,
 };
 use jsonrpsee::{
     SubscriptionSink,
@@ -70,6 +70,14 @@ impl indexer_service_rpc::RpcServer for IndexerService {
         subscription_sink: jsonrpsee::PendingSubscriptionSink,
         filter: EventSubscriptionFilter,
     ) -> SubscriptionResult {
+        if let Err(err) = check_event_coverage(
+            self.indexer.store.live_filter(),
+            filter.program_id,
+            filter.selector,
+        ) {
+            subscription_sink.reject(err).await;
+            return Ok(());
+        }
         let sink = subscription_sink.accept().await?;
         log::info!(
             "Accepted new subscription to events with ID {:?}",
@@ -195,17 +203,46 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .unwrap_or(0);
 
         let records = match plan_query(&filter, tip)? {
-            EventQuery::ByTxHash(tx_hash) => self
-                .indexer
-                .store
-                .get_events_by_tx_hash(tx_hash.0)
-                .map_err(db_error)?
-                .map(|(block_id, group)| EventRecord::from_tx_events(block_id, group))
-                .ok_or_else(unknown_transaction_error)?,
+            EventQuery::ByTxHash(tx_hash) => {
+                // Coverage is judged at the transaction's height, resolved BEFORE the
+                // events read: a filtered-out tx has no events row, and gating on the
+                // row's presence would serve `[]` for exactly the dropped domains.
+                let block_id = self
+                    .indexer
+                    .store
+                    .block_id_by_tx_hash(tx_hash.0)
+                    .map_err(db_error)?
+                    .ok_or_else(unknown_transaction_error)?;
+                check_range_coverage(
+                    self.indexer.store.filter_segments(),
+                    block_id,
+                    block_id,
+                    filter.program_id,
+                    filter.selector,
+                )?;
+                self.indexer
+                    .store
+                    .get_events_for_block(block_id)
+                    .map_err(db_error)?
+                    .and_then(|groups| {
+                        groups
+                            .into_iter()
+                            .find(|group| group.tx_hash.0 == tx_hash.0)
+                    })
+                    .map(|group| EventRecord::from_tx_events(block_id, group))
+                    .unwrap_or_default()
+            }
             EventQuery::ByRange {
                 from_block,
                 to_block,
             } => {
+                check_range_coverage(
+                    self.indexer.store.filter_segments(),
+                    from_block,
+                    to_block,
+                    filter.program_id,
+                    filter.selector,
+                )?;
                 let mut records = vec![];
                 for (block_id, groups) in self
                     .indexer
@@ -625,6 +662,53 @@ pub(crate) fn matches_subscription_filter(
             .is_none_or(|tx_hash| tx_hash == record.tx_hash)
 }
 
+// Coverage is judged against the filters the store was WRITTEN under: a query
+// they do not fully cover would be answered from a knowingly incomplete store.
+// Subscriptions are forward-only, so they check the live filter.
+pub(crate) fn check_event_coverage(
+    stored: &EventFilter,
+    program_id: Option<ProgramId>,
+    selector: Option<Selector>,
+) -> Result<(), ErrorObjectOwned> {
+    if stored.covers(program_id.map(|id| id.0), selector.map(|s| s.0)) {
+        Ok(())
+    } else {
+        Err(uncovered_query_error())
+    }
+}
+
+pub(crate) fn check_range_coverage(
+    segments: &[(EventFilter, u64)],
+    from: u64,
+    to: u64,
+    program_id: Option<ProgramId>,
+    selector: Option<Selector>,
+) -> Result<(), ErrorObjectOwned> {
+    if indexer_core::event_filter::covered_over_range(
+        segments,
+        from,
+        to,
+        program_id.map(|id| id.0),
+        selector.map(|s| s.0),
+    ) {
+        Ok(())
+    } else {
+        Err(uncovered_query_error())
+    }
+}
+
+fn uncovered_query_error() -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(
+        ErrorCode::InvalidParams.code(),
+        "UncoveredEventQuery".to_owned(),
+        Some(
+            "this indexer's event filter does not cover the requested events; query a declared \
+             program and selector, or an archival indexer"
+                .to_owned(),
+        ),
+    )
+}
+
 fn invalid_params_error(message: impl Into<String>) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(
         ErrorCode::InvalidParams.code(),
@@ -657,6 +741,9 @@ fn db_error(err: anyhow::Error) -> ErrorObjectOwned {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use indexer_core::event_filter::SelectorFilter;
     use indexer_service_protocol::{MAX_EVENT_QUERY_BLOCK_SPAN, ProgramId, Selector};
 
     use super::*;
@@ -804,5 +891,34 @@ mod tests {
         assert!(target.matches_fields(program, selector));
         assert!(!record(1, 7, 3).matches_fields(program, selector));
         assert!(!record(1, 8, 2).matches_fields(program, selector));
+    }
+
+    #[test]
+    fn coverage_check_accepts_archival_and_declared_sources() {
+        assert!(check_event_coverage(&EventFilter::Archival, None, None).is_ok());
+
+        let declared = EventFilter::Sources(HashMap::from([([7; 8], SelectorFilter::All)]));
+        assert!(
+            check_event_coverage(&declared, Some(ProgramId([7; 8])), Some(Selector([1; 8])))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn range_coverage_follows_segment_history() {
+        let declared = EventFilter::Sources(HashMap::from([([7; 8], SelectorFilter::All)]));
+        let segments = [(declared, 0), (EventFilter::Archival, 100)];
+
+        assert!(check_range_coverage(&segments, 100, 200, None, None).is_ok());
+        assert!(check_range_coverage(&segments, 50, 150, Some(ProgramId([7; 8])), None).is_ok());
+        let err = check_range_coverage(&segments, 50, 150, None, None).unwrap_err();
+        assert_eq!(err.message(), "UncoveredEventQuery");
+    }
+
+    #[test]
+    fn uncovered_query_is_rejected() {
+        let err = check_event_coverage(&EventFilter::default(), Some(ProgramId([7; 8])), None)
+            .unwrap_err();
+        assert_eq!(err.message(), "UncoveredEventQuery");
     }
 }

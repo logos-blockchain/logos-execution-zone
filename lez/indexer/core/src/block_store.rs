@@ -114,17 +114,8 @@ impl IndexerStore {
         Ok(self.dbio.get_block_events_range(from, to)?)
     }
 
-    pub fn get_events_by_tx_hash(&self, tx_hash: [u8; 32]) -> Result<Option<(u64, TxEvents)>> {
-        let Some(block_id) = self.dbio.get_block_id_by_tx_hash(tx_hash)? else {
-            return Ok(None);
-        };
-        let Some(groups) = self.dbio.get_block_events(block_id)? else {
-            return Ok(None);
-        };
-        Ok(groups
-            .into_iter()
-            .find(|group| group.tx_hash.0 == tx_hash)
-            .map(|group| (block_id, group)))
+    pub fn block_id_by_tx_hash(&self, tx_hash: [u8; 32]) -> Result<Option<u64>> {
+        Ok(self.dbio.get_block_id_by_tx_hash(tx_hash)?)
     }
 
     pub fn get_block_by_hash(&self, hash: [u8; 32]) -> Result<Option<Block>> {
@@ -452,7 +443,7 @@ mod tests {
     use testnet_initial_state::initial_pub_accounts_private_keys;
 
     use super::*;
-    use crate::event_filter::SelectorFilter;
+    use crate::event_filter::{SelectorFilter, covered_over_range};
 
     // Host-side mirror of the `event_emitter` test guest's instruction.
     #[derive(serde::Serialize)]
@@ -651,11 +642,16 @@ mod tests {
             vec![(3, groups.clone())]
         );
 
-        let (block_id, group) = store
-            .get_events_by_tx_hash(invoke_hash.0)
+        let block_id = store
+            .block_id_by_tx_hash(invoke_hash.0)
             .unwrap()
-            .expect("tx-hash lookup must find the group");
+            .expect("the invoking tx must resolve its block");
         assert_eq!(block_id, 3);
+        let group = store
+            .get_events_for_block(block_id)
+            .unwrap()
+            .and_then(|rows| rows.into_iter().find(|row| row.tx_hash == invoke_hash))
+            .expect("tx-hash lookup must find the group");
         assert_eq!(group, groups[0]);
     }
 
@@ -706,7 +702,13 @@ mod tests {
         // archival run stores both emitted events.
         assert_eq!(store.get_events_for_block(3).unwrap(), None);
         assert!(store.get_events_range(1, 3).unwrap().is_empty());
-        assert_eq!(store.get_events_by_tx_hash(invoke_hash.0).unwrap(), None);
+        assert!(
+            store
+                .block_id_by_tx_hash(invoke_hash.0)
+                .unwrap()
+                .and_then(|block_id| store.get_events_for_block(block_id).unwrap())
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -804,6 +806,35 @@ mod tests {
                 (EventFilter::default(), tip.saturating_add(1)),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn coverage_follows_the_segment_history_end_to_end() {
+        let home = tempdir().unwrap();
+        let tip = {
+            let store = open_with(home.as_ref(), EventFilter::Archival);
+            seed_emitted_events(&store).await;
+            store.get_last_block_id().unwrap().unwrap()
+        };
+
+        let reopened = open_default(home.as_ref());
+        let segments = reopened.filter_segments();
+
+        assert!(covered_over_range(segments, 1, tip, None, None));
+        assert!(!covered_over_range(
+            segments,
+            1,
+            tip.saturating_add(1),
+            None,
+            None
+        ));
+        assert!(!covered_over_range(
+            segments,
+            tip.saturating_add(1),
+            tip.saturating_add(1),
+            None,
+            None
+        ));
     }
 
     #[tokio::test]
@@ -932,6 +963,21 @@ mod tests {
         drop(dbio);
 
         assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
+    }
+
+    #[tokio::test]
+    async fn filtered_out_tx_still_resolves_its_block() {
+        let home = tempdir().unwrap();
+        let store = open_default(home.as_ref());
+        let invoke_hash = seed_emitted_events(&store).await;
+
+        // The events row was dropped by the filter, but the height is still known —
+        // which is what lets the query layer reject instead of serving `[]`.
+        let block_id = store
+            .block_id_by_tx_hash(invoke_hash.0)
+            .unwrap()
+            .expect("the filtered-out tx must still resolve its block");
+        assert_eq!(store.get_events_for_block(block_id).unwrap(), None);
     }
 }
 
