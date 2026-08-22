@@ -1944,7 +1944,6 @@ fn expected_diff(pre: &AccountWithMetadata, expected_post: &Account) -> AccountD
     }
 }
 
-
 #[test]
 fn pool_pda_produces_unique_id_for_token_pair() {
     assert!(
@@ -2260,8 +2259,8 @@ fn call_remove_liquidity_insufficient_liquidity_amount() {
         &AccountWithMetadataForTests::user_holding_a(),
         &AccountWithMetadataForTests::user_holding_b(),
         &AccountWithMetadataForTests::user_holding_a(), /* different token account than lp to
-                                                        * create desired
-                                                        * error */
+                                                         * create desired
+                                                         * error */
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),

@@ -546,7 +546,6 @@ fn expected_diff(pre: &AccountWithMetadata, expected_post: &Account) -> AccountD
     }
 }
 
-
 #[should_panic(expected = "Definition target account must have default values")]
 #[test]
 fn new_definition_non_default_first_account_should_fail() {
