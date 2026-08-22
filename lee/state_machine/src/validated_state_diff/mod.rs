@@ -225,7 +225,7 @@ impl ValidatedStateDiff {
                     .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
 
                 let data = if let Some(diff_data) = diff.diff_data.clone() {
-                    program.execute_update_from_diff(pre.account.clone(), diff_data)?
+                    program.execute_update_from_diff(&pre.account, &diff_data)?
                 } else {
                     pre.account.data.clone()
                 };
@@ -233,9 +233,7 @@ impl ValidatedStateDiff {
                 // Ownership is either inherited unchanged, or explicitly overwritten by a claim
                 // — never reverts to default. `AccountDiff` carries no ownership info at all, so
                 // this is the only place a materialized account's owner can change.
-                let mut program_owner = pre.account.program_owner;
-
-                if let Some(claim) = diff_output.required_claim() {
+                let program_owner = if let Some(claim) = diff_output.required_claim() {
                     // The invoked program can only claim accounts with default program id.
                     ensure!(
                         pre.account.program_owner == DEFAULT_PROGRAM_OWNER,
@@ -268,8 +266,10 @@ impl ValidatedStateDiff {
                         }
                     }
 
-                    program_owner = AccountId::from(chained_call.program_id);
-                }
+                    AccountId::from(chained_call.program_id)
+                } else {
+                    pre.account.program_owner
+                };
 
                 state_diff.insert(
                     account_id,

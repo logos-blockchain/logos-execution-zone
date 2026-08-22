@@ -6,8 +6,8 @@ use token_core::TokenHolding;
 
 #[must_use]
 pub fn transfer(
-    sender: AccountWithMetadata,
-    recipient: AccountWithMetadata,
+    sender: &AccountWithMetadata,
+    recipient: &AccountWithMetadata,
     balance_to_move: u128,
 ) -> Vec<AccountDiffOutput> {
     assert!(sender.is_authorized, "Sender authorization is missing");

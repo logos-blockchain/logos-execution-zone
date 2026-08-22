@@ -1,5 +1,3 @@
-use std::convert::Infallible;
-
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, SeenShard, inbox_config_account_id,
     inbox_config_seed, inbox_seen_shard_account_id, inbox_seen_shard_seed,
@@ -13,11 +11,11 @@ use lee_core::{
     },
 };
 
-fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
-    Ok(diff_data)
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Data {
+    diff_data
 }
 
-fn unchanged(pre: &AccountWithMetadata) -> AccountDiffOutput {
+const fn unchanged(pre: &AccountWithMetadata) -> AccountDiffOutput {
     AccountDiffOutput::new(AccountDiff {
         id: pre.account_id,
         diff_balance: BalanceDiff::Add(0),
@@ -40,8 +38,7 @@ fn main() {
             pre_state,
             diff_data,
         } => {
-            let data = update_from_diff(pre_state.clone(), diff_data.clone())
-                .expect("update_from_diff should not fail");
+            let data = update_from_diff(pre_state.clone(), diff_data.clone());
             write_update_from_diff_output(pre_state, diff_data, data);
             return;
         }

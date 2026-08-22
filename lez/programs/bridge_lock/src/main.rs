@@ -1,5 +1,3 @@
-use std::convert::Infallible;
-
 use bridge_lock_core::{
     Instruction, config_account_id, config_bytes, config_seed, escrow_account_id, escrow_seed,
     read_config,
@@ -14,11 +12,11 @@ use lee_core::{
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
 
-fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
-    Ok(diff_data)
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Data {
+    diff_data
 }
 
-fn unchanged(account_id: AccountId) -> AccountDiffOutput {
+const fn unchanged(account_id: AccountId) -> AccountDiffOutput {
     AccountDiffOutput::new(AccountDiff {
         id: account_id,
         diff_balance: BalanceDiff::Add(0),
@@ -41,8 +39,7 @@ fn main() {
             pre_state,
             diff_data,
         } => {
-            let data = update_from_diff(pre_state.clone(), diff_data.clone())
-                .expect("update_from_diff should not fail");
+            let data = update_from_diff(pre_state.clone(), diff_data.clone());
             write_update_from_diff_output(pre_state, diff_data, data);
             return;
         }

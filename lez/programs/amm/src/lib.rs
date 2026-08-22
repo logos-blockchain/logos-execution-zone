@@ -7,8 +7,6 @@
     reason = "TODO: Fix later"
 )]
 
-use std::convert::Infallible;
-
 pub use amm_core as core;
 use lee_core::{
     account::{Account, AccountDiff, AccountId, BalanceDiff, Data},
@@ -25,7 +23,7 @@ mod tests;
 
 /// A diff that leaves the account exactly as it was.
 #[must_use]
-pub fn unchanged(account_id: AccountId) -> AccountDiffOutput {
+pub const fn unchanged(account_id: AccountId) -> AccountDiffOutput {
     AccountDiffOutput::new(AccountDiff {
         id: account_id,
         diff_balance: BalanceDiff::Add(0),
@@ -33,6 +31,7 @@ pub fn unchanged(account_id: AccountId) -> AccountDiffOutput {
     })
 }
 
-pub fn update_from_diff(_pre_state: Account, diff_data: Data) -> Result<Data, Infallible> {
-    Ok(diff_data)
+#[must_use]
+pub fn update_from_diff(_pre_state: Account, diff_data: Data) -> Data {
+    diff_data
 }

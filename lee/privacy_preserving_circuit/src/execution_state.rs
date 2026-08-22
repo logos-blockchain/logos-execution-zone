@@ -271,6 +271,12 @@ impl ExecutionState {
     ///
     /// Return the set of authorized accounts as the result of the processed
     /// call.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is independently required context (caller identity, PDA scope, \
+                  diff-native pre/post states, and the update_from_diff binding queue); bundling \
+                  them into a struct wouldn't reduce complexity, only relocate it"
+    )]
     fn validate_and_sync_states(
         &mut self,
         account_identities: &[InputAccountIdentity],
@@ -456,9 +462,7 @@ impl ExecutionState {
             // Ownership is either inherited unchanged, or explicitly overwritten by a claim —
             // never reverts to default. `AccountDiff` carries no ownership info at all, so this
             // is the only place a materialized account's owner can change.
-            let mut post_program_owner = pre_account.program_owner;
-
-            if let Some(claim) = diff_output.required_claim() {
+            let post_program_owner = if let Some(claim) = diff_output.required_claim() {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(
                     pre_account.program_owner, DEFAULT_PROGRAM_OWNER,
@@ -535,8 +539,10 @@ impl ExecutionState {
                     }
                 }
 
-                post_program_owner = AccountId::from(program_id);
-            }
+                AccountId::from(program_id)
+            } else {
+                pre_account.program_owner
+            };
 
             post_states_entry.insert_entry(Account {
                 program_owner: post_program_owner,

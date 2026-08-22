@@ -27,7 +27,7 @@ const MOVE_DATA_FUNCTION_ID: u8 = 1;
 
 type Instruction = (u8, Vec<u8>);
 
-fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> AccountDiffOutput {
+fn write(pre_state: &AccountWithMetadata, greeting: &[u8]) -> AccountDiffOutput {
     // Construct the new data value
     let new_data: Data = {
         let mut bytes = pre_state.account.data.clone().into_inner();
@@ -48,7 +48,10 @@ fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> AccountDiffOutput {
     )
 }
 
-fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<AccountDiffOutput> {
+fn move_data(
+    from_pre: &AccountWithMetadata,
+    to_pre: &AccountWithMetadata,
+) -> Vec<AccountDiffOutput> {
     // Construct the post state account values
     let from_data: Vec<u8> = from_pre.account.data.clone().into();
 
@@ -98,8 +101,7 @@ fn main() {
             pre_state,
             diff_data,
         } => {
-            let data = update_from_diff(pre_state.clone(), diff_data.clone())
-                .expect("update_from_diff should not fail");
+            let data = update_from_diff(pre_state.clone(), diff_data.clone());
             write_update_from_diff_output(pre_state, diff_data, data);
             return;
         }
@@ -107,11 +109,11 @@ fn main() {
 
     let post_states = match (pre_states.as_slice(), function_id, data.len()) {
         ([account_pre], WRITE_FUNCTION_ID, _) => {
-            let post = write(account_pre.clone(), &data);
+            let post = write(account_pre, &data);
             vec![post]
         }
         ([account_from_pre, account_to_pre], MOVE_DATA_FUNCTION_ID, 0) => {
-            move_data(account_from_pre.clone(), account_to_pre.clone())
+            move_data(account_from_pre, account_to_pre)
         }
         _ => panic!("invalid params"),
     };
@@ -128,9 +130,6 @@ fn main() {
     .write();
 }
 
-fn update_from_diff(
-    _pre_state: Account,
-    diff_data: Data,
-) -> Result<Data, std::convert::Infallible> {
-    Ok(diff_data)
+fn update_from_diff(_pre_state: Account, diff_data: Data) -> Data {
+    diff_data
 }
