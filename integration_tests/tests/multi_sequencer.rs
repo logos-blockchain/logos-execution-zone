@@ -12,14 +12,12 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, ensure};
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
+    assert_same_chain, committee,
     config::{self, SequencerPartialConfig},
-    init_logger,
+    init_logger, wait_until,
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use sequencer_core::{
-    block_publisher::{Ed25519PublicKey, read_channel_state},
-    config::BedrockConfig,
-};
+use sequencer_core::config::BedrockConfig;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
@@ -27,8 +25,6 @@ use test_fixtures::{
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::test;
 
-const PHASE_TIMEOUT: Duration = Duration::from_secs(360);
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const TRANSFER_AMOUNT: u128 = 10;
 /// ≈4 turn windows, at the `system_accounts` posting timeframe and 5 s blocks.
 const ROTATION_BLOCKS: u64 = 8;
@@ -158,70 +154,10 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
     Ok(())
 }
 
-/// Polls `check` until it reports ready, failing with `what` on timeout.
-async fn wait_until<F, Fut>(what: &str, mut check: F) -> Result<()>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<bool>>,
-{
-    let wait = async {
-        while !check().await? {
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-        Ok::<(), anyhow::Error>(())
-    };
-    tokio::time::timeout(PHASE_TIMEOUT, wait)
-        .await
-        .with_context(|| format!("Timed out waiting for {what}"))?
-}
-
 /// Polls the sequencer until its chain height reaches `target`.
 async fn wait_for_height(client: &SequencerClient, target: u64, what: &str) -> Result<()> {
     wait_until(&format!("{what} (target height {target})"), || async {
         Ok(client.get_last_block_id().await? >= target)
     })
     .await
-}
-
-/// The channel's accredited keys, sorted, plus whose turn the tip was written on.
-async fn committee(config: &BedrockConfig) -> Result<(Vec<[u8; 32]>, Option<Ed25519PublicKey>)> {
-    let Some(state) = read_channel_state(config).await? else {
-        return Ok((Vec::new(), None));
-    };
-    let turn = state
-        .accredited_keys
-        .get(usize::from(state.tip_sequencer))
-        .copied();
-    let mut keys: Vec<_> = state
-        .accredited_keys
-        .iter()
-        .map(Ed25519PublicKey::to_bytes)
-        .collect();
-    keys.sort_unstable();
-    Ok((keys, turn))
-}
-
-/// Asserts A and B hold byte-identical block hashes over their common prefix.
-async fn assert_same_chain(a: &SequencerClient, b: &SequencerClient) -> Result<()> {
-    let common = a
-        .get_last_block_id()
-        .await?
-        .min(b.get_last_block_id().await?);
-    for id in 1..=common {
-        let block_a = a
-            .get_block(id)
-            .await?
-            .with_context(|| format!("A is missing block {id}"))?;
-        let block_b = b
-            .get_block(id)
-            .await?
-            .with_context(|| format!("B is missing block {id}"))?;
-        ensure!(
-            block_a.header.hash == block_b.header.hash,
-            "Chain divergence at block {id}: A {:?} vs B {:?}",
-            block_a.header.hash,
-            block_b.header.hash
-        );
-    }
-    Ok(())
 }

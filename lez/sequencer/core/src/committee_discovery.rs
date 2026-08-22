@@ -1,7 +1,46 @@
 //! Discovery process for the `sequencer_stake` committee.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use log::warn;
 use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig, StakeRecord};
+
+/// The channel slot each leaving key was first seen gone from the live committee at.
+///
+/// In memory only: a restart re-stamps at the current tip and costs a pending
+/// exit one more finality delay.
+#[derive(Debug, Default)]
+pub struct CommitteeAbsence {
+    absent_since: BTreeMap<SequencerKey, u64>,
+}
+
+impl CommitteeAbsence {
+    /// Records one look at the live committee, taken with the channel tip at
+    /// `tip_slot`.
+    pub fn observe(
+        &mut self,
+        live: &[SequencerKey],
+        leaving: &BTreeSet<SequencerKey>,
+        tip_slot: u64,
+    ) {
+        self.absent_since.retain(|key, _| leaving.contains(key));
+        for key in leaving {
+            if live.contains(key) {
+                self.absent_since.remove(key);
+            } else {
+                self.absent_since.entry(*key).or_insert(tip_slot);
+            }
+        }
+    }
+
+    /// Whether the channel slot that first showed `key` gone is irreversible.
+    #[must_use]
+    pub fn removal_is_final(&self, key: SequencerKey, finalized_slot: Option<u64>) -> bool {
+        self.absent_since
+            .get(&key)
+            .is_some_and(|absent_since| finalized_slot > Some(*absent_since))
+    }
+}
 
 /// The accredited-keys list LEZ state says the channel should have, or `None`
 /// if it already matches the live Bedrock committee.
@@ -70,40 +109,45 @@ pub fn finalize_unstake_candidates(state: &lee::V03State) -> Vec<(lee::AccountId
         .collect()
 }
 
-/// Block-validity rule for a `FinalizeUnstake` on `ownership_id`.
-///
-/// A partial release is always valid: `UnstakeRequest` already guarantees it
-/// leaves the key at or above the minimum, so committee membership is
-/// unaffected. A full drain — measured against tracked stake, not balance,
-/// which anyone can inflate — is valid only once the key is no longer
-/// accredited. An unknown account, no pending request, or no config entry
-/// also counts as valid; the program itself rejects those cases anyway.
-///
-/// TODO: checks live Bedrock membership, not an ordered history walk like the
-/// spec calls for. Fine for the sequencer building the next block, but a
-/// follower re-checking an already-adopted block has no independent way to
-/// verify it this way. Switch once zone-sdk exposes ordered `ChannelConfigOp`
-/// data to LEZ.
+// TODO: Only checked on blocks we build, never re-checked on adoption.
+/// Whether a `FinalizeUnstake` on `ownership_id` may go in a block: one that
+/// removes the key waits until the removal can no longer be undone.
 #[must_use]
 pub fn finalize_unstake_is_valid(
     state: &lee::V03State,
     ownership_id: lee::AccountId,
-    live_accredited_keys: &[SequencerKey],
+    absence: &CommitteeAbsence,
+    finalized_slot: Option<u64>,
 ) -> bool {
     let Some(record) = stake_record(state, ownership_id) else {
         return true;
     };
-    let Some(pending) = record.pending_unstake else {
+    if record.pending_unstake.is_none() {
         return true;
-    };
+    }
     let Some(entry) =
         read_config(state).and_then(|config| config.entries.get(&record.sequencer_key).copied())
     else {
         return true;
     };
 
-    let fully_drains = entry.total_staked == pending.amount;
-    !fully_drains || !live_accredited_keys.contains(&record.sequencer_key)
+    let fully_drains = entry.net_stake() == 0;
+    !fully_drains || absence.removal_is_final(record.sequencer_key, finalized_slot)
+}
+
+/// Keys whose pending release takes them out of the committee.
+#[must_use]
+pub fn keys_leaving_the_committee(state: &lee::V03State) -> BTreeSet<SequencerKey> {
+    let Some(config) = read_config(state) else {
+        return BTreeSet::new();
+    };
+
+    config
+        .entries
+        .into_iter()
+        .filter(|(_, entry)| entry.net_stake() == 0)
+        .map(|(key, _)| key)
+        .collect()
 }
 
 /// Reads the `sequencer_stake` config account — a single account read, not a
@@ -349,37 +393,85 @@ mod tests {
         let staked = Staked::new(5, MINIMUM + 10).pending(10);
         let state = state_with([staked]);
 
+        // Neither still accredited nor anything finalized matters here.
         assert!(finalize_unstake_is_valid(
             &state,
             staked.account_id,
-            &[staked.key]
+            &CommitteeAbsence::default(),
+            None
         ));
-        assert!(finalize_unstake_is_valid(&state, staked.account_id, &[]));
     }
 
     #[test]
-    fn a_full_drain_is_valid_only_once_absent_from_the_live_committee() {
+    fn a_full_drain_waits_for_the_removal_to_finalize() {
         let staked = Staked::new(6, MINIMUM).pending(MINIMUM);
         let state = state_with([staked]);
+        let watched = BTreeSet::from([staked.key]);
+        let valid = |absence: &CommitteeAbsence, finalized| {
+            finalize_unstake_is_valid(&state, staked.account_id, absence, finalized)
+        };
 
-        assert!(!finalize_unstake_is_valid(
-            &state,
-            staked.account_id,
-            &[staked.key]
-        ));
-        assert!(finalize_unstake_is_valid(&state, staked.account_id, &[]));
+        // Never looked at, or looked at and still accredited.
+        let mut absence = CommitteeAbsence::default();
+        assert!(!valid(&absence, Some(100)));
+        absence.observe(&[staked.key], &watched, 10);
+        assert!(!valid(&absence, Some(100)));
+
+        // Seen leaving at height 10: only a later block finalizing frees it.
+        absence.observe(&[], &watched, 10);
+        for finalized in [None, Some(9), Some(10)] {
+            assert!(
+                !valid(&absence, finalized),
+                "not final yet at {finalized:?}"
+            );
+        }
+        assert!(valid(&absence, Some(11)));
+    }
+
+    #[test]
+    fn each_removal_only_frees_its_own_release() {
+        let key = test_key(6);
+        let watched = BTreeSet::from([key]);
+        let mut absence = CommitteeAbsence::default();
+
+        absence.observe(&[], &watched, 10);
+        assert!(absence.removal_is_final(key, Some(11)));
+
+        // Seen back in the committee: that removal no longer counts.
+        absence.observe(&[key], &watched, 20);
+        assert!(!absence.removal_is_final(key, Some(100)));
+        absence.observe(&[], &watched, 30);
+        assert!(!absence.removal_is_final(key, Some(30)));
+        assert!(absence.removal_is_final(key, Some(31)));
+
+        // FinalizeUnstake ran: nothing pending, so the note is dropped.
+        absence.observe(&[], &BTreeSet::new(), 40);
+        assert!(!absence.removal_is_final(key, Some(100)));
     }
 
     #[test]
     fn a_donated_balance_does_not_make_a_full_drain_look_partial() {
-        // The drain is measured against the tracked stake, so a donation
-        // sitting on the ownership account does not reclassify it as partial.
+        // Measured against tracked stake, so a donation cannot hide the drain.
         let staked = Staked::new(7, MINIMUM).pending(MINIMUM).donated(1);
 
         assert!(!finalize_unstake_is_valid(
             &state_with([staked]),
             staked.account_id,
-            &[staked.key]
+            &CommitteeAbsence::default(),
+            Some(100)
         ));
+    }
+
+    #[test]
+    fn only_keys_a_release_would_remove_are_watched() {
+        // A key that stays in the committee has no removal to wait for.
+        let exiting = Staked::new(4, MINIMUM).pending(MINIMUM);
+        let staying = Staked::new(6, MINIMUM);
+        let shrinking = Staked::new(8, 2 * MINIMUM).pending(MINIMUM);
+
+        assert_eq!(
+            keys_leaving_the_committee(&state_with([exiting, staying, shrinking])),
+            BTreeSet::from([exiting.key])
+        );
     }
 }
