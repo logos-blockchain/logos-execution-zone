@@ -149,16 +149,16 @@ impl RocksDBIO {
             .expect("Tx hash to id map column should exist")
     }
 
-    pub fn account_id_to_tx_hash_column(&self) -> Arc<BoundColumnFamily<'_>> {
-        self.db
-            .cf_handle(CF_ACC_TO_TX)
-            .expect("Account id to tx map column should exist")
-    }
-
     pub fn events_column(&self) -> Arc<BoundColumnFamily<'_>> {
         self.db
             .cf_handle(CF_EVENTS)
             .expect("Events column should exist")
+    }
+
+    pub fn account_id_to_tx_hash_column(&self) -> Arc<BoundColumnFamily<'_>> {
+        self.db
+            .cf_handle(CF_ACC_TO_TX)
+            .expect("Account id to tx map column should exist")
     }
 
     pub fn account_meta_column(&self) -> Arc<BoundColumnFamily<'_>> {

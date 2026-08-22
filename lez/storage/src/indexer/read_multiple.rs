@@ -89,12 +89,11 @@ impl RocksDBIO {
     ) -> DbResult<Vec<(u64, Vec<TxEvents>)>> {
         let cf_events = self.events_column();
 
-        let block_ids: Vec<u64> = (from..=to).collect();
-        let mut keys = Vec::with_capacity(block_ids.len());
-        for block_id in &block_ids {
+        let mut keys = Vec::new();
+        for block_id in from..=to {
             keys.push((
                 &cf_events,
-                borsh::to_vec(block_id).map_err(|err| {
+                borsh::to_vec(&block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
                         Some("Failed to serialize block id".to_owned()),
@@ -104,7 +103,7 @@ impl RocksDBIO {
         }
 
         let mut block_events = vec![];
-        for (block_id, res) in block_ids.iter().zip(self.db.multi_get_cf(keys)) {
+        for (block_id, res) in (from..=to).zip(self.db.multi_get_cf(keys)) {
             let Some(data) = res.map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))? else {
                 continue;
             };
@@ -114,7 +113,7 @@ impl RocksDBIO {
                     Some("Failed to deserialize block events".to_owned()),
                 )
             })?;
-            block_events.push((*block_id, events));
+            block_events.push((block_id, events));
         }
 
         Ok(block_events)

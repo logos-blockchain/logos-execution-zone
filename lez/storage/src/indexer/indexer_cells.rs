@@ -124,7 +124,7 @@ impl SimpleWritableCell for BlockHashToBlockIdMapCell {
     }
 }
 
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
+#[derive(BorshDeserialize)]
 pub struct BlockEventsCellOwned(pub Vec<TxEvents>);
 
 impl SimpleStorableCell for BlockEventsCellOwned {
