@@ -38,14 +38,14 @@ fn main() {
             &config,
         ),
         ReceiverInstruction::RenounceAuthority => renounce_authority(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_words,
         ),
         ReceiverInstruction::UpdateSources { sources } => update_sources(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_words,
             sources,
@@ -118,11 +118,15 @@ fn record(
 
 /// Gives up the authority, freezing the source list for good.
 fn renounce_authority(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
 ) {
+    // See `record`'s doc comment: exact round-trip to the actual image id, needed by the
+    // PDA-derivation helpers below.
+    let self_program_id = ProgramId::from(self_account_id);
+
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
     let config_meta = pre_states
@@ -138,7 +142,7 @@ fn renounce_authority(
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
     assert!(
-        caller_program_id.is_none() || caller_program_id == cfg.governance,
+        caller_account_id.is_none() || caller_account_id == cfg.governance.map(Into::into),
         "the authority acts at top level, or through the configured governance program"
     );
 
@@ -172,8 +176,8 @@ fn renounce_authority(
         .expect("receiver config fits in account data");
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![config, authority.clone()],
         vec![
@@ -189,12 +193,16 @@ fn renounce_authority(
 /// Replaces the authorized sources, if the config names an authority and that
 /// account authorized this transaction.
 fn update_sources(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
     sources: Vec<([u8; 32], ProgramId)>,
 ) {
+    // See `record`'s doc comment: exact round-trip to the actual image id, needed by the
+    // PDA-derivation helpers below.
+    let self_program_id = ProgramId::from(self_account_id);
+
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
     let config_meta = pre_states
@@ -210,7 +218,7 @@ fn update_sources(
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
     assert!(
-        caller_program_id.is_none() || caller_program_id == cfg.governance,
+        caller_account_id.is_none() || caller_account_id == cfg.governance.map(Into::into),
         "the authority acts at top level, or through the configured governance program"
     );
 
@@ -244,8 +252,8 @@ fn update_sources(
         .expect("receiver config fits in account data");
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![config, authority.clone()],
         vec![
