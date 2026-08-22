@@ -55,9 +55,9 @@ pub struct ExecutionState {
     /// call tree, remaining authorized throughout all calls.
     globally_authorized: HashSet<AccountId>,
     signer_account_ids: Vec<AccountId>,
-    /// This, not `post_states`, is what the circuit ultimately outputs for public accounts:
-    /// `post_states` is only ever used internally, to give a later call in the same chain a
-    /// concrete `pre_state` for an account an earlier call already touched.
+    /// One diff per public account touch; diffs are not aggregated for the same public account.
+    /// This is the circuit's real output for public accounts and replayed by the sequencer against
+    /// live state.
     public_diffs: Vec<PublicDiff>,
 }
 
@@ -408,21 +408,12 @@ impl ExecutionState {
                             pre_is_authorized,
                         );
                     }
-                    // First sighting of a non-PDA-init account (`!has_private_pda_witness`):
-                    // this still runs unconditionally for its caller-PDA-seed-matching side
-                    // effects (a private PDA without an external seed legitimately authorizes
-                    // via the caller's `pda_seeds`), but the signer-list-derived result is only
-                    // *enforced* against `pre.is_authorized` for public accounts, inside
-                    // `authorize_first_sight_without_pda_witness`: `is_authorized` has no
-                    // downstream security consequence for private accounts (claim semantics are
-                    // entirely bypassed for them), and a private `AccountId` can never
-                    // legitimately appear in `signer_account_ids` (it's derived from `npk`/`vpk`,
-                    // not a real-world signature).
-                    //
-                    // Replaces the guarantee live-state reconstruction used to provide: once the
-                    // sequencer stops reconstructing pre-states from live state (PR3), this is
-                    // the circuit's only independent check that `is_authorized` for a top-level
-                    // public account was derived honestly rather than self-reported.
+                    // Enforces that a first-sighted public account's `is_authorized` claim
+                    // matches the real signer set instead of being trusted at face value: now
+                    // that the sequencer no longer reconstructs pre-states from live state, this
+                    // is the circuit's only remaining check that the claim was derived honestly
+                    // rather than self-reported. Also covers a private PDA with no external seed,
+                    // which can still be authorized via the caller's `pda_seeds`.
                     let is_public = account_identities
                         .get(pre_state_position)
                         .is_some_and(InputAccountIdentity::is_public);
@@ -476,11 +467,10 @@ impl ExecutionState {
             // journal we can't derive locally — the resulting `data` — in the same order the host
             // proved these receipts, matching this function's own traversal.
             let data = if let Some(diff_data) = diff.diff_data.clone() {
-                // The diff's materialization logic belongs to the account's *owner* program, not
-                // necessarily the calling program — falling back to the caller only when the
-                // account is still unclaimed (default owner). Must match the host's own
-                // resolution in `circuit::execute_and_prove`, since that's the program whose ELF
-                // actually produced the receipt being checked below.
+                // Owned by the account's *owner* program, not necessarily the caller — falls
+                // back to the caller only when unclaimed (default owner). Must match the host's
+                // resolution in `circuit::execute_and_prove`, the program whose ELF actually
+                // produced the receipt checked below.
                 let owner_id: ProgramId = if pre_account.program_owner == DEFAULT_PROGRAM_OWNER {
                     program_id
                 } else {
@@ -603,14 +593,10 @@ impl ExecutionState {
         authorized_accounts
     }
 
-    /// Consume self and yield the validity windows, the per-position PDA seed/program map
-    /// (recorded during `derive_from_outputs`), the committed signer set, the raw per-call
-    /// public diffs, and an iterator over pre and (internally materialized) post states of every
-    /// account involved in the execution. The materialized post state is only authoritative for
-    /// private accounts — for public ones it was only ever needed internally, for
-    /// chain-threading; `public_diffs` is the real output for those. Returning everything
-    /// together keeps the fields module-private rather than forcing them visible to downstream
-    /// consumers.
+    /// Consumes self into a tuple so the fields stay module-private rather than exposed
+    /// individually. The returned post state is only authoritative for private accounts — for
+    /// public ones it was only ever needed internally, for chain-threading; `public_diffs` is
+    /// the real output for those.
     #[expect(
         clippy::type_complexity,
         reason = "tuple bundles several exit values from one consuming call so all fields stay private; a struct would only rename it"
@@ -765,13 +751,11 @@ fn authorize_first_sight_without_pda_witness(
         assert_family_binding(pda_family_binding, caller_program_id, seed, pre_account_id);
         true
     } else {
-        // Replaces the guarantee live-state reconstruction used to provide: once the sequencer
-        // stops reconstructing pre-states from live state, this is the circuit's only
-        // independent check that `is_authorized` for a top-level public account was derived
-        // honestly rather than self-reported. `is_authorized` has no downstream security
-        // consequence for private accounts (claim semantics are entirely bypassed for them),
-        // and a private `AccountId` can never legitimately appear in `signer_account_ids` (it's
-        // derived from `npk`/`vpk`, not a real-world signature), so the check is public-only.
+        // Replaces the check live-state reconstruction used to provide: this is the circuit's
+        // only remaining proof that a public account's `is_authorized` was derived honestly, not
+        // self-reported. Private accounts are exempt — `is_authorized` has no security
+        // consequence for them, and a private `AccountId` (derived from `npk`/`vpk`) can never
+        // legitimately appear in `signer_account_ids` anyway.
         assert!(
             !is_public || pre_is_authorized == is_signer,
             "is_authorized for account {pre_account_id} doesn't match the canonical signer/PDA-authorization sources",

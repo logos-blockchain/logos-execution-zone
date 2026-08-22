@@ -16,8 +16,7 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    /// Raw, per-call, unaggregated diffs for public accounts. See
-    /// `PrivacyPreservingCircuitOutput::public_diffs`.
+    /// Per-call, unaggregated diffs for public accounts, copied from the circuit's output.
     pub public_diffs: Vec<PublicDiff>,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,
@@ -88,10 +87,8 @@ impl Message {
             .collect()
     }
 
-    /// The unique set of public accounts this transaction touches. `public_diffs` can
-    /// legitimately repeat an account (multiple calls touching the same account within one
-    /// transaction), so this dedups — callers rely on "each affected account listed once" (see
-    /// `PrivacyPreservingTransaction::affected_public_account_ids`).
+    /// The unique set of public accounts this transaction touches. `public_diffs` can repeat an
+    /// account across calls, so this dedups — callers depend on each account being listed once.
     #[must_use]
     pub fn public_account_ids(&self) -> Vec<AccountId> {
         let mut seen = HashSet::new();

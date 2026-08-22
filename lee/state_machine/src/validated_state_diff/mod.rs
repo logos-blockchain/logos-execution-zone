@@ -413,10 +413,9 @@ impl ValidatedStateDiff {
             LeeError::OutOfValidityWindow
         );
 
-        // Anchor the circuit's claimed signer set against real, cryptographically-verified
-        // signatures. Without this, a prover could satisfy claim-eligibility's authorization
-        // check for an account it never actually controls, since `is_authorized` inside the
-        // circuit is derived entirely from this list.
+        // Cross-checks the circuit's claimed signers against real signatures. `is_authorized`
+        // inside the circuit is derived entirely from this list, so without this check a prover
+        // could claim control of an account it doesn't own.
         ensure!(
             message
                 .signer_account_ids
@@ -436,12 +435,9 @@ impl ValidatedStateDiff {
         // 5. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        // Replay each public diff against live state, one at a time — never trusting anything
-        // the circuit internally materialized for a public account. This, not proof
-        // verification above, is what actually avoids tying this transaction's validity to a
-        // stale public-account snapshot: this step only cares about the diff's shape and this
-        // program's ownership, both independent of whatever pre-state the circuit witnessed
-        // while proving.
+        // Replay each public diff against live state, one at a time, never trusting what the
+        // circuit materialized — this is what actually decouples validity from a stale
+        // snapshot, checking only the diff's shape and ownership, not the witnessed pre-state.
         let mut public_diff: HashMap<AccountId, Account> = HashMap::new();
         for public_diff_entry in &message.public_diffs {
             let account_id = public_diff_entry.account_id;
@@ -453,12 +449,11 @@ impl ValidatedStateDiff {
             let diff = public_diff_entry.diff.diff();
             let account_program_owner = pre_account.program_owner;
             // `program_owner` is `AccountId`-typed; convert once up front rather than at each
-            // comparison below (see `From<ProgramId> for AccountId`'s doc comment).
+            // comparison below.
             let executing_account_id = AccountId::from(executing_program_id);
 
-            // Re-check authorization against *live* state — the circuit's own
-            // `validate_execution` check ran against a witnessed pre-state that isn't trusted
-            // for this purpose (see `check_privacy_preserving_circuit_proof_is_valid`).
+            // Re-check authorization against *live* state: the circuit's own `validate_execution`
+            // ran against a witnessed pre-state, which isn't trusted for this purpose.
             ensure!(
                 !matches!(diff.diff_balance, BalanceDiff::Sub(amount) if amount > 0)
                     || account_program_owner == executing_account_id,
@@ -612,10 +607,9 @@ fn authenticate_public_transaction_signers(
     Ok(signer_account_ids)
 }
 
-/// Verifies the proof against exactly what the circuit witnessed and output. Public account
-/// pre-states are a circuit-internal secret witness never committed to the journal at all, so
-/// there is nothing here to reconcile against live state in the first place. Materialization
-/// (which *does* use live state) happens separately, later, via `message.public_diffs`.
+/// Verifies the proof against exactly what the circuit witnessed and output. Public pre-states
+/// are a circuit-internal secret witness, never committed to the journal — materialization
+/// (which *does* use live state) happens later, via `message.public_diffs`.
 fn check_privacy_preserving_circuit_proof_is_valid(
     proof: &Proof,
     message: &Message,

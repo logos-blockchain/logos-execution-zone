@@ -469,13 +469,11 @@ fn privacy_garbage_proof_is_rejected() {
     }
 }
 
-/// The race condition this whole `AccountDiff` design exists to fix: a public account touched
-/// by a privacy transaction changes on-chain *after* the proof was generated but *before* the
-/// sequencer validates it (e.g. an unrelated public transfer into/out of the same account
-/// landing first). Proof validity no longer depends on a specific public-account snapshot — only
-/// on what the circuit itself witnessed and output — so the proof still verifies, and the
-/// diff it carries gets replayed against whatever the live balance actually is by the time the
-/// sequencer processes it, not the stale balance captured at proving time.
+/// The race condition this whole `AccountDiff` design fixes: a public account changes on-chain
+/// after proving but before sequencer validation (e.g. an unrelated transfer lands first). Proof
+/// validity no longer depends on a snapshot — only on what the circuit witnessed — so the proof
+/// still verifies, and its diff replays against the live balance at validation time, not the
+/// stale one captured while proving.
 #[test]
 fn privacy_transaction_survives_public_state_changing_after_proving() {
     use lee_core::{

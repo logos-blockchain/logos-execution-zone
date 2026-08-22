@@ -33,11 +33,9 @@ pub struct PrivacyPreservingCircuitInput {
     /// the pre-state), `diff_data` (known from the diff), and this `data`, then checks it via
     /// `env::verify` — so this value is untrusted input, made trustworthy only by that check.
     pub update_from_diff_results: Vec<Data>,
-    /// The accounts this transaction claims are signers. `is_authorized` for every account is
-    /// *derived* from membership in this single list — never accepted as an independent
-    /// per-account witness — and the list itself is committed to the output so the sequencer can
-    /// cross-check it against real signatures. Without that, a prover could satisfy
-    /// claim-eligibility's authorization check for an account it never actually controls.
+    /// Accounts this transaction claims as signers. Every account's `is_authorized` is derived
+    /// from membership here, not trusted individually — and the list is committed to the output
+    /// so the sequencer can cross-check it against real signatures.
     pub signer_account_ids: Vec<AccountId>,
 }
 
@@ -173,20 +171,18 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedAccountData,
 }
 
-/// One call's raw, unaggregated diff to a public account.
+/// One call's raw diff to a public account.
 ///
-/// Deliberately not collapsed into one diff per account: `AccountDiff` has no "combine two
-/// diffs" operation, especially for `diff_data`, which only composes by being applied in
-/// sequence. The sequencer replays these one at a time against its own live state — never
-/// trusting anything the circuit internally materialized for a public account, which is why the
-/// account's *value* (as opposed to its diffs) never appears here.
+/// Never aggregated per-account, since `AccountDiff` only composes by sequential application
+/// (no "combine" operation, especially for `diff_data`). The sequencer replays these one at a
+/// time against live state, never trusting what the circuit materialized, which is why only
+/// diffs (not values) appear here.
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
 pub struct PublicDiff {
     pub account_id: AccountId,
-    /// Carried alongside the diff because the sequencer's replay-time authorization re-check
-    /// (and PDA claim resolution) needs to know which program produced it — the same role
-    /// `chained_call.program_id` plays in the public-transaction path's live materialize loop.
+    /// Needed for the sequencer's replay-time authorization re-check and PDA claim resolution —
+    /// the same role `chained_call.program_id` plays in the public-transaction path.
     pub executing_program_id: ProgramId,
     pub diff: AccountDiffOutput,
 }

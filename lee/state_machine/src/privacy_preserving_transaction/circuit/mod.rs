@@ -98,13 +98,10 @@ pub fn execute_and_prove_with_padded_inputs(
     let mut program_outputs = Vec::new();
     let mut update_from_diff_results = Vec::new();
 
-    // Captured before `pre_states` moves into `initial_call` below — this is the only place
-    // `is_authorized` is caller-supplied (every later pre_state's authorization is resolved
-    // inside the circuit from this same list), so it's also the only place we need to derive
-    // the committed signer set from. Scoped to public accounts only: this list is committed and
-    // cross-checked by the sequencer against real, signature-derived `AccountId`s, which a
-    // private (`npk`/`vpk`-derived) `AccountId` can never match — including a private account
-    // here would make it permanently unverifiable.
+    // Captured before `pre_states` moves below — this is the only place `is_authorized` is
+    // caller-supplied; every later pre_state's authorization is derived inside the circuit from
+    // this same list. Public accounts only: a private (`npk`/`vpk`-derived) `AccountId` could
+    // never match a real signature, so including one would make it permanently unverifiable.
     let signer_account_ids: Vec<AccountId> = pre_states
         .iter()
         .zip(&account_identities)
@@ -141,9 +138,8 @@ pub fn execute_and_prove_with_padded_inputs(
         // Prove `update_from_diff` for every account this call's diff writes data to, in the
         // same order `execution_state::derive_from_outputs` will visit them, so
         // `update_from_diff_results` lines up positionally with the circuit's own traversal.
-        // The diff's materialization logic belongs to the account's *owner* program, not
-        // necessarily the calling program — falling back to the caller only when the account
-        // is still unclaimed (default owner), mirroring the claim-eligibility rule elsewhere.
+        // Dispatched to the account's *owner* program, not necessarily the caller — falls back
+        // to the caller only when the account is still unclaimed (default owner).
         for (pre, diff_output) in program_output
             .pre_states
             .iter()

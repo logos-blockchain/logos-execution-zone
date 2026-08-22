@@ -865,10 +865,9 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
     )
     .expect("a caller's pda_seeds must authorize a public PDA it delegates at first sight");
 
-    // The callee ran with the PDA authorized (auth_asserting_noop did not panic). The
-    // pre-state's is_authorized view is no longer exported to the journal at all (removed
-    // along with public_pre_states — nothing left to audit once it isn't part of the proven
-    // output), so only the touched account's identity is left to check here.
+    // The callee ran with the PDA authorized (auth_asserting_noop didn't panic). `is_authorized`
+    // is no longer exported to the journal at all, so only the touched account's identity is
+    // left to check here.
     assert_eq!(output.public_diffs.len(), 1);
     assert_eq!(output.public_diffs[0].account_id, pda);
 }
@@ -908,11 +907,8 @@ fn public_pda_first_sight_grant_does_not_extend_to_sibling_calls() {
 fn public_account_first_sight_authorization_without_signer_backing_is_rejected() {
     let seed = PdaSeed::new([77; 32]);
 
-    // Regression pin for the forgery PR3's signer check closes: `undeclaring_pda_delegator`
-    // self-declares `is_authorized = true` on a plain public account (not the seed's derived
-    // PDA, so no caller-seed match either) with no backing signer. Once `public_pre_states`
-    // stopped being exported, the circuit's signer-set check became the only thing standing
-    // between a self-reported claim and the proof succeeding — it must reject this.
+    // Regression pin: `undeclaring_pda_delegator` self-declares `is_authorized = true` with no
+    // caller-seed match and no backing signer — the signer-set check must reject this claim.
     let result = undeclaring_public_delegation(
         AccountId::new([9; 32]),
         Some(seed),
@@ -931,9 +927,8 @@ fn wrong_seed_public_pda_first_sight_without_signer_backing_is_rejected() {
     let delegator_id = crate::test_methods::undeclaring_pda_delegator().id();
     let pda = AccountId::for_public_pda(&delegator_id, &seed);
 
-    // An unmatched seed falls back to the credential-claim path, which is subject to the same
-    // signer-backing requirement as any other first-sighted public account — regression pin,
-    // see `public_account_first_sight_authorization_without_signer_backing_is_rejected`.
+    // An unmatched seed falls back to the credential-claim path, which needs the same
+    // signer backing as any first-sighted public account.
     let result = undeclaring_public_delegation(
         pda,
         Some(wrong_seed),

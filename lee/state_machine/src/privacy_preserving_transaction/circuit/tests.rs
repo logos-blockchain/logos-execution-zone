@@ -101,10 +101,8 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
 
     assert!(proof.is_valid_for(&output));
 
-    // The sender's `AccountDiff`, not a materialized post-state — this is the whole point of
-    // `AccountDiff`: the circuit never commits to a specific public post-state, only to what
-    // changed, so the sequencer can replay it against whatever the account's live state is by
-    // the time it processes this transaction.
+    // The sender's diff, not a materialized post-state — the whole point of `PublicDiff`: commit
+    // only to what changed, so the sequencer can replay it against live state.
     let [public_diff] = output.public_diffs.try_into().unwrap();
     assert_eq!(public_diff.account_id, expected_sender_pre.account_id);
     assert_eq!(public_diff.executing_program_id, program.id());

@@ -42,9 +42,8 @@ pub fn compute_circuit_output(
     {
         match account_identity {
             InputAccountIdentity::Public => {
-                // No longer exported: `pre_state` for public accounts is now witness-only. This
-                // account's effect is captured entirely by `execution_state`'s `public_diffs`
-                // (already merged into `output` above via `into_parts`).
+                // Nothing to add: `pre_state` is witness-only now, and the account's effect is
+                // already in `output.public_diffs` (merged above via `into_parts`).
             }
             InputAccountIdentity::Private(PrivateWitness {
                 vpk,
