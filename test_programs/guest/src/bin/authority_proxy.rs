@@ -12,8 +12,8 @@ type Instruction = (ProgramId, InstructionData, Option<PdaSeed>);
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (target_program_id, target_instruction_data, pda_seed),
         },
@@ -33,8 +33,8 @@ fn main() {
         .collect();
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         pre_states,
         post_states,
