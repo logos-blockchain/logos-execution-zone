@@ -1,12 +1,13 @@
 use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_inputs,
 };
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct EmitterInstruction {
     pub events: Vec<Vec<u8>>,
-    pub chain: Vec<(ProgramId, Vec<u32>)>,
+    pub chain: Vec<(ProgramId, InstructionData)>,
 }
 
 fn main() {

@@ -13,8 +13,8 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
-        BlockValidityWindow, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
-        ProgramId, TimestampValidityWindow, WrappedBalanceSum,
+        BlockValidityWindow, ExecutionValidationError, InstructionData, MAX_NUMBER_CHAINED_CALLS,
+        PdaSeed, ProgramId, TimestampValidityWindow, WrappedBalanceSum,
     },
 };
 
@@ -184,7 +184,7 @@ enum FlashSwapInstruction {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct EmitterInstruction {
     events: Vec<Vec<u8>>,
-    chain: Vec<(ProgramId, Vec<u32>)>,
+    chain: Vec<(ProgramId, InstructionData)>,
 }
 
 fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<AccountId, Account> {
