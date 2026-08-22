@@ -16,18 +16,23 @@ use logos_blockchain_zone_sdk::Slot;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
-use crate::status::CrossZoneHalt;
+use crate::{event_filter::EventFilter, status::CrossZoneHalt};
 
 #[derive(Clone)]
 pub struct IndexerStore {
     dbio: Arc<RocksDBIO>,
     current_state: Arc<RwLock<V03State>>,
+    event_filter: EventFilter,
 }
 
 impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
-    pub fn open_db(location: &Path, genesis_seed: Vec<(AccountId, Account)>) -> Result<Self> {
+    pub fn open_db(
+        location: &Path,
+        genesis_seed: Vec<(AccountId, Account)>,
+        event_filter: EventFilter,
+    ) -> Result<Self> {
         #[cfg(not(feature = "testnet"))]
         let base = testnet_initial_state::initial_state();
 
@@ -46,6 +51,7 @@ impl IndexerStore {
         Ok(Self {
             dbio: Arc::new(dbio),
             current_state: Arc::new(RwLock::new(current_state)),
+            event_filter,
         })
     }
 
@@ -270,8 +276,6 @@ impl IndexerStore {
 
         // TODO: we use scratch state to be atomic, but need to revisit how expensive a clone is
         let mut scratch = self.current_state.read().await.clone();
-        // The events come from the same application that produced `scratch`, and are
-        // written in the same `put_block` batch as the block and that state.
         let events = match apply_block_to_state(block, &mut scratch) {
             Ok(events) => events,
             Err(err) => {
@@ -282,6 +286,9 @@ impl IndexerStore {
                 return Ok(AcceptOutcome::Parked(err));
             }
         };
+        // The retained events come from the same application that produced `scratch`,
+        // and are written in the same `put_block` batch as the block and that state.
+        let events = self.event_filter.filter_block(events);
 
         let mut stored = block.clone();
         stored.bedrock_status = BedrockStatus::Finalized;
@@ -301,6 +308,16 @@ impl IndexerStore {
 }
 
 #[cfg(test)]
+fn open_default(home: &Path) -> IndexerStore {
+    open_with(home, EventFilter::default())
+}
+
+#[cfg(test)]
+fn open_with(home: &Path, filter: EventFilter) -> IndexerStore {
+    IndexerStore::open_db(home, Vec::new(), filter).expect("open store")
+}
+
+#[cfg(test)]
 mod stall_reason_tests {
     use common::HashType;
 
@@ -309,7 +326,7 @@ mod stall_reason_tests {
     #[tokio::test]
     async fn stall_reason_roundtrips_and_clears() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         assert!(store.get_stall_reason().expect("get").is_none());
 
@@ -346,7 +363,7 @@ mod stall_reason_tests {
     #[tokio::test]
     async fn cross_zone_halt_roundtrips_and_clears() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         assert!(store.get_cross_zone_halt().expect("get").is_none());
 
@@ -370,12 +387,15 @@ mod stall_reason_tests {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
     use lee_core::program::{InstructionData, ProgramEvent, ProgramId};
     use tempfile::tempdir;
     use testnet_initial_state::initial_pub_accounts_private_keys;
 
     use super::*;
+    use crate::event_filter::SelectorFilter;
 
     // Host-side mirror of the `event_emitter` test guest's instruction.
     #[derive(serde::Serialize)]
@@ -452,7 +472,7 @@ mod tests {
     fn correct_startup() {
         let home = tempdir().unwrap();
 
-        let storage = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let storage = open_default(home.as_ref());
 
         let final_id = storage.get_last_block_id().unwrap();
 
@@ -462,7 +482,7 @@ mod tests {
     #[tokio::test]
     async fn accept_block_applies_transfers_and_advances_tip() {
         let home = tempdir().unwrap();
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_default(home.as_ref());
 
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
@@ -504,7 +524,7 @@ mod tests {
     #[tokio::test]
     async fn account_state_at_block_reflects_history() {
         let home = tempdir().unwrap();
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_default(home.as_ref());
 
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
@@ -546,7 +566,7 @@ mod tests {
     #[tokio::test]
     async fn accept_block_captures_emitted_events() {
         let home = tempdir().unwrap();
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
 
         let invoke_hash = seed_emitted_events(&store).await;
 
@@ -586,12 +606,12 @@ mod tests {
     async fn events_survive_store_reopen() {
         let home = tempdir().unwrap();
         let invoke_hash = {
-            let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+            let store = open_with(home.as_ref(), EventFilter::Archival);
             seed_emitted_events(&store).await
         }; // drop releases the RocksDB lock
 
         // Reopening replays state from the breakpoints; the events rows must be untouched.
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
         let groups = store
             .get_events_for_block(3)
             .unwrap()
@@ -604,7 +624,7 @@ mod tests {
     #[tokio::test]
     async fn reaccepting_applied_block_does_not_duplicate_events() {
         let home = tempdir().unwrap();
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
 
         seed_emitted_events(&store).await;
         let before = store.get_events_for_block(3).unwrap().unwrap();
@@ -619,9 +639,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_filter_stores_no_events() {
+        let home = tempdir().unwrap();
+        let store = open_default(home.as_ref());
+
+        let invoke_hash = seed_emitted_events(&store).await;
+
+        // Nothing survives the filter, so block 3 gets no row at all — where the
+        // archival run stores both emitted events.
+        assert_eq!(store.get_events_for_block(3).unwrap(), None);
+        assert!(store.get_events_range(1, 3).unwrap().is_empty());
+        assert_eq!(store.get_events_by_tx_hash(invoke_hash.0).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn declared_source_filters_at_ingest() {
+        let home = tempdir().unwrap();
+        let filter = EventFilter::Sources(HashMap::from([(
+            test_methods::EVENT_EMITTER_ID,
+            SelectorFilter::Only(HashSet::from([emitted(1).selector])),
+        )]));
+        let store = open_with(home.as_ref(), filter);
+
+        let invoke_hash = seed_emitted_events(&store).await;
+
+        // The invoke emits `emitted(0)` and `emitted(1)`; only the declared selector lands.
+        let groups = store
+            .get_events_for_block(3)
+            .unwrap()
+            .expect("the retained event must still produce a row");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].tx_hash, invoke_hash);
+        assert_eq!(groups[0].events.len(), 1);
+        assert_eq!(
+            groups[0].events[0].program_id,
+            test_methods::EVENT_EMITTER_ID
+        );
+        assert_eq!(groups[0].events[0].event, emitted(1));
+    }
+
+    #[tokio::test]
     async fn blocks_without_events_have_no_row() {
         let home = tempdir().unwrap();
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_default(home.as_ref());
 
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
@@ -666,7 +726,7 @@ mod accept_tests {
     #[tokio::test]
     async fn non_genesis_first_block_parks_with_unexpected_id() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let block = valid_hash_block(2, HashType([0_u8; 32]));
         let outcome = store
@@ -689,7 +749,7 @@ mod accept_tests {
     #[tokio::test]
     async fn hash_mismatch_parks() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let mut block = valid_hash_block(1, HashType([0_u8; 32]));
         block.header.timestamp = 999; // invalidates the stored hash
@@ -707,7 +767,7 @@ mod accept_tests {
     #[tokio::test]
     async fn second_break_bumps_orphan_count_and_keeps_first() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let first = valid_hash_block(2, HashType([0_u8; 32]));
         store
@@ -728,7 +788,7 @@ mod accept_tests {
     #[tokio::test]
     async fn deserialize_break_records_stall_without_header() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         store
             .record_stall(
@@ -746,7 +806,7 @@ mod accept_tests {
     #[tokio::test]
     async fn parks_then_recovers_on_valid_continuation() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         // Genesis (block 1, clock-only) applies and advances the tip.
         let genesis = produce_dummy_block(1, None, vec![]);
@@ -794,7 +854,7 @@ mod accept_tests {
     #[tokio::test]
     async fn accept_block_records_tip_inscription_slot() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         assert_eq!(store.get_tip_slot().expect("get"), None);
 
@@ -836,7 +896,7 @@ mod accept_tests {
         use testnet_initial_state::initial_pub_accounts_private_keys;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
@@ -886,7 +946,7 @@ mod accept_tests {
         use testnet_initial_state::initial_pub_accounts_private_keys;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
@@ -946,7 +1006,7 @@ mod accept_tests {
         use testnet_initial_state::initial_pub_accounts_private_keys;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
@@ -983,7 +1043,7 @@ mod accept_tests {
 
         // The #605 restart: reopening past the boundary must work.
         drop(store);
-        let reopened = IndexerStore::open_db(dir.path(), Vec::new()).expect("reopen");
+        let reopened = open_default(dir.path());
         assert_eq!(reopened.last_block().unwrap(), Some(101));
     }
 
@@ -992,7 +1052,7 @@ mod accept_tests {
         use testnet_initial_state::initial_pub_accounts_private_keys;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;

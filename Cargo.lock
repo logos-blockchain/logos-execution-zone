@@ -4612,6 +4612,7 @@ dependencies = [
  "risc0-zkvm",
  "serde",
  "serde_json",
+ "serde_with",
  "storage",
  "tempfile",
  "test_methods",
