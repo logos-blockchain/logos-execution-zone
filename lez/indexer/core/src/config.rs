@@ -60,9 +60,7 @@ pub struct IndexerConfig {
     /// Defaults to `false`: on mismatch the indexer refuses to start.
     #[serde(default)]
     pub allow_chain_reset: bool,
-    /// Which emitted events this indexer persists at ingest. Omitted, it keeps
-    /// none: event storage is an explicit operator opt-in, declared per source
-    /// or wholesale via `archival`.
+    /// Which emitted events this indexer persists.
     #[serde(default)]
     pub event_filter: EventFilterConfig,
 }
@@ -94,7 +92,9 @@ impl IndexerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventFilterConfig {
+    /// Archival configuration persists all events.
     Archival,
+    /// Specifies which events to persist based on selector and id.
     Sources(Vec<EventSourceConfig>),
 }
 
@@ -104,10 +104,13 @@ impl Default for EventFilterConfig {
     }
 }
 
+/// Struct storing information on event-filtering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventSourceConfig {
+    /// The ID of the program emitting an event.
     pub program_id: ProgramId,
+    /// The optional selectors that are being monitored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selectors: Option<Vec<Selector>>,
 }
