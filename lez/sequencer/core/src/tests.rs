@@ -3691,7 +3691,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
             (
                 funding_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
+                    program_owner: programs::authenticated_transfer().deployed_account_id(),
                     balance: amount,
                     ..Account::default()
                 },
@@ -3815,7 +3815,7 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
             (
                 funding_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
+                    program_owner: programs::authenticated_transfer().deployed_account_id(),
                     balance: funding_balance,
                     ..Account::default()
                 },
@@ -3880,7 +3880,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
     // Donate into the claimed ownership account: a balance increase needs no
     // ownership of the target.
     let message = lee::public_transaction::Message::try_new(
-        programs::authenticated_transfer().id().into(),
+        programs::authenticated_transfer().deployed_account_id(),
         vec![funding_id, ownership_id],
         vec![state.get_account_by_id(funding_id).nonce],
         authenticated_transfer_core::Instruction::Transfer { amount: donation },
@@ -4049,7 +4049,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
             (
                 funding_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
+                    program_owner: programs::authenticated_transfer().deployed_account_id(),
                     balance: amount,
                     ..Account::default()
                 },
@@ -4218,6 +4218,21 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
 /// The sink burned stakes land in.
 fn slash_sink_id() -> AccountId {
     sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake().id())
+}
+
+/// Derives the `(header, segment)` account pair `bytecode` would deploy to.
+fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
+    let loader_id: ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let image_id: ProgramId = risc0_binfmt::compute_image_id(bytecode).unwrap().into();
+    let header =
+        program_loader_core::deploy_header_account_id(loader_id, image_id, 0, AccountId::default());
+    let segment = program_loader_core::deploy_segment_account_id(
+        loader_id,
+        image_id,
+        0,
+        AccountId::default(),
+    );
+    (header, segment)
 }
 
 /// Stakes `amount` for a fresh key and returns everything a slash test needs.
@@ -4484,13 +4499,11 @@ fn deploy_transaction(target: AccountId, bytecode: Vec<u8>) -> PublicTransaction
 
 #[test]
 fn loader_deploys_program() {
-    let loader_id: ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
-    let target =
-        program_loader_core::deploy_header_account_id(loader_id, image_id, 0, AccountId::default());
+    let (target, _segment) = deploy_targets(&bytecode);
 
     assert_eq!(state.get_account_by_id(target), Account::default());
 
@@ -4623,8 +4636,7 @@ fn loader_deploys_program_via_chained_call() {
 
     let bytecode = test_programs::claimer().elf().to_vec();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
-    let target =
-        program_loader_core::deploy_header_account_id(loader_id, image_id, 0, AccountId::default());
+    let (target, _segment) = deploy_targets(&bytecode);
 
     let inner_instruction_data =
         lee::program::Program::serialize_instruction(program_loader_core::Instruction::Deploy {
