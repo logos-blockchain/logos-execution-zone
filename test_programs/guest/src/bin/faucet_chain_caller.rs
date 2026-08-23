@@ -36,7 +36,6 @@ fn main() {
         .unwrap(),
         pre_states: vec![faucet_pre, vault_pda_pre],
         pda_seeds: vec![],
-        raw_payload: None,
     }];
 
     ProgramOutput::new(
