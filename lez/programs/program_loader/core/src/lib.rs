@@ -41,8 +41,8 @@ pub enum Instruction {
     ///   exactly this deployment's header — see [`execute_deploy`])
     /// - If this transaction doesn't deliver the whole program in one shot: an account matching
     ///   `update_auth`, signed (`is_authorized`) by its holder
-    /// - The target segment PDA accounts this transaction covers (`first_segment,
-    ///   first_segment+1, ...`), in order (each must be `Account::default()`)
+    /// - The target segment PDA accounts this transaction covers (`first_segment, first_segment+1,
+    ///   ...`), in order (each must be `Account::default()`)
     Deploy {
         /// Caller-declared identity of the program being deployed. Verified immediately against
         /// the real bytecode when a transaction delivers the whole program in one shot;
@@ -329,13 +329,13 @@ pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
 ///
 /// - **Whole deployment in one shot**: `user_elf_batch` is independently decoded and its real
 ///   `image_id` recomputed (combined with the assumed [`KERNEL_ELF`]) and checked against the
-///   declared one right here — exactly as trustworthy as a single-transaction deploy, no
-///   signature required.
+///   declared one right here — exactly as trustworthy as a single-transaction deploy, no signature
+///   required.
 /// - **A genuine partial batch**: `image_id`/`segment_count` can't be verified from what this
 ///   transaction alone carries — [`V03State::get_program`] only catches a mismatch once every
 ///   segment eventually exists. In the meantime, this transaction must instead prove control of
-///   `update_auth`: `update_auth` must be non-default (there is no key to sign a partial deploy
-///   of an immutable program with), included as this call's second `pre_states` entry, and
+///   `update_auth`: `update_auth` must be non-default (there is no key to sign a partial deploy of
+///   an immutable program with), included as this call's second `pre_states` entry, and
 ///   `is_authorized`. Every transaction in a partial sequence re-proves this independently, so no
 ///   one else can inject a rogue continuation into someone else's in-progress deployment either.
 ///
