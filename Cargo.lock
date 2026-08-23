@@ -1271,6 +1271,7 @@ dependencies = [
  "bridge_lock_core",
  "cross_zone_outbox_core",
  "lee_core",
+ "program_loader_core",
  "risc0-zkvm",
  "wrapped_token_core",
 ]
@@ -3182,6 +3183,7 @@ dependencies = [
  "bytemuck",
  "hex",
  "lee_core",
+ "program_loader_core",
  "risc0-zkvm",
 ]
 
@@ -12225,6 +12227,7 @@ dependencies = [
  "clock_core",
  "faucet_core",
  "lee_core",
+ "program_loader_core",
  "risc0-zkvm",
 ]
 

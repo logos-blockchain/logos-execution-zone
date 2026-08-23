@@ -408,7 +408,7 @@ fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
 /// slot taken after this returns still collides, at a probability of the
 /// occupied count over 2^32.
 async fn next_free_ordinal(client: &SequencerClient, target_zone: &ZoneId) -> Result<u32> {
-    let outbox_id = programs::cross_zone_outbox().id();
+    let outbox_id = programs::cross_zone_outbox().deployed_account_id();
     let emitter = programs::ping_sender().id();
     let start: u32 = rand::random();
 
@@ -448,8 +448,8 @@ async fn next_free_ordinal(client: &SequencerClient, target_zone: &ZoneId) -> Re
 /// block (its outbound leg); an inbox dispatch marks delivery on this zone.
 /// Runs forever; transient RPC errors are logged and retried.
 async fn scan_zone(state: Arc<AppState>, label: &'static str) {
-    let inbox_id = programs::cross_zone_inbox().id();
-    let sender_id = programs::ping_sender().id();
+    let inbox_id = programs::cross_zone_inbox().deployed_account_id();
+    let sender_id = programs::ping_sender().deployed_account_id();
     let client = &state.zone(label).expect("zone runtime exists").client;
 
     // Start from the current tip so genesis/boot blocks are skipped.
@@ -478,12 +478,12 @@ async fn scan_zone(state: Arc<AppState>, label: &'static str) {
                         let data = &public.message.instruction_data;
                         // A tx targets at most one of these programs; check both
                         // independently rather than chaining (avoids an empty else).
-                        if program_id == inbox_id.into()
+                        if program_id == inbox_id
                             && let Some(text) = decode_inbox_text(data)
                         {
                             state.mark_delivered(label, &text, next);
                         }
-                        if program_id == sender_id.into()
+                        if program_id == sender_id
                             && let Some(ordinal) = decode_send_ordinal(data)
                         {
                             state.mark_source_block(label, ordinal, next);
@@ -561,23 +561,23 @@ fn decode_payload(payload: &[u8]) -> Option<String> {
 /// mirroring `integration_tests/tests/cross_zone_ping.rs`.
 fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction {
     let receiver_id = programs::ping_receiver().id();
-    let outbox_id = programs::cross_zone_outbox().id();
+    let receiver_account_id = programs::ping_receiver().deployed_account_id();
+    let outbox_id = programs::cross_zone_outbox().deployed_account_id();
 
     let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
-        self_program_id: receiver_id,
         payload: text.as_bytes().to_vec(),
     })
     .expect("serialize record instruction");
     let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
     let sender_id = programs::ping_sender().id();
+    let sender_account_id = programs::ping_sender().deployed_account_id();
     let send = SenderInstruction::Send {
-        self_program_id: sender_id,
         target_zone: other_zone,
         target_program_id: receiver_id,
         target_accounts: vec![
-            receiver_config_account_id(receiver_id).into_value(),
-            ping_record_pda(receiver_id).into_value(),
+            receiver_config_account_id(receiver_account_id).into_value(),
+            ping_record_pda(receiver_account_id).into_value(),
         ],
         payload,
         ordinal,
@@ -591,7 +591,7 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
     );
     let message = Message::try_new(
         program_loader_core::immutable_deploy_account_id(sender_id),
-        vec![sender_config_account_id(sender_id), outbox_account],
+        vec![sender_config_account_id(sender_account_id), outbox_account],
         vec![],
         send,
     )

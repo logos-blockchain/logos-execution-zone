@@ -1,5 +1,5 @@
+use lee_core::account::AccountId;
 pub use lee_core::program::PdaSeed;
-use lee_core::{account::AccountId, program::ProgramId};
 use serde::{Deserialize, Serialize};
 
 const VAULT_SEED_DOMAIN_SEPARATOR: &[u8] = b"/LEZ/v0.3/VaultSeed/00000000000/";
@@ -47,7 +47,7 @@ pub fn compute_vault_seed(owner_id: AccountId) -> PdaSeed {
 }
 
 #[must_use]
-pub fn compute_vault_account_id(vault_program_id: ProgramId, owner_id: AccountId) -> AccountId {
+pub fn compute_vault_account_id(vault_account_id: AccountId, owner_id: AccountId) -> AccountId {
     let seed = compute_vault_seed(owner_id);
-    AccountId::for_public_pda(&vault_program_id, &seed)
+    AccountId::for_public_pda(&vault_account_id, &seed)
 }

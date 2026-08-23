@@ -3,10 +3,7 @@
 use std::collections::BTreeMap;
 
 pub use lee_core::program::PdaSeed;
-use lee_core::{
-    account::AccountId,
-    program::{InstructionData, ProgramId},
-};
+use lee_core::{account::AccountId, program::InstructionData};
 use serde::{Deserialize, Serialize};
 
 const INVALID_KEY: &str = "invalid Ed25519 public key";
@@ -70,11 +67,6 @@ pub enum Instruction {
     /// Locks `amount` into the ownership account for `sequencer_key`. First
     /// use claims the account; later calls top up the same account.
     Stake {
-        /// This program's own image id. The guest cannot learn this at runtime, so the trusted
-        /// caller supplies it to recompute the config PDA; a wrong value only fails the guest's
-        /// own self-consistency assertion, since real authorization is independently enforced by
-        /// the state layer against the account's `program_owner`.
-        self_program_id: ProgramId,
         sequencer_key: SequencerKey,
         amount: u128,
         mover_account_id: AccountId,
@@ -87,18 +79,13 @@ pub enum Instruction {
     /// Records a request to release `amount` to `destination`; no balance
     /// moves yet. Must leave the account at zero or at/above the minimum.
     UnstakeRequest {
-        /// See [`Instruction::Stake::self_program_id`].
-        self_program_id: ProgramId,
         amount: u128,
         destination: AccountId,
     },
 
     /// Unsigned, permissionless: releases a pending `UnstakeRequest`.
     /// Block-inclusion validity is enforced outside this program.
-    FinalizeUnstake {
-        /// See [`Instruction::Stake::self_program_id`].
-        self_program_id: ProgramId,
-    },
+    FinalizeUnstake,
 }
 
 /// Tag written into a claimed ownership account: which key it backs, plus any pending unstake.
@@ -189,15 +176,15 @@ pub const fn sequencer_stake_config_seed() -> PdaSeed {
 }
 
 #[must_use]
-pub fn sequencer_stake_config_account_id(program_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&program_id, &sequencer_stake_config_seed())
+pub fn sequencer_stake_config_account_id(program_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&program_account_id, &sequencer_stake_config_seed())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const PROGRAM_ID: ProgramId = [9; 8];
+    const PROGRAM_ID: AccountId = AccountId::new([9; 32]);
 
     fn test_destination() -> AccountId {
         AccountId::new([3; 32])

@@ -9,7 +9,7 @@ use lee_core::{
     PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramOutput,
+        ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramOutput,
         RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, compute_public_authorized_pdas, validate_execution,
     },
 };
@@ -100,7 +100,6 @@ impl ValidatedStateDiff {
 
         let initial_caller_data = CallerData {
             caller_account_id: None,
-            caller_image_id: None,
             authorized_accounts: signer_account_ids.iter().copied().collect(),
         };
 
@@ -120,15 +119,11 @@ impl ValidatedStateDiff {
                 chained_call.pre_states,
                 chained_call.instruction_data
             );
-            let (program_id, mut program_output) = if chained_call.program_account_id
+            let mut program_output = if chained_call.program_account_id
                 == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
             {
                 // Runs `Deploy` as native Rust instead of interpreting a guest ELF — see
-                // `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc comment for why. The
-                // loader's own identity is this fixed reserved `AccountId`, unlike an
-                // ordinary program's, so recovering it via the bijection is exact — there's
-                // no separate "real image id" to look up, Deploy isn't itself upgradeable.
-                let program_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+                // `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc comment for why.
                 // `execute_deploy` validates its input via `assert!`/`.expect(...)`, exactly
                 // like every guest program in this codebase, relying here on `catch_unwind` to
                 // play the same role the zkVM executor plays for a real guest: converting a
@@ -139,20 +134,21 @@ impl ValidatedStateDiff {
                     })?;
                 let deploy_pre_states = chained_call.pre_states.clone();
                 let post_states = std::panic::catch_unwind(|| {
-                    program_loader_core::execute_deploy(program_id, deploy_pre_states, bytecode)
+                    program_loader_core::execute_deploy(
+                        chained_call.program_account_id,
+                        deploy_pre_states,
+                        bytecode,
+                    )
                 })
                 .map_err(|_panic_payload| {
                     LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
                 })?;
-                (
-                    program_id,
-                    ProgramOutput::new(
-                        chained_call.program_account_id,
-                        caller_data.caller_account_id,
-                        chained_call.instruction_data.clone(),
-                        chained_call.pre_states.clone(),
-                        post_states,
-                    ),
+                ProgramOutput::new(
+                    chained_call.program_account_id,
+                    caller_data.caller_account_id,
+                    chained_call.instruction_data.clone(),
+                    chained_call.pre_states.clone(),
+                    post_states,
                 )
             } else {
                 // The real `image_id`, sourced from the program's own account rather than
@@ -164,15 +160,12 @@ impl ValidatedStateDiff {
                     return Err(LeeError::InvalidInput("Unknown program".into()));
                 };
                 let program = Program::new_unchecked(program_id, Cow::Owned(elf));
-                (
-                    program_id,
-                    program.execute(
-                        chained_call.program_account_id,
-                        caller_data.caller_account_id,
-                        &chained_call.pre_states,
-                        &chained_call.instruction_data,
-                    )?,
-                )
+                program.execute(
+                    chained_call.program_account_id,
+                    caller_data.caller_account_id,
+                    &chained_call.pre_states,
+                    &chained_call.instruction_data,
+                )?
             };
             debug!(
                 "Program {:?} output: {:?}",
@@ -180,7 +173,7 @@ impl ValidatedStateDiff {
             );
 
             let authorized_pdas = compute_public_authorized_pdas(
-                caller_data.caller_image_id,
+                caller_data.caller_account_id,
                 &chained_call.pda_seeds,
             );
 
@@ -284,7 +277,8 @@ impl ValidatedStateDiff {
                         // The program can only claim accounts that correspond to the PDAs it is
                         // authorized to claim. The public-execution path only sees public
                         // accounts, so the public-PDA derivation is the correct formula here.
-                        let pda = AccountId::for_public_pda(&program_id, &seed);
+                        let pda =
+                            AccountId::for_public_pda(&chained_call.program_account_id, &seed);
                         ensure!(
                             account_id == pda,
                             InvalidProgramBehaviorError::MismatchedPdaClaim {
@@ -328,7 +322,6 @@ impl ValidatedStateDiff {
                     new_call,
                     CallerData {
                         caller_account_id: Some(chained_call.program_account_id),
-                        caller_image_id: Some(program_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
@@ -519,11 +512,6 @@ impl ValidatedStateDiff {
 #[derive(Debug)]
 struct CallerData {
     caller_account_id: Option<AccountId>,
-    /// The caller's real `image_id`, recovered when the caller itself was dispatched (see
-    /// `V03State::get_program`) rather than guessed from `caller_account_id` via the bijection —
-    /// needed wherever PDA derivation requires the caller's actual identity, since a
-    /// `Deploy`-created caller's address doesn't encode it.
-    caller_image_id: Option<ProgramId>,
     authorized_accounts: HashSet<AccountId>,
 }
 

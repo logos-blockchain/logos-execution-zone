@@ -1,5 +1,5 @@
+use lee_core::account::AccountId;
 pub use lee_core::program::PdaSeed;
-use lee_core::{account::AccountId, program::ProgramId};
 use serde::{Deserialize, Serialize};
 
 const BRIDGE_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/BridgeSeed/0000000000/";
@@ -20,14 +20,8 @@ pub enum Instruction {
         /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
         /// Deposit Event on L1.
         l1_deposit_op_id: [u8; 32],
-        /// This program's own image id. The guest cannot learn this at runtime, so the trusted
-        /// caller supplies it to recompute the bridge and receipt PDAs; a wrong value only fails
-        /// the guest's own self-consistency assertions, since real authorization is
-        /// independently enforced by the state layer against the account's `program_owner`.
-        self_program_id: ProgramId,
-        /// The vault program's own image id, used to derive the expected recipient vault PDA.
-        vault_program_id: ProgramId,
-        /// The vault program's real dispatch address, used as the chained-call target.
+        /// The vault program's real dispatch address, used both to derive the expected recipient
+        /// vault PDA and as the chained-call target.
         vault_account_id: AccountId,
         recipient_id: AccountId,
         amount: u64,
@@ -53,8 +47,8 @@ pub const fn compute_bridge_seed() -> PdaSeed {
 }
 
 #[must_use]
-pub fn compute_bridge_account_id(bridge_program_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&bridge_program_id, &compute_bridge_seed())
+pub fn compute_bridge_account_id(bridge_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&bridge_account_id, &compute_bridge_seed())
 }
 
 /// Seed of the deposit-receipt PDA for `l1_deposit_op_id`, exposed so the guest
@@ -77,17 +71,17 @@ pub fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
 /// The deposit-receipt PDA whose existence marks `l1_deposit_op_id` as minted.
 #[must_use]
 pub fn deposit_receipt_account_id(
-    bridge_program_id: ProgramId,
+    bridge_account_id: AccountId,
     l1_deposit_op_id: [u8; 32],
 ) -> AccountId {
-    AccountId::for_public_pda(&bridge_program_id, &deposit_receipt_seed(l1_deposit_op_id))
+    AccountId::for_public_pda(&bridge_account_id, &deposit_receipt_seed(l1_deposit_op_id))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const BRIDGE_ID: ProgramId = [7; 8];
+    const BRIDGE_ID: AccountId = AccountId::new([7; 32]);
 
     #[test]
     fn receipt_id_is_deterministic_per_op_id() {

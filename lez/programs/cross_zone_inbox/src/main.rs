@@ -5,10 +5,7 @@ use cross_zone_inbox_core::{
 };
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
-    program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    program::{AccountPostState, ChainedCall, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 fn unchanged(pre: &AccountWithMetadata) -> AccountPostState {
@@ -32,27 +29,19 @@ fn main() {
     );
 
     match instruction {
-        Instruction::Dispatch {
-            message,
-            self_program_id,
-        } => dispatch(
+        Instruction::Dispatch { message } => dispatch(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_words,
             &message,
-            self_program_id,
         ),
-        Instruction::InitConfig {
-            config,
-            self_program_id,
-        } => init_config(
+        Instruction::InitConfig { config } => init_config(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_words,
             &config,
-            self_program_id,
         ),
     }
 }
@@ -78,7 +67,6 @@ fn dispatch(
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
     msg: &CrossZoneMessage,
-    self_program_id: ProgramId,
 ) {
     assert!(
         msg.l1_inclusion_witness.is_none(),
@@ -94,12 +82,12 @@ fn dispatch(
 
     assert_eq!(
         config.account_id,
-        inbox_config_account_id(self_program_id),
+        inbox_config_account_id(self_account_id),
         "First account must be the inbox config PDA"
     );
     assert_eq!(
         seen.account_id,
-        inbox_seen_shard_account_id(self_program_id, &msg.src_zone, msg.src_block_id),
+        inbox_seen_shard_account_id(self_account_id, &msg.src_zone, msg.src_block_id),
         "Second account must be the seen-shard PDA"
     );
     // The one value the chained call carries about where the message came from.
@@ -196,14 +184,13 @@ fn init_config(
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
     config: &InboxConfig,
-    self_program_id: ProgramId,
 ) {
     // pre_states: [config PDA].
     let [config_meta] = <[AccountWithMetadata; 1]>::try_from(pre_states)
         .expect("InitConfig requires the config account");
     assert_eq!(
         config_meta.account_id,
-        inbox_config_account_id(self_program_id),
+        inbox_config_account_id(self_account_id),
         "account must be the inbox config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first

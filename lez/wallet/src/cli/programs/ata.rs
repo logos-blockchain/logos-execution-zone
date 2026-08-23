@@ -74,7 +74,7 @@ impl AtaSubcommand {
         token_definition: AccountId,
         _wallet_core: &WalletCore,
     ) -> SubcommandReturnValue {
-        let ata_program_id = programs::ata().id();
+        let ata_program_id = programs::ata().deployed_account_id();
         let ata_id = associated_token_account_core::get_associated_token_account_id(
             &ata_program_id,
             &associated_token_account_core::compute_ata_seed(owner, token_definition),
@@ -188,7 +188,7 @@ impl AtaSubcommand {
         token_definition: Vec<AccountId>,
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let ata_program_id = programs::ata().id();
+        let ata_program_id = programs::ata().deployed_account_id();
 
         for def in &token_definition {
             let ata_id = associated_token_account_core::get_associated_token_account_id(

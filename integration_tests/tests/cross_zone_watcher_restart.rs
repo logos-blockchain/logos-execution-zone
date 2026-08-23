@@ -92,7 +92,7 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
         .send_transaction(build_ping_tx(zone_b, receiver_id))
         .await
         .context("Failed to submit ping on zone A")?;
-    let record_id = ping_record_pda(receiver_id);
+    let record_id = ping_record_pda(programs::ping_receiver().deployed_account_id());
     let delivered = wait_for_delivery(sequencer_client(seq_b.addr())?, record_id).await?;
     assert_eq!(
         delivered, PING_PAYLOAD,
@@ -188,24 +188,24 @@ async fn wait_for_block_id(
 /// Builds a top-level `ping_sender` transaction that chains into the outbox to emit
 /// a message carrying a `ping_receiver::Record` instruction for the target zone.
 fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransaction {
-    let outbox_id = programs::cross_zone_outbox().id();
+    let receiver_account_id = program_loader_core::immutable_deploy_account_id(receiver_id);
+    let outbox_id = programs::cross_zone_outbox().deployed_account_id();
     let ordinal = 0;
 
     let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
-        self_program_id: receiver_id,
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping instruction");
     let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
     let sender_id = programs::ping_sender().id();
+    let sender_account_id = programs::ping_sender().deployed_account_id();
     let send = SenderInstruction::Send {
-        self_program_id: sender_id,
         target_zone,
         target_program_id: receiver_id,
         target_accounts: vec![
-            receiver_config_account_id(receiver_id).into_value(),
-            ping_record_pda(receiver_id).into_value(),
+            receiver_config_account_id(receiver_account_id).into_value(),
+            ping_record_pda(receiver_account_id).into_value(),
         ],
         payload,
         ordinal,
@@ -219,7 +219,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
     );
     let message = Message::try_new(
         program_loader_core::immutable_deploy_account_id(sender_id),
-        vec![sender_config_account_id(sender_id), outbox_account],
+        vec![sender_config_account_id(sender_account_id), outbox_account],
         vec![],
         send,
     )

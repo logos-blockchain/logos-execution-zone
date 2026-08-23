@@ -279,7 +279,6 @@ fn cross_zone_test_config() -> SequencerConfig {
 /// form an emitter on the peer zone puts in the message payload.
 fn ping_payload(payload: &[u8]) -> Vec<u8> {
     risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
-        self_program_id: programs::ping_receiver().id(),
         payload: payload.to_vec(),
     })
     .expect("ping instruction serializes")
@@ -293,6 +292,7 @@ fn ping_payload(payload: &[u8]) -> Vec<u8> {
 /// to the encoding shows up here rather than passing silently.
 fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
     let receiver_id = programs::ping_receiver().id();
+    let receiver_account_id = programs::ping_receiver().deployed_account_id();
     LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
         &cross_zone::EmissionSource {
             src_zone: PEER_ZONE,
@@ -305,8 +305,8 @@ fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
         },
         receiver_id,
         &[
-            receiver_config_account_id(receiver_id).into_value(),
-            ping_record_pda(receiver_id).into_value(),
+            receiver_config_account_id(receiver_account_id).into_value(),
+            ping_record_pda(receiver_account_id).into_value(),
         ],
         payload,
     ))
@@ -632,7 +632,8 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
         mints, 1,
         "the deposit is re-minted exactly once after the orphan"
     );
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient_id);
+    let vault_id =
+        vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), recipient_id);
     assert_eq!(
         sequencer
             .with_state(|s| s.get_account_by_id(vault_id).balance)
@@ -668,7 +669,8 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
         panic!("bridge deposit tx is public");
     };
 
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient_id);
+    let vault_id =
+        vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), recipient_id);
     let mut state = sequencer.chain().lock().await.head_state().clone();
 
     // First mint: claims the receipt and credits the recipient vault.
@@ -736,7 +738,7 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
         "the drained delivery should be included in the produced block"
     );
 
-    let record_id = ping_record_pda(programs::ping_receiver().id());
+    let record_id = ping_record_pda(programs::ping_receiver().deployed_account_id());
     assert_eq!(
         sequencer
             .with_state(|state| state.get_account_by_id(record_id).data.into_inner())
@@ -2127,7 +2129,7 @@ fn pda_mechanism_with_pinata_token_program() {
     let pinata_token_definition_id = AccountId::new([2; 32]);
     // Total supply of pinata token will be in an account under a PDA.
     let pinata_token_holding_id =
-        AccountId::for_public_pda(&pinata_token.id(), &PdaSeed::new([0; 32]));
+        AccountId::for_public_pda(&pinata_token.deployed_account_id(), &PdaSeed::new([0; 32]));
     let winner_token_holding_id = AccountId::new([3; 32]);
 
     let expected_winner_account_holding = token_core::TokenHolding::Fungible {
@@ -3194,7 +3196,6 @@ fn diag_sequencer_stake_claims_ownership_account() {
         vec![funding_id, ownership_id, config_id],
         vec![Nonce(0), Nonce(0)],
         sequencer_stake_core::Instruction::Stake {
-            self_program_id: programs::sequencer_stake().id(),
             sequencer_key,
             amount,
             mover_account_id: program_loader_core::immutable_deploy_account_id(
@@ -3250,7 +3251,6 @@ fn stake_transaction(
             state.get_account_by_id(ownership_id).nonce,
         ],
         sequencer_stake_core::Instruction::Stake {
-            self_program_id: programs::sequencer_stake().id(),
             sequencer_key,
             amount,
             mover_account_id: program_loader_core::immutable_deploy_account_id(
@@ -3320,7 +3320,6 @@ fn unstake_request_transaction(
         vec![ownership_id, config_slot],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
-            self_program_id: programs::sequencer_stake().id(),
             amount,
             destination,
         },
@@ -3562,7 +3561,6 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         ],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
-            self_program_id: programs::sequencer_stake().id(),
             amount,
             destination: funding_id,
         },
@@ -3667,7 +3665,6 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         // The genesis Stake transaction already signed once with this account.
         vec![Nonce(1)],
         sequencer_stake_core::Instruction::UnstakeRequest {
-            self_program_id: programs::sequencer_stake().id(),
             amount: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
             destination,
         },
@@ -3695,12 +3692,15 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
 
 /// Derives the `(header, segment)` account pair `bytecode` would deploy to.
 fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
-    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(bytecode).unwrap().into();
-    let header =
-        program_loader_core::deploy_header_account_id(loader_id, image_id, 0, AccountId::default());
+    let header = program_loader_core::deploy_header_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        AccountId::default(),
+    );
     let segment = program_loader_core::deploy_segment_account_id(
-        loader_id,
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
         image_id,
         0,
         AccountId::default(),
@@ -3713,9 +3713,8 @@ fn deploy_transaction(
     segment: AccountId,
     bytecode: Vec<u8>,
 ) -> PublicTransaction {
-    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let message = lee::public_transaction::Message::try_new(
-        loader_id.into(),
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
         vec![header, segment],
         vec![],
         program_loader_core::Instruction::Deploy { bytecode },

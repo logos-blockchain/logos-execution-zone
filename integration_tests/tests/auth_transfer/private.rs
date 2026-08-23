@@ -593,8 +593,6 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         bytecode,
     ));
 
-    // `Deploy`'s bytecode payload runs ~4x its raw size on the wire (see `encoded_tx_size`'s
-    // docs), so the default 1 MiB block size isn't enough headroom for a real guest binary.
     let tx_size = encoded_tx_size(&deploy_tx);
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
@@ -616,6 +614,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let attacker_id = ctx.existing_public_accounts()[0];
     let faucet_program_id = programs::faucet().id();
     let vault_program_id = programs::vault().id();
+    let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
     let auth_transfer_program_id = programs::authenticated_transfer().id();
     let ask = lee_core::AuthorizationSecretKey([3; 32]);
     let nsk = lee_core::NullifierSecretKey::from(&ask);
@@ -623,7 +622,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let attacker_vault_id = {
         let seed = vault_core::compute_vault_seed(attacker_id);
-        AccountId::for_private_pda(&vault_program_id, &seed, &npk, &vpk, 1337)
+        AccountId::for_private_pda(&vault_account_id, &seed, &npk, &vpk, 1337)
     };
     let amount: u128 = 1;
 
@@ -645,10 +644,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
                 program_loader_core::immutable_deploy_account_id(faucet_program_id),
                 programs::faucet(),
             ),
-            (
-                program_loader_core::immutable_deploy_account_id(vault_program_id),
-                programs::vault(),
-            ),
+            (vault_account_id, programs::vault()),
             (
                 program_loader_core::immutable_deploy_account_id(auth_transfer_program_id),
                 programs::authenticated_transfer(),
@@ -659,9 +655,8 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     .with_program_account_id(faucet_chain_caller_header);
 
     let instruction = Program::serialize_instruction((
-        faucet_program_id,
         program_loader_core::immutable_deploy_account_id(faucet_program_id),
-        program_loader_core::immutable_deploy_account_id(vault_program_id),
+        vault_account_id,
         attacker_id,
         amount,
     ))?;

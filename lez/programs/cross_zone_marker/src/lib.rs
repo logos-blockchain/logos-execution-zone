@@ -32,12 +32,12 @@ pub type ZoneId = [u8; 32];
 /// pinning its caller to the inbox, and only the inbox can be that caller.
 #[must_use]
 pub fn inbox_source_marker_account_id(
-    inbox_id: ProgramId,
+    inbox_account_id: AccountId,
     src_zone: &ZoneId,
     src_program_id: ProgramId,
 ) -> AccountId {
     AccountId::for_public_pda(
-        &inbox_id,
+        &inbox_account_id,
         &inbox_source_marker_seed(src_zone, src_program_id),
     )
 }
@@ -69,7 +69,7 @@ mod tests {
     /// must not land on the same account.
     #[test]
     fn the_marker_separates_every_source() {
-        let inbox: ProgramId = [1; 8];
+        let inbox = AccountId::new([1; 32]);
         let base = inbox_source_marker_account_id(inbox, &[7; 32], [9; 8]);
         assert_eq!(
             base,
@@ -85,7 +85,7 @@ mod tests {
         );
         assert_ne!(
             base,
-            inbox_source_marker_account_id([2; 8], &[7; 32], [9; 8])
+            inbox_source_marker_account_id(AccountId::new([2; 32]), &[7; 32], [9; 8])
         );
     }
 }

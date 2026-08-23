@@ -1,9 +1,12 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountPostState, ChainedCall, InstructionData, ProgramInput, ProgramOutput,
+        read_lee_inputs,
+    },
 };
 
-type Instruction = (ProgramId, InstructionData, bool);
+type Instruction = (AccountId, InstructionData, bool);
 
 fn main() {
     let (
@@ -11,7 +14,7 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (callee_program_id, callee_instruction, declare_pre_states),
+            instruction: (callee_account_id, callee_instruction, declare_pre_states),
         },
         instruction_words,
     ) = read_lee_inputs::<Instruction>();
@@ -36,7 +39,7 @@ fn main() {
         output_post_states,
     )
     .with_chained_calls(vec![ChainedCall {
-        program_account_id: callee_program_id.into(),
+        program_account_id: callee_account_id,
         instruction_data: callee_instruction,
         pre_states,
         pda_seeds: vec![],

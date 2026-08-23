@@ -234,23 +234,11 @@ impl SeenShard {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
     /// Delivers a finalized peer message to its target program.
-    Dispatch {
-        message: CrossZoneMessage,
-        /// This inbox's own image id. The guest cannot learn this at runtime, so the trusted
-        /// caller (the watcher/verifier) supplies it to recompute the inbox's own PDAs; a wrong
-        /// value only fails the guest's own self-consistency assertions, since real
-        /// authorization is independently enforced by the state layer against the account's
-        /// `program_owner`.
-        self_program_id: ProgramId,
-    },
+    Dispatch { message: CrossZoneMessage },
     /// Initializes the inbox config account at genesis. Written once, into a
     /// default (unclaimed) config PDA; the guest refuses a non-default pre-state,
     /// so it cannot be re-run to overwrite the allowlists.
-    InitConfig {
-        config: InboxConfig,
-        /// See [`Dispatch::self_program_id`](Instruction::Dispatch).
-        self_program_id: ProgramId,
-    },
+    InitConfig { config: InboxConfig },
 }
 
 /// Content-addressed replay key for a delivered message.
@@ -276,8 +264,8 @@ pub fn message_key(src_zone: &ZoneId, src_block_id: u64, src_tx_index: u32) -> M
 
 /// The config account holding the allowlists.
 #[must_use]
-pub fn inbox_config_account_id(inbox_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&inbox_id, &inbox_config_seed())
+pub fn inbox_config_account_id(inbox_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&inbox_account_id, &inbox_config_seed())
 }
 
 /// Seed of the config PDA, exposed so the guest can claim the account when it
@@ -290,11 +278,14 @@ pub const fn inbox_config_seed() -> PdaSeed {
 /// The seen-set shard for the peer block the message came from.
 #[must_use]
 pub fn inbox_seen_shard_account_id(
-    inbox_id: ProgramId,
+    inbox_account_id: AccountId,
     src_zone: &ZoneId,
     src_block_id: u64,
 ) -> AccountId {
-    AccountId::for_public_pda(&inbox_id, &inbox_seen_shard_seed(src_zone, src_block_id))
+    AccountId::for_public_pda(
+        &inbox_account_id,
+        &inbox_seen_shard_seed(src_zone, src_block_id),
+    )
 }
 
 /// Seed of the seen-shard PDA, exposed so the guest can claim the account.
@@ -372,7 +363,7 @@ mod tests {
 
     #[test]
     fn every_peer_block_gets_its_own_seen_shard() {
-        let id: ProgramId = [9; 8];
+        let id = AccountId::new([9; 32]);
         assert_eq!(
             inbox_seen_shard_account_id(id, &zone(1), 7),
             inbox_seen_shard_account_id(id, &zone(1), 7),

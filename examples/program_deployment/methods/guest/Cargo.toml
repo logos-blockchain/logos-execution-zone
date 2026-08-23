@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 lee_core.workspace = true
+program_loader_core.workspace = true
 
 hex.workspace = true
 bytemuck.workspace = true

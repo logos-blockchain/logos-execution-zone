@@ -1,13 +1,11 @@
 use lee_core::{
     account::AccountId,
-    program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+    program::{AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use risc0_zkvm::serde::to_vec;
 
-type Instruction = (ProgramId, AccountId, AccountId, AccountId, u128);
-// (faucet_program_id, faucet_account_id, vault_account_id, recipient_id, amount)
+type Instruction = (AccountId, AccountId, AccountId, u128);
+// (faucet_account_id, vault_account_id, recipient_id, amount)
 
 fn main() {
     let (
@@ -15,8 +13,7 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction:
-                (faucet_program_id, faucet_account_id, vault_account_id, recipient_id, amount),
+            instruction: (faucet_account_id, vault_account_id, recipient_id, amount),
         },
         instruction_words,
     ) = read_lee_inputs::<Instruction>();
@@ -32,7 +29,6 @@ fn main() {
     let chained_calls = vec![ChainedCall {
         program_account_id: faucet_account_id,
         instruction_data: to_vec(&faucet_core::Instruction::GenesisTransferVault {
-            self_program_id: faucet_program_id,
             vault_account_id,
             recipient_id,
             amount,

@@ -6,8 +6,10 @@ fn flash_swap_successful() {
     let callback = crate::test_methods::flash_swap_callback();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
-    let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
+    let vault_id =
+        AccountId::for_public_pda(&initiator.deployed_account_id(), &PdaSeed::new([0_u8; 32]));
+    let receiver_id =
+        AccountId::for_public_pda(&callback.deployed_account_id(), &PdaSeed::new([1_u8; 32]));
 
     let initial_balance: u128 = 1000;
     let amount_out: u128 = 100;
@@ -57,8 +59,10 @@ fn flash_swap_callback_keeps_funds_rollback() {
     let callback = crate::test_methods::flash_swap_callback();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
-    let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
+    let vault_id =
+        AccountId::for_public_pda(&initiator.deployed_account_id(), &PdaSeed::new([0_u8; 32]));
+    let receiver_id =
+        AccountId::for_public_pda(&callback.deployed_account_id(), &PdaSeed::new([1_u8; 32]));
 
     let initial_balance: u128 = 1000;
     let amount_out: u128 = 100;
@@ -115,8 +119,10 @@ fn flash_swap_self_call_targets_correct_program() {
     let callback = crate::test_methods::flash_swap_callback();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
-    let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
+    let vault_id =
+        AccountId::for_public_pda(&initiator.deployed_account_id(), &PdaSeed::new([0_u8; 32]));
+    let receiver_id =
+        AccountId::for_public_pda(&callback.deployed_account_id(), &PdaSeed::new([1_u8; 32]));
 
     let initial_balance: u128 = 1000;
 
@@ -164,7 +170,8 @@ fn flash_swap_standalone_invariant_check_rejected() {
     let initiator = crate::test_methods::flash_swap_initiator();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+    let vault_id =
+        AccountId::for_public_pda(&initiator.deployed_account_id(), &PdaSeed::new([0_u8; 32]));
 
     let vault_account = Account {
         program_owner: token.deployed_account_id(),

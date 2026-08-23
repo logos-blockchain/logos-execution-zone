@@ -24,31 +24,28 @@ fn main() {
         panic!("Outbox is only callable through a chain call from a user program");
     };
 
-    let (self_program_id, target_zone, target_program_id, target_accounts, payload, ordinal) =
-        match instruction {
-            Instruction::Emit {
-                self_program_id,
-                target_zone,
-                target_program_id,
-                target_accounts,
-                payload,
-                ordinal,
-            } => (
-                self_program_id,
-                target_zone,
-                target_program_id,
-                target_accounts,
-                payload,
-                ordinal,
-            ),
-        };
+    let (target_zone, target_program_id, target_accounts, payload, ordinal) = match instruction {
+        Instruction::Emit {
+            target_zone,
+            target_program_id,
+            target_accounts,
+            payload,
+            ordinal,
+        } => (
+            target_zone,
+            target_program_id,
+            target_accounts,
+            payload,
+            ordinal,
+        ),
+    };
 
     let [outbox] =
         <[AccountWithMetadata; 1]>::try_from(pre_states).expect("Emit requires exactly 1 account");
 
     assert_eq!(
         outbox.account_id,
-        outbox_pda(self_program_id, emitter, &target_zone, ordinal),
+        outbox_pda(self_account_id, emitter, &target_zone, ordinal),
         "Account must be the outbox PDA for (emitter, target_zone, ordinal)"
     );
 

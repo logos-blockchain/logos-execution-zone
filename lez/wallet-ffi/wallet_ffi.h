@@ -941,20 +941,20 @@ enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
  * Produce account id for public PDA.
  *
  * # Parameters
- * - `program_id`: Id of the owner program
+ * - `program_account_id`: dispatch address of the owner program
  * - `pda_seed`: 32 byte seed
  *
  * # Returns
  * - `FfiBytes32` representing account id bytes
  */
-struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId program_id,
+struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiBytes32 program_account_id,
                                                        FfiPdaSeed pda_seed);
 
 /**
  * Produce account id for private PDA.
  *
  * # Parameters
- * - `program_id`: Id of the owner program
+ * - `program_account_id`: dispatch address of the owner program
  * - `pda_seed`: 32 byte seed
  * - `npk`: 32 byte nullifier public key (can be obtained from
  *   `wallet_ffi_get_private_account_keys`)
@@ -973,7 +973,7 @@ struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId progr
  * - `viewing_public_key` must be a valid pointer to a `u8`
  * - `account_id` must be a valid pointer to a `FfiBytes32` struct
  */
-enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiProgramId program_id,
+enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiBytes32 program_account_id,
                                                           FfiPdaSeed pda_seed,
                                                           FfiNullifierPublicKey npk,
                                                           const uint8_t *viewing_public_key,

@@ -110,7 +110,8 @@ fn supplied_account(balance: u128) -> (AccountId, GenesisAction) {
     let account_id = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::new_os_random(),
     ));
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), account_id);
+    let vault_id =
+        vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), account_id);
     (
         vault_id,
         GenesisAction::SupplyAccount {

@@ -162,22 +162,12 @@ impl AsRef<[u8]> for PdaSeed {
 /// to reconstruct the account's [`AccountId`] on the receiver side.
 ///
 /// [`AccountId`]: crate::account::AccountId
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    BorshSerialize,
-    BorshDeserialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(PartialOrd, Ord))]
 pub enum PrivateAccountKind {
     Regular(Identifier),
     Pda {
-        program_id: ProgramId,
+        program_account_id: AccountId,
         seed: PdaSeed,
         identifier: Identifier,
     },
@@ -187,8 +177,9 @@ impl PrivateAccountKind {
     /// Borsh layout (all integers little-endian, variant index is u8):
     ///
     /// ```text
-    /// Regular(ident):                  0x00 || ident (16 LE) || [0u8; 64]
-    /// Pda { program_id, seed, ident }: 0x01 || program_id (32) || seed (32) || ident (16 LE)
+    /// Regular(ident):                         0x00 || ident (16 LE) || [0u8; 64]
+    /// Pda { program_account_id, seed, ident }: 0x01 || program_account_id (32) || seed (32)
+    ///                                               || ident (16 LE)
     /// ```
     ///
     /// Both variants are zero-padded to the same length so all ciphertexts are the same size,
@@ -219,18 +210,22 @@ impl PrivateAccountKind {
 }
 
 impl AccountId {
-    /// Derives an [`AccountId`] for a public PDA from the program ID and seed.
+    /// Derives an [`AccountId`] for a public PDA from the owning program's dispatch address and
+    /// a seed.
+    ///
+    /// Keyed on the program's `AccountId` (its actual dispatch address), not its `ProgramId`
+    /// (bytecode image id): two different deployments of identical bytecode get different
+    /// `AccountId`s (see `program_loader_core::deploy_header_account_id`'s `update_auth`
+    /// parameter), and each must own a disjoint family of PDAs.
     #[must_use]
-    pub fn for_public_pda(program_id: &ProgramId, seed: &PdaSeed) -> Self {
+    pub fn for_public_pda(program_account_id: &Self, seed: &PdaSeed) -> Self {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PROGRAM_DERIVED_ACCOUNT_ID_PREFIX: &[u8; 32] =
-            b"/LEE/v0.2/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00\x00";
+            b"/LEE/v0.3/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00\x00";
 
         let mut bytes = [0; 96];
         bytes[0..32].copy_from_slice(PROGRAM_DERIVED_ACCOUNT_ID_PREFIX);
-        let program_id_bytes: &[u8] =
-            bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
-        bytes[32..64].copy_from_slice(program_id_bytes);
+        bytes[32..64].copy_from_slice(program_account_id.value());
         bytes[64..].copy_from_slice(&seed.0);
         Self::new(
             Impl::hash_bytes(&bytes)
@@ -240,16 +235,17 @@ impl AccountId {
         )
     }
 
-    /// Derives an [`AccountId`] for a private PDA from the program ID, seed, nullifier public
-    /// key, and identifier.
+    /// Derives an [`AccountId`] for a private PDA from the owning program's dispatch address,
+    /// seed, nullifier public key, and identifier.
     ///
     /// Unlike public PDAs ([`AccountId::for_public_pda`]), this includes the `npk` in the
     /// derivation, making the address unique per group of controllers sharing viewing keys.
-    /// The `identifier` further diversifies the address, so a single `(program_id, seed, npk)`
-    /// tuple controls a family of 2^128 addresses.
+    /// The `identifier` further diversifies the address, so a single
+    /// `(program_account_id, seed, npk)` tuple controls a family of 2^128 addresses. See
+    /// `for_public_pda`'s doc for why this is keyed on `AccountId` rather than `ProgramId`.
     #[must_use]
     pub fn for_private_pda(
-        program_id: &ProgramId,
+        program_account_id: &Self,
         seed: &PdaSeed,
         npk: &NullifierPublicKey,
         vpk: &ViewingPublicKey,
@@ -260,9 +256,7 @@ impl AccountId {
 
         let mut bytes = [0_u8; 32 + 32 + 32 + 32 + ViewingPublicKey::LEN + 16];
         bytes[0..32].copy_from_slice(PRIVATE_PDA_PREFIX);
-        let program_id_bytes: &[u8] =
-            bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
-        bytes[32..64].copy_from_slice(program_id_bytes);
+        bytes[32..64].copy_from_slice(program_account_id.value());
         bytes[64..96].copy_from_slice(&seed.0);
         bytes[96..128].copy_from_slice(&npk.to_byte_array());
         bytes[128..128 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
@@ -287,10 +281,10 @@ impl AccountId {
                 Self::for_regular_private_account(npk, vpk, *identifier)
             }
             PrivateAccountKind::Pda {
-                program_id,
+                program_account_id,
                 seed,
                 identifier,
-            } => Self::for_private_pda(program_id, seed, npk, vpk, *identifier),
+            } => Self::for_private_pda(program_account_id, seed, npk, vpk, *identifier),
         }
     }
 }
@@ -727,10 +721,10 @@ pub enum ExecutionValidationError {
 /// `pre_state`.
 #[must_use]
 pub fn compute_public_authorized_pdas(
-    caller_image_id: Option<ProgramId>,
+    caller_account_id: Option<AccountId>,
     pda_seeds: &[PdaSeed],
 ) -> HashSet<AccountId> {
-    let Some(caller) = caller_image_id else {
+    let Some(caller) = caller_account_id else {
         return HashSet::new();
     };
     pda_seeds

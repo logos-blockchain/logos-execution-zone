@@ -1,6 +1,6 @@
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ChainedCall, ProgramId},
+    account::{AccountId, AccountWithMetadata},
+    program::{AccountPostState, ChainedCall},
 };
 use token_core::TokenHolding;
 
@@ -8,7 +8,7 @@ pub fn transfer_from_associated_token_account(
     owner: AccountWithMetadata,
     sender_ata: AccountWithMetadata,
     recipient: AccountWithMetadata,
-    ata_program_id: ProgramId,
+    ata_program_id: AccountId,
     amount: u128,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
     let token_program_id = sender_ata.account.program_owner;
