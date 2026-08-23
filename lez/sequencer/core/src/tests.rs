@@ -152,19 +152,19 @@ fn setup_sequencer_config() -> SequencerConfig {
 #[test]
 fn only_the_cross_zone_inbox_is_sequencer_only() {
     assert!(is_sequencer_only_program(
-        program_program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id())
+        program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id())
     ));
     assert!(!is_sequencer_only_program(
-        program_program_loader_core::immutable_deploy_account_id(programs::cross_zone_outbox().id())
+        program_loader_core::immutable_deploy_account_id(programs::cross_zone_outbox().id())
     ));
     assert!(!is_sequencer_only_program(
-        program_program_loader_core::immutable_deploy_account_id(programs::wrapped_token().id())
+        program_loader_core::immutable_deploy_account_id(programs::wrapped_token().id())
     ));
     assert!(!is_sequencer_only_program(
-        program_program_loader_core::immutable_deploy_account_id(programs::ping_sender().id())
+        program_loader_core::immutable_deploy_account_id(programs::ping_sender().id())
     ));
     assert!(!is_sequencer_only_program(
-        program_program_loader_core::immutable_deploy_account_id(programs::clock().id())
+        program_loader_core::immutable_deploy_account_id(programs::clock().id())
     ));
 }
 
@@ -231,7 +231,7 @@ fn tx_is_bridge_deposit(
     };
 
     if public_tx.message.program_account_id
-        != program_program_loader_core::immutable_deploy_account_id(programs::bridge().id())
+        != program_loader_core::immutable_deploy_account_id(programs::bridge().id())
     {
         return false;
     }
@@ -261,7 +261,7 @@ fn cross_zone_test_config() -> SequencerConfig {
             peers: vec![CrossZonePeer {
                 channel_id: PEER_ZONE,
                 allowed_routes: vec![CrossZoneRoute {
-                    src_account_id: program_program_loader_core::immutable_deploy_account_id(
+                    src_account_id: program_loader_core::immutable_deploy_account_id(
                         programs::ping_sender().id(),
                     ),
                     target_program_id: programs::ping_receiver().id(),
@@ -299,7 +299,7 @@ fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
             src_block_id,
             src_block_hash: peer_block_hash(src_block_id),
             src_tx_index: 0,
-            src_account_id: program_program_loader_core::immutable_deploy_account_id(
+            src_account_id: program_loader_core::immutable_deploy_account_id(
                 programs::ping_sender().id(),
             ),
         },
@@ -1643,7 +1643,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
     // be dropped because their diffs touch the clock accounts.
     let crafted_clock_tx = {
         let message = lee::public_transaction::Message::try_new(
-            program_program_loader_core::immutable_deploy_account_id(programs::clock().id()),
+            program_loader_core::immutable_deploy_account_id(programs::clock().id()),
             system_accounts::clock_account_ids().to_vec(),
             vec![],
             42_u64,
@@ -2236,7 +2236,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     .unwrap();
     let withdraw_tx = {
         let message = lee::public_transaction::Message::try_new(
-            program_program_loader_core::immutable_deploy_account_id(programs::bridge().id()),
+            program_loader_core::immutable_deploy_account_id(programs::bridge().id()),
             vec![system_accounts::bridge_account_id()],
             vec![],
             bridge_core::Instruction::Withdraw {
@@ -3192,13 +3192,13 @@ fn diag_sequencer_stake_claims_ownership_account() {
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        program_program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![funding_id, ownership_id, config_id],
         vec![Nonce(0), Nonce(0)],
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
             amount,
-            mover_account_id: program_program_loader_core::immutable_deploy_account_id(
+            mover_account_id: program_loader_core::immutable_deploy_account_id(
                 programs::authenticated_transfer().id(),
             ),
             mover_instruction_data,
@@ -3216,7 +3216,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
     let ownership_account = state.get_account_by_id(ownership_id);
     assert_eq!(
         ownership_account.program_owner,
-        program_program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         "ownership account should be claimed by sequencer_stake"
     );
     assert_eq!(ownership_account.balance, amount);
@@ -3240,7 +3240,7 @@ fn stake_transaction(
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        program_program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![
             funding_id,
             ownership_id,
@@ -3253,7 +3253,7 @@ fn stake_transaction(
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
             amount,
-            mover_account_id: program_program_loader_core::immutable_deploy_account_id(
+            mover_account_id: program_loader_core::immutable_deploy_account_id(
                 programs::authenticated_transfer().id(),
             ),
             mover_instruction_data,
@@ -3316,7 +3316,7 @@ fn unstake_request_transaction(
 ) -> PublicTransaction {
     let (ownership_id, ownership_key) = ownership;
     let message = lee::public_transaction::Message::try_new(
-        program_program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![ownership_id, config_slot],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
@@ -3489,7 +3489,7 @@ fn an_ownership_account_cannot_stand_in_for_the_config_account() {
 
     assert_eq!(
         state.get_account_by_id(other_ownership_id).program_owner,
-        program_program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         "the stand-in is owned by sequencer_stake, so ownership alone would not catch it"
     );
 
@@ -3554,7 +3554,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 
     // Full exit, releasing back to the (now drained) funding account.
     let message = lee::public_transaction::Message::try_new(
-        program_program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![
             ownership_id,
             system_accounts::sequencer_stake_config_account_id(),
@@ -3590,7 +3590,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
     assert_eq!(
         state.get_account_by_id(ownership_id).program_owner,
-        program_program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         "the ownership account stays claimed after a full exit"
     );
 
@@ -3623,7 +3623,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
     assert_eq!(
         stake_account.program_owner,
-        program_program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id())
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id())
     );
     assert_eq!(
         stake_account.balance,
@@ -3657,7 +3657,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     ));
 
     let message = lee::public_transaction::Message::try_new(
-        program_program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![
             stake_id,
             system_accounts::sequencer_stake_config_account_id(),
@@ -3692,9 +3692,9 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
 
 /// Derives the `(header, segments)` accounts `bytecode` would deploy to.
 fn deploy_targets(bytecode: &[u8]) -> (AccountId, Vec<AccountId>) {
-    let user_elf = program_program_loader_core::extract_user_elf(bytecode).unwrap();
-    let image_id = program_program_loader_core::compute_image_id(&user_elf).unwrap();
-    let plan = program_program_loader_core::plan_deploy(
+    let user_elf = program_loader_core::extract_user_elf(bytecode).unwrap();
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
+    let plan = program_loader_core::plan_deploy(
         RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
         image_id,
         AccountId::default(),
@@ -3719,8 +3719,8 @@ fn deploy_transaction(
     // and `compute_image_id` are best-effort here so malformed input still reaches
     // `execute_deploy`'s own rejection path, rather than this helper itself panicking first.
     let user_elf =
-        program_program_loader_core::extract_user_elf(bytecode).unwrap_or_else(|_| bytecode.to_vec());
-    let image_id = program_program_loader_core::compute_image_id(&user_elf).unwrap_or([0; 8]);
+        program_loader_core::extract_user_elf(bytecode).unwrap_or_else(|_| bytecode.to_vec());
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap_or([0; 8]);
     let segment_count = u32::try_from(segments.len()).unwrap();
     deploy_batch_transaction(
         header,
@@ -3769,7 +3769,7 @@ fn deploy_batch_transaction(
         RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
         account_ids,
         nonces,
-        program_program_loader_core::Instruction::Deploy {
+        program_loader_core::Instruction::Deploy {
             image_id,
             segment_count,
             first_segment,
@@ -3817,7 +3817,12 @@ fn deploy_transactions(
                 )
             })
             .collect();
-        let header = program_loader_core::deploy_header_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+        let header = program_loader_core::deploy_header_account_id(
+            RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+            image_id,
+            0,
+            update_auth,
+        );
         let batch_byte_len = batch_len
             .checked_mul(program_loader_core::MAX_SEGMENT_DATA_LEN)
             .unwrap()
@@ -3850,8 +3855,8 @@ fn loader_deploys_program() {
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let user_elf = program_program_loader_core::extract_user_elf(&bytecode).unwrap();
-    let image_id = program_program_loader_core::compute_image_id(&user_elf).unwrap();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
     let (header, segments) = deploy_targets(&bytecode);
 
     assert_eq!(state.get_account_by_id(header), Account::default());
@@ -3869,7 +3874,7 @@ fn loader_deploys_program() {
         deployed_header.program_owner,
         RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
     );
-    let program_data = program_program_loader_core::ProgramData::try_from(&deployed_header.data)
+    let program_data = program_loader_core::ProgramData::try_from(&deployed_header.data)
         .expect("deployed header account data should decode as ProgramData");
     assert_eq!(program_data.image_id, image_id);
     assert_eq!(
@@ -3995,8 +4000,8 @@ fn loader_rejects_wrong_number_of_accounts() {
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let user_elf = program_program_loader_core::extract_user_elf(&bytecode).unwrap();
-    let image_id = program_program_loader_core::compute_image_id(&user_elf).unwrap();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
     let (header, segments) = deploy_targets(&bytecode);
     let extra = AccountId::new([9; 32]);
 
@@ -4008,7 +4013,7 @@ fn loader_rejects_wrong_number_of_accounts() {
         loader_id.into(),
         account_ids,
         vec![],
-        program_program_loader_core::Instruction::Deploy {
+        program_loader_core::Instruction::Deploy {
             image_id,
             segment_count: u32::try_from(segments.len()).unwrap(),
             first_segment: 0,
@@ -4043,9 +4048,21 @@ fn loader_deploys_program_across_multiple_transactions() {
     let key = PrivateKey::try_new([11; 32]).unwrap();
     let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-    let header = program_loader_core::deploy_header_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
     let segment_ids: Vec<AccountId> = (0..segment_count)
-        .map(|i| program_loader_core::deploy_segment_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, i, update_auth))
+        .map(|i| {
+            program_loader_core::deploy_segment_account_id(
+                RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+                image_id,
+                i,
+                update_auth,
+            )
+        })
         .collect();
 
     let remaining_segments = usize::try_from(segment_count.checked_sub(1).unwrap()).unwrap();
@@ -4092,9 +4109,21 @@ fn loader_deploy_batches_can_land_out_of_order() {
     let key = PrivateKey::try_new([12; 32]).unwrap();
     let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-    let header = program_loader_core::deploy_header_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
     let segment_ids: Vec<AccountId> = (0..segment_count)
-        .map(|i| program_loader_core::deploy_segment_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, i, update_auth))
+        .map(|i| {
+            program_loader_core::deploy_segment_account_id(
+                RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+                image_id,
+                i,
+                update_auth,
+            )
+        })
         .collect();
 
     // Batch covering segments [1..segment_count) lands first.
@@ -4158,7 +4187,12 @@ fn loader_get_program_returns_none_for_abandoned_multi_tx_deploy() {
     let txs = deploy_transactions(&bytecode, &[1, remaining_segments], update_auth, &key);
     let header = {
         let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-        program_loader_core::deploy_header_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth)
+        program_loader_core::deploy_header_account_id(
+            RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+            image_id,
+            0,
+            update_auth,
+        )
     };
 
     // Only the first batch ever lands — the deployer abandons the rest of the sequence.
@@ -4187,8 +4221,18 @@ fn loader_rejects_a_partial_deploy_batch_with_default_update_auth() {
 
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
     let update_auth = AccountId::default();
-    let header = program_loader_core::deploy_header_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
-    let segment0 = program_loader_core::deploy_segment_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+    let segment0 = program_loader_core::deploy_segment_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
 
     // Genuinely partial (first_segment 0, but fewer segments than declared segment_count), and
     // no update_auth to fall back on — this is exactly the griefing shape the account list
@@ -4227,8 +4271,18 @@ fn loader_rejects_a_partial_deploy_batch_without_a_valid_signature() {
     let key = PrivateKey::try_new([14; 32]).unwrap();
     let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-    let header = program_loader_core::deploy_header_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
-    let segment0 = program_loader_core::deploy_segment_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+    let segment0 = program_loader_core::deploy_segment_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
 
     // update_auth is real and declared correctly, but the transaction carries no witness for it.
     let tx = deploy_batch_transaction(
@@ -4267,9 +4321,24 @@ fn loader_rejects_header_racing_with_a_different_segment_count() {
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
     // The header PDA depends on (image_id, update_auth) only, not on segment_count — verified
     // separately by header_pda_is_independent_of_segment_count in loader_core.
-    let header = program_loader_core::deploy_header_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
-    let segment0 = program_loader_core::deploy_segment_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
-    let segment1 = program_loader_core::deploy_segment_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 1, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+    let segment0 = program_loader_core::deploy_segment_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+    let segment1 = program_loader_core::deploy_segment_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        1,
+        update_auth,
+    );
 
     let tx1 = deploy_batch_transaction(
         header,
@@ -4322,8 +4391,18 @@ fn loader_rejects_overlapping_segment_rewrite() {
     let key = PrivateKey::try_new([16; 32]).unwrap();
     let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-    let header = program_loader_core::deploy_header_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
-    let segment0 = program_loader_core::deploy_segment_account_id(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+    let segment0 = program_loader_core::deploy_segment_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
 
     let batch_bytes = &user_elf[..program_loader_core::MAX_SEGMENT_DATA_LEN.min(user_elf.len())];
     let tx1 = deploy_batch_transaction(
@@ -4373,12 +4452,12 @@ fn loader_deploys_program_via_chained_call() {
     let mut state = V03State::new().with_programs([forwarder.clone()]);
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let user_elf = program_program_loader_core::extract_user_elf(&bytecode).unwrap();
-    let image_id = program_program_loader_core::compute_image_id(&user_elf).unwrap();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
     let (header, segments) = deploy_targets(&bytecode);
 
     let inner_instruction_data =
-        lee::program::Program::serialize_instruction(program_program_loader_core::Instruction::Deploy {
+        lee::program::Program::serialize_instruction(program_loader_core::Instruction::Deploy {
             image_id,
             segment_count: u32::try_from(segments.len()).unwrap(),
             first_segment: 0,
@@ -4413,7 +4492,7 @@ fn loader_deploys_program_via_chained_call() {
         RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
     );
 
-    let program_data = program_program_loader_core::ProgramData::try_from(&deployed_header.data)
+    let program_data = program_loader_core::ProgramData::try_from(&deployed_header.data)
         .expect("deployed header account data should decode as ProgramData");
     assert_eq!(program_data.image_id, image_id);
 
