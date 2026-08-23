@@ -68,10 +68,8 @@ fn get_program_returns_none_for_a_missing_segment() {
     assert_eq!(result, None);
 }
 
-/// If a segment's bytes are corrupted (or the header's `segment_count` is wrong in a way that
-/// still finds real segment accounts, just not the right ones), the reconstructed elf's real
-/// `image_id` won't match what the header claims — `get_program` must reject that distinguishably
-/// from plain absence, matching "sequencer returns an error about a bad program elf."
+/// A corrupted segment's reconstructed `image_id` won't match the header's claim —
+/// `get_program` must reject that distinguishably from plain absence.
 #[test]
 fn get_program_rejects_a_corrupted_segment() {
     let program = crate::test_methods::claimer();

@@ -22,10 +22,8 @@ const KERNEL_ELF: &[u8] = include_bytes!("kernel.bin");
 
 /// Max bytes of `user_elf` one segment account's `Data` may hold.
 ///
-/// Chosen comfortably under `lee_core::account::data::DATA_MAX_LENGTH` (100 KiB), leaving
-/// headroom for any future per-segment framing without needing to touch this constant, while
-/// still yielding a sane segment count (4-6) for every real production ELF (340-490 KB
-/// `user_elf`).
+/// Comfortably under `DATA_MAX_LENGTH` (100 KiB), with headroom for future per-segment framing;
+/// yields 4-6 segments for a typical 340-490 KB `user_elf`.
 pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -259,11 +257,9 @@ pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
 
 /// Executes the `Deploy` instruction.
 ///
-/// Verifies `user_elf` decodes as a valid RISC0 program (combined with the assumed
-/// [`KERNEL_ELF`]), derives its header and segment PDAs (chunking `user_elf` across as many
-/// segments as [`plan_deploy`] reports), and claims all of them.
-///
-/// Called natively from dispatch's `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut (see that
+/// Verifies `user_elf` decodes as a valid RISC0 program (with the assumed [`KERNEL_ELF`]),
+/// derives its header and segment PDAs via [`plan_deploy`], and claims all of them. Called
+/// natively from dispatch's `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut (see that
 /// constant's doc comment in `lee_core::program`) — `Deploy` has no guest binary of its own.
 #[must_use]
 pub fn execute_deploy(
