@@ -33,7 +33,6 @@ fn main() {
 
     let chained_calls = match instruction {
         Instruction::GenesisTransferVault {
-            self_program_id,
             vault_account_id,
             recipient_id,
             amount,
@@ -44,7 +43,7 @@ fn main() {
 
             assert_eq!(
                 faucet.account_id,
-                faucet_core::compute_faucet_account_id(self_program_id),
+                faucet_core::compute_faucet_account_id(self_account_id),
                 "First account must be faucet PDA"
             );
 
@@ -63,17 +62,14 @@ fn main() {
                 .with_pda_seeds(vec![faucet_core::compute_faucet_seed()]),
             ]
         }
-        Instruction::GenesisTransferDirect {
-            self_program_id,
-            amount,
-        } => {
+        Instruction::GenesisTransferDirect { amount } => {
             let [faucet, recipient] = pre_states
                 .try_into()
                 .expect("TransferDirect requires exactly 2 accounts");
 
             assert_eq!(
                 faucet.account_id,
-                faucet_core::compute_faucet_account_id(self_program_id),
+                faucet_core::compute_faucet_account_id(self_account_id),
                 "First account must be faucet PDA"
             );
 

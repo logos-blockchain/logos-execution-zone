@@ -2,29 +2,29 @@ use lee::AccountId;
 
 use crate::{
     error::WalletFfiError, FfiBytes32, FfiNullifierPublicKey, FfiPdaSeed, FfiPrivateAccountKeys,
-    FfiProgramId, FfiU128,
+    FfiU128,
 };
 
 /// Produce account id for public PDA.
 ///
 /// # Parameters
-/// - `program_id`: Id of the owner program
+/// - `program_account_id`: dispatch address of the owner program
 /// - `pda_seed`: 32 byte seed
 ///
 /// # Returns
 /// - `FfiBytes32` representing account id bytes
 #[no_mangle]
 pub extern "C" fn wallet_ffi_account_id_for_public_pda(
-    program_id: FfiProgramId,
+    program_account_id: FfiBytes32,
     pda_seed: FfiPdaSeed,
 ) -> FfiBytes32 {
-    AccountId::for_public_pda(&program_id.data, &pda_seed.into()).into()
+    AccountId::for_public_pda(&program_account_id.into(), &pda_seed.into()).into()
 }
 
 /// Produce account id for private PDA.
 ///
 /// # Parameters
-/// - `program_id`: Id of the owner program
+/// - `program_account_id`: dispatch address of the owner program
 /// - `pda_seed`: 32 byte seed
 /// - `npk`: 32 byte nullifier public key (can be obtained from
 ///   `wallet_ffi_get_private_account_keys`)
@@ -44,7 +44,7 @@ pub extern "C" fn wallet_ffi_account_id_for_public_pda(
 /// - `account_id` must be a valid pointer to a `FfiBytes32` struct
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
-    program_id: FfiProgramId,
+    program_account_id: FfiBytes32,
     pda_seed: FfiPdaSeed,
     npk: FfiNullifierPublicKey,
     viewing_public_key: *const u8,
@@ -70,7 +70,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
 
     unsafe {
         *account_id = AccountId::for_private_pda(
-            &program_id.data,
+            &program_account_id.into(),
             &pda_seed.into(),
             &ffi_private_keys.npk(),
             &vpk.unwrap(),
@@ -96,24 +96,26 @@ mod tests {
 
     #[test]
     fn public_pda_consistent_derivation() {
-        let program_id = [100_u32, 101, 102, 103, 104, 105, 106, 107];
+        let program_account_id = AccountId::new([100; 32]);
         let pda_seed = PdaSeed::new([42; 32]);
 
-        let pda_id = AccountId::for_public_pda(&program_id, &pda_seed);
-        let ffi_pda_id = wallet_ffi_account_id_for_public_pda(program_id.into(), pda_seed.into());
+        let pda_id = AccountId::for_public_pda(&program_account_id, &pda_seed);
+        let ffi_pda_id =
+            wallet_ffi_account_id_for_public_pda(program_account_id.into(), pda_seed.into());
 
         assert_eq!(pda_id.into_value(), ffi_pda_id.data);
     }
 
     #[test]
     fn private_pda_consistent_derivation() {
-        let program_id = [100_u32, 101, 102, 103, 104, 105, 106, 107];
+        let program_account_id = AccountId::new([100; 32]);
         let pda_seed = PdaSeed::new([42; 32]);
         let vpk = ViewingPublicKey::from_bytes(vec![43; 1184]).unwrap();
         let npk = NullifierPublicKey([44; 32]);
         let identifier = 100_000_u128;
 
-        let pda_id = AccountId::for_private_pda(&program_id, &pda_seed, &npk, &vpk, identifier);
+        let pda_id =
+            AccountId::for_private_pda(&program_account_id, &pda_seed, &npk, &vpk, identifier);
 
         let vpk_ptr = Box::into_raw(vpk.to_bytes().to_vec().into_boxed_slice()) as *const u8;
 
@@ -122,7 +124,7 @@ mod tests {
 
         let err = unsafe {
             wallet_ffi_account_id_for_private_pda(
-                program_id.into(),
+                program_account_id.into(),
                 pda_seed.into(),
                 npk.into(),
                 vpk_ptr,

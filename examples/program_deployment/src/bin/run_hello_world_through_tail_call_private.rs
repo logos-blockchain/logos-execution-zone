@@ -47,7 +47,7 @@ async fn main() {
     let hello_world_bytecode: Vec<u8> = std::fs::read(hello_world_path).unwrap();
     let hello_world = Program::new(hello_world_bytecode.into()).unwrap();
     let dependencies: HashMap<AccountId, Program> =
-        std::iter::once((hello_world.id().into(), hello_world)).collect();
+        std::iter::once((hello_world.deployed_account_id(), hello_world)).collect();
     let program_with_dependencies = ProgramWithDependencies::new(simple_tail_call, dependencies);
 
     let accounts = vec![AccountIdentity::PrivateOwned(account_id)];

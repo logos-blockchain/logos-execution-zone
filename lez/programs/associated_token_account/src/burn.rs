@@ -1,6 +1,6 @@
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ChainedCall, ProgramId},
+    account::{AccountId, AccountWithMetadata},
+    program::{AccountPostState, ChainedCall},
 };
 use token_core::TokenHolding;
 
@@ -8,7 +8,7 @@ pub fn burn_from_associated_token_account(
     owner: AccountWithMetadata,
     holder_ata: AccountWithMetadata,
     token_definition: AccountWithMetadata,
-    ata_program_id: ProgramId,
+    ata_program_id: AccountId,
     amount: u128,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
     let token_program_id = holder_ata.account.program_owner;

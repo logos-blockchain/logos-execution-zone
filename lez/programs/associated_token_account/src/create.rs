@@ -1,13 +1,13 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{AccountPostState, ChainedCall, Claim, ProgramId},
+    account::{Account, AccountId, AccountWithMetadata},
+    program::{AccountPostState, ChainedCall, Claim},
 };
 
 pub fn create_associated_token_account(
     owner: AccountWithMetadata,
     token_definition: AccountWithMetadata,
     ata_account: AccountWithMetadata,
-    ata_program_id: ProgramId,
+    ata_program_id: AccountId,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
     // No authorization check needed: create is idempotent, so anyone can call it safely.
     let token_program_id = token_definition.account.program_owner;

@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 borsh.workspace = true
 lee_core.workspace = true
+program_loader_core.workspace = true
 
 hex.workspace = true
 bytemuck.workspace = true

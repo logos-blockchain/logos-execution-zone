@@ -3,8 +3,8 @@ use std::collections::btree_map::Entry;
 use lee_core::{
     account::{AccountId, AccountWithMetadata},
     program::{
-        AccountPostState, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramId,
-        ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountPostState, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramInput,
+        ProgramOutput, read_lee_inputs,
     },
 };
 use sequencer_stake_core::{
@@ -28,7 +28,6 @@ fn main() {
 
     let (post_states, chained_calls) = match instruction {
         Instruction::Stake {
-            self_program_id,
             sequencer_key,
             amount,
             mover_account_id,
@@ -39,7 +38,6 @@ fn main() {
                 "Stake is only invoked as a top-level user transaction"
             );
             stake(
-                self_program_id,
                 self_account_id,
                 pre_states.clone(),
                 sequencer_key,
@@ -60,7 +58,6 @@ fn main() {
             (post, Vec::new())
         }
         Instruction::UnstakeRequest {
-            self_program_id,
             amount,
             destination,
         } => {
@@ -68,25 +65,18 @@ fn main() {
                 caller_account_id.is_none(),
                 "UnstakeRequest is only invoked as a top-level user transaction"
             );
-            let post = unstake_request(
-                self_program_id,
-                self_account_id,
-                pre_states.clone(),
-                amount,
-                destination,
-            );
+            let post = unstake_request(self_account_id, pre_states.clone(), amount, destination);
             (post, Vec::new())
         }
-        Instruction::FinalizeUnstake { self_program_id } => {
+        Instruction::FinalizeUnstake => {
             assert!(
                 caller_account_id.is_none(),
                 "FinalizeUnstake is only invoked as a top-level user transaction"
             );
-            let post = finalize_unstake(self_program_id, self_account_id, pre_states.clone());
+            let post = finalize_unstake(self_account_id, pre_states.clone());
             (post, Vec::new())
         }
         Instruction::Slash {
-            self_program_id,
             sequencer_key,
             inscription,
             approvals,
@@ -96,7 +86,6 @@ fn main() {
                 "Slash is only invoked as a top-level user transaction"
             );
             let post = slash(
-                self_program_id,
                 self_account_id,
                 pre_states.clone(),
                 sequencer_key,
@@ -120,14 +109,13 @@ fn main() {
 
 fn decode_config(
     config_account: &AccountWithMetadata,
-    self_program_id: ProgramId,
     self_account_id: AccountId,
 ) -> SequencerStakeConfig {
     // By id, not just by owner: every ownership account is owned by this
     // program too, and its data is caller-influenced.
     assert_eq!(
         config_account.account_id,
-        sequencer_stake_config_account_id(self_program_id),
+        sequencer_stake_config_account_id(self_account_id),
         "not the sequencer_stake config account"
     );
     assert_eq!(
@@ -139,7 +127,6 @@ fn decode_config(
 }
 
 fn stake(
-    self_program_id: ProgramId,
     self_account_id: AccountId,
     pre_states: Vec<AccountWithMetadata>,
     sequencer_key: SequencerKey,
@@ -157,7 +144,7 @@ fn stake(
         "must sign for the ownership account"
     );
 
-    let mut config = decode_config(&config_account, self_program_id, self_account_id);
+    let mut config = decode_config(&config_account, self_account_id);
     let minimum_sequencer_stake = config.minimum_sequencer_stake;
 
     let balance_before = ownership_account.account.balance;
@@ -279,7 +266,6 @@ fn confirm_stake(
 }
 
 fn unstake_request(
-    self_program_id: ProgramId,
     self_account_id: AccountId,
     pre_states: Vec<AccountWithMetadata>,
     amount: u128,
@@ -304,7 +290,7 @@ fn unstake_request(
         "an unstake request is already pending"
     );
 
-    let mut config = decode_config(&config_account, self_program_id, self_account_id);
+    let mut config = decode_config(&config_account, self_account_id);
     let minimum_sequencer_stake = config.minimum_sequencer_stake;
     let entry = config
         .entries
@@ -390,7 +376,6 @@ fn verify_approvals(
 }
 
 fn slash(
-    self_program_id: ProgramId,
     self_account_id: AccountId,
     pre_states: Vec<AccountWithMetadata>,
     sequencer_key: SequencerKey,
@@ -408,7 +393,7 @@ fn slash(
     );
     assert_eq!(
         sink_account.account_id,
-        slash_sink_account_id(self_program_id),
+        slash_sink_account_id(self_account_id),
         "second account must be the slash sink PDA"
     );
 
@@ -419,7 +404,7 @@ fn slash(
         "ownership account backs a different sequencer key"
     );
 
-    let mut config = decode_config(&config_account, self_program_id, self_account_id);
+    let mut config = decode_config(&config_account, self_account_id);
     // The approvals are the whole authorization.
     verify_approvals(&config, sequencer_key, inscription, approvals);
 
@@ -467,7 +452,6 @@ fn slash(
 }
 
 fn finalize_unstake(
-    self_program_id: ProgramId,
     self_account_id: AccountId,
     pre_states: Vec<AccountWithMetadata>,
 ) -> Vec<AccountPostState> {
@@ -509,7 +493,7 @@ fn finalize_unstake(
         .checked_add(pending.amount)
         .expect("finalize unstake amount overflow");
 
-    let mut config = decode_config(&config_account, self_program_id, self_account_id);
+    let mut config = decode_config(&config_account, self_account_id);
     let entry = config
         .entries
         .get_mut(&record.sequencer_key)

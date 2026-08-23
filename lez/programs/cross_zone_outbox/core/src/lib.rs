@@ -24,11 +24,6 @@ pub enum Instruction {
     /// Required accounts (1):
     /// - Outbox PDA account
     Emit {
-        /// This program's own image id. The guest cannot learn this at runtime, so the trusted
-        /// caller supplies it to recompute the outbox slot PDA; a wrong value only fails the
-        /// guest's own self-consistency assertion, since real authorization is independently
-        /// enforced by the state layer against the account's `program_owner`.
-        self_program_id: ProgramId,
         target_zone: ZoneId,
         target_program_id: ProgramId,
         /// Accounts the destination inbox must hand to the target program's
@@ -82,12 +77,15 @@ impl OutboxRecord {
 /// other.
 #[must_use]
 pub fn outbox_pda(
-    outbox_id: ProgramId,
+    outbox_account_id: AccountId,
     emitter: AccountId,
     target_zone: &ZoneId,
     ordinal: u32,
 ) -> AccountId {
-    AccountId::for_public_pda(&outbox_id, &outbox_pda_seed(emitter, target_zone, ordinal))
+    AccountId::for_public_pda(
+        &outbox_account_id,
+        &outbox_pda_seed(emitter, target_zone, ordinal),
+    )
 }
 
 /// Seed of an outbox message PDA, exposed so the guest can claim the account.
@@ -112,7 +110,7 @@ pub fn outbox_pda_seed(emitter: AccountId, target_zone: &ZoneId, ordinal: u32) -
 mod tests {
     use super::*;
 
-    const OUTBOX: ProgramId = [3; 8];
+    const OUTBOX: AccountId = AccountId::new([3; 32]);
     const EMITTER: AccountId = AccountId::new([4; 32]);
 
     #[test]

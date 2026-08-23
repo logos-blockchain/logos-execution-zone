@@ -5,8 +5,8 @@ use amm_core::{
     compute_pool_pda, compute_pool_pda_seed, compute_vault_pda, compute_vault_pda_seed,
 };
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall, Claim, ProgramId},
+    account::{Account, AccountId, AccountWithMetadata, Data},
+    program::{AccountPostState, ChainedCall, Claim},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -21,7 +21,7 @@ pub fn new_definition(
     user_holding_lp: AccountWithMetadata,
     token_a_amount: NonZeroU128,
     token_b_amount: NonZeroU128,
-    amm_program_id: ProgramId,
+    amm_account_id: AccountId,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
     // Verify token_a and token_b are different
     let definition_token_a_id = token_core::TokenHolding::try_from(&user_holding_a.account.data)
@@ -44,22 +44,22 @@ pub fn new_definition(
     );
     assert_eq!(
         pool.account_id,
-        compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id),
+        compute_pool_pda(amm_account_id, definition_token_a_id, definition_token_b_id),
         "Pool Definition Account ID does not match PDA"
     );
     assert_eq!(
         vault_a.account_id,
-        compute_vault_pda(amm_program_id, pool.account_id, definition_token_a_id),
+        compute_vault_pda(amm_account_id, pool.account_id, definition_token_a_id),
         "Vault ID does not match PDA"
     );
     assert_eq!(
         vault_b.account_id,
-        compute_vault_pda(amm_program_id, pool.account_id, definition_token_b_id),
+        compute_vault_pda(amm_account_id, pool.account_id, definition_token_b_id),
         "Vault ID does not match PDA"
     );
     assert_eq!(
         pool_definition_lp.account_id,
-        compute_liquidity_token_pda(amm_program_id, pool.account_id),
+        compute_liquidity_token_pda(amm_account_id, pool.account_id),
         "Liquidity pool Token Definition Account ID does not match PDA"
     );
 

@@ -32,9 +32,6 @@ async fn reject_oversized_transaction() -> Result<()> {
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
                 .with_sequencer_partial_config(SequencerPartialConfig {
                     max_num_tx_in_block: 100,
-                    // Below the transaction's actual size, so it's rejected outright (the
-                    // sequencer additionally reserves ~200 bytes of block-header overhead off of
-                    // this limit, so being equal to `tx_size` is already enough of a margin).
                     max_block_size: ByteSize::b(tx_size),
                     mempool_max_size: 1000,
                     block_create_timeout: Duration::from_secs(10),
@@ -66,6 +63,9 @@ async fn reject_oversized_transaction() -> Result<()> {
 
 #[test]
 async fn accept_transaction_within_limit() -> Result<()> {
+    // A real Deploy of a valid guest binary: the native Deploy dispatch path parses
+    // the bytecode as an actual RISC0 image, so an arbitrary small buffer no longer
+    // qualifies as "a small transaction" the way it did under the legacy path.
     let bytecode = test_programs::claimer().elf().to_vec();
     let (header, segment) = deploy_targets(&bytecode);
     let tx = LeeTransaction::Public(deploy_transaction(header, segment, bytecode));
@@ -76,7 +76,8 @@ async fn accept_transaction_within_limit() -> Result<()> {
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
                 .with_sequencer_partial_config(SequencerPartialConfig {
                     max_num_tx_in_block: 100,
-                    // Comfortably above the transaction's actual size.
+                    // TOFIX: should be `ByteSize::mib(1)` again once the program-as-account
+                    // migration is finished.
                     max_block_size: ByteSize::b(tx_size + 10 * 1024),
                     mempool_max_size: 1000,
                     block_create_timeout: Duration::from_secs(10),

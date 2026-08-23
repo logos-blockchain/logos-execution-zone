@@ -12,7 +12,7 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, utils::sync_private, verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, PrivacyPreservingTransaction, ProgramId,
+    AccountId, PrivacyPreservingTransaction,
     privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, execute_and_prove},
         message::Message,
@@ -43,12 +43,12 @@ async fn fund_private_pda(
     vpk: ViewingPublicKey,
     identifier: u128,
     seed: PdaSeed,
-    authority_program_id: ProgramId,
+    authority_account_id: AccountId,
     amount: u128,
     auth_transfer: &ProgramWithDependencies,
 ) -> Result<()> {
     let pda_account_id =
-        AccountId::for_private_pda(&authority_program_id, &seed, &npk, &vpk, identifier);
+        AccountId::for_private_pda(&authority_account_id, &seed, &npk, &vpk, identifier);
     let sender_account = wallet
         .get_account_public(sender)
         .await
@@ -70,7 +70,7 @@ async fn fund_private_pda(
             random_seed: [0; 32],
             identifier,
             kind: WitnessKind::Pda {
-                binding: Some((authority_program_id, seed)),
+                binding: Some((authority_account_id, seed)),
             },
             nullifier: NullifierWitness::Init {
                 npk,
@@ -161,7 +161,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let proxy = test_programs::pda_spend_proxy();
     let auth_transfer = programs::authenticated_transfer();
-    let proxy_id = proxy.id();
+    let proxy_id = proxy.deployed_account_id();
     let auth_transfer_id = auth_transfer.id();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;

@@ -1,8 +1,9 @@
 use aes_gcm::{Aes256Gcm, KeyInit as _, aead::Aead as _};
 use lee_core::{
     Identifier, SharedSecretKey,
+    account::AccountId,
     encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN, ViewingPublicKey},
-    program::{PdaSeed, ProgramId},
+    program::PdaSeed,
 };
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
@@ -98,21 +99,22 @@ impl GroupKeyHolder {
 
     /// Derive a per-PDA [`SecretSpendingKey`] by mixing the seed into the SHA-256 input.
     ///
-    /// Each distinct `(program_id, pda_seed)` pair produces a distinct SSK in the full 256-bit
-    /// space, so adversarial seed-grinding cannot collide two PDAs' derived keys under the same
-    /// group. Uses the codebase's 32-byte protocol-versioned domain-separation convention.
+    /// Each distinct `(program_account_id, pda_seed)` pair produces a distinct SSK in the full
+    /// 256-bit space, so adversarial seed-grinding cannot collide two PDAs' derived keys under
+    /// the same group. Keyed on the program's dispatch `AccountId` rather than its `ProgramId`
+    /// for the same reason `AccountId::for_public_pda`/`for_private_pda` are: two different
+    /// deployments of identical bytecode must derive different key families. Uses the codebase's
+    /// 32-byte protocol-versioned domain-separation convention.
     fn secret_spending_key_for_pda(
         &self,
-        program_id: &ProgramId,
+        program_account_id: &AccountId,
         pda_seed: &PdaSeed,
     ) -> SecretSpendingKey {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/GroupKeyDerivation/SSK";
         let mut hasher = sha2::Sha256::new();
         hasher.update(PREFIX);
         hasher.update(self.gms);
-        for word in program_id {
-            hasher.update(word.to_le_bytes());
-        }
+        hasher.update(program_account_id.value());
         hasher.update(pda_seed.as_ref());
         SecretSpendingKey(hasher.finalize_fixed().into())
     }
@@ -120,14 +122,14 @@ impl GroupKeyHolder {
     /// Derive keys for a specific PDA under a given program.
     ///
     /// All controllers holding the same GMS independently derive the same keys for the
-    /// same `(program_id, seed)` because the derivation is deterministic.
+    /// same `(program_account_id, seed)` because the derivation is deterministic.
     #[must_use]
     pub fn derive_keys_for_pda(
         &self,
-        program_id: &ProgramId,
+        program_account_id: &AccountId,
         pda_seed: &PdaSeed,
     ) -> PrivateKeyHolder {
-        self.secret_spending_key_for_pda(program_id, pda_seed)
+        self.secret_spending_key_for_pda(program_account_id, pda_seed)
             .produce_private_key_holder(None)
     }
 
@@ -256,7 +258,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_PROGRAM_ID: ProgramId = [9; 8];
+    const TEST_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new([9; 32]);
 
     /// Two holders from the same GMS derive identical keys for the same PDA seed.
     #[test]
@@ -266,8 +268,8 @@ mod tests {
         let holder_b = GroupKeyHolder::from_gms(gms);
         let seed = PdaSeed::new([1; 32]);
 
-        let keys_a = holder_a.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
-        let keys_b = holder_b.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
+        let keys_a = holder_a.derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed);
+        let keys_b = holder_b.derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed);
 
         assert_eq!(
             keys_a.generate_nullifier_public_key().to_byte_array(),
@@ -283,10 +285,10 @@ mod tests {
         let seed_b = PdaSeed::new([2; 32]);
 
         let npk_a = holder
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed_a)
+            .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed_a)
             .generate_nullifier_public_key();
         let npk_b = holder
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed_b)
+            .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed_b)
             .generate_nullifier_public_key();
 
         assert_ne!(npk_a.to_byte_array(), npk_b.to_byte_array());
@@ -300,10 +302,10 @@ mod tests {
         let seed = PdaSeed::new([1; 32]);
 
         let npk_a = holder_a
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed)
             .generate_nullifier_public_key();
         let npk_b = holder_b
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed)
             .generate_nullifier_public_key();
 
         assert_ne!(npk_a.to_byte_array(), npk_b.to_byte_array());
@@ -317,10 +319,10 @@ mod tests {
         let seed = PdaSeed::new([1; 32]);
 
         let npk_original = original
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed)
             .generate_nullifier_public_key();
         let npk_restored = restored
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed)
             .generate_nullifier_public_key();
 
         assert_eq!(npk_original.to_byte_array(), npk_restored.to_byte_array());
@@ -332,38 +334,41 @@ mod tests {
         let holder = GroupKeyHolder::from_gms([42_u8; 32]);
         let seed = PdaSeed::new([1; 32]);
         let npk = holder
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed)
             .generate_nullifier_public_key();
 
         assert_ne!(npk, NullifierPublicKey([0; 32]));
     }
 
-    /// Pins the end-to-end derivation for a fixed (GMS, `ProgramId`, `PdaSeed`). Any change
+    /// Pins the end-to-end derivation for a fixed (GMS, `AccountId`, `PdaSeed`). Any change
     /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` ask/nsk/npk chain, or the
     /// `AccountId::for_private_pda` formula breaks this test. Mirrors the pinned-value
     /// pattern from `for_private_pda_matches_pinned_value` in `lee_core`.
     #[test]
     fn pinned_end_to_end_derivation_for_private_pda() {
-        use lee_core::{account::AccountId, program::ProgramId};
-
         let gms = [42_u8; 32];
         let seed = PdaSeed::new([1; 32]);
-        let program_id: ProgramId = [9; 8];
 
         let holder = GroupKeyHolder::from_gms(gms);
-        let keys = holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
+        let keys = holder.derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, u128::MAX);
+        let account_id =
+            AccountId::for_private_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed, &npk, &vpk, u128::MAX);
 
         let expected_npk = NullifierPublicKey([
-            59, 136, 7, 185, 56, 46, 38, 4, 195, 155, 85, 32, 161, 24, 119, 14, 148, 100, 26, 152,
-            239, 255, 145, 142, 122, 166, 219, 75, 200, 9, 168, 7,
+            157, 78, 138, 125, 166, 166, 136, 141, 157, 143, 238, 187, 210, 89, 187, 136, 196, 15,
+            217, 30, 21, 89, 46, 158, 180, 44, 73, 55, 147, 158, 210, 66,
         ]);
-        // AccountId is derived from (program_id, seed, npk), so it changes when npk changes.
-        // We verify npk is pinned, and AccountId is deterministically derived from it.
-        let expected_account_id =
-            AccountId::for_private_pda(&program_id, &seed, &expected_npk, &vpk, u128::MAX);
+        // AccountId is derived from (program_account_id, seed, npk), so it changes when npk
+        // changes. We verify npk is pinned, and AccountId is deterministically derived from it.
+        let expected_account_id = AccountId::for_private_pda(
+            &TEST_PROGRAM_ACCOUNT_ID,
+            &seed,
+            &expected_npk,
+            &vpk,
+            u128::MAX,
+        );
 
         assert_eq!(npk, expected_npk);
         assert_eq!(account_id, expected_account_id);
@@ -381,10 +386,10 @@ mod tests {
 
         let seed = PdaSeed::new([1; 32]);
         let npk_original = original
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed)
             .generate_nullifier_public_key();
         let npk_restored = restored
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed)
             .generate_nullifier_public_key();
 
         assert_eq!(npk_original, npk_restored);
@@ -402,7 +407,7 @@ mod tests {
         let seed = PdaSeed::new([5; 32]);
 
         let group_npk = GroupKeyHolder::from_gms(shared_bytes)
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed)
             .generate_nullifier_public_key();
 
         let personal_npk = SecretSpendingKey(shared_bytes)
@@ -432,10 +437,10 @@ mod tests {
         let seed = PdaSeed::new([1; 32]);
         assert_eq!(
             holder
-                .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+                .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed)
                 .generate_nullifier_public_key(),
             restored
-                .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+                .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed)
                 .generate_nullifier_public_key(),
         );
     }
@@ -523,7 +528,7 @@ mod tests {
             .iter()
             .map(|gms| {
                 GroupKeyHolder::from_gms(*gms)
-                    .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+                    .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &seed)
                     .generate_nullifier_public_key()
             })
             .collect();
@@ -541,13 +546,10 @@ mod tests {
     /// Full lifecycle: create group, distribute GMS via seal/unseal, verify key agreement.
     #[test]
     fn group_pda_lifecycle() {
-        use lee_core::account::AccountId;
-
         let alice_holder = GroupKeyHolder::new();
         let pda_seed = PdaSeed::new([42_u8; 32]);
-        let program_id: lee_core::program::ProgramId = [1; 8];
 
-        let alice_keys = alice_holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &pda_seed);
+        let alice_keys = alice_holder.derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &pda_seed);
         let alice_npk = alice_keys.generate_nullifier_public_key();
 
         let bob_ssk = SecretSpendingKey([77_u8; 32]);
@@ -560,16 +562,26 @@ mod tests {
         let bob_holder =
             GroupKeyHolder::unseal(&sealed, &bob_vsk).expect("Bob should unseal the GMS");
 
-        let bob_group_keys = bob_holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &pda_seed);
+        let bob_group_keys = bob_holder.derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &pda_seed);
         let bob_npk = bob_group_keys.generate_nullifier_public_key();
         assert_eq!(alice_npk, bob_npk);
 
         let alice_vpk = alice_keys.generate_viewing_public_key();
         let bob_group_vpk = bob_group_keys.generate_viewing_public_key();
-        let alice_account_id =
-            AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk, &alice_vpk, 0);
-        let bob_account_id =
-            AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk, &bob_group_vpk, 0);
+        let alice_account_id = AccountId::for_private_pda(
+            &TEST_PROGRAM_ACCOUNT_ID,
+            &pda_seed,
+            &alice_npk,
+            &alice_vpk,
+            0,
+        );
+        let bob_account_id = AccountId::for_private_pda(
+            &TEST_PROGRAM_ACCOUNT_ID,
+            &pda_seed,
+            &bob_npk,
+            &bob_group_vpk,
+            0,
+        );
         assert_eq!(alice_account_id, bob_account_id);
     }
 
@@ -612,7 +624,7 @@ mod tests {
         let bytes = [1_u8; 32];
 
         let pda_npk = holder
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &PdaSeed::new(bytes))
+            .derive_keys_for_pda(&TEST_PROGRAM_ACCOUNT_ID, &PdaSeed::new(bytes))
             .generate_nullifier_public_key();
         let shared_npk = holder
             .derive_keys_for_shared_account(&bytes)

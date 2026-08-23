@@ -18,8 +18,10 @@ impl Vault<'_> {
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
         let vault_program_id = programs::vault().id();
-        let recipient_vault_id =
-            vault_core::compute_vault_account_id(vault_program_id, recipient_id);
+        let recipient_vault_id = vault_core::compute_vault_account_id(
+            programs::vault().deployed_account_id(),
+            recipient_id,
+        );
 
         let instruction = vault_core::Instruction::Transfer {
             recipient_id,
@@ -46,9 +48,10 @@ impl Vault<'_> {
         recipient_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let vault_program_id = programs::vault().id();
-        let recipient_vault_id =
-            vault_core::compute_vault_account_id(vault_program_id, recipient_id);
+        let recipient_vault_id = vault_core::compute_vault_account_id(
+            programs::vault().deployed_account_id(),
+            recipient_id,
+        );
         let instruction = vault_core::Instruction::Transfer {
             recipient_id,
             amount,
@@ -80,7 +83,8 @@ impl Vault<'_> {
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
         let vault_program_id = programs::vault().id();
-        let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner_id);
+        let owner_vault_id =
+            vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), owner_id);
 
         let instruction = vault_core::Instruction::Claim { amount };
         let instruction_data =
@@ -103,8 +107,8 @@ impl Vault<'_> {
         owner_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let vault_program_id = programs::vault().id();
-        let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner_id);
+        let owner_vault_id =
+            vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), owner_id);
 
         let instruction = vault_core::Instruction::Claim { amount };
         let instruction_data =

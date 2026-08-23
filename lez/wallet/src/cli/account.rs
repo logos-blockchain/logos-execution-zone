@@ -103,14 +103,15 @@ pub enum NewSubcommand {
         /// Label to assign to the new account.
         label: Option<Label>,
         #[arg(long)]
-        /// Create a PDA account (requires --seed and --program-id).
+        /// Create a PDA account (requires --seed and --authority-account-id).
         pda: bool,
         #[arg(long, requires = "pda")]
         /// PDA seed as 64-character hex string.
         seed: Option<String>,
         #[arg(long, requires = "pda")]
-        /// Program ID as hex string.
-        program_id: Option<String>,
+        /// The owner program's dispatch `AccountId` as a 64-character hex string (not its image
+        /// id/ProgramId).
+        authority_account_id: Option<String>,
         #[arg(long)]
         /// Identifier selecting the shared account.
         /// Co-owners must supply the same value to derive the same account.
@@ -203,7 +204,7 @@ impl NewSubcommand {
         label: Option<Label>,
         pda: bool,
         seed: Option<String>,
-        program_id: Option<String>,
+        authority_account_id: Option<String>,
         identifier: Option<u128>,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -213,7 +214,8 @@ impl NewSubcommand {
 
         let info = if pda {
             let seed_hex = seed.context("--seed is required for PDA accounts")?;
-            let pid_hex = program_id.context("--program-id is required for PDA accounts")?;
+            let authority_hex = authority_account_id
+                .context("--authority-account-id is required for PDA accounts")?;
 
             let seed_bytes: [u8; 32] = hex::decode(&seed_hex)
                 .context("Invalid seed hex")?
@@ -221,20 +223,17 @@ impl NewSubcommand {
                 .map_err(|_err| anyhow::anyhow!("Seed must be exactly 32 bytes"))?;
             let pda_seed = lee_core::program::PdaSeed::new(seed_bytes);
 
-            let pid_bytes = hex::decode(&pid_hex).context("Invalid program ID hex")?;
-            if pid_bytes.len() != 32 {
-                anyhow::bail!("Program ID must be exactly 32 bytes");
-            }
-            let mut pid: lee_core::program::ProgramId = [0; 8];
-            for (i, chunk) in pid_bytes.chunks_exact(4).enumerate() {
-                pid[i] = u32::from_le_bytes(chunk.try_into().unwrap());
-            }
+            let authority_bytes: [u8; 32] = hex::decode(&authority_hex)
+                .context("Invalid authority account id hex")?
+                .try_into()
+                .map_err(|_err| anyhow::anyhow!("Authority account id must be exactly 32 bytes"))?;
+            let authority_account_id = lee_core::account::AccountId::new(authority_bytes);
 
             wallet_core
                 .create_shared_pda_account(
                     group.clone(),
                     pda_seed,
-                    pid,
+                    authority_account_id,
                     identifier.unwrap_or_else(rand::random),
                 )
                 .await?
@@ -302,7 +301,7 @@ impl WalletSubcommand for NewSubcommand {
                 label,
                 pda,
                 seed,
-                program_id,
+                authority_account_id,
                 identifier,
             } => {
                 Self::handle_private_gms(
@@ -310,7 +309,7 @@ impl WalletSubcommand for NewSubcommand {
                     label,
                     pda,
                     seed,
-                    program_id,
+                    authority_account_id,
                     identifier,
                     wallet_core,
                 )

@@ -185,7 +185,7 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
 fn execution_that_requires_authentication_of_a_program_derived_account_id_succeeds() {
     let chain_caller = crate::test_methods::chain_caller();
     let pda_seed = PdaSeed::new([37; 32]);
-    let from = AccountId::for_public_pda(&chain_caller.id(), &pda_seed);
+    let from = AccountId::for_public_pda(&chain_caller.deployed_account_id(), &pda_seed);
     let to = AccountId::new([2; 32]);
     let initial_balance = 1000;
     let initial_data = [(from, initial_balance), (to, 0)];
@@ -300,10 +300,10 @@ fn unauthorized_public_account_claiming_fails_when_executed_privately() {
 #[test]
 fn authorized_public_account_claiming_succeeds_when_executed_privately() {
     let program = crate::test_methods::simple_balance_transfer();
-    let program_id = program.id();
+    let program_account_id = program.deployed_account_id();
     let sender_keys = test_private_account_keys_1();
     let sender_private_account = Account {
-        program_owner: program_id.into(),
+        program_owner: program_account_id,
         balance: 100,
         ..Account::default()
     };
@@ -311,8 +311,9 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
         AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
     let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
     let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
-    let mut state =
-        V03State::new().with_private_accounts([(sender_commitment, sender_init_nullifier)]);
+    let mut state = V03State::new()
+        .with_private_accounts([(sender_commitment, sender_init_nullifier)])
+        .with_test_programs();
     let sender_pre = AccountWithMetadata::new(
         sender_private_account,
         true,
@@ -365,7 +366,7 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
     assert_eq!(
         state.get_account_by_id(recipient_account_id),
         Account {
-            program_owner: program_id.into(),
+            program_owner: program_account_id,
             balance,
             nonce: Nonce(1),
             ..Account::default()

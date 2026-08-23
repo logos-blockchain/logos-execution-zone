@@ -161,17 +161,17 @@ pub(crate) fn build_slash_tx(
     inscription: [u8; 32],
     approvals: Vec<SlashApproval>,
 ) -> Result<LeeTransaction> {
-    let program_id = programs::sequencer_stake().id();
+    let program_account_id =
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id());
     let message = Message::try_new(
-        program_loader_core::immutable_deploy_account_id(program_id),
+        program_account_id,
         vec![
             ownership_id,
-            sequencer_stake_core::slash_sink_account_id(program_id),
+            sequencer_stake_core::slash_sink_account_id(program_account_id),
             system_accounts::sequencer_stake_config_account_id(),
         ],
         vec![],
         sequencer_stake_core::Instruction::Slash {
-            self_program_id: program_id,
             sequencer_key,
             inscription,
             approvals,

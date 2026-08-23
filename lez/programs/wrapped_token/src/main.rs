@@ -23,28 +23,19 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     match instruction {
-        Instruction::Mint {
-            self_program_id,
-            recipient,
-            amount,
-        } => mint(
+        Instruction::Mint { recipient, amount } => mint(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_data,
-            self_program_id,
             recipient,
             amount,
         ),
-        Instruction::InitConfig {
-            self_program_id,
-            config,
-        } => init_config(
+        Instruction::InitConfig { config } => init_config(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_data,
-            self_program_id,
             &config,
         ),
         Instruction::RenounceAuthority => renounce_authority(
@@ -68,7 +59,6 @@ fn mint(
     caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
-    self_program_id: lee_core::program::ProgramId,
     recipient: [u8; 32],
     amount: u128,
 ) {
@@ -80,7 +70,7 @@ fn mint(
     // inbox). Pin the caller to it, since the guest cannot import the inbox id.
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "second account must be the wrapped-token config PDA"
     );
     let mut cfg = WrappedTokenConfig::from_bytes(&config.account.data)
@@ -120,7 +110,7 @@ fn mint(
 
     assert_eq!(
         holding.account_id,
-        holding_account_id(self_program_id, &recipient),
+        holding_account_id(self_account_id, &recipient),
         "third account must be the recipient holding PDA"
     );
 
@@ -171,10 +161,6 @@ fn renounce_authority(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
 ) {
-    // See `mint`'s doc comment: exact round-trip to the actual image id, needed by the
-    // PDA-derivation helpers below.
-    let self_program_id = lee_core::program::ProgramId::from(self_account_id);
-
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
     let config_meta = pre_states
@@ -182,7 +168,7 @@ fn renounce_authority(
         .expect("RenounceAuthority requires the config account");
     assert_eq!(
         config_meta.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "first account must be the wrapped-token config PDA"
     );
     let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data)
@@ -190,7 +176,7 @@ fn renounce_authority(
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
     assert!(
-        caller_account_id.is_none() || caller_account_id == cfg.governance.map(Into::into),
+        caller_account_id.is_none() || caller_account_id == cfg.governance,
         "the authority acts at top level, or through the configured governance program"
     );
 
@@ -247,10 +233,6 @@ fn update_sources(
     instruction_data: Vec<u8>,
     sources: &[wrapped_token_core::SourcePolicy],
 ) {
-    // See `mint`'s doc comment: exact round-trip to the actual image id, needed by the
-    // PDA-derivation helpers below.
-    let self_program_id = lee_core::program::ProgramId::from(self_account_id);
-
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
     let config_meta = pre_states
@@ -258,7 +240,7 @@ fn update_sources(
         .expect("UpdateSources requires the config account");
     assert_eq!(
         config_meta.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "first account must be the wrapped-token config PDA"
     );
     let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data)
@@ -266,7 +248,7 @@ fn update_sources(
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
     assert!(
-        caller_account_id.is_none() || caller_account_id == cfg.governance.map(Into::into),
+        caller_account_id.is_none() || caller_account_id == cfg.governance,
         "the authority acts at top level, or through the configured governance program"
     );
 
@@ -340,7 +322,6 @@ fn init_config(
     caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
-    self_program_id: lee_core::program::ProgramId,
     config_value: &WrappedTokenConfig,
 ) {
     assert!(
@@ -353,7 +334,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "account must be the wrapped-token config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first

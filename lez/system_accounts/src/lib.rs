@@ -42,7 +42,7 @@ pub fn pinata_account() -> Account {
 
 #[must_use]
 pub fn faucet_account_id() -> AccountId {
-    faucet_core::compute_faucet_account_id(programs::faucet().id())
+    faucet_core::compute_faucet_account_id(programs::faucet().deployed_account_id())
 }
 
 #[must_use]
@@ -58,7 +58,7 @@ pub fn faucet_account() -> Account {
 
 #[must_use]
 pub fn bridge_account_id() -> AccountId {
-    bridge_core::compute_bridge_account_id(programs::bridge().id())
+    bridge_core::compute_bridge_account_id(programs::bridge().deployed_account_id())
 }
 
 #[must_use]
@@ -78,7 +78,9 @@ pub const fn clock_account_ids() -> [AccountId; 3] {
 
 #[must_use]
 pub fn sequencer_stake_config_account_id() -> AccountId {
-    sequencer_stake_core::sequencer_stake_config_account_id(programs::sequencer_stake().id())
+    sequencer_stake_core::sequencer_stake_config_account_id(
+        programs::sequencer_stake().deployed_account_id(),
+    )
 }
 
 /// Starts with no entries; every stake, including the bootstrap sequencer's

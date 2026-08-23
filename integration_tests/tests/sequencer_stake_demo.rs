@@ -73,7 +73,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .add_imported_public_account(funding_private_key);
 
     // Claim the genesis supply out of its vault.
-    let owner_vault_id = vault_core::compute_vault_account_id(programs::vault().id(), funding_id);
+    let owner_vault_id =
+        vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), funding_id);
     let claim_instruction_data = Program::serialize_instruction(vault_core::Instruction::Claim {
         amount: FUNDING_BALANCE,
     })
@@ -112,7 +113,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .context("Failed to serialize mover instruction")?;
     let stake_instruction_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
-            self_program_id: programs::sequencer_stake().id(),
             sequencer_key: demo_stake_key,
             amount: FUNDING_BALANCE,
             mover_account_id: program_loader_core::immutable_deploy_account_id(
@@ -271,7 +271,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     let unstake_request_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
-            self_program_id: programs::sequencer_stake().id(),
             amount: FUNDING_BALANCE,
             destination: destination_id,
         })

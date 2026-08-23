@@ -127,9 +127,9 @@ fn build_inbox_dispatch_tx(
 ) -> lee::PublicTransaction {
     let inbox_account_id = program_loader_core::immutable_deploy_account_id(inbox_id);
     let mut account_ids = Vec::with_capacity(target_account_ids.len().saturating_add(3));
-    account_ids.push(inbox_config_account_id(inbox_id));
+    account_ids.push(inbox_config_account_id(inbox_account_id));
     account_ids.push(inbox_seen_shard_account_id(
-        inbox_id,
+        inbox_account_id,
         &msg.src_zone,
         msg.src_block_id,
     ));
@@ -149,7 +149,6 @@ fn build_inbox_dispatch_tx(
         vec![],
         Instruction::Dispatch {
             message: msg.clone(),
-            self_program_id: inbox_id,
         },
     )
     .expect("inbox dispatch instruction must serialize");
@@ -199,12 +198,12 @@ pub fn build_dispatch_from_emission(
 #[must_use]
 pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
     let inbox_id = programs::cross_zone_inbox().id();
+    let inbox_account_id = program_loader_core::immutable_deploy_account_id(inbox_id);
     genesis_public_tx(
         inbox_id,
-        vec![inbox_config_account_id(inbox_id)],
+        vec![inbox_config_account_id(inbox_account_id)],
         Instruction::InitConfig {
             config: InboxConfig { self_zone },
-            self_program_id: inbox_id,
         },
     )
 }
@@ -214,14 +213,14 @@ pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
 #[must_use]
 pub fn build_bridge_lock_init_holding_tx(holder: AccountId) -> lee::PublicTransaction {
     let bridge_lock_id = programs::bridge_lock().id();
+    let bridge_lock_account_id = program_loader_core::immutable_deploy_account_id(bridge_lock_id);
     genesis_public_tx(
         bridge_lock_id,
         vec![bridge_lock_core::holding_account_id(
-            bridge_lock_id,
+            bridge_lock_account_id,
             &holder.into_value(),
         )],
         bridge_lock_core::Instruction::InitHolding {
-            self_program_id: bridge_lock_id,
             holder: holder.into_value(),
         },
     )
@@ -230,7 +229,10 @@ pub fn build_bridge_lock_init_holding_tx(holder: AccountId) -> lee::PublicTransa
 /// The holding PDA a holder's bridgeable balance lives in.
 #[must_use]
 pub fn bridge_lock_holding_account_id(holder: AccountId) -> AccountId {
-    bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder.into_value())
+    bridge_lock_core::holding_account_id(
+        program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
+        &holder.into_value(),
+    )
 }
 
 /// The `(src_zone, src_account_id)` pairs the operator's routes name for one
@@ -306,6 +308,8 @@ fn cross_zone_targets() -> [ProgramId; 2] {
 #[must_use]
 pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::PublicTransaction {
     let wrapped_token_id = programs::wrapped_token().id();
+    let wrapped_token_account_id =
+        program_loader_core::immutable_deploy_account_id(wrapped_token_id);
     let sources = sources_for_target(cross_zone, wrapped_token_id)
         .into_iter()
         .map(
@@ -321,14 +325,15 @@ pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
         .collect();
     genesis_public_tx(
         wrapped_token_id,
-        vec![wrapped_token_core::config_account_id(wrapped_token_id)],
+        vec![wrapped_token_core::config_account_id(
+            wrapped_token_account_id,
+        )],
         wrapped_token_core::Instruction::InitConfig {
-            self_program_id: wrapped_token_id,
             config: wrapped_token_core::WrappedTokenConfig {
                 minter: program_loader_core::immutable_deploy_account_id(
                     programs::cross_zone_inbox().id(),
                 ),
-                governance: cross_zone.source_governance,
+                governance: cross_zone.source_governance.map(program_loader_core::immutable_deploy_account_id),
                 authority: cross_zone.source_authority,
                 sources,
             },
@@ -341,14 +346,13 @@ pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
 #[must_use]
 pub fn build_ping_sender_init_config_tx() -> lee::PublicTransaction {
     let ping_sender_id = programs::ping_sender().id();
+    let ping_sender_account_id = program_loader_core::immutable_deploy_account_id(ping_sender_id);
     let outbox_id = programs::cross_zone_outbox().id();
     genesis_public_tx(
         ping_sender_id,
-        vec![ping_core::sender_config_account_id(ping_sender_id)],
+        vec![ping_core::sender_config_account_id(ping_sender_account_id)],
         ping_core::SenderInstruction::InitConfig {
-            self_program_id: ping_sender_id,
             outbox_account_id: program_loader_core::immutable_deploy_account_id(outbox_id),
-            outbox_program_id: outbox_id,
         },
     )
 }
@@ -358,14 +362,13 @@ pub fn build_ping_sender_init_config_tx() -> lee::PublicTransaction {
 #[must_use]
 pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
     let bridge_lock_id = programs::bridge_lock().id();
+    let bridge_lock_account_id = program_loader_core::immutable_deploy_account_id(bridge_lock_id);
     let outbox_id = programs::cross_zone_outbox().id();
     genesis_public_tx(
         bridge_lock_id,
-        vec![bridge_lock_core::config_account_id(bridge_lock_id)],
+        vec![bridge_lock_core::config_account_id(bridge_lock_account_id)],
         bridge_lock_core::Instruction::InitConfig {
-            self_program_id: bridge_lock_id,
             outbox_account_id: program_loader_core::immutable_deploy_account_id(outbox_id),
-            outbox_program_id: outbox_id,
             target_program_id: programs::wrapped_token().id(),
         },
     )
@@ -377,6 +380,7 @@ pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
 #[must_use]
 pub fn build_ping_receiver_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::PublicTransaction {
     let receiver_id = programs::ping_receiver().id();
+    let receiver_account_id = program_loader_core::immutable_deploy_account_id(receiver_id);
     // Caps are refused on non-minting targets above, so the cap is always
     // absent here and the receiver's pair list keeps its shape.
     let sources = sources_for_target(cross_zone, receiver_id)
@@ -385,14 +389,13 @@ pub fn build_ping_receiver_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
         .collect();
     genesis_public_tx(
         receiver_id,
-        vec![ping_core::receiver_config_account_id(receiver_id)],
+        vec![ping_core::receiver_config_account_id(receiver_account_id)],
         ping_core::ReceiverInstruction::InitConfig {
-            self_program_id: receiver_id,
             config: ping_core::ReceiverConfig {
                 deliverer: program_loader_core::immutable_deploy_account_id(
                     programs::cross_zone_inbox().id(),
                 ),
-                governance: cross_zone.source_governance,
+                governance: cross_zone.source_governance.map(program_loader_core::immutable_deploy_account_id),
                 authority: cross_zone.source_authority,
                 sources,
             },

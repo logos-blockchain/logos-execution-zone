@@ -4,7 +4,7 @@ use associated_token_account_core::{compute_ata_seed, get_associated_token_accou
 use lee_core::account::{Account, AccountId, AccountWithMetadata, Data};
 use token_core::{TokenDefinition, TokenHolding};
 
-const ATA_PROGRAM_ID: lee_core::program::ProgramId = [1u32; 8];
+const ATA_PROGRAM_ID: AccountId = AccountId::new([1u8; 32]);
 const TOKEN_PROGRAM_ID: lee_core::program::ProgramId = [2u32; 8];
 
 fn owner_id() -> AccountId {

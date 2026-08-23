@@ -28,7 +28,6 @@ fn main() {
         Instruction::NewDefinition {
             token_a_amount,
             token_b_amount,
-            amm_program_id,
         } => {
             let [
                 pool,
@@ -51,7 +50,7 @@ fn main() {
                 user_holding_lp,
                 NonZero::new(token_a_amount).expect("Token A should have a nonzero amount"),
                 NonZero::new(token_b_amount).expect("Token B should have a nonzero amount"),
-                amm_program_id,
+                self_account_id,
             )
         }
         Instruction::AddLiquidity {

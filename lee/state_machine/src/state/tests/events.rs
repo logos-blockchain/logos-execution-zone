@@ -126,8 +126,8 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     let emitter = crate::test_methods::event_emitter();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0; 32]));
-    let receiver_id = AccountId::for_public_pda(&emitter.id(), &PdaSeed::new([1; 32]));
+    let vault_id = AccountId::for_public_pda(&initiator.id().into(), &PdaSeed::new([0; 32]));
+    let receiver_id = AccountId::for_public_pda(&emitter.id().into(), &PdaSeed::new([1; 32]));
 
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(

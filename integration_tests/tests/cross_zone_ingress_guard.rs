@@ -57,15 +57,13 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         payload: vec![],
         l1_inclusion_witness: None,
     };
-    let seen_id = inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id);
+    let inbox_account_id = program_loader_core::immutable_deploy_account_id(inbox_id);
+    let seen_id = inbox_seen_shard_account_id(inbox_account_id, &msg.src_zone, msg.src_block_id);
     let message = Message::try_new(
-        program_loader_core::immutable_deploy_account_id(inbox_id),
-        vec![inbox_config_account_id(inbox_id), seen_id],
+        inbox_account_id,
+        vec![inbox_config_account_id(inbox_account_id), seen_id],
         vec![],
-        Instruction::Dispatch {
-            message: msg,
-            self_program_id: inbox_id,
-        },
+        Instruction::Dispatch { message: msg },
     )
     .expect("build dispatch message");
     let tx = LeeTransaction::Public(PublicTransaction::new(

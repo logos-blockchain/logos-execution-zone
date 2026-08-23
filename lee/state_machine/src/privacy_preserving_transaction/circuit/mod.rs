@@ -47,9 +47,11 @@ impl Proof {
 #[derive(Clone)]
 pub struct ProgramWithDependencies {
     pub program: Program,
-    /// Where `program` is dispatched at. Defaults to `AccountId::from(program.id())` (correct
-    /// for a legacy, bijection-addressed program); override via
-    /// [`Self::with_program_account_id`] for a program deployed to a PDA (e.g. via `Deploy`).
+    /// Where `program` is dispatched at. Defaults to
+    /// `program_loader_core::immutable_deploy_account_id(program.id())`, matching how every
+    /// genesis-seeded builtin is actually dispatched; override via
+    /// [`Self::with_program_account_id`] for a program deployed to a different PDA (e.g. a
+    /// `Deploy` with a non-default `update_auth`).
     pub program_account_id: AccountId,
     // TODO: avoid having a copy of the bytecode of each dependency.
     pub dependencies: HashMap<AccountId, Program>,
@@ -58,7 +60,7 @@ pub struct ProgramWithDependencies {
 impl ProgramWithDependencies {
     #[must_use]
     pub fn new(program: Program, dependencies: HashMap<AccountId, Program>) -> Self {
-        let program_account_id = AccountId::from(program.id());
+        let program_account_id = program_loader_core::immutable_deploy_account_id(program.id());
         Self {
             program,
             program_account_id,
@@ -66,8 +68,8 @@ impl ProgramWithDependencies {
         }
     }
 
-    /// Overrides the address `program` is dispatched at, for a program whose address isn't
-    /// derived from its own image id (e.g. deployed via `Deploy` to a PDA).
+    /// Overrides the address `program` is dispatched at, for a program not deployed to the
+    /// default immutable PDA (e.g. a `Deploy` with a non-default `update_auth`).
     #[must_use]
     pub const fn with_program_account_id(mut self, program_account_id: AccountId) -> Self {
         self.program_account_id = program_account_id;
@@ -170,15 +172,10 @@ pub fn execute_and_prove_with_padded_inputs(
     };
 
     let mut chained_calls =
-        VecDeque::from_iter([(initial_call, initial_program, None, None, HashSet::new())]);
+        VecDeque::from_iter([(initial_call, initial_program, None, HashSet::new())]);
     let mut chain_calls_counter = 0;
-    while let Some((
-        chained_call,
-        program,
-        caller_account_id,
-        caller_image_id,
-        caller_authorized_accounts,
-    )) = chained_calls.pop_front()
+    while let Some((chained_call, program, caller_account_id, caller_authorized_accounts)) =
+        chained_calls.pop_front()
     {
         if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
             return Err(LeeError::MaxChainedCallsDepthExceeded);
@@ -188,10 +185,10 @@ pub fn execute_and_prove_with_padded_inputs(
         // the top), used only to build this callee's input. The top-level call's pre_states
         // came straight from the caller, not a `ChainedCall`, and are used as-is.
         let authorized_pdas =
-            compute_public_authorized_pdas(caller_image_id, &chained_call.pda_seeds);
+            compute_public_authorized_pdas(caller_account_id, &chained_call.pda_seeds);
 
         let real_pre_states: Vec<AccountWithMetadata> =
-            if let Some(caller_id) = caller_image_id {
+            if let Some(caller_id) = caller_account_id {
                 let mut resolved = Vec::with_capacity(chained_call.pre_state_ids.len());
                 for account_id in &chained_call.pre_state_ids {
                     let account = materialized_state.get(account_id).cloned().ok_or(
@@ -277,7 +274,7 @@ pub fn execute_and_prove_with_padded_inputs(
                 .get(position)
                 .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
             let pda_match = authorized_pdas.contains(&account_id)
-                || caller_image_id.is_some_and(|caller_id| {
+                || caller_account_id.is_some_and(|caller_id| {
                     private_pda_witness.is_some_and(|(npk, vpk, identifier)| {
                         chained_call.pda_seeds.iter().any(|seed| {
                             AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
@@ -328,7 +325,6 @@ pub fn execute_and_prove_with_padded_inputs(
                 new_call,
                 next_program,
                 Some(chained_call.program_account_id),
-                Some(program.id()),
                 authorized_output_accounts.clone(),
             ));
         }

@@ -131,11 +131,11 @@ pub fn compute_circuit_output(
                 let account_kind = match kind {
                     WitnessKind::Regular { .. } => PrivateAccountKind::Regular(*identifier),
                     WitnessKind::Pda { .. } => {
-                        let (authority_program_id, seed) = pda_seed_by_position
+                        let (authority_account_id, seed) = pda_seed_by_position
                             .get(&pos)
                             .expect("private PDA position must be in pda_seed_by_position");
                         PrivateAccountKind::Pda {
-                            program_id: *authority_program_id,
+                            program_account_id: *authority_account_id,
                             seed: *seed,
                             identifier: *identifier,
                         }
