@@ -125,10 +125,11 @@ pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
     deploy_header_account_id(loader_id, image_id, 0, AccountId::default())
 }
 
-/// Executes the `Deploy` instruction: verifies `bytecode` decodes as a valid RISC0 program
-/// binary, derives its header and segment PDAs, and claims both. Called natively from
-/// dispatch's `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut (see that constant's doc
-/// comment in `lee_core::program`).
+/// Executes the `Deploy` instruction.
+///
+/// Verifies `bytecode` decodes as a valid RISC0 program binary, derives its header and segment
+/// PDAs, and claims both. Called natively from dispatch's `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`
+/// shortcut, which runs this instead of interpreting a guest ELF.
 #[must_use]
 pub fn execute_deploy(
     self_program_id: ProgramId,

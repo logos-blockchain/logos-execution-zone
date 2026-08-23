@@ -12,9 +12,8 @@
 
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction as InboxInstruction, SeenShard,
-    inbox_config_account_id, inbox_seen_shard_account_id,
+    inbox_config_account_id, inbox_seen_shard_account_id, inbox_source_marker_account_id,
 };
-use cross_zone_marker_core::inbox_source_marker_account_id;
 use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
 use lee::{
     AccountId, PrivateKey, PublicKey, PublicTransaction, V03State, ValidatedStateDiff,
@@ -40,6 +39,24 @@ const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
 /// These tests drive the guest directly, so any fixed source-block hash does.
 const SRC_BLOCK_HASH: [u8; 32] = [7; 32];
+
+/// Converts the wire-format `(zone, ProgramId)` sources an `UpdateSources`
+/// instruction carries into the `(zone, AccountId)` pairs a config stores, the
+/// same way `update_sources` itself does, so a test can compare its input
+/// against what actually landed in state.
+fn expected_sources(
+    sources: &[([u8; 32], lee_core::program::ProgramId)],
+) -> Vec<([u8; 32], AccountId)> {
+    sources
+        .iter()
+        .map(|(zone, program_id)| {
+            (
+                *zone,
+                program_loader_core::immutable_deploy_account_id(*program_id),
+            )
+        })
+        .collect()
+}
 
 /// State registering the cross-zone builtins these tests exercise.
 fn base_state() -> V03State {
@@ -127,7 +144,9 @@ fn seed_receiver_config_with_governance(
 ) {
     let receiver_id = programs::ping_receiver().id();
     let config = ping_core::ReceiverConfig {
-        deliverer: program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id()),
+        deliverer: program_loader_core::immutable_deploy_account_id(
+            programs::cross_zone_inbox().id(),
+        ),
         governance,
         authority,
         sources,
@@ -175,7 +194,9 @@ fn seed_bridge_lock_config(state: &mut V03State) {
         Account {
             program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
             data: bridge_lock_core::config_bytes(
-                program_loader_core::immutable_deploy_account_id(programs::cross_zone_outbox().id()),
+                program_loader_core::immutable_deploy_account_id(
+                    programs::cross_zone_outbox().id(),
+                ),
                 programs::cross_zone_outbox().id(),
                 programs::wrapped_token().id(),
             )
@@ -267,8 +288,11 @@ fn chained_via_inbox(
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_program_id: programs::bridge_lock().id(),
+        src_account_id: program_loader_core::immutable_deploy_account_id(
+            programs::bridge_lock().id(),
+        ),
         target_program_id: target,
+        target_account_id: program_loader_core::immutable_deploy_account_id(target),
         payload: words.into_iter().flat_map(u32::to_le_bytes).collect(),
         l1_inclusion_witness: None,
     };
@@ -276,7 +300,10 @@ fn chained_via_inbox(
         inbox_id.into(),
         dispatch_accounts(inbox_id, &msg, vec![config_id, authority]),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
@@ -619,7 +646,9 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
     let mut state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
+            program_owner: program_loader_core::immutable_deploy_account_id(
+                programs::bridge_lock().id(),
+            ),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -1272,7 +1301,11 @@ fn the_token_authority_path_holds() {
         &state.get_account_by_id(config_id).data.into_inner(),
     )
     .expect("config decodes");
-    assert_eq!(cfg.sources, bridge_source, "the new source is authorized");
+    assert_eq!(
+        cfg.sources,
+        expected_sources(&bridge_source),
+        "the new source is authorized"
+    );
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         wrapped_token_id.into(),
@@ -1293,7 +1326,8 @@ fn the_token_authority_path_holds() {
     )
     .expect("config decodes");
     assert_eq!(
-        updated_cfg.sources, sender_source,
+        updated_cfg.sources,
+        expected_sources(&sender_source),
         "the second change took effect"
     );
     assert_eq!(
@@ -1314,12 +1348,13 @@ fn the_token_authority_path_holds() {
     .expect("config decodes");
     assert_eq!(renounced_cfg.authority, None, "the authority is gone");
     assert_eq!(
-        renounced_cfg.sources, sender_source,
+        renounced_cfg.sources,
+        expected_sources(&sender_source),
         "renouncing leaves the sources it froze"
     );
     assert_eq!(
         renounced_cfg.minter,
-        programs::cross_zone_inbox().id(),
+        program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id()),
         "the minter is unchanged"
     );
     rejects_at(
@@ -1352,10 +1387,14 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
     seed_receiver_config(
         &mut state,
         None,
-        vec![(src_zone, programs::bridge_lock().id())],
+        vec![(
+            src_zone,
+            program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
+        )],
     );
 
     let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        self_program_id: receiver_id,
         payload: b"ping".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -1364,8 +1403,11 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_program_id: programs::ping_sender().id(),
+        src_account_id: program_loader_core::immutable_deploy_account_id(
+            programs::ping_sender().id(),
+        ),
         target_program_id: receiver_id,
+        target_account_id: program_loader_core::immutable_deploy_account_id(receiver_id),
         payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
         l1_inclusion_witness: None,
     };
@@ -1380,7 +1422,10 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -1407,9 +1452,17 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_receiver_config(&mut state, None, vec![(src_zone, sender_id)]);
+    seed_receiver_config(
+        &mut state,
+        None,
+        vec![(
+            src_zone,
+            program_loader_core::immutable_deploy_account_id(sender_id),
+        )],
+    );
 
     let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        self_program_id: receiver_id,
         payload: b"ping".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -1418,8 +1471,9 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_program_id: sender_id,
+        src_account_id: program_loader_core::immutable_deploy_account_id(sender_id),
         target_program_id: receiver_id,
+        target_account_id: program_loader_core::immutable_deploy_account_id(receiver_id),
         payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
         l1_inclusion_witness: None,
     };
@@ -1431,12 +1485,19 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
         vec![
             inbox_config_account_id(inbox_id),
             inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
-            inbox_source_marker_account_id(inbox_id, &src_zone, programs::bridge_lock().id()),
+            inbox_source_marker_account_id(
+                program_loader_core::immutable_deploy_account_id(inbox_id),
+                &src_zone,
+                program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
+            ),
             receiver_config_account_id(receiver_id),
             ping_record_pda(receiver_id),
         ],
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            self_program_id: inbox_id,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -1523,8 +1584,11 @@ fn the_receiver_authority_path_holds() {
         &state.get_account_by_id(config_id).data.into_inner(),
     )
     .expect("config decodes");
-    assert_eq!(cfg.sources, vec![(src_zone, sender_id)]);
-    assert_eq!(cfg.deliverer, programs::cross_zone_inbox().id());
+    assert_eq!(cfg.sources, expected_sources(&[(src_zone, sender_id)]));
+    assert_eq!(
+        cfg.deliverer,
+        program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id())
+    );
 
     let renounce_diff =
         ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 1), &state, 2, 0)
@@ -1537,7 +1601,7 @@ fn the_receiver_authority_path_holds() {
     assert_eq!(renounced_cfg.authority, None, "the authority is gone");
     assert_eq!(
         renounced_cfg.sources,
-        vec![(src_zone, sender_id)],
+        expected_sources(&[(src_zone, sender_id)]),
         "renouncing freezes the list it had"
     );
     rejects_at(&state, &update(authority, &key, 2), 3, "fixed at genesis");
@@ -1648,7 +1712,10 @@ fn the_governance_path_holds() {
         &state.get_account_by_id(config_id).data.into_inner(),
     )
     .expect("config decodes");
-    assert_eq!(cfg.sources, vec![(src_zone, programs::bridge_lock().id())]);
+    assert_eq!(
+        cfg.sources,
+        expected_sources(&[(src_zone, programs::bridge_lock().id())])
+    );
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         wrapped_token_id.into(),
@@ -1815,7 +1882,10 @@ fn the_receiver_governance_path_holds() {
         &state.get_account_by_id(config_id).data.into_inner(),
     )
     .expect("config decodes");
-    assert_eq!(cfg.sources, vec![(src_zone, programs::ping_sender().id())]);
+    assert_eq!(
+        cfg.sources,
+        expected_sources(&[(src_zone, programs::ping_sender().id())])
+    );
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         receiver_id.into(),
@@ -1883,7 +1953,7 @@ fn a_shared_authority_survives_the_first_claim() {
     .expect("config decodes");
     assert_eq!(
         receiver_cfg.sources,
-        vec![(src_zone, programs::ping_sender().id())]
+        expected_sources(&[(src_zone, programs::ping_sender().id())])
     );
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
@@ -2072,7 +2142,9 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_account_id: program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
+        src_account_id: program_loader_core::immutable_deploy_account_id(
+            programs::bridge_lock().id(),
+        ),
         target_program_id: wrapped_token_id,
         target_account_id: program_loader_core::immutable_deploy_account_id(wrapped_token_id),
         payload: mint_payload(),
@@ -2114,7 +2186,8 @@ fn a_top_level_mint_is_refused() {
     let inbox_id = programs::cross_zone_inbox().id();
     let wrapped_token_id = programs::wrapped_token().id();
     let src_zone = [2_u8; 32];
-    let src_account_id = program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id());
+    let src_account_id =
+        program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id());
 
     let mut state = base_state();
     seed_wrapped_config(&mut state, None, vec![(src_zone, src_account_id)]);
@@ -2198,7 +2271,9 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
         // The emitter a user can drive directly, aimed at the bridge's target.
-        src_account_id: program_loader_core::immutable_deploy_account_id(programs::ping_sender().id()),
+        src_account_id: program_loader_core::immutable_deploy_account_id(
+            programs::ping_sender().id(),
+        ),
         target_program_id: wrapped_token_id,
         target_account_id: program_loader_core::immutable_deploy_account_id(wrapped_token_id),
         payload: mint_payload(),

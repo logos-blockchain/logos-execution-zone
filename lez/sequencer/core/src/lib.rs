@@ -1964,7 +1964,7 @@ fn genesis_stake_message(
         .expect("genesis funding nonce overflow");
 
     Message::try_new(
-        loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![
             genesis_stake_funding_account(),
             ownership_id,
@@ -1978,7 +1978,7 @@ fn genesis_stake_message(
             self_program_id: programs::sequencer_stake().id(),
             sequencer_key,
             amount,
-            mover_account_id: loader_core::immutable_deploy_account_id(
+            mover_account_id: program_loader_core::immutable_deploy_account_id(
                 programs::authenticated_transfer().id(),
             ),
             mover_instruction_data,
@@ -2203,7 +2203,7 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
 
     let message = tx.message();
     if message.program_account_id
-        != loader_core::immutable_deploy_account_id(programs::sequencer_stake().id())
+        != program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id())
     {
         return None;
     }
@@ -2238,7 +2238,7 @@ fn build_finalize_unstake_tx(
     pending: sequencer_stake_core::PendingUnstake,
 ) -> Result<LeeTransaction> {
     let message = Message::try_new(
-        loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![
             ownership_id,
             pending.destination,

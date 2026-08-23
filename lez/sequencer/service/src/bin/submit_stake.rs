@@ -91,7 +91,7 @@ async fn main() -> Result<()> {
                     self_program_id: programs::sequencer_stake().id(),
                     sequencer_key,
                     amount,
-                    mover_account_id: loader_core::immutable_deploy_account_id(
+                    mover_account_id: program_loader_core::immutable_deploy_account_id(
                         programs::authenticated_transfer().id(),
                     ),
                     mover_instruction_data,

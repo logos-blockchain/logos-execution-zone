@@ -108,8 +108,7 @@ fn decode_config(
         "not the sequencer_stake config account"
     );
     assert_eq!(
-        config_account.account.program_owner,
-        self_account_id,
+        config_account.account.program_owner, self_account_id,
         "config account is not owned by sequencer_stake"
     );
     SequencerStakeConfig::from_bytes(config_account.account.data.as_ref())
@@ -148,8 +147,7 @@ fn stake(
     let is_claimed = ownership_account.account.program_owner != DEFAULT_PROGRAM_OWNER;
     if is_claimed {
         assert_eq!(
-            ownership_account.account.program_owner,
-            self_account_id,
+            ownership_account.account.program_owner, self_account_id,
             "not a sequencer_stake ownership account"
         );
         let record = StakeRecord::from_bytes(ownership_account.account.data.as_ref())
@@ -281,8 +279,7 @@ fn unstake_request(
         "must sign for the ownership account"
     );
     assert_eq!(
-        ownership_account.account.program_owner,
-        self_account_id,
+        ownership_account.account.program_owner, self_account_id,
         "not a sequencer_stake ownership account"
     );
 
@@ -351,8 +348,7 @@ fn finalize_unstake(
         );
 
     assert_eq!(
-        ownership_account.account.program_owner,
-        self_account_id,
+        ownership_account.account.program_owner, self_account_id,
         "not a sequencer_stake ownership account"
     );
 

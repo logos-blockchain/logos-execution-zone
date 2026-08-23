@@ -95,8 +95,11 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
             );
         }
 
-        Ok(Self::new(orig_program, program_map)
-            .with_program_account_id(program_loader_core::immutable_deploy_account_id(orig_program_id)))
+        Ok(
+            Self::new(orig_program, program_map).with_program_account_id(
+                program_loader_core::immutable_deploy_account_id(orig_program_id),
+            ),
+        )
     }
 }
 

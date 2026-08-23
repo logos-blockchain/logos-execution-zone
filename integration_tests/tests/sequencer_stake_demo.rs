@@ -115,7 +115,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             self_program_id: programs::sequencer_stake().id(),
             sequencer_key: demo_stake_key,
             amount: FUNDING_BALANCE,
-            mover_account_id: loader_core::immutable_deploy_account_id(
+            mover_account_id: program_loader_core::immutable_deploy_account_id(
                 programs::authenticated_transfer().id(),
             ),
             mover_instruction_data,

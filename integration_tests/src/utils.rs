@@ -331,8 +331,12 @@ pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
         risc0_binfmt::compute_image_id(bytecode).unwrap().into();
     let header =
         program_loader_core::deploy_header_account_id(loader_id, image_id, 0, AccountId::default());
-    let segment =
-        program_loader_core::deploy_segment_account_id(loader_id, image_id, 0, AccountId::default());
+    let segment = program_loader_core::deploy_segment_account_id(
+        loader_id,
+        image_id,
+        0,
+        AccountId::default(),
+    );
     (header, segment)
 }
 
