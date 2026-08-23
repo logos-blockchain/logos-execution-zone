@@ -133,7 +133,6 @@ fn main() {
                 pre_states: vec![vault_authorized, receiver_pre.clone()],
                 instruction_data: transfer_instruction,
                 pda_seeds: vec![PdaSeed::new([0_u8; 32])],
-                raw_payload: None,
             };
 
             // Chained call 2: User callback.
@@ -144,7 +143,6 @@ fn main() {
                 pre_states: vec![vault_after_transfer, receiver_after_transfer],
                 instruction_data: callback_instruction_data,
                 pda_seeds: vec![],
-                raw_payload: None,
             };
 
             // Chained call 3: Self-call to enforce the invariant.
@@ -163,7 +161,6 @@ fn main() {
                 pre_states: vec![vault_after_callback],
                 instruction_data: invariant_instruction,
                 pda_seeds: vec![],
-                raw_payload: None,
             };
 
             // The initiator itself makes no direct state changes.

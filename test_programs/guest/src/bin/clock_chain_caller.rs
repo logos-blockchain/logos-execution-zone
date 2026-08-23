@@ -31,7 +31,6 @@ fn main() {
         instruction_data: to_vec(&timestamp).unwrap(),
         pre_states: pre_states.clone(),
         pda_seeds: vec![],
-        raw_payload: None,
     };
 
     ProgramOutput::new(

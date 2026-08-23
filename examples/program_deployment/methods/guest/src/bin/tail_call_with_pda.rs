@@ -66,7 +66,6 @@ fn main() {
         instruction_data: chained_call_instruction_data,
         pre_states: vec![pre_state_for_chained_call],
         pda_seeds: vec![PDA_SEED],
-        raw_payload: None,
     };
 
     // Write the outputs.

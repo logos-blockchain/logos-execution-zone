@@ -96,7 +96,6 @@ impl ValidatedStateDiff {
             instruction_data: message.instruction_data.clone(),
             pre_states: input_pre_states,
             pda_seeds: vec![],
-            raw_payload: message.raw_payload.clone(),
         };
 
         let initial_caller_data = CallerData {
@@ -133,9 +132,13 @@ impl ValidatedStateDiff {
                     risc0_zkvm::serde::from_slice(&chained_call.instruction_data).map_err(|e| {
                         LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
                     })?;
-                // The bytecode itself travels via `raw_payload`, not `instruction_data` — see
-                // `Message::raw_payload`'s doc comment for why.
-                let bytecode = chained_call.raw_payload.clone().ok_or_else(|| {
+                // The bytecode itself travels via the transaction's own `raw_payload`, not
+                // `instruction_data` and not `chained_call.raw_payload` (which no guest can ever
+                // set) — see `Message::raw_payload`'s doc comment for why. Deploy only ever runs
+                // natively, so a chained call into it (at any depth) can still reach the
+                // top-level payload here, without any intermediary guest ever having to carry the
+                // bytecode through its own execution.
+                let bytecode = message.raw_payload.clone().ok_or_else(|| {
                     LeeError::InvalidInput("Deploy requires a raw_payload".into())
                 })?;
                 let deploy_pre_states = chained_call.pre_states.clone();

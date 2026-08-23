@@ -3890,28 +3890,18 @@ fn loader_rejects_wrong_number_of_accounts() {
     );
 }
 
+/// A program that wants to chain-call `Deploy` never has to carry the bytecode through its own
+/// execution: `Deploy` only ever runs natively, so the dispatcher resolves its `raw_payload`
+/// straight from the top-level transaction regardless of chain-call depth, and the forwarder here
+/// only ever handles a small `instruction_data` (see
+/// `lee::state_machine::validated_state_diff`'s `Deploy` dispatch branch).
 #[test]
-#[ignore = "known limitation, not an addressing problem: a program that wants to chain-call \
-            Deploy must carry the target bytecode through its own instruction_data to build the \
-            ChainedCall, which costs ~1,400-1,500 cycles/byte of real guest interpretation and \
-            blows the 32M-cycle public-execution cap for any realistically-sized program. \
-            AccountId-based dispatch (marvin/program-as-account-3-1) fixed locating a \
-            Deploy-created (PDA-addressed) program, but that was never the blocker here: the \
-            forwarder never gets far enough to need it, since it exhausts its cycle budget just \
-            carrying the bytecode through its own execution. Making an arbitrary program able to \
-            decide mid-flow to deploy something new, as one step among others it orchestrates, \
-            needs a mechanism where the bytecode reaches Deploy without being copied through any \
-            intermediary guest's interpreted execution (e.g. a commitment carried in \
-            instruction_data with the real payload resolved out-of-band by the dispatcher) — \
-            deferred to a future PR. The supported pattern today is Deploy as the top-level \
-            entry point, natively emitting its own follow-up chained calls after deploying \
-            (see loader_deploys_program)."]
 fn loader_deploys_program_via_chained_call() {
-    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let forwarder = test_programs::chained_call_forwarder();
     let mut state = V03State::new().with_programs([forwarder.clone()]);
 
     let bytecode = test_programs::claimer().elf().to_vec();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
     let (header, segment) = deploy_targets(&bytecode);
 
@@ -3925,9 +3915,13 @@ fn loader_deploys_program_via_chained_call() {
         forwarder.deployed_account_id(),
         vec![header, segment],
         vec![],
-        (loader_id, inner_instruction_data),
+        (
+            RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+            inner_instruction_data,
+        ),
     )
-    .unwrap();
+    .unwrap()
+    .with_raw_payload(user_elf);
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
