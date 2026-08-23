@@ -324,9 +324,10 @@ impl V03State {
     /// - Owned by [`RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`]: deployed via the native `Deploy`
     ///   dispatch shortcut. `account.data` decodes as a [`ProgramData`] header holding the real
     ///   `image_id` and `segment_count`; the program-specific `user_elf` is split across that many
-    ///   separately-addressed segment accounts (see `program_loader_core::deploy_segment_account_id`),
-    ///   which this fetches in order, concatenates, and reconstructs into the full two-ELF binary
-    ///   (see `program_loader_core::reconstruct_program_binary`) before returning it.
+    ///   separately-addressed segment accounts (see
+    ///   `program_loader_core::deploy_segment_account_id`), which this fetches in order,
+    ///   concatenates, and reconstructs into the full two-ELF binary (see
+    ///   `program_loader_core::reconstruct_program_binary`) before returning it.
     ///
     /// Returning the real `image_id` — rather than callers deriving one from the address, which
     /// is only valid for the legacy path — is what makes upgrading a `Deploy`-created program

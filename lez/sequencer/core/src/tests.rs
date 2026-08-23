@@ -3945,7 +3945,7 @@ fn loader_deploys_program_via_chained_call() {
         ),
     )
     .unwrap()
-    .with_raw_payload(user_elf);
+    .with_raw_payload(user_elf.clone());
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 

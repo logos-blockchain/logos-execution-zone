@@ -1,22 +1,26 @@
 use lee_core::{
     account::Data,
-    program::{ProgramData, ProgramId, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID},
+    program::{ProgramData, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID},
 };
 
 use super::*;
 
-/// `insert_program` (genesis) must produce exactly the account shape `loader_core::plan_deploy`
-/// reports for the same bytecode — the invariant that makes genesis and a live `Deploy`
-/// indistinguishable to `get_program`.
+/// `insert_program` (genesis) must produce exactly the account shape
+/// `program_loader_core::plan_deploy` reports for the same bytecode — the invariant that makes
+/// genesis and a live `Deploy` indistinguishable to `get_program`.
 #[test]
 fn insert_program_matches_plan_deploy() {
     let program = crate::test_methods::claimer();
     let mut state = V03State::new();
     state.insert_program(&program);
 
-    let loader_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
-    let user_elf = loader_core::extract_user_elf(program.elf()).unwrap();
-    let plan = loader_core::plan_deploy(loader_id, program.id(), AccountId::default(), &user_elf);
+    let user_elf = program_loader_core::extract_user_elf(program.elf()).unwrap();
+    let plan = program_loader_core::plan_deploy(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        program.id(),
+        AccountId::default(),
+        &user_elf,
+    );
     assert!(
         plan.segments.len() > 1,
         "a real program should span multiple segments at the 96 KiB chunk size"
@@ -74,9 +78,12 @@ fn get_program_rejects_a_corrupted_segment() {
     let mut state = V03State::new();
     state.insert_program(&program);
 
-    let loader_id = ProgramId::from(RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
-    let first_segment_account_id =
-        loader_core::deploy_segment_account_id(loader_id, program.id(), 0, AccountId::default());
+    let first_segment_account_id = program_loader_core::deploy_segment_account_id(
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        program.id(),
+        0,
+        AccountId::default(),
+    );
     let mut first_segment = state.public_state[&first_segment_account_id].clone();
     let mut corrupted = first_segment.data.to_vec();
     corrupted[0] ^= 0xFF;
