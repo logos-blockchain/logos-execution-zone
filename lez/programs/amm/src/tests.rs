@@ -19,7 +19,7 @@ use crate::{
 };
 
 const TOKEN_PROGRAM_ID: ProgramId = [15; 8];
-const AMM_PROGRAM_ID: ProgramId = [42; 8];
+const AMM_PROGRAM_ID: AccountId = AccountId::new([42; 32]);
 
 struct BalanceForTests;
 struct ChainedCallForTests;
@@ -1293,14 +1293,17 @@ impl BalanceForExeTests {
 impl IdForExeTests {
     fn pool_definition_id() -> AccountId {
         amm_core::compute_pool_pda(
-            programs::amm().id(),
+            programs::amm().deployed_account_id(),
             Self::token_a_definition_id(),
             Self::token_b_definition_id(),
         )
     }
 
     fn token_lp_definition_id() -> AccountId {
-        amm_core::compute_liquidity_token_pda(programs::amm().id(), Self::pool_definition_id())
+        amm_core::compute_liquidity_token_pda(
+            programs::amm().deployed_account_id(),
+            Self::pool_definition_id(),
+        )
     }
 
     fn token_a_definition_id() -> AccountId {
@@ -1331,7 +1334,7 @@ impl IdForExeTests {
 
     fn vault_a_id() -> AccountId {
         amm_core::compute_vault_pda(
-            programs::amm().id(),
+            programs::amm().deployed_account_id(),
             Self::pool_definition_id(),
             Self::token_a_definition_id(),
         )
@@ -1339,7 +1342,7 @@ impl IdForExeTests {
 
     fn vault_b_id() -> AccountId {
         amm_core::compute_vault_pda(
-            programs::amm().id(),
+            programs::amm().deployed_account_id(),
             Self::pool_definition_id(),
             Self::token_b_definition_id(),
         )
@@ -3186,7 +3189,6 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
     let instruction = amm_core::Instruction::NewDefinition {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
-        amm_program_id: programs::amm().id(),
     };
 
     let message = public_transaction::Message::try_new(
@@ -3271,7 +3273,6 @@ fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
     let instruction = amm_core::Instruction::NewDefinition {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
-        amm_program_id: programs::amm().id(),
     };
 
     let message = public_transaction::Message::try_new(
@@ -3343,7 +3344,6 @@ fn simple_amm_new_definition_uninitialized_pool() {
     let instruction = amm_core::Instruction::NewDefinition {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
-        amm_program_id: programs::amm().id(),
     };
 
     let message = public_transaction::Message::try_new(

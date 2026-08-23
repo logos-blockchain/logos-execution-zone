@@ -20,24 +20,13 @@ pub enum ReceiverInstruction {
     ///
     /// Required accounts (3): the source marker, the receiver config PDA, then
     /// the record PDA.
-    Record {
-        /// This program's own image id. The guest cannot learn this at runtime, so the trusted
-        /// caller supplies it to recompute the config and record PDAs; a wrong value only fails
-        /// the guest's own self-consistency assertions, since real authorization is
-        /// independently enforced by the state layer against the account's `program_owner`.
-        self_program_id: ProgramId,
-        payload: Vec<u8>,
-    },
+    Record { payload: Vec<u8> },
     /// Pins the deliverer and the peer sources it may deliver from, written once
     /// into a default config PDA at genesis. A re-run holding anything different
     /// is refused; an identical one is a no-op, which is what genesis replay does.
     ///
     /// Required accounts (1): the receiver config PDA.
-    InitConfig {
-        /// See [`Record::self_program_id`](ReceiverInstruction::Record).
-        self_program_id: ProgramId,
-        config: ReceiverConfig,
-    },
+    InitConfig { config: ReceiverConfig },
     /// Replaces the authorized sources. Refused unless the config names an
     /// authority and that account authorized the transaction.
     ///
@@ -65,9 +54,10 @@ pub enum ReceiverInstruction {
 pub struct ReceiverConfig {
     /// The dispatch address of the program allowed to call `Record`: the cross-zone inbox.
     pub deliverer: AccountId,
-    /// The program allowed to reach the authority instructions through a chained
-    /// call, or `None` for top-level only. See `WrappedTokenConfig::governance`.
-    pub governance: Option<ProgramId>,
+    /// The dispatch address of the program allowed to reach the authority
+    /// instructions through a chained call, or `None` for top-level only. See
+    /// `WrappedTokenConfig::governance`.
+    pub governance: Option<AccountId>,
     /// The account allowed to change `sources`, or `None` for a list fixed at
     /// genesis. Seeded unset; see `WrappedTokenConfig::authority` for why.
     pub authority: Option<AccountId>,
@@ -98,11 +88,6 @@ pub enum SenderInstruction {
     ///
     /// Required accounts (2): the sender config PDA, then the outbox PDA.
     Send {
-        /// This program's own image id. The guest cannot learn this at runtime, so the trusted
-        /// caller supplies it to recompute the sender's own config PDA; a wrong value only fails
-        /// the guest's own self-consistency assertion, since real authorization is independently
-        /// enforced by the state layer against the account's `program_owner`.
-        self_program_id: ProgramId,
         target_zone: [u8; 32],
         target_program_id: ProgramId,
         target_accounts: Vec<[u8; 32]>,
@@ -115,20 +100,15 @@ pub enum SenderInstruction {
     ///
     /// Required accounts (1): the sender config PDA.
     InitConfig {
-        /// See [`Send::self_program_id`](SenderInstruction::Send).
-        self_program_id: ProgramId,
         /// The outbox program's real dispatch address, used as the chained-call target.
         outbox_account_id: AccountId,
-        /// The outbox program's own image id, supplied back to it as its `self_program_id` when
-        /// dispatching `cross_zone_outbox_core::Instruction::Emit`.
-        outbox_program_id: ProgramId,
     },
 }
 
 /// The account a `ping_receiver` records the latest delivered payload into.
 #[must_use]
-pub fn ping_record_pda(receiver_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&receiver_id, &ping_record_seed())
+pub fn ping_record_pda(receiver_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&receiver_account_id, &ping_record_seed())
 }
 
 /// Seed of the record PDA, exposed so the guest can claim the account.
@@ -140,8 +120,8 @@ pub const fn ping_record_seed() -> PdaSeed {
 /// PDA holding the outbox program id, seeded at genesis so the guest can pin the
 /// program it chains into without importing the outbox image id.
 #[must_use]
-pub fn sender_config_account_id(sender_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&sender_id, &sender_config_seed())
+pub fn sender_config_account_id(sender_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&sender_account_id, &sender_config_seed())
 }
 
 #[must_use]
@@ -151,8 +131,8 @@ pub const fn sender_config_seed() -> PdaSeed {
 
 /// PDA holding the sources `ping_receiver` accepts a delivery from.
 #[must_use]
-pub fn receiver_config_account_id(receiver_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&receiver_id, &receiver_config_seed())
+pub fn receiver_config_account_id(receiver_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&receiver_account_id, &receiver_config_seed())
 }
 
 #[must_use]
@@ -160,39 +140,21 @@ pub const fn receiver_config_seed() -> PdaSeed {
     PdaSeed::new(RECEIVER_CONFIG_SEED)
 }
 
-/// Encodes the pinned outbox's dispatch address and image id for the config
-/// account's data.
+/// Encodes the pinned outbox's dispatch address for the config account's data.
 #[must_use]
-pub fn outbox_bytes(outbox_account_id: AccountId, outbox_program_id: ProgramId) -> [u8; 64] {
-    let mut bytes = [0_u8; 64];
-    bytes[..32].copy_from_slice(outbox_account_id.value());
-    for (word, chunk) in outbox_program_id
-        .iter()
-        .zip(bytes[32..].chunks_exact_mut(4))
-    {
-        chunk.copy_from_slice(&word.to_le_bytes());
-    }
-    bytes
+pub const fn outbox_bytes(outbox_account_id: AccountId) -> [u8; 32] {
+    *outbox_account_id.value()
 }
 
-/// Decodes the pinned outbox's dispatch address and image id from the config
-/// account's data.
+/// Decodes the pinned outbox's dispatch address from the config account's data.
 #[must_use]
-pub fn read_outbox(data: &[u8]) -> Option<(AccountId, ProgramId)> {
-    if data.len() < 64 {
+pub fn read_outbox(data: &[u8]) -> Option<AccountId> {
+    if data.len() < 32 {
         return None;
     }
-    assert!(data.len() >= 64);
-    let outbox_account_id =
-        AccountId::new(data[..32].try_into().unwrap_or_else(|_| unreachable!()));
-    let mut outbox_program_id = [0_u32; 8];
-    for (word, chunk) in outbox_program_id
-        .iter_mut()
-        .zip(data[32..64].chunks_exact(4))
-    {
-        *word = u32::from_le_bytes(chunk.try_into().unwrap_or_else(|_| unreachable!()));
-    }
-    Some((outbox_account_id, outbox_program_id))
+    Some(AccountId::new(
+        data[..32].try_into().unwrap_or_else(|_| unreachable!()),
+    ))
 }
 
 #[cfg(test)]
@@ -205,7 +167,6 @@ mod tests {
     #[test]
     fn send_is_the_first_variant() {
         let send = SenderInstruction::Send {
-            self_program_id: [2; 8],
             target_zone: [7; 32],
             target_program_id: [1; 8],
             target_accounts: vec![],
@@ -220,10 +181,7 @@ mod tests {
     /// decoded by the destination, so its tag byte is wire format.
     #[test]
     fn record_is_the_first_variant() {
-        let record = ReceiverInstruction::Record {
-            self_program_id: [1; 8],
-            payload: vec![],
-        };
+        let record = ReceiverInstruction::Record { payload: vec![] };
         let bytes = borsh::to_vec(&record).expect("Record serializes");
         assert_eq!(bytes[0], 0);
     }
@@ -247,10 +205,9 @@ mod tests {
     #[test]
     fn outbox_id_round_trips() {
         let outbox_account_id = AccountId::new([9; 32]);
-        let outbox_program_id: ProgramId = [3; 8];
         assert_eq!(
-            read_outbox(&outbox_bytes(outbox_account_id, outbox_program_id)),
-            Some((outbox_account_id, outbox_program_id))
+            read_outbox(&outbox_bytes(outbox_account_id)),
+            Some(outbox_account_id)
         );
     }
 }

@@ -10,7 +10,7 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
     program::{
         CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, DEPLOYMENT_PROGRAM_ACCOUNT_ID,
-        ProgramId, ProgramOutput, compute_public_authorized_pdas, validate_execution,
+        ProgramOutput, compute_public_authorized_pdas, validate_execution,
     },
 };
 use log::debug;
@@ -119,24 +119,61 @@ impl ValidatedStateDiff {
                 chained_call.pre_states,
                 chained_call.instruction_data
             );
-
-            let (program_id, mut program_output) =
-                execute_chained_call(state, &chained_call, caller_data.account_id)?;
+            let mut program_output = if chained_call.program_account_id
+                == DEPLOYMENT_PROGRAM_ACCOUNT_ID
+            {
+                // Runs `Deploy` as native Rust instead of interpreting a guest ELF — see
+                // `DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc comment for why.
+                // `execute_deploy` validates its input via `assert!`/`.expect(...)`, exactly
+                // like every guest program in this codebase, relying here on `catch_unwind` to
+                // play the same role the zkVM executor plays for a real guest: converting a
+                // rejected input into a graceful `Err` instead of unwinding past this call.
+                let program_loader_core::Instruction::Deploy { bytecode } =
+                    risc0_zkvm::serde::from_slice(&chained_call.instruction_data).map_err(|e| {
+                        LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
+                    })?;
+                let deploy_pre_states = chained_call.pre_states.clone();
+                let post_states = std::panic::catch_unwind(|| {
+                    program_loader_core::execute_deploy(
+                        chained_call.program_account_id,
+                        deploy_pre_states,
+                        bytecode,
+                    )
+                })
+                .map_err(|_panic_payload| {
+                    LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
+                })?;
+                ProgramOutput::new(
+                    chained_call.program_account_id,
+                    caller_data.account_id,
+                    chained_call.instruction_data.clone(),
+                    chained_call.pre_states.clone(),
+                    post_states,
+                )
+            } else {
+                // The real `image_id`, sourced from the program's own account rather than
+                // guessed from its address — see `V03State::get_program`'s doc comment for
+                // why that distinction matters once a program's address can outlive its
+                // current bytecode (upgrades).
+                let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)
+                else {
+                    return Err(LeeError::InvalidInput("Unknown program".into()));
+                };
+                let program = Program::new_unchecked(program_id, Cow::Owned(elf));
+                program.execute(
+                    chained_call.program_account_id,
+                    caller_data.account_id,
+                    &chained_call.pre_states,
+                    &chained_call.instruction_data,
+                )?
+            };
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_account_id, program_output
             );
 
-            // The caller's real `image_id`, re-derived from its dispatch address the same way it
-            // was originally resolved (`state` never mutates during this traversal, so this is
-            // exact) — needed because a `Deploy`-created caller's address doesn't encode its
-            // image id, unlike the legacy bijection this used to (incorrectly) assume.
-            let caller_image_id = caller_data
-                .account_id
-                .map(|caller_account_id| real_image_id(state, caller_account_id))
-                .transpose()?;
             let authorized_pdas =
-                compute_public_authorized_pdas(caller_image_id, &chained_call.pda_seeds);
+                compute_public_authorized_pdas(caller_data.account_id, &chained_call.pda_seeds);
 
             // Account is authorized if it is either in the caller's authorized accounts or in the
             // list of PDAs the caller has authorized.
@@ -238,7 +275,8 @@ impl ValidatedStateDiff {
                         // The program can only claim accounts that correspond to the PDAs it is
                         // authorized to claim. The public-execution path only sees public
                         // accounts, so the public-PDA derivation is the correct formula here.
-                        let pda = AccountId::for_public_pda(&program_id, &seed);
+                        let pda =
+                            AccountId::for_public_pda(&chained_call.program_account_id, &seed);
                         ensure!(
                             account_id == pda,
                             InvalidProgramBehaviorError::MismatchedPdaClaim {
@@ -467,76 +505,6 @@ impl ValidatedStateDiff {
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
     }
-}
-
-/// Executes a chained call, dispatching to the native `Deploy` fast path when the call targets
-/// [`DEPLOYMENT_PROGRAM_ACCOUNT_ID`], or interpreting the target's guest ELF otherwise. Returns
-/// the real `image_id` the call actually dispatched at, alongside its output — needed by the
-/// caller to correctly derive PDAs for any further chained calls this program makes, since a
-/// `Deploy`-created program's address doesn't encode its image id.
-fn execute_chained_call(
-    state: &V03State,
-    chained_call: &ChainedCall,
-    caller_account_id: Option<AccountId>,
-) -> Result<(ProgramId, ProgramOutput), LeeError> {
-    if chained_call.program_account_id == DEPLOYMENT_PROGRAM_ACCOUNT_ID {
-        // The loader's own identity is this fixed reserved `AccountId`, unlike an ordinary
-        // program's, so recovering it via the bijection is exact — there's no separate "real
-        // image id" to look up, Deploy isn't itself upgradeable.
-        let program_id = ProgramId::from(DEPLOYMENT_PROGRAM_ACCOUNT_ID);
-        // Runs `Deploy` as native Rust instead of interpreting a guest ELF.
-        let program_loader_core::Instruction::Deploy { bytecode } =
-            risc0_zkvm::serde::from_slice(&chained_call.instruction_data)
-                .map_err(|e| LeeError::InvalidInput(format!("invalid Deploy instruction: {e}")))?;
-        let deploy_pre_states = chained_call.pre_states.clone();
-        // FIXME: catch_unwind won't catch aborts; remove once lez programs have better
-        // error handling than panicking on invalid input.
-        let post_states = std::panic::catch_unwind(|| {
-            program_loader_core::execute_deploy(program_id, deploy_pre_states, bytecode)
-        })
-        .map_err(|_panic_payload| {
-            LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
-        })?;
-        Ok((
-            program_id,
-            ProgramOutput::new(
-                chained_call.program_account_id,
-                caller_account_id,
-                chained_call.instruction_data.clone(),
-                chained_call.pre_states.clone(),
-                post_states,
-            ),
-        ))
-    } else {
-        // The real `image_id`, sourced from the program's own account rather than guessed from
-        // its address — a `Deploy`-created program's address doesn't encode its image id, and
-        // its address can outlive its current bytecode (upgrades).
-        let Some((program_id, elf)) = state.get_program(chained_call.program_account_id) else {
-            return Err(LeeError::InvalidInput("Unknown program".into()));
-        };
-        let program = Program::new_unchecked(program_id, Cow::Owned(elf));
-        let program_output = program.execute(
-            chained_call.program_account_id,
-            caller_account_id,
-            &chained_call.pre_states,
-            &chained_call.instruction_data,
-        )?;
-        Ok((program_id, program_output))
-    }
-}
-
-/// The real `image_id` a dispatch address currently resolves to, sourced from the program's own
-/// account rather than guessed from its address — a `Deploy`-created program's address doesn't
-/// encode its image id, unlike the legacy bijection this used to (incorrectly) assume, and its
-/// address can outlive its current bytecode (upgrades).
-fn real_image_id(state: &V03State, account_id: AccountId) -> Result<ProgramId, LeeError> {
-    if account_id == DEPLOYMENT_PROGRAM_ACCOUNT_ID {
-        return Ok(ProgramId::from(DEPLOYMENT_PROGRAM_ACCOUNT_ID));
-    }
-    state
-        .get_program(account_id)
-        .map(|(image_id, _elf)| image_id)
-        .ok_or_else(|| LeeError::InvalidInput("Unknown program".into()))
 }
 
 fn authenticate_public_transaction_signers(

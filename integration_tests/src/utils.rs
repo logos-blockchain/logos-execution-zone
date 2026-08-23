@@ -326,13 +326,16 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
 /// `sequencer_core`'s private test helper of the same name.
 #[must_use]
 pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
-    let loader_id: lee_core::program::ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let image_id: lee_core::program::ProgramId =
         risc0_binfmt::compute_image_id(bytecode).unwrap().into();
-    let header =
-        program_loader_core::deploy_header_account_id(loader_id, image_id, 0, AccountId::default());
+    let header = program_loader_core::deploy_header_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        AccountId::default(),
+    );
     let segment = program_loader_core::deploy_segment_account_id(
-        loader_id,
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
         image_id,
         0,
         AccountId::default(),
@@ -351,9 +354,8 @@ pub fn deploy_transaction(
     segment: AccountId,
     bytecode: Vec<u8>,
 ) -> lee::PublicTransaction {
-    let loader_id: lee_core::program::ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let message = lee::public_transaction::Message::try_new(
-        loader_id.into(),
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
         vec![header, segment],
         vec![],
         program_loader_core::Instruction::Deploy { bytecode },

@@ -354,7 +354,8 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 
     let recipient = ctx.existing_public_accounts()[0];
     let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient);
+    let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
+    let recipient_vault_id = vault_core::compute_vault_account_id(vault_account_id, recipient);
 
     let recipient_balance_before = account_balance(&ctx, recipient).await?;
     let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
@@ -365,8 +366,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
         vec![faucet_account_id, recipient_vault_id],
         vec![],
         faucet_core::Instruction::GenesisTransferVault {
-            self_program_id: programs::faucet().id(),
-            vault_account_id: program_loader_core::immutable_deploy_account_id(vault_program_id),
+            vault_account_id,
             recipient_id: recipient,
             amount,
         },
@@ -405,8 +405,6 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
         bytecode,
     ));
 
-    // `Deploy`'s bytecode payload runs ~4x its raw size on the wire (see `encoded_tx_size`'s
-    // docs), so the default 1 MiB block size isn't enough headroom for a real guest binary.
     let tx_size = encoded_tx_size(&deploy_tx);
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
@@ -428,7 +426,8 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let attacker = ctx.existing_public_accounts()[0];
     let faucet_program_id = programs::faucet().id();
     let vault_program_id = programs::vault().id();
-    let attacker_vault_id = vault_core::compute_vault_account_id(vault_program_id, attacker);
+    let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
+    let attacker_vault_id = vault_core::compute_vault_account_id(vault_account_id, attacker);
     let amount: u128 = 1;
 
     let message = public_transaction::Message::try_new(
@@ -436,9 +435,8 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
         vec![faucet_account_id, attacker_vault_id],
         vec![],
         (
-            faucet_program_id,
             program_loader_core::immutable_deploy_account_id(faucet_program_id),
-            program_loader_core::immutable_deploy_account_id(vault_program_id),
+            vault_account_id,
             attacker,
             amount,
         ),

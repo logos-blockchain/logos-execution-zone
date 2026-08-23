@@ -45,9 +45,11 @@ impl Proof {
 #[derive(Clone)]
 pub struct ProgramWithDependencies {
     pub program: Program,
-    /// Where `program` is dispatched at. Defaults to `AccountId::from(program.id())` (correct
-    /// for a legacy, bijection-addressed program); override via
-    /// [`Self::with_program_account_id`] for a program deployed to a PDA (e.g. via `Deploy`).
+    /// Where `program` is dispatched at. Defaults to
+    /// `program_loader_core::immutable_deploy_account_id(program.id())`, matching how every
+    /// genesis-seeded builtin is actually dispatched; override via
+    /// [`Self::with_program_account_id`] for a program deployed to a different PDA (e.g. a
+    /// `Deploy` with a non-default `update_auth`).
     pub program_account_id: AccountId,
     // TODO: avoid having a copy of the bytecode of each dependency.
     pub dependencies: HashMap<AccountId, Program>,
@@ -56,7 +58,7 @@ pub struct ProgramWithDependencies {
 impl ProgramWithDependencies {
     #[must_use]
     pub fn new(program: Program, dependencies: HashMap<AccountId, Program>) -> Self {
-        let program_account_id = AccountId::from(program.id());
+        let program_account_id = program_loader_core::immutable_deploy_account_id(program.id());
         Self {
             program,
             program_account_id,
@@ -64,8 +66,8 @@ impl ProgramWithDependencies {
         }
     }
 
-    /// Overrides the address `program` is dispatched at, for a program whose address isn't
-    /// derived from its own image id (e.g. deployed via `Deploy` to a PDA).
+    /// Overrides the address `program` is dispatched at, for a program not deployed to the
+    /// default immutable PDA (e.g. a `Deploy` with a non-default `update_auth`).
     #[must_use]
     pub const fn with_program_account_id(mut self, program_account_id: AccountId) -> Self {
         self.program_account_id = program_account_id;

@@ -12,6 +12,7 @@ borsh.workspace = true
 lee_core.workspace = true
 bridge_lock_core.workspace = true
 cross_zone_outbox_core.workspace = true
+program_loader_core.workspace = true
 wrapped_token_core.workspace = true
 risc0-zkvm.workspace = true
 

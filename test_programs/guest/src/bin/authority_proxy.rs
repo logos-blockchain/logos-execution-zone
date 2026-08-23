@@ -23,13 +23,9 @@ fn main() {
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
-    // See `record`'s doc comment in ping_receiver: exact round-trip to the actual image id,
-    // needed by `AccountId::for_public_pda` below.
-    let self_program_id = ProgramId::from(self_account_id);
-
     let mut call_pre_states = pre_states.clone();
     if let Some(seed) = pda_seed {
-        let delegated = AccountId::for_public_pda(&self_program_id, &seed);
+        let delegated = AccountId::for_public_pda(&self_account_id, &seed);
         for pre in &mut call_pre_states {
             if pre.account_id == delegated {
                 pre.is_authorized = true;
@@ -38,7 +34,7 @@ fn main() {
     }
 
     let chained_call = ChainedCall {
-        program_account_id: target_program_id.into(),
+        program_account_id: program_loader_core::immutable_deploy_account_id(target_program_id),
         instruction_data: target_instruction_data,
         pre_states: call_pre_states,
         pda_seeds: pda_seed.into_iter().collect(),

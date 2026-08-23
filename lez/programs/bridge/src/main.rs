@@ -34,8 +34,6 @@ fn main() {
     let (post_states, chained_calls) = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
-            self_program_id,
-            vault_program_id,
             vault_account_id,
             recipient_id,
             amount,
@@ -46,19 +44,19 @@ fn main() {
 
             assert_eq!(
                 bridge.account_id,
-                bridge_core::compute_bridge_account_id(self_program_id),
+                bridge_core::compute_bridge_account_id(self_account_id),
                 "First account must be bridge PDA"
             );
 
             assert_eq!(
                 recipient_vault.account_id,
-                vault_core::compute_vault_account_id(vault_program_id, recipient_id),
+                vault_core::compute_vault_account_id(vault_account_id, recipient_id),
                 "Second account must be recipient vault PDA"
             );
 
             assert_eq!(
                 receipt.account_id,
-                bridge_core::deposit_receipt_account_id(self_program_id, l1_deposit_op_id),
+                bridge_core::deposit_receipt_account_id(self_account_id, l1_deposit_op_id),
                 "Third account must be the deposit-receipt PDA"
             );
 
@@ -117,7 +115,7 @@ fn main() {
 
             // assert_eq!(
             //     bridge.account_id,
-            //     bridge_core::compute_bridge_account_id(self_account_id.into()),
+            //     bridge_core::compute_bridge_account_id(self_account_id),
             //     "Second account must be bridge PDA"
             // );
 

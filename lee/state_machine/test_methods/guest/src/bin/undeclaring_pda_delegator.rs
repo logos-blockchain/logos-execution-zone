@@ -1,14 +1,17 @@
 use borsh::to_vec;
-use lee_core::program::{
-    ChainedCall, InstructionData, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountId,
+    program::{
+        ChainedCall, InstructionData, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+    },
 };
 
 type Instruction = (
     Option<PdaSeed>,
     bool,
-    ProgramId,
+    AccountId,
     InstructionData,
-    Option<ProgramId>,
+    Option<AccountId>,
 );
 
 fn main() {
@@ -17,7 +20,7 @@ fn main() {
             self_account_id,
             caller_account_id,
             mut pre_states,
-            instruction: (seed, declare_authorized, callee_program_id, callee_instruction, sibling),
+            instruction: (seed, declare_authorized, callee_account_id, callee_instruction, sibling),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -27,11 +30,11 @@ fn main() {
     };
     first.is_authorized = declare_authorized;
 
-    let sibling_call = sibling.map(|sibling_program_id| {
+    let sibling_call = sibling.map(|sibling_account_id| {
         let mut sibling_pre = pre_states[0].clone();
         sibling_pre.is_authorized = true;
         ChainedCall {
-            program_account_id: sibling_program_id.into(),
+            program_account_id: sibling_account_id,
             instruction_data: to_vec(&()).unwrap(),
             pre_states: vec![sibling_pre],
             pda_seeds: vec![],
@@ -39,7 +42,7 @@ fn main() {
     });
 
     let mut chained_calls = vec![ChainedCall {
-        program_account_id: callee_program_id.into(),
+        program_account_id: callee_account_id,
         instruction_data: callee_instruction,
         pre_states,
         pda_seeds: seed.into_iter().collect(),

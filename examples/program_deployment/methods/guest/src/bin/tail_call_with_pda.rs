@@ -60,7 +60,9 @@ fn main() {
         this
     };
     let chained_call = ChainedCall {
-        program_account_id: hello_world_program_id().into(),
+        program_account_id: program_loader_core::immutable_deploy_account_id(
+            hello_world_program_id(),
+        ),
         instruction_data: chained_call_instruction_data,
         pre_states: vec![pre_state_for_chained_call],
         pda_seeds: vec![PDA_SEED],

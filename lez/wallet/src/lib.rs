@@ -409,7 +409,7 @@ impl WalletCore {
         group_label: Label,
         identifier: lee_core::Identifier,
         pda_seed: Option<lee_core::program::PdaSeed>,
-        authority_program_id: Option<lee_core::program::ProgramId>,
+        authority_account_id: Option<AccountId>,
     ) {
         self.storage.key_chain_mut().insert_shared_private_account(
             account_id,
@@ -417,7 +417,7 @@ impl WalletCore {
                 group_label,
                 identifier,
                 pda_seed,
-                authority_program_id,
+                authority_account_id,
                 account: Account::default(),
             },
         );
@@ -479,7 +479,7 @@ impl WalletCore {
         &mut self,
         group_name: Label,
         pda_seed: lee_core::program::PdaSeed,
-        program_id: lee_core::program::ProgramId,
+        authority_account_id: AccountId,
         identifier: lee_core::Identifier,
     ) -> Result<SharedAccountInfo> {
         let holder = self
@@ -488,17 +488,18 @@ impl WalletCore {
             .group_key_holder(&group_name)
             .context(format!("Group '{group_name}' not found"))?;
 
-        let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
+        let keys = holder.derive_keys_for_pda(&authority_account_id, &pda_seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_private_pda(&program_id, &pda_seed, &npk, &vpk, identifier);
+        let account_id =
+            AccountId::for_private_pda(&authority_account_id, &pda_seed, &npk, &vpk, identifier);
 
         self.register_shared_account(
             account_id,
             group_name,
             identifier,
             Some(pda_seed),
-            Some(program_id),
+            Some(authority_account_id),
         );
         self.catch_up_shared_account(account_id).await?;
 

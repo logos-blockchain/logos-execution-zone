@@ -54,10 +54,11 @@ pub struct FoundPrivateAccount<'acc> {
 pub struct SharedAccountEntry {
     pub group_label: Label,
     pub identifier: Identifier,
-    /// For PDA accounts, the seed and program ID used to derive keys via `derive_keys_for_pda`.
-    /// `None` for regular shared accounts (keys derived from identifier via derivation seed).
+    /// For PDA accounts, the seed and owner dispatch address used to derive keys via
+    /// `derive_keys_for_pda`. `None` for regular shared accounts (keys derived from identifier
+    /// via derivation seed).
     pub pda_seed: Option<lee_core::program::PdaSeed>,
-    pub authority_program_id: Option<lee_core::program::ProgramId>,
+    pub authority_account_id: Option<AccountId>,
     pub account: Account,
 }
 
@@ -337,15 +338,16 @@ impl UserKeyChain {
     }
 
     /// Re-derives the [`PrivateKeyHolder`] for a shared account `entry`, dispatching on PDA vs
-    /// regular. `None` if the group key holder is absent or a PDA entry lacks its program id.
+    /// regular. `None` if the group key holder is absent or a PDA entry lacks its authority
+    /// account id.
     #[must_use]
     pub fn derive_shared_account_keys(
         &self,
         entry: &SharedAccountEntry,
     ) -> Option<PrivateKeyHolder> {
         let holder = self.group_key_holder(&entry.group_label)?;
-        Some(match (&entry.pda_seed, &entry.authority_program_id) {
-            (Some(pda_seed), Some(program_id)) => holder.derive_keys_for_pda(program_id, pda_seed),
+        Some(match (&entry.pda_seed, &entry.authority_account_id) {
+            (Some(pda_seed), Some(account_id)) => holder.derive_keys_for_pda(account_id, pda_seed),
             (Some(_), None) => return None,
             _ => holder.derive_regular_shared_account_keys_from_identifier(entry.identifier),
         })
@@ -977,7 +979,7 @@ mod tests {
                 group_label: label,
                 identifier,
                 pda_seed: None,
-                authority_program_id: None,
+                authority_account_id: None,
                 account: old_account.clone(),
             },
         );
@@ -1046,7 +1048,7 @@ mod tests {
                 group_label: label,
                 identifier,
                 pda_seed: None,
-                authority_program_id: None,
+                authority_account_id: None,
                 account: Account::default(),
             },
         );
@@ -1335,7 +1337,7 @@ mod tests {
             group_label: Label::new("test-group"),
             identifier: 42,
             pda_seed: None,
-            authority_program_id: None,
+            authority_account_id: None,
             account: lee_core::account::Account::default(),
         };
         let encoded = bincode::serialize(&entry).expect("serialize");
@@ -1348,7 +1350,7 @@ mod tests {
             group_label: Label::new("pda-group"),
             identifier: u128::MAX,
             pda_seed: Some(PdaSeed::new([7_u8; 32])),
-            authority_program_id: Some([9; 8]),
+            authority_account_id: Some(AccountId::new([9; 32])),
             account: lee_core::account::Account::default(),
         };
         let pda_encoded = bincode::serialize(&pda_entry).expect("serialize pda");
@@ -1367,7 +1369,7 @@ mod tests {
             group_label: Label::new("old"),
             identifier: 1,
             pda_seed: None,
-            authority_program_id: None,
+            authority_account_id: None,
             account: lee_core::account::Account::default(),
         };
         let encoded = bincode::serialize(&entry).expect("serialize");
@@ -1398,8 +1400,8 @@ mod tests {
 
         // PDA shared account: derive via seed
         let seed = PdaSeed::new([2_u8; 32]);
-        let pda_keys_a = holder.derive_keys_for_pda(&[9; 8], &seed);
-        let pda_keys_b = holder.derive_keys_for_pda(&[9; 8], &seed);
+        let pda_keys_a = holder.derive_keys_for_pda(&AccountId::new([9; 32]), &seed);
+        let pda_keys_b = holder.derive_keys_for_pda(&AccountId::new([9; 32]), &seed);
         assert_eq!(
             pda_keys_a.generate_nullifier_public_key(),
             pda_keys_b.generate_nullifier_public_key(),

@@ -212,10 +212,9 @@ impl V03State {
         let image_id = program.id();
         let segment_number = 0;
         let update_auth = AccountId::default();
-        let loader_id = ProgramId::from(DEPLOYMENT_PROGRAM_ACCOUNT_ID);
 
         let header_account_id = program_loader_core::deploy_header_account_id(
-            loader_id,
+            DEPLOYMENT_PROGRAM_ACCOUNT_ID,
             image_id,
             segment_number,
             update_auth,
@@ -231,7 +230,7 @@ impl V03State {
         };
 
         let segment_account_id = program_loader_core::deploy_segment_account_id(
-            loader_id,
+            DEPLOYMENT_PROGRAM_ACCOUNT_ID,
             image_id,
             segment_number,
             update_auth,
@@ -352,9 +351,8 @@ impl V03State {
         }
         if account.program_owner == DEPLOYMENT_PROGRAM_ACCOUNT_ID {
             let header = ProgramData::try_from(&account.data).ok()?;
-            let loader_id = ProgramId::from(DEPLOYMENT_PROGRAM_ACCOUNT_ID);
             let segment_account_id = program_loader_core::deploy_segment_account_id(
-                loader_id,
+                DEPLOYMENT_PROGRAM_ACCOUNT_ID,
                 header.image_id,
                 header.segment_number,
                 header.update_auth,

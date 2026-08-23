@@ -90,26 +90,26 @@ fn deploy_seed(
 
 #[must_use]
 pub fn deploy_header_account_id(
-    loader_program_id: ProgramId,
+    loader_account_id: AccountId,
     image_id: ProgramId,
     segment_number: u32,
     update_auth: AccountId,
 ) -> AccountId {
     AccountId::for_public_pda(
-        &loader_program_id,
+        &loader_account_id,
         &deploy_header_pda_seed(image_id, segment_number, update_auth),
     )
 }
 
 #[must_use]
 pub fn deploy_segment_account_id(
-    loader_program_id: ProgramId,
+    loader_account_id: AccountId,
     image_id: ProgramId,
     segment_number: u32,
     update_auth: AccountId,
 ) -> AccountId {
     AccountId::for_public_pda(
-        &loader_program_id,
+        &loader_account_id,
         &deploy_segment_pda_seed(image_id, segment_number, update_auth),
     )
 }
@@ -121,8 +121,12 @@ pub fn deploy_segment_account_id(
 /// and any `Deploy` submitted with a default `update_auth`, dispatches at.
 #[must_use]
 pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
-    let loader_id = ProgramId::from(lee_core::program::DEPLOYMENT_PROGRAM_ACCOUNT_ID);
-    deploy_header_account_id(loader_id, image_id, 0, AccountId::default())
+    deploy_header_account_id(
+        lee_core::program::DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        AccountId::default(),
+    )
 }
 
 /// Executes the `Deploy` instruction: verifies `bytecode` decodes as a valid RISC0 program
@@ -131,7 +135,7 @@ pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
 /// comment in `lee_core::program`).
 #[must_use]
 pub fn execute_deploy(
-    self_program_id: ProgramId,
+    self_account_id: AccountId,
     pre_states: Vec<AccountWithMetadata>,
     bytecode: Vec<u8>,
 ) -> Vec<AccountPostState> {
@@ -142,8 +146,8 @@ pub fn execute_deploy(
     let update_auth = AccountId::default();
     let header_seed = deploy_header_pda_seed(image_id, segment_number, update_auth);
     let segment_seed = deploy_segment_pda_seed(image_id, segment_number, update_auth);
-    let header_pda = AccountId::for_public_pda(&self_program_id, &header_seed);
-    let segment_pda = AccountId::for_public_pda(&self_program_id, &segment_seed);
+    let header_pda = AccountId::for_public_pda(&self_account_id, &header_seed);
+    let segment_pda = AccountId::for_public_pda(&self_account_id, &segment_seed);
 
     let [header_target, segment_target] = pre_states
         .try_into()

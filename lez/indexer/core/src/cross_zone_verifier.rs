@@ -1446,6 +1446,7 @@ mod tests {
 
     fn dispatch_naming_block_hash(payload: &[u8], src_block_hash: [u8; 32]) -> LeeTransaction {
         let receiver_id = programs::ping_receiver().id();
+        let receiver_account_id = programs::ping_receiver().deployed_account_id();
         LeeTransaction::Public(build_dispatch_from_emission(
             &EmissionSource {
                 src_zone: PEER_ZONE,
@@ -1458,8 +1459,8 @@ mod tests {
             },
             receiver_id,
             &[
-                receiver_config_account_id(receiver_id).into_value(),
-                ping_record_pda(receiver_id).into_value(),
+                receiver_config_account_id(receiver_account_id).into_value(),
+                ping_record_pda(receiver_account_id).into_value(),
             ],
             payload.to_vec(),
         ))

@@ -23,10 +23,10 @@ impl Ata<'_> {
 
         let ata_program_id = programs::ata().id();
         let ata_id = get_associated_token_account_id(
-            &ata_program_id,
+            &programs::ata().deployed_account_id(),
             &compute_ata_seed(owner_id, definition_id),
         );
-        let instruction = associated_token_account_core::Instruction::Create { ata_program_id };
+        let instruction = associated_token_account_core::Instruction::Create;
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
@@ -56,13 +56,10 @@ impl Ata<'_> {
 
         let ata_program_id = programs::ata().id();
         let sender_ata_id = get_associated_token_account_id(
-            &ata_program_id,
+            &programs::ata().deployed_account_id(),
             &compute_ata_seed(owner_id, definition_id),
         );
-        let instruction = associated_token_account_core::Instruction::Transfer {
-            ata_program_id,
-            amount,
-        };
+        let instruction = associated_token_account_core::Instruction::Transfer { amount };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
@@ -91,13 +88,10 @@ impl Ata<'_> {
 
         let ata_program_id = programs::ata().id();
         let holder_ata_id = get_associated_token_account_id(
-            &ata_program_id,
+            &programs::ata().deployed_account_id(),
             &compute_ata_seed(owner_id, definition_id),
         );
-        let instruction = associated_token_account_core::Instruction::Burn {
-            ata_program_id,
-            amount,
-        };
+        let instruction = associated_token_account_core::Instruction::Burn { amount };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
@@ -119,13 +113,12 @@ impl Ata<'_> {
         owner_id: AccountId,
         definition_id: AccountId,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = programs::ata().id();
         let ata_id = get_associated_token_account_id(
-            &ata_program_id,
+            &programs::ata().deployed_account_id(),
             &compute_ata_seed(owner_id, definition_id),
         );
 
-        let instruction = associated_token_account_core::Instruction::Create { ata_program_id };
+        let instruction = associated_token_account_core::Instruction::Create;
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
@@ -153,16 +146,12 @@ impl Ata<'_> {
         recipient_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = programs::ata().id();
         let sender_ata_id = get_associated_token_account_id(
-            &ata_program_id,
+            &programs::ata().deployed_account_id(),
             &compute_ata_seed(owner_id, definition_id),
         );
 
-        let instruction = associated_token_account_core::Instruction::Transfer {
-            ata_program_id,
-            amount,
-        };
+        let instruction = associated_token_account_core::Instruction::Transfer { amount };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
@@ -189,16 +178,12 @@ impl Ata<'_> {
         definition_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = programs::ata().id();
         let holder_ata_id = get_associated_token_account_id(
-            &ata_program_id,
+            &programs::ata().deployed_account_id(),
             &compute_ata_seed(owner_id, definition_id),
         );
 
-        let instruction = associated_token_account_core::Instruction::Burn {
-            ata_program_id,
-            amount,
-        };
+        let instruction = associated_token_account_core::Instruction::Burn { amount };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 

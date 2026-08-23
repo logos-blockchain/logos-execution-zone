@@ -79,11 +79,12 @@ impl TpsTestManager {
         sequencer_client: &sequencer_service_rpc::SequencerClient,
     ) -> Result<()> {
         let vault_program_id = programs::vault().id();
+        let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
 
         let mut tx_hashes = Vec::with_capacity(self.public_keypairs.len());
         for (private_key, account_id) in &self.public_keypairs {
             let owner_vault_id =
-                vault_core::compute_vault_account_id(vault_program_id, *account_id);
+                vault_core::compute_vault_account_id(vault_account_id, *account_id);
             let message = putx::Message::try_new(
                 program_loader_core::immutable_deploy_account_id(vault_program_id),
                 vec![*account_id, owner_vault_id],

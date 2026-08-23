@@ -764,6 +764,7 @@ mod tests {
     /// in these tests carry a decodable dispatch key.
     fn dispatch_tx() -> common::transaction::LeeTransaction {
         let receiver_id = programs::ping_receiver().id();
+        let receiver_account_id = programs::ping_receiver().deployed_account_id();
         common::transaction::LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
             &cross_zone::EmissionSource {
                 src_zone: [2; 32],
@@ -776,8 +777,8 @@ mod tests {
             },
             receiver_id,
             &[
-                ping_core::receiver_config_account_id(receiver_id).into_value(),
-                ping_core::ping_record_pda(receiver_id).into_value(),
+                ping_core::receiver_config_account_id(receiver_account_id).into_value(),
+                ping_core::ping_record_pda(receiver_account_id).into_value(),
             ],
             b"hi".to_vec(),
         ))

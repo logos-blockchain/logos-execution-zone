@@ -57,7 +57,8 @@ pub unsafe extern "C" fn wallet_ffi_get_vault_balance(
     };
 
     let owner_id = AccountId::new(unsafe { (*owner).data });
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), owner_id);
+    let vault_id =
+        vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), owner_id);
 
     let balance = match block_on(wallet.get_account_balance(vault_id)) {
         Ok(b) => b,

@@ -23,6 +23,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id = programs::amm().id();
+        let amm_account_id = programs::amm().deployed_account_id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -42,14 +43,13 @@ impl Amm<'_> {
             .definition_id();
 
         let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
-        let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
-        let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
-        let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);
+            compute_pool_pda(amm_account_id, definition_token_a_id, definition_token_b_id);
+        let vault_holding_a = compute_vault_pda(amm_account_id, amm_pool, definition_token_a_id);
+        let vault_holding_b = compute_vault_pda(amm_account_id, amm_pool, definition_token_b_id);
+        let pool_lp = compute_liquidity_token_pda(amm_account_id, amm_pool);
         let instruction = amm_core::Instruction::NewDefinition {
             token_a_amount: balance_a,
             token_b_amount: balance_b,
-            amm_program_id,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -87,6 +87,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id = programs::amm().id();
+        let amm_account_id = programs::amm().deployed_account_id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -106,9 +107,9 @@ impl Amm<'_> {
             .definition_id();
 
         let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
-        let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
-        let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
+            compute_pool_pda(amm_account_id, definition_token_a_id, definition_token_b_id);
+        let vault_holding_a = compute_vault_pda(amm_account_id, amm_pool, definition_token_a_id);
+        let vault_holding_b = compute_vault_pda(amm_account_id, amm_pool, definition_token_b_id);
         let instruction = amm_core::Instruction::SwapExactInput {
             swap_amount_in,
             min_amount_out,
@@ -168,6 +169,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id = programs::amm().id();
+        let amm_account_id = programs::amm().deployed_account_id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -187,9 +189,9 @@ impl Amm<'_> {
             .definition_id();
 
         let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
-        let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
-        let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
+            compute_pool_pda(amm_account_id, definition_token_a_id, definition_token_b_id);
+        let vault_holding_a = compute_vault_pda(amm_account_id, amm_pool, definition_token_a_id);
+        let vault_holding_b = compute_vault_pda(amm_account_id, amm_pool, definition_token_b_id);
         let instruction = amm_core::Instruction::SwapExactOutput {
             exact_amount_out,
             max_amount_in,
@@ -250,6 +252,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id = programs::amm().id();
+        let amm_account_id = programs::amm().deployed_account_id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -269,10 +272,10 @@ impl Amm<'_> {
             .definition_id();
 
         let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
-        let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
-        let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
-        let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);
+            compute_pool_pda(amm_account_id, definition_token_a_id, definition_token_b_id);
+        let vault_holding_a = compute_vault_pda(amm_account_id, amm_pool, definition_token_a_id);
+        let vault_holding_b = compute_vault_pda(amm_account_id, amm_pool, definition_token_b_id);
+        let pool_lp = compute_liquidity_token_pda(amm_account_id, amm_pool);
         let instruction = amm_core::Instruction::AddLiquidity {
             min_amount_liquidity,
             max_amount_to_add_token_a,
@@ -308,6 +311,7 @@ impl Amm<'_> {
         min_amount_to_remove_token_b: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
         let amm_program_id = programs::amm().id();
+        let amm_account_id = programs::amm().deployed_account_id();
         let user_a_acc = self
             .0
             .get_account_public(user_holding_a)
@@ -327,10 +331,10 @@ impl Amm<'_> {
             .definition_id();
 
         let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
-        let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
-        let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
-        let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);
+            compute_pool_pda(amm_account_id, definition_token_a_id, definition_token_b_id);
+        let vault_holding_a = compute_vault_pda(amm_account_id, amm_pool, definition_token_a_id);
+        let vault_holding_b = compute_vault_pda(amm_account_id, amm_pool, definition_token_b_id);
+        let pool_lp = compute_liquidity_token_pda(amm_account_id, amm_pool);
         let instruction = amm_core::Instruction::RemoveLiquidity {
             remove_liquidity_amount,
             min_amount_to_remove_token_a,

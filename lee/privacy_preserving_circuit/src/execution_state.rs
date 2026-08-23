@@ -23,8 +23,8 @@ pub struct ExecutionState {
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     /// Positions (in `pre_states`) of private-PDA accounts whose supplied npk has been bound to
-    /// their `AccountId` via a proven `AccountId::for_private_pda(program_id, seed, npk, vpk,
-    /// identifier)` check.
+    /// their `AccountId` via a proven `AccountId::for_private_pda(program_account_id, seed, npk,
+    /// vpk, identifier)` check.
     /// Two proof paths populate this set: a `Claim::Pda(seed)` in a program's `post_state` on
     /// that `pre_state`, or a caller's `ChainedCall.pda_seeds` entry matching that `pre_state`
     /// under the private derivation. Binding is an idempotent property, not an event: the same
@@ -32,24 +32,24 @@ pub struct ExecutionState {
     /// claims a private PDA and then delegates it to a callee), and the map uses `contains_key`,
     /// not `assert!(insert)`. After the main loop, every private-PDA position must appear in this
     /// map; otherwise the npk is unbound and the circuit rejects.
-    /// The stored `(ProgramId, PdaSeed)` is the owner program and seed, used in
-    /// `compute_circuit_output` to construct `PrivateAccountKind::Pda { program_id, seed,
-    /// identifier }`.
-    private_pda_bound_positions: HashMap<usize, (ProgramId, PdaSeed)>,
-    /// Across the whole transaction, each `(program_id, seed)` pair may resolve to at most one
-    /// `AccountId`. A seed under a program can derive a family of accounts, one public PDA and
-    /// one private PDA per distinct npk. Without this check, a single `pda_seeds: [S]` entry in
-    /// a chained call could authorize multiple family members at once (different npks under the
-    /// same seed) and let a callee mix balances across them. Every claim and every
-    /// caller-authorization resolution is recorded here, either as a new `(program, seed)` →
-    /// `AccountId` entry or as an equality check against the existing one, making the rule: one
-    /// `(program, seed)` → one account per tx.
-    pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
+    /// The stored `(AccountId, PdaSeed)` is the owning program's dispatch address and seed, used
+    /// in `compute_circuit_output` to construct `PrivateAccountKind::Pda { program_account_id,
+    /// seed, identifier }`.
+    private_pda_bound_positions: HashMap<usize, (AccountId, PdaSeed)>,
+    /// Across the whole transaction, each `(program_account_id, seed)` pair may resolve to at
+    /// most one `AccountId`. A seed under a program can derive a family of accounts, one public
+    /// PDA and one private PDA per distinct npk. Without this check, a single `pda_seeds: [S]`
+    /// entry in a chained call could authorize multiple family members at once (different npks
+    /// under the same seed) and let a callee mix balances across them. Every claim and every
+    /// caller-authorization resolution is recorded here, either as a new
+    /// `(program_account_id, seed)` → `AccountId` entry or as an equality check against the
+    /// existing one, making the rule: one `(program_account_id, seed)` → one account per tx.
+    pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
     /// Map from a private-PDA `pre_state`'s position in `account_identities` to the (npk, vpk,
     /// identifier) supplied for that position. Built once in `derive_from_outputs` by walking
     /// `account_identities` and consulting `npk_vpk_if_private_pda`. Used later by the claim and
     /// caller-seeds authorization paths to verify
-    /// `AccountId::for_private_pda(program_id, seed, npk, vpk, identifier) ==
+    /// `AccountId::for_private_pda(program_account_id, seed, npk, vpk, identifier) ==
     /// pre_state.account_id`.
     private_pda_by_position: HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
     /// The set containing non-PDA accounts authorized at their first sight, anywhere in the
@@ -58,15 +58,12 @@ pub struct ExecutionState {
 }
 
 /// A chained call's caller context, threaded down its own lineage only (never shared across
-/// sibling branches): who called it, that caller's real image id (needed for PDA derivation,
-/// since a `Deploy`-created caller's address doesn't encode it), and the accounts authorized
-/// along the path from the root down to this call. `authorized_accounts` is monotonically
-/// growing per lineage — each child inherits its parent's set plus whatever the parent itself
-/// authorized in its own `pre_states` — so authorization earned in one branch never leaks into an
-/// unrelated sibling branch.
+/// sibling branches): who called it, and the accounts authorized along the path from the root
+/// down to this call. `authorized_accounts` is monotonically growing per lineage — each child
+/// inherits its parent's set plus whatever the parent itself authorized in its own `pre_states`
+/// — so authorization earned in one branch never leaks into an unrelated sibling branch.
 struct CallerData {
     caller_account_id: Option<AccountId>,
-    caller_image_id: Option<ProgramId>,
     authorized_accounts: HashSet<AccountId>,
 }
 
@@ -154,7 +151,6 @@ impl ExecutionState {
         };
         let initial_caller_data = CallerData {
             caller_account_id: None,
-            caller_image_id: None,
             authorized_accounts: HashSet::new(),
         };
         let mut chained_calls = VecDeque::from_iter([(initial_call, initial_caller_data)]);
@@ -228,7 +224,6 @@ impl ExecutionState {
             let authorized_accounts = execution_state.validate_and_sync_states(
                 account_identities,
                 chained_call.program_account_id,
-                current_program_id,
                 caller_data,
                 &chained_call.pda_seeds,
                 program_output.pre_states,
@@ -240,7 +235,6 @@ impl ExecutionState {
                     next_call,
                     CallerData {
                         caller_account_id: Some(chained_call.program_account_id),
-                        caller_image_id: Some(current_program_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
@@ -295,15 +289,10 @@ impl ExecutionState {
     }
 
     /// Validate program pre and post states and populate the execution state.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "breaking out a context struct does not buy us anything here"
-    )]
     fn validate_and_sync_states(
         &mut self,
         account_identities: &[InputAccountIdentity],
         account_id: AccountId,
-        program_id: ProgramId,
         caller: CallerData,
         caller_pda_seeds: &[PdaSeed],
         output_pre_states: Vec<AccountWithMetadata>,
@@ -368,13 +357,13 @@ impl ExecutionState {
                             identifier,
                             kind:
                                 WitnessKind::Pda {
-                                    binding: Some((authority_program_id, seed)),
+                                    binding: Some((authority_account_id, seed)),
                                 },
                             nullifier,
                             ..
                         })) => {
                             let expected = AccountId::for_private_pda(
-                                authority_program_id,
+                                authority_account_id,
                                 seed,
                                 &nullifier.npk(),
                                 vpk,
@@ -384,23 +373,23 @@ impl ExecutionState {
                                 pre_account_id, expected,
                                 "External seed mismatch for private PDA at position {pre_state_position}"
                             );
-                            Some((*authority_program_id, *seed))
+                            Some((*authority_account_id, *seed))
                         }
                         _ => None,
                     };
                     // External seed is only consulted the first time the account is seen.
                     // Subsequent calls need no re-check because the entry is already recorded on
                     // private_pda_bound_positions.
-                    if let Some((authority_program_id, seed)) = external_seed {
+                    if let Some((authority_account_id, seed)) = external_seed {
                         bind_private_pda_position(
                             &mut self.private_pda_bound_positions,
                             pre_state_position,
-                            authority_program_id,
+                            authority_account_id,
                             seed,
                         );
                         assert_family_binding(
                             &mut self.pda_family_binding,
-                            authority_program_id,
+                            authority_account_id,
                             seed,
                             pre_account_id,
                         );
@@ -477,14 +466,14 @@ impl ExecutionState {
                             );
                         }
                         Claim::Pda(seed) => {
-                            let pda = AccountId::for_public_pda(&program_id, &seed);
+                            let pda = AccountId::for_public_pda(&account_id, &seed);
                             assert_eq!(
                                 pre_account_id, pda,
                                 "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
                             );
                             assert_family_binding(
                                 &mut self.pda_family_binding,
-                                program_id,
+                                account_id,
                                 seed,
                                 pre_account_id,
                             );
@@ -503,7 +492,7 @@ impl ExecutionState {
                                     "private PDA pre_state must have an npk in the position map",
                                 );
                             let pda = AccountId::for_private_pda(
-                                &program_id,
+                                &account_id,
                                 &seed,
                                 npk,
                                 vpk,
@@ -516,12 +505,12 @@ impl ExecutionState {
                             bind_private_pda_position(
                                 &mut self.private_pda_bound_positions,
                                 pre_state_position,
-                                program_id,
+                                account_id,
                                 seed,
                             );
                             assert_family_binding(
                                 &mut self.pda_family_binding,
-                                program_id,
+                                account_id,
                                 seed,
                                 pre_account_id,
                             );
@@ -553,7 +542,7 @@ impl ExecutionState {
     ) -> (
         BlockValidityWindow,
         TimestampValidityWindow,
-        HashMap<usize, (ProgramId, PdaSeed)>,
+        HashMap<usize, (AccountId, PdaSeed)>,
         impl ExactSizeIterator<Item = (AccountWithMetadata, Account)>,
     ) {
         let block_validity_window = self.block_validity_window;
@@ -575,20 +564,20 @@ impl ExecutionState {
     }
 }
 
-/// Record or re-verify the `(program_id, seed) → account_id` family binding for the
+/// Record or re-verify the `(program_account_id, seed) → account_id` family binding for the
 /// transaction. Any claim or caller-seed authorization that resolves a `pre_state` under
-/// `(program_id, seed)` must agree with every prior resolution of the same pair; otherwise a
-/// single `pda_seeds: [seed]` entry could authorize multiple private-PDA family members at
-/// once (different npks under the same seed) and let a callee mix balances across them. Free
-/// function so callers can pass `&mut self.pda_family_binding` without holding a borrow on
-/// the surrounding struct's other fields.
+/// `(program_account_id, seed)` must agree with every prior resolution of the same pair;
+/// otherwise a single `pda_seeds: [seed]` entry could authorize multiple private-PDA family
+/// members at once (different npks under the same seed) and let a callee mix balances across
+/// them. Free function so callers can pass `&mut self.pda_family_binding` without holding a
+/// borrow on the surrounding struct's other fields.
 fn assert_family_binding(
-    bindings: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
-    program_id: ProgramId,
+    bindings: &mut HashMap<(AccountId, PdaSeed), AccountId>,
+    program_account_id: AccountId,
     seed: PdaSeed,
     account_id: AccountId,
 ) {
-    match bindings.entry((program_id, seed)) {
+    match bindings.entry((program_account_id, seed)) {
         Entry::Vacant(e) => {
             e.insert(account_id);
         }
@@ -604,19 +593,19 @@ fn assert_family_binding(
 }
 
 fn bind_private_pda_position(
-    map: &mut HashMap<usize, (ProgramId, PdaSeed)>,
+    map: &mut HashMap<usize, (AccountId, PdaSeed)>,
     position: usize,
-    program_id: ProgramId,
+    program_account_id: AccountId,
     seed: PdaSeed,
 ) {
     match map.entry(position) {
         Entry::Occupied(e) => assert_eq!(
             *e.get(),
-            (program_id, seed),
-            "Duplicate binding at position {position}: conflicting (program_id, seed)"
+            (program_account_id, seed),
+            "Duplicate binding at position {position}: conflicting (program_account_id, seed)"
         ),
         Entry::Vacant(e) => {
-            e.insert((program_id, seed));
+            e.insert((program_account_id, seed));
         }
     }
 }
@@ -626,30 +615,30 @@ fn bind_private_pda_position(
 /// Either the account is a public PDA the caller delegates via `caller_pda_seeds`, in which case
 /// the public mask must be cleared before export (see the `pre.is_authorized = false` comment at
 /// the call site), or it's a regular account, whose authorization (if any) becomes globally
-/// visible for the rest of the call tree. Only reachable when `caller.caller_image_id.is_some()`;
-/// top-level flows have no caller-emitted seeds, so a first-sight PDA there must come through the
-/// claim path instead.
+/// visible for the rest of the call tree. Only reachable when
+/// `caller.caller_account_id.is_some()`; top-level flows have no caller-emitted seeds, so a
+/// first-sight PDA there must come through the claim path instead.
 fn authorize_first_sight_without_pda_witness(
-    pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
+    pda_family_binding: &mut HashMap<(AccountId, PdaSeed), AccountId>,
     globally_authorized: &mut HashSet<AccountId>,
     caller: &CallerData,
     caller_pda_seeds: &[PdaSeed],
     pre_account_id: AccountId,
     pre_is_authorized: bool,
 ) -> bool {
-    let matched_caller_seed = caller.caller_image_id.and_then(|caller_id| {
+    let matched_caller_seed = caller.caller_account_id.and_then(|caller_account_id| {
         caller_pda_seeds
             .iter()
-            .find(|seed| AccountId::for_public_pda(&caller_id, seed) == pre_account_id)
-            .map(|seed| (*seed, caller_id))
+            .find(|seed| AccountId::for_public_pda(&caller_account_id, seed) == pre_account_id)
+            .map(|seed| (*seed, caller_account_id))
     });
 
-    if let Some((seed, caller_id)) = matched_caller_seed {
+    if let Some((seed, caller_account_id)) = matched_caller_seed {
         assert!(
             pre_is_authorized,
             "Caller-seeded public PDA must be declared authorized at first sight: {pre_account_id}"
         );
-        assert_family_binding(pda_family_binding, caller_id, seed, pre_account_id);
+        assert_family_binding(pda_family_binding, caller_account_id, seed, pre_account_id);
         true
     } else {
         if pre_is_authorized {
@@ -671,16 +660,16 @@ fn authorize_first_sight_without_pda_witness(
 /// let authorization earned in one branch leak into an unrelated sibling branch. When a caller
 /// seed matches, also records the `(caller, seed) → account_id` family binding and, for the
 /// private form, marks the position in `private_pda_bound_positions`. Only reachable when
-/// `caller.caller_image_id.is_some()`, top-level flows have no caller-emitted seeds, so binding at
-/// top level must come from the claim path. Free function so callers can pass individual
+/// `caller.caller_account_id.is_some()`, top-level flows have no caller-emitted seeds, so binding
+/// at top level must come from the claim path. Free function so callers can pass individual
 /// `&mut self.*` field borrows without holding a borrow on the surrounding struct's other fields.
 #[expect(
     clippy::too_many_arguments,
     reason = "breaking out a context struct does not buy us anything here"
 )]
 fn resolve_authorization_and_record_bindings(
-    pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
-    private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
+    pda_family_binding: &mut HashMap<(AccountId, PdaSeed), AccountId>,
+    private_pda_bound_positions: &mut HashMap<usize, (AccountId, PdaSeed)>,
     private_pda_by_position: &HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
     globally_authorized: &HashSet<AccountId>,
     caller: &CallerData,
@@ -688,34 +677,30 @@ fn resolve_authorization_and_record_bindings(
     pre_state_position: usize,
     caller_pda_seeds: &[PdaSeed],
 ) -> bool {
-    // `for_public_pda`/`for_private_pda`'s derivation formula is pinned to the caller's real
-    // image id, not its dispatch-facing `AccountId` — a `Deploy`-created caller's address doesn't
-    // encode it, so `caller.caller_image_id` must be the recovered real image id (see
-    // `derive_from_outputs`'s `current_program_id`), not a bijection round-trip.
-    let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> =
-        caller.caller_image_id.and_then(|caller_id| {
+    let matched_caller_seed: Option<(PdaSeed, bool, AccountId)> =
+        caller.caller_account_id.and_then(|caller_account_id| {
             caller_pda_seeds.iter().find_map(|seed| {
-                if AccountId::for_public_pda(&caller_id, seed) == pre_account_id {
-                    return Some((*seed, false, caller_id));
+                if AccountId::for_public_pda(&caller_account_id, seed) == pre_account_id {
+                    return Some((*seed, false, caller_account_id));
                 }
                 if let Some((npk, vpk, identifier)) =
                     private_pda_by_position.get(&pre_state_position)
-                    && AccountId::for_private_pda(&caller_id, seed, npk, vpk, *identifier)
+                    && AccountId::for_private_pda(&caller_account_id, seed, npk, vpk, *identifier)
                         == pre_account_id
                 {
-                    return Some((*seed, true, caller_id));
+                    return Some((*seed, true, caller_account_id));
                 }
                 None
             })
         });
 
-    if let Some((seed, is_private_form, caller_id)) = matched_caller_seed {
-        assert_family_binding(pda_family_binding, caller_id, seed, pre_account_id);
+    if let Some((seed, is_private_form, caller_account_id)) = matched_caller_seed {
+        assert_family_binding(pda_family_binding, caller_account_id, seed, pre_account_id);
         if is_private_form {
             bind_private_pda_position(
                 private_pda_bound_positions,
                 pre_state_position,
-                caller_id,
+                caller_account_id,
                 seed,
             );
         }

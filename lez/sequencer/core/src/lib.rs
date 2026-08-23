@@ -1489,8 +1489,10 @@ struct BlockWithMeta {
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — its receipt
 /// PDA exists. The receipt is the exactly-once ledger the bridge program keeps.
 fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> bool {
-    let receipt_id =
-        bridge_core::deposit_receipt_account_id(programs::bridge().id(), deposit_op_id.0);
+    let receipt_id = bridge_core::deposit_receipt_account_id(
+        programs::bridge().deployed_account_id(),
+        deposit_op_id.0,
+    );
     state
         .get_account_by_id_ref(receipt_id)
         .is_some_and(|receipt| *receipt != lee::Account::default())
@@ -1508,7 +1510,7 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
 /// delivered would drop the record instead of dead-lettering it.
 fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage) -> bool {
     let shard_id = cross_zone_inbox_core::inbox_seen_shard_account_id(
-        programs::cross_zone_inbox().id(),
+        programs::cross_zone_inbox().deployed_account_id(),
         &message.src_zone,
         message.src_block_id,
     );
@@ -1975,7 +1977,6 @@ fn genesis_stake_message(
             lee_core::account::Nonce(0),
         ],
         sequencer_stake_core::Instruction::Stake {
-            self_program_id: programs::sequencer_stake().id(),
             sequencer_key,
             amount,
             mover_account_id: program_loader_core::immutable_deploy_account_id(
@@ -2022,10 +2023,7 @@ fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTrans
             genesis_stake_funding_account(),
         ],
         vec![lee_core::account::Nonce(0)],
-        faucet_core::Instruction::GenesisTransferDirect {
-            self_program_id: programs::faucet().id(),
-            amount: total,
-        },
+        faucet_core::Instruction::GenesisTransferDirect { amount: total },
     )
     .expect("Failed to build genesis funding message");
     // The funding account signs even though it is only receiving. It is a brand
@@ -2088,15 +2086,15 @@ fn build_supply_account_genesis_transaction(
 ) -> PublicTransaction {
     let faucet_program_id = programs::faucet().id();
     let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, *account_id);
+    let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
+    let recipient_vault_id = vault_core::compute_vault_account_id(vault_account_id, *account_id);
 
     let message = Message::try_new(
         program_loader_core::immutable_deploy_account_id(faucet_program_id),
         vec![system_accounts::faucet_account_id(), recipient_vault_id],
         Vec::new(),
         faucet_core::Instruction::GenesisTransferVault {
-            self_program_id: faucet_program_id,
-            vault_account_id: program_loader_core::immutable_deploy_account_id(vault_program_id),
+            vault_account_id,
             recipient_id: *account_id,
             amount: balance,
         },
@@ -2115,10 +2113,7 @@ fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTrans
         program_loader_core::immutable_deploy_account_id(faucet_program_id),
         vec![system_accounts::faucet_account_id(), bridge_account_id],
         Vec::new(),
-        faucet_core::Instruction::GenesisTransferDirect {
-            self_program_id: faucet_program_id,
-            amount: balance,
-        },
+        faucet_core::Instruction::GenesisTransferDirect { amount: balance },
     )
     .expect("Failed to serialize bridge genesis transfer instruction");
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
@@ -2140,16 +2135,18 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
     let bridge_program_id = programs::bridge().id();
+    let bridge_account_id = program_loader_core::immutable_deploy_account_id(bridge_program_id);
     let vault_program_id = programs::vault().id();
+    let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
     let recipient_vault_id =
-        vault_core::compute_vault_account_id(vault_program_id, metadata.recipient_id);
+        vault_core::compute_vault_account_id(vault_account_id, metadata.recipient_id);
     // The receipt PDA carries the exactly-once check: the program reads it to
     // detect a replay, so it must be in the tx's account list.
     let receipt_id =
-        bridge_core::deposit_receipt_account_id(bridge_program_id, event.deposit_op_id.0);
+        bridge_core::deposit_receipt_account_id(bridge_account_id, event.deposit_op_id.0);
 
     let message = Message::try_new(
-        program_loader_core::immutable_deploy_account_id(bridge_program_id),
+        bridge_account_id,
         vec![
             system_accounts::bridge_account_id(),
             recipient_vault_id,
@@ -2158,9 +2155,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         Vec::new(),
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
-            self_program_id: bridge_program_id,
-            vault_program_id,
-            vault_account_id: program_loader_core::immutable_deploy_account_id(vault_program_id),
+            vault_account_id,
             recipient_id: metadata.recipient_id,
             amount: event.amount,
         },
@@ -2209,7 +2204,7 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
     }
 
     match borsh::from_slice::<sequencer_stake_core::Instruction>(&message.instruction_data) {
-        Ok(sequencer_stake_core::Instruction::FinalizeUnstake { .. }) => {
+        Ok(sequencer_stake_core::Instruction::FinalizeUnstake) => {
             message.account_ids.first().copied()
         }
         Ok(_) | Err(_) => None,
@@ -2243,9 +2238,7 @@ fn build_finalize_unstake_tx(
             system_accounts::sequencer_stake_config_account_id(),
         ],
         vec![],
-        sequencer_stake_core::Instruction::FinalizeUnstake {
-            self_program_id: programs::sequencer_stake().id(),
-        },
+        sequencer_stake_core::Instruction::FinalizeUnstake,
     )
     .context("Failed to build FinalizeUnstake message")?;
 

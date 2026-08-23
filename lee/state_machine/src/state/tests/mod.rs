@@ -14,7 +14,7 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
-        ProgramId, TimestampValidityWindow, WrappedBalanceSum,
+        TimestampValidityWindow, WrappedBalanceSum,
     },
 };
 
@@ -264,7 +264,7 @@ pub fn test_private_account_keys_2() -> TestPrivateKeys {
 pub fn init_pda_witness(
     keys: &TestPrivateKeys,
     identifier: Identifier,
-    binding: Option<(ProgramId, PdaSeed)>,
+    binding: Option<(AccountId, PdaSeed)>,
 ) -> InputAccountIdentity {
     InputAccountIdentity::Private(PrivateWitness {
         vpk: keys.vpk(),
@@ -448,13 +448,15 @@ fn deshielded_balance_transfer_for_tests(
 fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransaction) {
     let sender_keys = test_private_account_keys_1();
     let sender_private_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+        program_owner: crate::test_methods::simple_balance_transfer().deployed_account_id(),
         balance: 100,
         nonce: Nonce(0xdead_beef),
         ..Account::default()
     };
     let recipient_keys = test_private_account_keys_2();
-    let state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
+    let state = V03State::new()
+        .with_test_programs()
+        .with_private_account(&sender_keys, &sender_private_account);
     let tx = private_balance_transfer_for_tests(
         &sender_keys,
         &sender_private_account,

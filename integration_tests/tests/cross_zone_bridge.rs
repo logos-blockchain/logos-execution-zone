@@ -110,7 +110,10 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         .context("Failed to submit lock on zone A")?;
 
     // Wait until zone B's indexer reflects the verified mint.
-    let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
+    let holding_id = wrapped_token_core::holding_account_id(
+        programs::wrapped_token().deployed_account_id(),
+        &RECIPIENT,
+    );
 
     let minted = wait_for_mint(ind_client_b, holding_id).await?;
     assert_eq!(
@@ -121,7 +124,8 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // Conservation: the mint on B must be backed by an equal lock on A. The lock
     // has already landed (it preceded delivery), so zone A reflects the debit and
     // escrow now.
-    let escrow_id = bridge_lock_core::escrow_account_id(programs::bridge_lock().id());
+    let escrow_id =
+        bridge_lock_core::escrow_account_id(programs::bridge_lock().deployed_account_id());
     let escrowed = seq_client_a.get_account(escrow_id).await?.balance;
     assert_eq!(
         escrowed, LOCK_AMOUNT,
@@ -144,23 +148,23 @@ fn build_lock_tx(
     target_zone: [u8; 32],
 ) -> LeeTransaction {
     let bridge_lock_id = programs::bridge_lock().id();
+    let bridge_lock_account_id = programs::bridge_lock().deployed_account_id();
     let wrapped_token_id = programs::wrapped_token().id();
-    let outbox_id = programs::cross_zone_outbox().id();
+    let wrapped_token_account_id = programs::wrapped_token().deployed_account_id();
+    let outbox_id = programs::cross_zone_outbox().deployed_account_id();
     let ordinal = 0;
 
     let mint = wrapped_token_core::Instruction::Mint {
-        self_program_id: wrapped_token_id,
         recipient: RECIPIENT,
         amount: LOCK_AMOUNT,
     };
     let payload = borsh::to_vec(&mint).expect("serialize mint");
 
     let target_accounts = vec![
-        wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
-        wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT).into_value(),
+        wrapped_token_core::config_account_id(wrapped_token_account_id).into_value(),
+        wrapped_token_core::holding_account_id(wrapped_token_account_id, &RECIPIENT).into_value(),
     ];
     let lock = bridge_lock_core::Instruction::Lock {
-        self_program_id: bridge_lock_id,
         amount: LOCK_AMOUNT,
         target_zone,
         target_program_id: wrapped_token_id,
@@ -170,9 +174,9 @@ fn build_lock_tx(
     };
 
     let accounts = vec![
-        bridge_lock_core::config_account_id(bridge_lock_id),
+        bridge_lock_core::config_account_id(bridge_lock_account_id),
         holder_id,
-        bridge_lock_core::escrow_account_id(bridge_lock_id),
+        bridge_lock_core::escrow_account_id(bridge_lock_account_id),
         outbox_pda(
             outbox_id,
             program_loader_core::immutable_deploy_account_id(bridge_lock_id),
