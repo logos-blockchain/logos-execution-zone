@@ -40,7 +40,6 @@ fn main() {
         instruction_data: to_vec(&()).unwrap(),
         pre_states: vec![pre_for_callee],
         pda_seeds: vec![delegated_seed],
-        raw_payload: None,
     };
 
     ProgramOutput::new(

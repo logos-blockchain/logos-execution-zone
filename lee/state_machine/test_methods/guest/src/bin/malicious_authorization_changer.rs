@@ -37,7 +37,6 @@ fn main() {
         instruction_data: call_instruction_data,
         pre_states: vec![authorised_sender, receiver.clone()],
         pda_seeds: vec![],
-        raw_payload: None,
     };
 
     ProgramOutput::new(
