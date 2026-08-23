@@ -62,7 +62,8 @@ pub struct EmissionSource {
 /// through `AccountId::from` is only exact under the legacy bijection scheme.
 #[must_use]
 pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
-    account_id == program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id())
+    account_id
+        == program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id())
 }
 
 /// Extracts the cross-zone emission from a source transaction.
@@ -72,7 +73,8 @@ pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
 /// they agree on what a given source tx emits.
 #[must_use]
 pub fn extract_emission(account_id: AccountId, instruction_data: &[u8]) -> Option<Emission> {
-    if account_id == program_loader_core::immutable_deploy_account_id(programs::ping_sender().id()) {
+    if account_id == program_loader_core::immutable_deploy_account_id(programs::ping_sender().id())
+    {
         // Not every transaction to an emitter emits: `InitConfig` is one of its
         // instructions, so a non-`Send` decode is an ordinary non-emitting tx.
         let Ok(ping_core::SenderInstruction::Send {
@@ -91,7 +93,9 @@ pub fn extract_emission(account_id: AccountId, instruction_data: &[u8]) -> Optio
             target_accounts,
             payload,
         })
-    } else if account_id == program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()) {
+    } else if account_id
+        == program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id())
+    {
         let Ok(bridge_lock_core::Instruction::Lock {
             target_zone,
             target_program_id,
@@ -212,7 +216,9 @@ pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
 #[must_use]
 pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, Account) {
     let account = Account {
-        program_owner: program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
+        program_owner: program_loader_core::immutable_deploy_account_id(
+            programs::bridge_lock().id(),
+        ),
         balance: amount,
         ..Default::default()
     };
@@ -389,7 +395,9 @@ mod tests {
             peers: vec![CrossZonePeer {
                 channel_id: [2; 32],
                 allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
-                    src_program_id: programs::bridge_lock().id(),
+                    src_account_id: program_loader_core::immutable_deploy_account_id(
+                        programs::bridge_lock().id(),
+                    ),
                     target_program_id: programs::amm().id(),
                 }],
                 expected_block_signing_pubkeys: Vec::new(),

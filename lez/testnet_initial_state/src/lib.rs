@@ -154,8 +154,9 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
 
             let mut acc = init_comm_data.account.clone();
 
-            acc.program_owner =
-                program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id());
+            acc.program_owner = program_loader_core::immutable_deploy_account_id(
+                programs::authenticated_transfer().id(),
+            );
 
             (
                 lee_core::Commitment::new(&account_id, &acc),

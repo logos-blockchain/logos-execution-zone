@@ -205,16 +205,21 @@ impl V03State {
 
     /// Seeds a program directly into state in the exact two-account shape a live `Deploy`
     /// dispatch (with a default `update_auth`, i.e. no upgrade authority) would produce for the
-    /// same `image_id` (see [`Self::get_program`] and [`program_loader_core::immutable_deploy_account_id`]),
-    /// skipping only the dispatch/proving machinery genesis has no signer to drive.
+    /// same `image_id` (see [`Self::get_program`] and
+    /// [`program_loader_core::immutable_deploy_account_id`]), skipping only the
+    /// dispatch/proving machinery genesis has no signer to drive.
     pub(crate) fn insert_program(&mut self, program: &Program) {
         let image_id = program.id();
         let segment_number = 0;
         let update_auth = AccountId::default();
         let loader_id = ProgramId::from(DEPLOYMENT_PROGRAM_ACCOUNT_ID);
 
-        let header_account_id =
-            program_loader_core::deploy_header_account_id(loader_id, image_id, segment_number, update_auth);
+        let header_account_id = program_loader_core::deploy_header_account_id(
+            loader_id,
+            image_id,
+            segment_number,
+            update_auth,
+        );
         let header_account = Account {
             program_owner: DEPLOYMENT_PROGRAM_ACCOUNT_ID,
             data: Data::from(&ProgramData {

@@ -1,4 +1,4 @@
-use cross_zone_marker_core::inbox_source_marker_account_id;
+use cross_zone_inbox_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountWithMetadata},
     program::{
@@ -269,7 +269,15 @@ fn update_sources(
         "the configured authority must authorize a source change"
     );
 
-    cfg.sources = sources;
+    cfg.sources = sources
+        .into_iter()
+        .map(|(zone, program_id)| {
+            (
+                zone,
+                program_loader_core::immutable_deploy_account_id(program_id),
+            )
+        })
+        .collect();
     let mut config_account = config.account.clone();
     config_account.data = cfg
         .to_bytes()

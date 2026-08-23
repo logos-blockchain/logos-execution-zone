@@ -8,9 +8,8 @@ use crate::{
     HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, ProgramImageClaim, Proof,
-    PublicActionWithID,
-    PublicKey, PublicMessage, PublicTransaction, Signature, StallReason, Transaction,
-    ValidityWindow, WitnessSet,
+    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature, StallReason,
+    Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
