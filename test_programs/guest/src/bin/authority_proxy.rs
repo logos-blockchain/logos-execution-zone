@@ -38,6 +38,7 @@ fn main() {
         instruction_data: target_instruction_data,
         pre_states: call_pre_states,
         pda_seeds: pda_seed.into_iter().collect(),
+        raw_payload: None,
     };
 
     let post_states = pre_states

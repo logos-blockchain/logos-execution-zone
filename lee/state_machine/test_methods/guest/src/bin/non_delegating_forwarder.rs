@@ -43,6 +43,7 @@ fn main() {
         instruction_data: callee_instruction,
         pre_states,
         pda_seeds: vec![],
+        raw_payload: None,
     }])
     .write();
 }
