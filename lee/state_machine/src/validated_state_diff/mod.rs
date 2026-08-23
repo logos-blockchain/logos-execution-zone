@@ -121,8 +121,8 @@ impl ValidatedStateDiff {
             );
             let mut program_output = if chained_call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID
             {
-                // Runs the loader natively instead of interpreting a guest ELF — see
-                // `PROGRAM_LOADER_ACCOUNT_ID`'s doc comment for why.
+                // The loader runs as native Rust instead of interpreting a guest ELF — there's no
+                // guest binary for it.
                 let instruction: program_loader_core::Instruction =
                     borsh::from_slice(&chained_call.instruction_data).map_err(|e| {
                         LeeError::InvalidInput(format!("invalid loader instruction: {e}"))
@@ -141,11 +141,11 @@ impl ValidatedStateDiff {
                         } => {
                             // The bytecode itself travels via the transaction's own
                             // `raw_payload`, not `instruction_data` and not
-                            // `chained_call.raw_payload` (which no guest can ever set) — see
-                            // `Message::raw_payload`'s doc comment for why. Deploy only ever
-                            // runs natively, so a chained call into it (at any depth) can still
-                            // reach the top-level payload here, without any intermediary guest
-                            // ever having to carry the bytecode through its own execution.
+                            // `chained_call.raw_payload` (which no guest can ever set). Deploy
+                            // only ever runs natively, so a chained call into it (at any depth)
+                            // can still reach the top-level payload here, without any
+                            // intermediary guest ever having to carry the bytecode through its
+                            // own execution.
                             let bytecode = message.raw_payload.clone().ok_or_else(|| {
                                 LeeError::InvalidInput("Deploy requires a raw_payload".into())
                             })?;
@@ -186,9 +186,8 @@ impl ValidatedStateDiff {
                 )
             } else {
                 // The real `image_id`, sourced from the program's own account rather than
-                // guessed from its address — see `V03State::get_program`'s doc comment for
-                // why that distinction matters once a program's address can outlive its
-                // current bytecode (upgrades).
+                // guessed from its address, since a program's address can outlive its current
+                // bytecode (upgrades).
                 let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)?
                 else {
                     return Err(LeeError::InvalidInput("Unknown program".into()));
