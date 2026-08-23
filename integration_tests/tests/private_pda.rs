@@ -166,7 +166,8 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
-    let auth_transfer_account_id = program_loader_core::immutable_deploy_account_id(auth_transfer_id);
+    let auth_transfer_account_id =
+        program_loader_core::immutable_deploy_account_id(auth_transfer_id);
     let auth_transfer_program = ProgramWithDependencies::new(auth_transfer.clone(), [].into())
         .with_program_account_id(auth_transfer_account_id);
     let spend_program =

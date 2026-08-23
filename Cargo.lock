@@ -2155,7 +2155,6 @@ name = "cross_zone_inbox_program"
 version = "0.1.0"
 dependencies = [
  "cross_zone_inbox_core",
- "cross_zone_marker_core",
  "lee_core",
 ]
 
@@ -9147,9 +9146,10 @@ dependencies = [
 name = "ping_receiver_program"
 version = "0.1.0"
 dependencies = [
- "cross_zone_marker_core",
+ "cross_zone_inbox_core",
  "lee_core",
  "ping_core",
+ "program_loader_core",
 ]
 
 [[package]]
@@ -9508,6 +9508,7 @@ dependencies = [
  "lee",
  "lee_core",
  "ping_core",
+ "program_loader_core",
  "risc0-zkvm",
  "sequencer_stake_core",
  "token_core",
@@ -14455,8 +14456,9 @@ dependencies = [
 name = "wrapped_token_program"
 version = "0.1.0"
 dependencies = [
- "cross_zone_marker_core",
+ "cross_zone_inbox_core",
  "lee_core",
+ "program_loader_core",
  "wrapped_token_core",
 ]
 

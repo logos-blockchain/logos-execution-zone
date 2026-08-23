@@ -9,8 +9,7 @@ use crate::{
     PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, ProgramImageClaim, Proof,
     PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, Signature,
-    StallReason, Transaction,
-    ValidityWindow, WitnessSet,
+    StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================

@@ -12,9 +12,8 @@
 
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction as InboxInstruction, SeenShard,
-    inbox_config_account_id, inbox_seen_shard_account_id,
+    inbox_config_account_id, inbox_seen_shard_account_id, inbox_source_marker_account_id,
 };
-use cross_zone_marker_core::inbox_source_marker_account_id;
 use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
 use lee::{
     AccountId, PrivateKey, PublicKey, PublicTransaction, V03State, ValidatedStateDiff,
@@ -135,7 +134,9 @@ fn seed_receiver_config_with_governance(
 ) {
     let receiver_id = programs::ping_receiver().id();
     let config = ping_core::ReceiverConfig {
-        deliverer: program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id()),
+        deliverer: program_loader_core::immutable_deploy_account_id(
+            programs::cross_zone_inbox().id(),
+        ),
         governance,
         authority,
         sources,
@@ -183,7 +184,9 @@ fn seed_bridge_lock_config(state: &mut V03State) {
         Account {
             program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
             data: bridge_lock_core::config_bytes(
-                program_loader_core::immutable_deploy_account_id(programs::cross_zone_outbox().id()),
+                program_loader_core::immutable_deploy_account_id(
+                    programs::cross_zone_outbox().id(),
+                ),
                 programs::cross_zone_outbox().id(),
                 programs::wrapped_token().id(),
             )
@@ -635,7 +638,9 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
     let mut state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
+            program_owner: program_loader_core::immutable_deploy_account_id(
+                programs::bridge_lock().id(),
+            ),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -2232,7 +2237,9 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_account_id: program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
+        src_account_id: program_loader_core::immutable_deploy_account_id(
+            programs::bridge_lock().id(),
+        ),
         target_program_id: wrapped_token_id,
         target_account_id: program_loader_core::immutable_deploy_account_id(wrapped_token_id),
         payload: mint_payload(),
@@ -2274,7 +2281,8 @@ fn a_top_level_mint_is_refused() {
     let inbox_id = programs::cross_zone_inbox().id();
     let wrapped_token_id = programs::wrapped_token().id();
     let src_zone = [2_u8; 32];
-    let src_account_id = program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id());
+    let src_account_id =
+        program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id());
 
     let mut state = base_state();
     seed_wrapped_config(&mut state, None, vec![(src_zone, src_account_id)]);
@@ -2358,7 +2366,9 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
         // The emitter a user can drive directly, aimed at the bridge's target.
-        src_account_id: program_loader_core::immutable_deploy_account_id(programs::ping_sender().id()),
+        src_account_id: program_loader_core::immutable_deploy_account_id(
+            programs::ping_sender().id(),
+        ),
         target_program_id: wrapped_token_id,
         target_account_id: program_loader_core::immutable_deploy_account_id(wrapped_token_id),
         payload: mint_payload(),

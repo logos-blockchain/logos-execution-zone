@@ -1,4 +1,4 @@
-use cross_zone_marker_core::inbox_source_marker_account_id;
+use cross_zone_inbox_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
     program::{
