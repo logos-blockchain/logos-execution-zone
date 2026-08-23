@@ -34,18 +34,17 @@ pub enum Instruction {
     /// transaction — its `ProgramData` header too. One or more `Deploy`s (each covering a
     /// contiguous range of segments) complete a deployment or an upgrade; a non-self-contained
     /// one always needs a following [`Instruction::Finalize`] before the program is
-    /// dispatchable again — see [`execute_deploy`] for exactly what each transaction requires.
+    /// dispatchable again.
     ///
     /// The bytecode itself travels via the dispatching message's `raw_payload`, not this
-    /// instruction — see `Message::raw_payload`'s doc comment for why.
+    /// instruction.
     ///
     /// Required accounts, in order:
     /// - The target `ProgramData` header PDA account (`Account::default()` for a program's very
     ///   first `Deploy`, or its already-existing header for any later batch, continuation, or
-    ///   upgrade — see [`execute_deploy`])
+    ///   upgrade)
     /// - Unless this transaction is both self-contained *and* the program's very first `Deploy`: an
-    ///   account matching the authority that must sign this write (see [`execute_deploy`]),
-    ///   `is_authorized`
+    ///   account matching the authority that must sign this write, `is_authorized`
     /// - The target segment PDA accounts this transaction covers (`first_segment, first_segment+1,
     ///   ...`), in order — each `Account::default()` for a program's first deploy, or (for an
     ///   upgrade) either `Account::default()` or already-populated
@@ -56,7 +55,7 @@ pub enum Instruction {
         /// trusts a caller's own claim about a program's genesis pair once its header already
         /// exists — it reads `ProgramData::genesis_image_id`/`genesis_update_auth` straight out
         /// of the header's own account data instead, so there's no way for a transaction to even
-        /// declare a wrong or stale genesis pair for an existing program. See [`Genesis`].
+        /// declare a wrong or stale genesis pair for an existing program.
         genesis: Option<Genesis>,
         /// `segment_number` of this transaction's first segment (0-indexed); its remaining
         /// segment accounts are `first_segment, first_segment+1, ...` in order.
@@ -96,11 +95,11 @@ pub enum Instruction {
 }
 
 /// A program's genesis identity — the address-derivation salt fixed forever at its first
-/// `Deploy`. See [`Instruction::Deploy::genesis`] and [`ProgramData`]'s doc comment.
+/// `Deploy`.
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct Genesis {
     pub image_id: ProgramId,
-    /// `None` means immutable from birth — see `ProgramData::genesis_update_auth`.
+    /// `None` means immutable from birth.
     pub update_auth: Option<AccountId>,
 }
 
@@ -152,13 +151,12 @@ pub fn compute_image_id(user_elf: &[u8]) -> anyhow::Result<ProgramId> {
 /// Derives the PDA seed for a deployed program's `ProgramData` header account.
 ///
 /// Combines the program's genesis identity (`genesis_image_id`), `segment_number` (always `0`
-/// for a header — unrelated to how many bytecode segments the program's data spans, see
-/// [`plan_deploy`]; kept as a parameter only because it shares this shape with
-/// [`deploy_segment_pda_seed`]), and `genesis_update_auth` — included so multiple independent
-/// deployments of identical bytecode land at distinct accounts instead of colliding. Fixed
-/// forever once a program's header is created; never re-derived from its *current*
-/// `image_id`/`update_auth`, which may change across upgrades — see [`ProgramData`]'s doc
-/// comment.
+/// for a header — unrelated to how many bytecode segments the program's data spans; kept as a
+/// parameter only because it shares this shape with [`deploy_segment_pda_seed`]), and
+/// `genesis_update_auth` — included so multiple independent deployments of identical bytecode
+/// land at distinct accounts instead of colliding. Fixed forever once a program's header is
+/// created; never re-derived from its *current* `image_id`/`update_auth`, which may change
+/// across upgrades.
 ///
 /// Domain-separated from other PDA-seed derivations in the codebase, including
 /// [`deploy_segment_pda_seed`], so a header seed can never collide with a segment seed (or
@@ -258,9 +256,8 @@ pub fn deploy_segment_account_id(
 /// `segment_count`, so [`immutable_deploy_account_id`] stays stable regardless of how a deploy is
 /// batched) plus `batch_user_elf` chunked at [`MAX_SEGMENT_DATA_LEN`], numbered `first_segment,
 /// first_segment+1, ...`. `genesis_image_id`/`genesis_update_auth` are always the program's
-/// genesis pair (see [`ProgramData`]'s doc comment) — this function only computes *addresses*
-/// (and the segment byte chunks), never the header's current-state fields, since those depend on
-/// whether the header already exists; see [`execute_deploy`] for that.
+/// genesis pair — this function only computes *addresses* (and the segment byte chunks), never
+/// the header's current-state fields, since those depend on whether the header already exists.
 ///
 /// `segment_count` is the *total* as of this write, not just this batch. [`plan_deploy`] is the
 /// single-batch (whole program, `first_segment` 0) special case of this — the single source of
@@ -282,7 +279,7 @@ pub fn plan_deploy_range(
         // Only used by the fresh-header path in `execute_deploy` and by `V03State::insert_program`
         // — filled in with the real current-state fields there. Placeholder shape here just so
         // `PlannedAccount::data` always exists for the header like it does for a segment; not
-        // meant to be written verbatim by an upgrade/continuation batch (see `execute_deploy`).
+        // meant to be written verbatim by an upgrade/continuation batch.
         data: Vec::new(),
     };
 
@@ -318,8 +315,6 @@ pub fn plan_deploy_range(
 
 /// Computes the account shape (header + N bytecode segments) for deploying the whole of `user_elf`
 /// at `genesis_image_id` under `genesis_update_auth` in a single, self-contained batch.
-///
-/// See [`plan_deploy_range`].
 #[must_use]
 pub fn plan_deploy(
     loader_account_id: AccountId,
@@ -357,8 +352,7 @@ pub fn segment_count_for(user_elf: &[u8]) -> u32 {
 ///
 /// `segment_number` 0, `update_auth` `None`. What every genesis-seeded builtin, and any immutable
 /// (non-upgradeable) `Deploy`, dispatches at. For an upgradeable program this is **not** the
-/// dispatch address — see [`deploy_header_account_id`] with the program's real genesis pair
-/// instead.
+/// dispatch address.
 #[must_use]
 pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
     deploy_header_account_id(
@@ -391,33 +385,26 @@ fn pass_through_signer(target: &AccountWithMetadata) -> AccountPostState {
 /// a multi-transaction one.
 ///
 /// `genesis` must be `Some` if and only if the header doesn't exist yet (a program's very first
-/// `Deploy`) — see [`Instruction::Deploy::genesis`]. Once a header exists, its own stored
-/// `genesis_image_id`/`genesis_update_auth` are used for every address computation instead;
-/// nothing about a program's genesis identity is ever taken from a caller's declaration once
-/// there's a header to read it from.
+/// `Deploy`). Once a header exists, its own stored `genesis_image_id`/`genesis_update_auth` are
+/// used for every address computation instead — nothing about a program's genesis identity is
+/// ever taken from a caller's declaration once there's a header to read it from.
 ///
-/// Whether this transaction needs a real, checked authorization depends on two independent
-/// things: whether it delivers the *whole* program in one shot (`first_segment == 0` and
-/// `user_elf_batch` covers all `segment_count` segments — i.e. "self-contained"), and whether the
-/// header already exists (i.e. this program has been written to before, whether finalized or
-/// not):
+/// Whether this transaction needs a real, checked authorization depends on two things: whether it
+/// delivers the *whole* program in one shot (`first_segment == 0` and `user_elf_batch` covers all
+/// `segment_count` segments — "self-contained"), and whether the header already exists:
 ///
 /// - **Self-contained *and* the header doesn't exist yet (a brand-new program)**: no signature
 ///   required. `user_elf_batch` is independently decoded and its real `image_id` recomputed
 ///   (combined with the assumed [`KERNEL_ELF`]) and checked against the declared one right here.
 ///   The header is written with `genesis_image_id`/`genesis_update_auth` equal to the declared
-///   values, `current_image_id` set directly to the verified real `image_id` (no separate
-///   [`finalize`] needed), and `program_version` `1`.
+///   values, `current_image_id` set directly to the verified real `image_id`, and `program_version`
+///   `1`.
 /// - **Everything else** (a partial batch of a brand-new deploy, or *any* write once the header
-///   already exists — a continuation of an unfinalized initial deploy, or a genuine upgrade of an
-///   already-finalized one): self-verification can't establish authorization to overwrite
-///   whatever's already there, so a real signer is always required, regardless of size. If the
-///   header doesn't exist yet, that authority is this instruction's own declared genesis
-///   `update_auth`, which must be `Some` — there is no key to sign a partial deploy of an
-///   otherwise-immutable program with. If the header already exists, that authority is whatever its
-///   *current* `ProgramData::update_auth` says (which may have diverged from the genesis value via
-///   [`Instruction::RotateUpdateAuth`], and must likewise be `Some` — a program with no authority
-///   at all, immutable from birth or by renouncement, can never be written to again). Either way,
+///   already exists): self-verification can't establish authorization to overwrite whatever's
+///   already there, so a real signer is always required. That authority is this instruction's own
+///   declared genesis `update_auth` if the header doesn't exist yet, or the header's *current*
+///   `ProgramData::update_auth` otherwise — either way it must be `Some`, since a program with no
+///   authority at all (immutable from birth or by renouncement) can never be written to again.
 ///   `current_image_id` is left at (or reset to) [`UNFINALIZED_IMAGE_ID`]; a [`finalize`] is
 ///   required afterward.
 ///
@@ -427,8 +414,8 @@ fn pass_through_signer(target: &AccountWithMetadata) -> AccountPostState {
 /// `Account::default()` (this upgrade grew the segment count) or already-populated (this upgrade
 /// is overwriting it) — both are fine, since authorization was already established above.
 ///
-/// Called natively from dispatch's `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut (see that
-/// constant's doc comment in `lee_core::program`) — `Deploy` has no guest binary of its own.
+/// Called natively from dispatch's `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut — `Deploy`
+/// has no guest binary of its own.
 #[must_use]
 pub fn execute_deploy(
     self_account_id: AccountId,
@@ -543,8 +530,8 @@ pub fn execute_deploy(
         );
     }
 
-    // pre_states/post_states are matched positionally (see validate_execution), so an
-    // update_auth signer slot present in pre_states must get a matching entry here too.
+    // pre_states/post_states are matched positionally, so an update_auth signer slot present in
+    // pre_states must get a matching entry here too.
     let update_auth_post_state = update_auth_target.map(pass_through_signer);
 
     let header_post_state = if header_is_fresh {
@@ -1117,9 +1104,8 @@ mod tests {
         assert_eq!(header_data2.current_image_id, UNFINALIZED_IMAGE_ID);
     }
 
-    /// Deploys `program` across two batches (so it lands unfinalized, exactly like
-    /// `execute_deploy_two_batch_sequence_leaves_it_unfinalized`), then returns everything needed
-    /// to either finalize it or feed it back into another `execute_deploy`/`finalize`/
+    /// Deploys `program` across two batches, so it lands unfinalized, then returns everything
+    /// needed to either finalize it or feed it back into another `execute_deploy`/`finalize`/
     /// `rotate_update_auth` call: the plan, the header account as it exists on-chain, and every
     /// segment account as it exists on-chain (all real, populated bytes).
     fn deploy_unfinalized_across_two_batches(
@@ -1280,10 +1266,8 @@ mod tests {
     }
 
     /// Deploys `program` in one self-contained transaction with a real `update_auth` — no
-    /// signature needed (per
-    /// `execute_deploy_single_batch_finalizes_atomically_even_with_real_update_auth`),
-    /// and already live (`current_image_id` real, `program_version` 1) with no separate
-    /// `finalize` required. Returns the plan and the on-chain header/segment accounts.
+    /// signature needed, and already live (`current_image_id` real, `program_version` 1) with no
+    /// separate `finalize` required. Returns the plan and the on-chain header/segment accounts.
     fn deploy_and_finalize_in_one_shot(
         full_binary: &[u8],
         image_id: ProgramId,

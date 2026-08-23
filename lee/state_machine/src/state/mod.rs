@@ -207,9 +207,7 @@ impl V03State {
 
     /// Seeds a program directly into state in the exact `1 + segment_count`-account shape a live
     /// `Deploy` dispatch (with no upgrade authority, i.e. immutable) would produce for the same
-    /// `image_id` (see [`Self::get_program`] and
-    /// [`program_loader_core::immutable_deploy_account_id`]), skipping only the dispatch/proving
-    /// machinery genesis has no signer to drive.
+    /// `image_id`, skipping only the dispatch/proving machinery genesis has no signer to drive.
     pub(crate) fn insert_program(&mut self, program: &Program) {
         let update_auth = None;
         let user_elf = program_loader_core::extract_user_elf(program.elf())
@@ -344,10 +342,8 @@ impl V03State {
     /// - Owned by [`RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`]: deployed via the native `Deploy`
     ///   dispatch shortcut. `account.data` decodes as a [`ProgramData`] header holding the real
     ///   `image_id` and `segment_count`; the program-specific `user_elf` is split across that many
-    ///   separately-addressed segment accounts (see
-    ///   `program_loader_core::deploy_segment_account_id`), which this fetches in order,
-    ///   concatenates, and reconstructs into the full two-ELF binary (see
-    ///   `program_loader_core::reconstruct_program_binary`) before returning it.
+    ///   separately-addressed segment accounts, which this fetches in order, concatenates, and
+    ///   reconstructs into the full two-ELF binary before returning it.
     ///
     /// Returning the real `image_id` — rather than callers deriving one from the address, which
     /// is only valid for the legacy path — is what makes upgrading a `Deploy`-created program
@@ -356,14 +352,10 @@ impl V03State {
     ///
     /// An account that matches neither owner isn't a deployed program, whatever its contents —
     /// this is the single place that distinction is enforced, so callers never have to remember
-    /// to re-check it themselves. `Ok(None)` means no such program exists — including, ordinarily,
-    /// a multi-transaction `Deploy` sequence that hasn't (yet, or ever going to) land every one of
-    /// its `segment_count` segments; a caller mid-sequence sees exactly the same result as a
-    /// program that was never deployed at all, by construction, since a missing segment is
-    /// detected the same way regardless of cause. `Err(LeeError::InvalidProgramBytecode(_))` means
-    /// every segment exists but they don't reconstruct to the `image_id` the header declares — a
-    /// defense-in-depth check against a corrupted or malformed segment set, distinguishable from
-    /// plain absence.
+    /// to re-check it themselves. `None` means no such program is currently dispatchable: no
+    /// account at all, an unfinalized header (`current_image_id` still the sentinel), or a
+    /// multi-transaction `Deploy` sequence missing one of its segments — all indistinguishable
+    /// from a program that was never deployed.
     pub fn get_program(
         &self,
         program_account_id: AccountId,

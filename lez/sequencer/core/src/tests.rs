@@ -4394,9 +4394,7 @@ fn loader_rejects_a_partial_deploy_batch_without_a_valid_signature() {
 
 /// Once a header exists, the authorized `update_auth` can change the declared `segment_count`
 /// between batches (a new version may need more or fewer segments than the last) — this is the
-/// same mechanism upgrades use, not a distinct "racing" bug. Unauthorized third parties still
-/// can't touch an existing header at all — see
-/// `loader_rejects_an_unauthorized_party_touching_an_existing_header`.
+/// same mechanism upgrades use, not a distinct "racing" bug.
 #[test]
 fn loader_allows_the_authorized_party_to_change_segment_count_mid_sequence() {
     let mut state = V03State::new();
@@ -4554,8 +4552,7 @@ fn loader_allows_the_authorized_party_to_rewrite_a_segment() {
 /// A program that wants to chain-call `Deploy` never has to carry the bytecode through its own
 /// execution: `Deploy` only ever runs natively, so the dispatcher resolves its `raw_payload`
 /// straight from the top-level transaction regardless of chain-call depth, and the forwarder here
-/// only ever handles a small `instruction_data` (see
-/// `lee::state_machine::validated_state_diff`'s `Deploy` dispatch branch).
+/// only ever handles a small `instruction_data`.
 #[test]
 fn loader_deploys_program_via_chained_call() {
     let forwarder = test_programs::chained_call_forwarder();
