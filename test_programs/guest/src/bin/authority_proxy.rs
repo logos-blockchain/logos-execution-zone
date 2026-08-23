@@ -1,8 +1,8 @@
 use lee_core::{
     account::AccountId,
     program::{
-        AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountPostState, ChainedCall, InstructionData, PdaSeed, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_inputs,
     },
 };
 
@@ -10,7 +10,7 @@ use lee_core::{
 /// forwarding every account it was given. With a seed, the PDA derived from
 /// `(self, seed)` is delegated through `pda_seeds` and flagged authorized in the
 /// call, which is how a program-held authority acts on a callee.
-type Instruction = (ProgramId, Vec<u8>, Option<PdaSeed>);
+type Instruction = (ProgramId, InstructionData, Option<PdaSeed>);
 
 fn main() {
     let (

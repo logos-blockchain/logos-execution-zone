@@ -10,7 +10,7 @@ fn main() {
         account_identities,
         program_id,
         dummy_inputs,
-    } = borsh::from_slice(&read_input_frame()).expect("circuit input must be a valid borsh frame");
+    } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
 
     let execution_state = execution_state::ExecutionState::derive_from_outputs(
         &account_identities,

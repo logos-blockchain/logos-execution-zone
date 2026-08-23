@@ -78,16 +78,17 @@ impl Program {
             .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
 
         // Get outputs
-        let framed = from_frame(&session_info.journal.bytes).ok_or_else(|| {
+        let payload = from_frame(&session_info.journal.bytes).ok_or_else(|| {
             LeeError::ProgramExecutionFailed("malformed program journal frame".to_owned())
         })?;
-        let program_output = borsh::from_slice(framed)
+        let program_output = borsh::from_slice(payload)
             .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
 
         Ok(program_output)
     }
 
-    /// Writes inputs to `env_builder` in the order expected by the programs.
+    /// Writes the guest's [`ProgramInput`] as a single length-prefixed borsh frame, the form
+    /// `read_lee_inputs` expects.
     pub fn write_inputs(
         &self,
         caller_program_id: Option<ProgramId>,

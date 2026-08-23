@@ -701,7 +701,8 @@ pub fn read_input_frame() -> Vec<u8> {
     payload
 }
 
-/// Reads the LEE inputs from the guest environment.
+/// Reads the LEE inputs from the guest environment. The frame decodes as
+/// `ProgramInput<InstructionData>`; `T` is a second decode of the instruction bytes.
 #[must_use]
 pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionData) {
     let ProgramInput {

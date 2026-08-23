@@ -2340,7 +2340,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
 
     // Control: the same delivery naming the bound block executes, so the refusal
     // above is the binding and not the transaction's shape.
-    let control_words = borsh::to_vec(&ReceiverInstruction::Record {
+    let control_payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"from-the-bound-block".to_vec(),
     })
     .expect("serialize ping instruction");
@@ -2351,7 +2351,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         src_tx_index: 1,
         src_program_id: [9_u32; 8],
         target_program_id: receiver_id,
-        payload: control_words,
+        payload: control_payload,
         l1_inclusion_witness: None,
     };
     let control_message = Message::try_new(

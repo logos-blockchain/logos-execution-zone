@@ -5,9 +5,7 @@ use lee_core::{
     },
 };
 
-/// Instruction uses only risc0-serde-compatible primitives — no `AccountId`/`Account` structs,
-/// which use `SerializeDisplay`/`DeserializeFromStr` and cannot round-trip through
-/// `instruction_data`.
+/// Instruction is a flat tuple of primitives, borsh-encoded.
 ///
 /// Fields:
 ///   `p2_id`:                  program ID of the launderer (P2)

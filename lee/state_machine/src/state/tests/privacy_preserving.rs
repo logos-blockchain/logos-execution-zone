@@ -399,7 +399,10 @@ fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(
+        &result,
+        "Pre-state and post-state lengths do not match: pre-state length 1, post-state length 2",
+    );
 }
 
 #[test]
@@ -431,7 +434,10 @@ fn missing_output_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(
+        &result,
+        "Pre-state and post-state lengths do not match: pre-state length 2, post-state length 1",
+    );
 }
 
 #[test]
@@ -454,7 +460,10 @@ fn program_owner_changer_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(
+        &result,
+        "Unallowed modification of program owner for account",
+    );
 }
 
 #[test]
@@ -486,7 +495,7 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "which is not the owner");
 }
 
 #[test]
@@ -557,5 +566,5 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
     );
 
     // Assert - should fail because the malicious program tries to manipulate is_authorized
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "Inconsistent authorization for account");
 }

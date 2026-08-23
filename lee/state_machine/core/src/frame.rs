@@ -28,10 +28,10 @@ pub fn to_frame(payload: &[u8]) -> Vec<u8> {
     framed
 }
 
-/// Returns the payload slice of a frame produced by [`to_frame`].
+/// Returns the payload slice of a frame produced by [`to_frame`] or [`to_borsh_frame`].
 ///
-/// Returns `None` if `bytes` is shorter than the 4-bytes or the prefixed length
-/// exceeds the available payload.
+/// Returns `None` if `bytes` is shorter than the 4-byte length prefix or the prefixed
+/// length exceeds the available payload.
 #[must_use]
 pub fn from_frame(bytes: &[u8]) -> Option<&[u8]> {
     let (len_bytes, payload) = bytes.split_at_checked(4)?;
@@ -60,10 +60,10 @@ mod tests {
     }
 
     #[test]
-    fn frame_tolerates_trailing_padding() {
+    fn from_frame_ignores_bytes_after_the_payload() {
         let payload: &[u8] = &[1, 2, 3, 4, 5, 6, 7];
         let mut framed = to_frame(payload);
-        // Simulate transport padding the frame up to a word boundary.
+        // The prefix delimits the payload; whatever follows belongs to another frame.
         framed.extend_from_slice(&[0, 0, 0]);
         assert_eq!(from_frame(&framed).unwrap(), payload);
     }

@@ -1,5 +1,4 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use serde::{Deserialize, Serialize};
 
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
@@ -9,7 +8,7 @@ use crate::{
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
 
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
     /// Outputs of the program execution.
     pub program_outputs: Vec<ProgramOutput>,
@@ -23,7 +22,7 @@ pub struct PrivacyPreservingCircuitInput {
     pub dummy_inputs: Vec<DummyInput>,
 }
 
-#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[expect(
     clippy::large_enum_variant,
     reason = "Private carries the ML-KEM viewing key and dominates; boxing it would add a guest heap allocation per witness, and the footprint matches the pre-refactor enum"
@@ -35,7 +34,7 @@ pub enum InputAccountIdentity {
     Private(PrivateWitness),
 }
 
-#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct PrivateWitness {
     pub vpk: ViewingPublicKey,
     pub random_seed: [u8; 32],
@@ -44,7 +43,7 @@ pub struct PrivateWitness {
     pub nullifier: NullifierWitness,
 }
 
-#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub enum WitnessKind {
     /// Standalone private account. The `account_id` is derived as
     /// `AccountId::for_regular_private_account(&npk, vpk, identifier)` and matched against
@@ -64,7 +63,7 @@ pub enum WitnessKind {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub enum NullifierWitness {
     /// Init of a private account: no membership proof. The `pre_state` must be
     /// `Account::default()`. `npk` is supplied directly, so the caller need not own the account
@@ -84,7 +83,7 @@ pub enum NullifierWitness {
 
 /// A struct containing necessary data for dummy nullifier and
 /// commitment generation.
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub struct DummyInput {
     /// The seed used for generating the dummy nullifier.
     pub nullifier_seed: [u8; 32],
@@ -140,7 +139,7 @@ impl NullifierWitness {
     }
 }
 
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(
     any(feature = "host", test),
     derive(Debug, Clone, Default, PartialEq, Eq)
@@ -195,7 +194,7 @@ impl PrivacyPreservingCircuitOutput {
     /// Serializes the circuit output to the exact journal byte sequence the circuit guest commits.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        crate::to_frame(&borsh::to_vec(self).expect("borsh serialization is infallible"))
+        crate::to_borsh_frame(self)
     }
 }
 
