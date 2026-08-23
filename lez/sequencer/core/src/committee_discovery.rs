@@ -235,7 +235,7 @@ mod tests {
             (
                 staked.account_id,
                 Account {
-                    program_owner: programs::sequencer_stake().id().into(),
+                    program_owner: programs::sequencer_stake().deployed_account_id(),
                     balance: staked.balance,
                     data: StakeRecord {
                         sequencer_key: staked.key,
@@ -250,7 +250,7 @@ mod tests {
         });
 
         let config = Account {
-            program_owner: programs::sequencer_stake().id().into(),
+            program_owner: programs::sequencer_stake().deployed_account_id(),
             data: SequencerStakeConfig {
                 minimum_sequencer_stake: MINIMUM,
                 entries: stakes
