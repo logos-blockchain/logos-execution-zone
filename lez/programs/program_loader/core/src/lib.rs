@@ -22,10 +22,8 @@ const KERNEL_ELF: &[u8] = include_bytes!("kernel.bin");
 
 /// Max bytes of `user_elf` one segment account's `Data` may hold.
 ///
-/// Chosen comfortably under `lee_core::account::data::DATA_MAX_LENGTH` (100 KiB), leaving
-/// headroom for any future per-segment framing without needing to touch this constant, while
-/// still yielding a sane segment count (4-6) for every real production ELF (340-490 KB
-/// `user_elf`).
+/// Comfortably under `DATA_MAX_LENGTH` (100 KiB), with headroom for future per-segment framing;
+/// yields 4-6 segments for a typical 340-490 KB `user_elf`.
 pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
 
 #[derive(BorshSerialize, BorshDeserialize)]
