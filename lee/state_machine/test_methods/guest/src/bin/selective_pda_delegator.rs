@@ -48,6 +48,7 @@ fn main() {
             .chain(rest.iter().cloned())
             .collect(),
         pda_seeds: vec![delegated_seed],
+        raw_payload: None,
     }];
 
     // If sibling is present in instruction, send out a call
@@ -66,6 +67,7 @@ fn main() {
                 },
             ),
             pda_seeds: vec![],
+            raw_payload: None,
         });
     }
 

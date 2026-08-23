@@ -9418,6 +9418,7 @@ dependencies = [
 name = "program_loader_core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "borsh",
  "bytemuck",
  "lee_core",

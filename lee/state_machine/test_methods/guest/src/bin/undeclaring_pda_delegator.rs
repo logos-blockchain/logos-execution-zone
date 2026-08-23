@@ -38,6 +38,7 @@ fn main() {
             instruction_data: to_vec(&()).unwrap(),
             pre_states: vec![sibling_pre],
             pda_seeds: vec![],
+            raw_payload: None,
         }
     });
 
@@ -46,6 +47,7 @@ fn main() {
         instruction_data: callee_instruction,
         pre_states,
         pda_seeds: seed.into_iter().collect(),
+        raw_payload: None,
     }];
     chained_calls.extend(sibling_call);
 

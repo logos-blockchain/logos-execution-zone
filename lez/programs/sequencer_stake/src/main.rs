@@ -214,6 +214,7 @@ fn stake(
         pre_states: vec![funding_account, ownership_account_claimed.clone()],
         instruction_data: mover_instruction_data,
         pda_seeds: Vec::new(),
+        raw_payload: None,
     };
 
     // expected balance after the mover call
