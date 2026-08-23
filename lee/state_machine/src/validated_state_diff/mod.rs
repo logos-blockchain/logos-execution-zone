@@ -96,7 +96,6 @@ impl ValidatedStateDiff {
             instruction_data: message.instruction_data.clone(),
             pre_states: input_pre_states,
             pda_seeds: vec![],
-            raw_payload: message.raw_payload.clone(),
         };
 
         let initial_caller_data = CallerData {

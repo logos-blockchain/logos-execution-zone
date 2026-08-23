@@ -310,13 +310,6 @@ pub struct ChainedCall {
     /// mutate the `AccountId` derived from `(caller_account_id, seed)`, regardless of
     /// whether the account is public or private.
     pub pda_seeds: Vec<PdaSeed>,
-    /// An optional large raw byte payload, carried alongside `instruction_data` rather than
-    /// packed into it. `instruction_data` is word-serialized (`risc0_zkvm::serde`), which encodes
-    /// a `Vec<u8>` at 4 bytes per word since it doesn't route through that serializer's
-    /// `serialize_bytes`; a large payload (e.g. `Deploy`'s program bytecode) would bloat ~4x if
-    /// packed in there. `raw_payload` avoids that entirely for callers that need it — see
-    /// `Message::raw_payload`'s doc comment for the equivalent, host-side rationale.
-    pub raw_payload: Option<Vec<u8>>,
 }
 
 impl ChainedCall {
@@ -332,19 +325,12 @@ impl ChainedCall {
             instruction_data: borsh::to_vec(instruction)
                 .expect("borsh serialization is infallible"),
             pda_seeds: Vec::new(),
-            raw_payload: None,
         }
     }
 
     #[must_use]
     pub fn with_pda_seeds(mut self, pda_seeds: Vec<PdaSeed>) -> Self {
         self.pda_seeds = pda_seeds;
-        self
-    }
-
-    #[must_use]
-    pub fn with_raw_payload(mut self, raw_payload: Vec<u8>) -> Self {
-        self.raw_payload = Some(raw_payload);
         self
     }
 }

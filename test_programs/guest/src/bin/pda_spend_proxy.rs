@@ -40,7 +40,6 @@ fn main() {
             .unwrap(),
         pre_states: vec![first_for_callee, second.clone()],
         pda_seeds: vec![seed],
-        raw_payload: None,
     };
 
     ProgramOutput::new(
