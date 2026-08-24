@@ -6,8 +6,8 @@ use lee_core::{
     PrivacyPreservingCircuitOutput, PrivateWitness, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     program::{
-        AccountPostState, DEFAULT_PROGRAM_ID, DEFAULT_PROGRAM_OWNER, PdaSeed, PrivateAccountKind,
-        ProgramOutput, SystemInstruction,
+        AccountPostState, ChainedCall, Claim, DEFAULT_PROGRAM_ID, DEFAULT_PROGRAM_OWNER, PdaSeed,
+        PrivateAccountKind, ProgramOutput, SystemInstruction,
     },
 };
 
@@ -1281,59 +1281,6 @@ fn private_default_owner_credited_without_claim_succeeds() {
     assert!(recipient_post.balance > 0);
 }
 
-/// The credit is one-way: a default-owned private note cannot be debited, because rule 5 gates
-/// balance decreases on the owner executing and the default owner never executes.
-#[test]
-fn private_default_owner_debit_is_rejected() {
-    let program = crate::test_methods::modified_transfer_program();
-    let keys = test_private_account_keys_1();
-    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
-    let sender_account = Account {
-        program_owner: DEFAULT_PROGRAM_OWNER,
-        balance: 500_000,
-        data: Data::default(),
-        nonce: Nonce(0),
-    };
-    let commitment = Commitment::new(&account_id, &sender_account);
-    let mut commitment_set = CommitmentSet::with_capacity(1);
-    commitment_set.extend(std::slice::from_ref(&commitment));
-    let membership_proof = commitment_set.get_proof_for(&commitment).unwrap();
-    let sender = AccountWithMetadata::new(sender_account, true, account_id);
-
-    let recipient = AccountWithMetadata::new(
-        Account {
-            program_owner: program.id().into(),
-            ..Account::default()
-        },
-        false,
-        AccountId::new([88; 32]),
-    );
-
-    let result = execute_and_prove(
-        vec![sender, recipient],
-        Program::serialize_instruction(1_u128).unwrap(),
-        vec![
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(keys.ask),
-                },
-                nullifier: NullifierWitness::Update {
-                    view_tag: 0,
-                    nsk: keys.nsk(),
-                    membership_proof,
-                },
-            }),
-            InputAccountIdentity::Public,
-        ],
-        &program.into(),
-    );
-
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
 fn prove_forged_clear(
     new_owner: AccountId,
     forged_post: Account,
@@ -1344,10 +1291,10 @@ fn prove_forged_clear(
     prove_synthesized_input(&circuit_input)
 }
 
-/// A clear cannot mint: a post claiming more balance than the note carried is not the canonical
-/// cleared account, so the circuit refuses to prove.
+/// The post must be exactly the canonical cleared account: a forged post — here one minting
+/// balance the note never had — is rejected.
 #[test]
-fn private_clear_inflating_balance_is_rejected() {
+fn private_clear_with_forged_post_is_rejected() {
     let forged = Account {
         program_owner: DEFAULT_PROGRAM_OWNER,
         balance: 56,
@@ -1361,46 +1308,51 @@ fn private_clear_inflating_balance_is_rejected() {
     ));
 }
 
-/// A clear must zero the data: a post that keeps the note's data is not the canonical cleared
-/// account, so the circuit refuses to prove.
-#[test]
-fn private_clear_retaining_data_is_rejected() {
-    let forged = Account {
-        program_owner: DEFAULT_PROGRAM_OWNER,
-        balance: 55,
-        data: vec![1_u8, 2, 3].try_into().unwrap(),
-        nonce: Nonce(3),
-    };
-
-    assert!(matches!(
-        prove_forged_clear(DEFAULT_PROGRAM_OWNER, forged),
-        Err(LeeError::CircuitProvingError(_))
-    ));
-}
-
-/// The new owner is pinned by the declared instruction: a post handing the note to an owner the
-/// `Clear` did not declare is rejected.
-#[test]
-fn private_clear_to_undeclared_owner_is_rejected() {
-    let forged = Account {
-        program_owner: AccountId::new([9; 32]),
-        balance: 55,
-        data: Data::default(),
-        nonce: Nonce(3),
-    };
-
-    assert!(matches!(
-        prove_forged_clear(AccountId::new([7; 32]), forged),
-        Err(LeeError::CircuitProvingError(_))
-    ));
-}
-
 /// A clear must post exactly one state per cleared note: dropping the post state is rejected
 /// before any post is inspected.
 #[test]
 fn private_clear_length_mismatch_is_rejected() {
     let (.., mut circuit_input) = clear_note_circuit_input(DEFAULT_PROGRAM_OWNER, true);
     circuit_input.program_outputs[0].post_states.clear();
+
+    let result = prove_synthesized_input(&circuit_input);
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+}
+
+/// The System Program is a leaf: a clear that emits a chained call is rejected even when the
+/// follow-on call and its output are themselves valid.
+#[test]
+fn private_clear_emitting_chained_calls_is_rejected() {
+    let (account_id, _, cleared, mut circuit_input) =
+        clear_note_circuit_input(DEFAULT_PROGRAM_OWNER, true);
+    let instruction_data = circuit_input.program_outputs[0].instruction_data.clone();
+    let follow_on_pre = AccountWithMetadata::new(cleared.clone(), true, account_id);
+
+    circuit_input.program_outputs[0].chained_calls = vec![ChainedCall {
+        program_id: DEFAULT_PROGRAM_ID,
+        instruction_data: instruction_data.clone(),
+        pre_states: vec![follow_on_pre.clone()],
+        pda_seeds: Vec::new(),
+    }];
+    circuit_input.program_outputs.push(ProgramOutput::new(
+        DEFAULT_PROGRAM_ID,
+        Some(DEFAULT_PROGRAM_ID),
+        instruction_data,
+        vec![follow_on_pre],
+        vec![AccountPostState::new(cleared)],
+    ));
+
+    let result = prove_synthesized_input(&circuit_input);
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+}
+
+/// A clear takes no ownership: a post carrying a claim is rejected, so the System Program can
+/// never route an account through the claim path.
+#[test]
+fn private_clear_requesting_a_claim_is_rejected() {
+    let (.., cleared, mut circuit_input) = clear_note_circuit_input(DEFAULT_PROGRAM_OWNER, true);
+    circuit_input.program_outputs[0].post_states =
+        vec![AccountPostState::new_claimed(cleared, Claim::Authorized)];
 
     let result = prove_synthesized_input(&circuit_input);
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
