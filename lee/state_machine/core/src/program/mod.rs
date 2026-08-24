@@ -843,7 +843,7 @@ pub fn validate_execution(
     Ok(())
 }
 
-/// Logic of system-wide `Clear` instriction.
+/// Logic of system-wide `Clear` instruction.
 ///
 /// Checks authorization, clearing data and assigning a new owner.
 pub fn validate_clear(

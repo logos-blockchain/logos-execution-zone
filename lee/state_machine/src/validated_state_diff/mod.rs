@@ -129,6 +129,9 @@ impl ValidatedStateDiff {
 
                 match instruction {
                     SystemInstruction::Clear { new_owner } => {
+                        // Only the `account_id` is read from `chained_call.pre_states`; the
+                        // account and its authorization are re-derived below, so a forged
+                        // pre_state grants nothing (cf. the audit-issue 91 note further down).
                         for pre_state in &chained_call.pre_states {
                             let account_id = pre_state.account_id;
                             let pre = AccountWithMetadata::new(
