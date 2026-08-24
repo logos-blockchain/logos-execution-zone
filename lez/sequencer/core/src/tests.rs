@@ -579,6 +579,7 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
     // Orphan that block. The receipt reverts with it — nothing else tracks the
     // mint — so the deposit reads as unminted again.
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -914,6 +915,7 @@ async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
     assert_eq!(dispatches_in(&delivery_block), vec![key]);
 
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -1303,6 +1305,7 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
         .unwrap()
         .unwrap();
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2277,6 +2280,7 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
 
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2348,6 +2352,7 @@ async fn a_rewind_after_the_turn_gate_does_not_republish_a_taken_height() {
         .unwrap()
         .unwrap();
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2432,6 +2437,7 @@ async fn production_chains_on_an_ignorable_inscription_at_the_tip() {
     let junk = MsgId::from([42_u8; 32]);
     sequencer.block_publisher().set_channel_tip(Some(junk));
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2474,6 +2480,7 @@ async fn an_orphan_of_the_pinned_block_rewinds_to_the_surviving_entry() {
         .block_publisher()
         .set_channel_tip(Some(block2_msg));
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2511,6 +2518,7 @@ async fn an_orphan_of_an_ignorable_entry_rewinds_the_pin() {
     let junk = MsgId::from([42_u8; 32]);
     sequencer.block_publisher().set_channel_tip(Some(junk));
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2527,6 +2535,7 @@ async fn an_orphan_of_an_ignorable_entry_rewinds_the_pin() {
         .block_publisher()
         .set_channel_tip(Some(block2_msg));
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2563,6 +2572,7 @@ async fn an_orphan_of_the_newest_ignorable_entry_falls_back_to_the_one_below() {
         .block_publisher()
         .set_channel_tip(Some(second_junk));
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2582,6 +2592,7 @@ async fn an_orphan_of_the_newest_ignorable_entry_falls_back_to_the_one_below() {
         .block_publisher()
         .set_channel_tip(Some(first_junk));
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2616,6 +2627,7 @@ async fn the_pin_stays_on_a_finalized_entry_through_its_pruning_report() {
     let block2_msg = mock_msg_of(&block2);
 
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2635,6 +2647,7 @@ async fn the_pin_stays_on_a_finalized_entry_through_its_pruning_report() {
     // LIB pruning reports our finalized inscription as orphaned a poll or two
     // later; the channel still holds it, so the checkpoint's tip stays put.
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2679,6 +2692,7 @@ async fn a_dropped_orphan_frees_the_published_height() {
 
     // The sdk orphans the tip and re-adopts it under a fresh inscription.
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2698,6 +2712,7 @@ async fn a_dropped_orphan_frees_the_published_height() {
 
     // The sdk orphans both and re-adopts neither.
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2744,6 +2759,7 @@ async fn a_readopted_block_above_the_head_keeps_the_published_height() {
 
     // A finalized floor, so the orphan report below cannot rewind past `first`.
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2757,6 +2773,7 @@ async fn a_readopted_block_above_the_head_keeps_the_published_height() {
     // The channel drops both, then puts the tip back on a parent we do not hold,
     // so it lands above the head instead of applying.
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2803,6 +2820,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
     };
 
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2841,6 +2859,7 @@ async fn follow_adopted_peer_block_applies_and_persists() {
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![tx]);
 
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2891,6 +2910,7 @@ async fn follow_redelivery_of_own_block_is_deduped() {
     // The channel redelivers our own block under the MsgId the mock publisher
     // assigned at publish time.
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2933,6 +2953,7 @@ async fn follow_orphan_reverts_head_and_requeues_user_txs() {
     let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
 
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -2991,6 +3012,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
     let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
 
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -3001,6 +3023,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
     )
     .await;
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -3043,6 +3066,7 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
     let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
 
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -3101,6 +3125,7 @@ async fn follow_finalized_delivery_drops_its_pending_record() {
     );
 
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -3150,6 +3175,7 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
         common::test_utils::produce_dummy_block(9, Some(HashType([44; 32])), vec![delivery]);
 
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -3187,6 +3213,7 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
 
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -3253,6 +3280,7 @@ async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_r
         common::test_utils::produce_dummy_block(9, Some(HashType([44; 32])), vec![deposit_tx]);
 
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -3327,6 +3355,7 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
     let block2_prime =
         common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
@@ -3381,6 +3410,7 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
         sequencer.run_production_turn().await.unwrap();
         let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
         apply_follow_update(
+            "test",
             sequencer.block_store().storage_ref(),
             &sequencer.chain(),
             &mempool_handle,
@@ -3493,6 +3523,7 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
 
     // One update carrying several blocks: both adopted, block 2 also finalized.
     apply_follow_update(
+        "test",
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,

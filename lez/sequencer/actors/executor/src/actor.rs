@@ -89,6 +89,15 @@ impl<BP: BlockPublisherTrait + Send + 'static, S: StorageActorTrait> ExecutorAct
     pub fn mempool_handle(&self) -> MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
         self.mempool_handle.clone()
     }
+
+    /// This node's sequencer public key, to tell nodes apart in shared logs.
+    fn node_identity(&self) -> String {
+        hex::encode(
+            Ed25519Key::from_bytes(&self.sequencer.sequencer_config().signing_key)
+                .public_key()
+                .as_bytes(),
+        )
+    }
 }
 
 impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Actor
@@ -170,9 +179,12 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
         }
 
         // The channel moved past our pin, so every publish this turn would be refused.
-        if let Some(tip) = self.sequencer.pin_behind_channel_tip().await {
+        if let Some((pin, tip)) = self.sequencer.pin_behind_channel_tip().await {
             self.sequencer.update_committee_absence().await;
-            info!("Skipping turn: channel tip {tip:?} moved past our pin; catching up first");
+            info!(
+                "Skipping turn: node {} pin {pin} behind channel tip {tip}; catching up first",
+                self.node_identity(),
+            );
             return Ok(());
         }
 
@@ -183,11 +195,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
             .await
             .map_err(Error::BlockProductionFailed)?;
 
-        let author_identity = hex::encode(
-            Ed25519Key::from_bytes(&self.sequencer.sequencer_config().signing_key)
-                .public_key()
-                .as_bytes(),
-        );
+        let author_identity = self.node_identity();
         log::info!("Block with id {id} created by {author_identity:?}");
 
         Ok(())

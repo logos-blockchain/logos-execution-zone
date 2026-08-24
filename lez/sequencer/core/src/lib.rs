@@ -332,6 +332,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             config.retry_pending_blocks_timeout,
             initial_checkpoint,
             Self::on_follow(
+                hex::encode(bedrock_signing_key.public_key().to_bytes()),
                 store.storage_ref().clone(),
                 Arc::clone(&chain),
                 mempool_handle.clone(),
@@ -717,12 +718,14 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
 
     /// Publisher sink adapter over [`apply_follow_update`].
     fn on_follow(
+        node: String,
         storage_ref: ActorRef<S>,
         chain: Arc<Mutex<ChainState>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
         slash_record: slashing::SlashRecord,
     ) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
+            let node = node.clone();
             let storage_ref = storage_ref.clone();
             let chain = Arc::clone(&chain);
             let mempool_handle = mempool_handle.clone();
@@ -730,7 +733,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             Box::pin(async move {
                 // Before the checkpoint moves past them.
                 slash_record.report(&storage_ref, &update.undecodable).await;
-                apply_follow_update(&storage_ref, &chain, &mempool_handle, update).await;
+                apply_follow_update(&node, &storage_ref, &chain, &mempool_handle, update).await;
             })
         })
     }
@@ -1562,15 +1565,16 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         (self.next_block_height().await <= high_water).then_some(high_water)
     }
 
-    /// The live channel tip when it has moved past our pin, meaning the next
-    /// publish would be refused and the caller should skip its turn.
-    pub async fn pin_behind_channel_tip(&self) -> Option<MsgId> {
+    /// Our pin and the live channel tip when the tip has moved past the pin,
+    /// meaning the next publish would be refused and the caller should skip
+    /// its turn.
+    pub async fn pin_behind_channel_tip(&self) -> Option<(MsgId, MsgId)> {
         let pin = self.chain.lock().await.pin_parent()?;
         if self.own_tip_msg == Some(pin) {
             return None;
         }
         match self.block_publisher.channel_tip_message().await {
-            Ok(Some(tip)) if tip != pin => Some(tip),
+            Ok(Some(tip)) if tip != pin => Some((pin, tip)),
             Ok(_) => None,
             Err(err) => {
                 warn!("Failed to read the channel tip, leaving the refusal to the publish: {err:#}");
@@ -1658,6 +1662,7 @@ async fn record_dead_letter_gauge<S: StorageActorTrait>(storage_ref: &ActorRef<S
 /// `AcceptOutcome::RetryableFailure` yet; adding retry parity here is a
 /// follow-up.
 async fn apply_follow_update<S: StorageActorTrait>(
+    node: &str,
     storage_ref: &ActorRef<S>,
     chain: &Mutex<ChainState>,
     mempool_handle: &MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
@@ -1774,6 +1779,15 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // The checkpoint rode in with this delta, so its `last_msg_id` is the
         // channel tip on the view just applied: the surviving entry after an
         // orphan, and entries the head never carries (garbage, config ops).
+        debug!(
+            "Follow update: node {node} cursor {:?} -> checkpoint {}, adopted {}, orphaned {}, \
+             finalized {}",
+            chain.channel_cursor(),
+            checkpoint.last_msg_id,
+            adopted.len(),
+            orphaned.len(),
+            finalized.len(),
+        );
         chain.set_channel_cursor(checkpoint.last_msg_id);
 
         // User txs of orphaned blocks, returned to the mempool below.

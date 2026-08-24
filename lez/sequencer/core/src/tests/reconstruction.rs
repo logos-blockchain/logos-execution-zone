@@ -368,6 +368,7 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
         finalized.push(block);
     }
     apply_follow_update(
+        "test",
         seq_b.block_store().storage_ref(),
         &seq_b.chain(),
         &mempool_b,
@@ -462,6 +463,7 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
         common::test_utils::produce_dummy_block(tip_a.id, Some(genesis_b.hash), vec![]);
     assert_ne!(competitor.header.hash, tip_a.hash);
     apply_follow_update(
+        "test",
         seq_b.block_store().storage_ref(),
         &seq_b.chain(),
         &mempool_b,
