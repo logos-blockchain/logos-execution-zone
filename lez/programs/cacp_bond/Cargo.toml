@@ -1,0 +1,19 @@
+[package]
+name = "cacp_bond_program"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[[bin]]
+name = "cacp_bond"
+path = "src/main.rs"
+
+[dependencies]
+authenticated_transfer_core.workspace = true
+cacp_bond_core.workspace = true
+clock_core.workspace = true
+ed25519-dalek.workspace = true
+lee_core.workspace = true
+
+[lints]
+workspace = true

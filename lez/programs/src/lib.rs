@@ -11,11 +11,12 @@ mod inner {
     use guests::{
         AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
         AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, BRIDGE_ELF, BRIDGE_ID,
-        BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
-        CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID,
-        PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID, PING_RECEIVER_ELF,
-        PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID,
-        TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
+        BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CACP_BOND_ELF, CACP_BOND_ID, CLOCK_ELF, CLOCK_ID,
+        CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID,
+        FAUCET_ELF, FAUCET_ID, PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID,
+        PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF,
+        SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID, WRAPPED_TOKEN_ELF,
+        WRAPPED_TOKEN_ID,
     };
     use lee::program::Program;
 
@@ -76,6 +77,12 @@ mod inner {
     #[inline]
     pub const fn vault() -> Program {
         Program::new_unchecked(VAULT_ID, Cow::Borrowed(VAULT_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn cacp_bond() -> Program {
+        Program::new_unchecked(CACP_BOND_ID, Cow::Borrowed(CACP_BOND_ELF))
     }
 
     #[must_use]
@@ -141,6 +148,7 @@ mod inner {
             let auth_transfer_program = authenticated_transfer();
             let token_program = token();
             let vault_program = vault();
+            let cacp_bond_program = cacp_bond();
             let faucet_program = faucet();
             let bridge_program = bridge();
             let pinata_program = pinata();
@@ -152,6 +160,8 @@ mod inner {
             assert_eq!(token_program.elf(), TOKEN_ELF);
             assert_eq!(vault_program.id(), VAULT_ID);
             assert_eq!(vault_program.elf(), VAULT_ELF);
+            assert_eq!(cacp_bond_program.id(), CACP_BOND_ID);
+            assert_eq!(cacp_bond_program.elf(), CACP_BOND_ELF);
             assert_eq!(faucet_program.id(), FAUCET_ID);
             assert_eq!(faucet_program.elf(), FAUCET_ELF);
             assert_eq!(bridge_program.id(), BRIDGE_ID);
@@ -175,6 +185,7 @@ mod inner {
                 (PINATA_TOKEN_ELF, PINATA_TOKEN_ID),
                 (TOKEN_ELF, TOKEN_ID),
                 (VAULT_ELF, VAULT_ID),
+                (CACP_BOND_ELF, CACP_BOND_ID),
                 (CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID),
                 (CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID),
                 (PING_SENDER_ELF, PING_SENDER_ID),

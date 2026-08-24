@@ -151,6 +151,12 @@ cross-zone-chat:
     @echo "💬 Cross-zone chat demo — open the printed localhost URL"
     {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo run -p cross_zone_chat --release
 
+# Demo: two CACP participant zones plus a neutral LEZ bond execution zone.
+# Bedrock appends one fee transfer after the two business inscriptions.
+demo-cacp:
+    @echo "🔐 CACP + protocol-enforced LEZ bond demo"
+    {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo run -p cacp_demo
+
 # Clean runtime data
 clean:
     @echo "🧹 Cleaning run artifacts"

@@ -26,6 +26,8 @@ use lee_core::{
 use serde::Serialize;
 
 pub mod acceptance;
+pub mod cacp;
+pub mod costly_abort;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
