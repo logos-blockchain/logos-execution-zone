@@ -4,6 +4,7 @@ pub mod accounts;
 pub mod committee;
 pub mod environment;
 pub mod indexer;
+pub mod stake;
 pub mod transfers;
 
 pub const TARGET: &str = "cucumber_steps";
