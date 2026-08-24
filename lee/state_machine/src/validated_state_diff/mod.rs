@@ -6,7 +6,7 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Data},
     program::{
         CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID, DEFAULT_PROGRAM_OWNER,
         SystemInstruction, compute_public_authorized_pdas, validate_clear, validate_execution,
@@ -333,7 +333,7 @@ impl ValidatedStateDiff {
             Some((*account_id, post))
         }) {
             ensure!(
-                post.program_owner != DEFAULT_PROGRAM_OWNER,
+                post.program_owner != DEFAULT_PROGRAM_OWNER || post.data == Data::default(),
                 InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
             );
         }

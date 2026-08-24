@@ -658,9 +658,9 @@ pub enum ExecutionValidationError {
     },
 
     #[error(
-        "Post-state for account {account_id} has default program owner but pre-state was not default"
+        "Post-state for account {account_id} has default program owner but pre-state carries data"
     )]
-    NonDefaultAccountWithDefaultOwner { account_id: AccountId },
+    DataBearingAccountWithDefaultOwner { account_id: AccountId },
 
     #[error("Total balance across accounts overflowed 2^256 - 1")]
     BalanceSumOverflow,
@@ -806,12 +806,12 @@ pub fn validate_execution(
             });
         }
 
-        // 7. If a post state has default program owner, the pre state must have been a default
-        //    account
-        if post.account.program_owner == DEFAULT_PROGRAM_OWNER && pre.account != Account::default()
+        // 7. A post state with default program owner must not have carried data in its pre state
+        if post.account.program_owner == DEFAULT_PROGRAM_OWNER
+            && pre.account.data != Data::default()
         {
             return Err(
-                ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
+                ExecutionValidationError::DataBearingAccountWithDefaultOwner {
                     account_id: pre.account_id,
                 },
             );
