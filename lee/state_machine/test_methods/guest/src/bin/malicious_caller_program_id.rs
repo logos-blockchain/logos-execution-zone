@@ -12,7 +12,7 @@ fn main() {
             pre_states,
             instruction: (),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let post_states = pre_states
@@ -26,7 +26,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         Some(DEFAULT_PROGRAM_ID), // WRONG: should be None for a top-level call
-        instruction_words,
+        instruction_data,
         pre_states,
         post_states,
     )

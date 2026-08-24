@@ -11,7 +11,7 @@ fn main() {
             pre_states,
             instruction: (data_opt, should_claim),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
@@ -38,7 +38,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![pre],
         vec![post_state],
     )

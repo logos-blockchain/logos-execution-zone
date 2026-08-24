@@ -123,6 +123,7 @@ programs = [
 ]
 
 [dependencies]
+borsh.workspace = true
 lee = { workspace = true, optional = true }
 lee_core = { workspace = true, optional = true }
 risc0-zkvm = { workspace = true, optional = true }

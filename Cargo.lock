@@ -144,7 +144,6 @@ dependencies = [
  "borsh",
  "lee_core",
  "risc0-zkvm",
- "serde",
 ]
 
 [[package]]
@@ -549,9 +548,9 @@ checksum = "4858a9d740c5007a9069007c3b4e91152d0506f13c1b31dd49051fd537656156"
 name = "associated_token_account_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
- "serde",
 ]
 
 [[package]]
@@ -786,7 +785,7 @@ dependencies = [
 name = "authenticated_transfer_core"
 version = "0.1.0"
 dependencies = [
- "serde",
+ "borsh",
 ]
 
 [[package]]
@@ -1249,24 +1248,25 @@ dependencies = [
 name = "bridge_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
- "serde",
 ]
 
 [[package]]
 name = "bridge_lock_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
- "serde",
 ]
 
 [[package]]
 name = "bridge_lock_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "bridge_lock_core",
  "cross_zone_outbox_core",
  "lee_core",
@@ -2100,6 +2100,7 @@ checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 name = "cross_zone"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "bridge_lock_core",
  "common",
  "cross_zone_inbox_core",
@@ -2109,8 +2110,6 @@ dependencies = [
  "lee_core",
  "ping_core",
  "programs",
- "risc0-zkvm",
- "serde",
  "wrapped_token_core",
 ]
 
@@ -2120,6 +2119,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
+ "borsh",
  "common",
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",
@@ -2129,7 +2129,6 @@ dependencies = [
  "ping_core",
  "programs",
  "rand 0.8.6",
- "risc0-zkvm",
  "sequencer_service_rpc",
  "serde",
  "test_fixtures",
@@ -2170,7 +2169,6 @@ dependencies = [
  "borsh",
  "lee_core",
  "risc0-zkvm",
- "serde",
 ]
 
 [[package]]
@@ -3176,6 +3174,7 @@ dependencies = [
 name = "example_program_deployment_programs"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "bytemuck",
  "hex",
  "lee_core",
@@ -3248,8 +3247,8 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 name = "faucet_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
- "serde",
 ]
 
 [[package]]
@@ -4609,7 +4608,6 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "ping_core",
  "programs",
- "risc0-zkvm",
  "serde",
  "serde_json",
  "storage",
@@ -4770,6 +4768,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "authenticated_transfer_core",
+ "borsh",
  "bridge_core",
  "bridge_lock_core",
  "bytesize",
@@ -4794,7 +4793,6 @@ dependencies = [
  "num-bigint 0.4.6",
  "ping_core",
  "programs",
- "risc0-zkvm",
  "sequencer_core",
  "sequencer_service",
  "sequencer_service_rpc",
@@ -5599,7 +5597,6 @@ dependencies = [
  "rand 0.8.6",
  "risc0-binfmt",
  "risc0-zkvm",
- "serde",
  "serde_with",
  "sha2 0.10.9",
  "test-case",
@@ -9067,7 +9064,6 @@ dependencies = [
  "borsh",
  "lee_core",
  "risc0-zkvm",
- "serde",
 ]
 
 [[package]]
@@ -9297,6 +9293,7 @@ dependencies = [
 name = "privacy_preserving_circuit_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -9411,6 +9408,7 @@ dependencies = [
  "associated_token_account_core",
  "associated_token_account_program",
  "authenticated_transfer_core",
+ "borsh",
  "bridge_core",
  "bridge_lock_core",
  "build_utils",
@@ -10984,7 +10982,6 @@ dependencies = [
  "ping_core",
  "programs",
  "rand 0.8.6",
- "risc0-zkvm",
  "sequencer_core_metrics",
  "sequencer_stake_core",
  "sequencer_storage_actor",
@@ -12185,9 +12182,9 @@ dependencies = [
 name = "test_methods_guests"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
- "serde",
 ]
 
 [[package]]
@@ -12195,6 +12192,7 @@ name = "test_program_guests"
 version = "0.1.0"
 dependencies = [
  "authenticated_transfer_core",
+ "borsh",
  "clock_core",
  "faucet_core",
  "lee_core",
@@ -13444,9 +13442,9 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 name = "vault_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
- "serde",
 ]
 
 [[package]]
@@ -13546,7 +13544,6 @@ dependencies = [
  "lee",
  "lee_core",
  "programs",
- "risc0-zkvm",
  "serde_json",
  "tokio",
  "vault_core",
@@ -14314,7 +14311,6 @@ dependencies = [
  "borsh",
  "lee_core",
  "risc0-zkvm",
- "serde",
 ]
 
 [[package]]

@@ -65,7 +65,7 @@ impl borsh::BorshDeserialize for SequencerKey {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum Instruction {
     /// Locks `amount` into the ownership account for `sequencer_key`. First
     /// use claims the account; later calls top up the same account.

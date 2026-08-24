@@ -3,7 +3,6 @@ use lee_core::{
     account::Nonce,
     program::{InstructionData, ProgramId},
 };
-use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::LeeError, program::Program};
@@ -36,7 +35,7 @@ impl std::fmt::Debug for Message {
 }
 
 impl Message {
-    pub fn try_new<T: Serialize>(
+    pub fn try_new<T: BorshSerialize>(
         program_id: ProgramId,
         account_ids: Vec<AccountId>,
         nonces: Vec<Nonce>,
@@ -89,45 +88,29 @@ mod tests {
 
     use super::{Message, PREFIX};
 
-    #[test]
-    fn hash_public_pinned() {
-        let msg = Message::new_preserialized(
+    // program_id [1_u32; 8], each word as LE u32.
+    const PROGRAM_ID_BYTES: [u8; 32] = [
+        1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+        0, 0,
+    ];
+
+    fn pinned_message(instruction_data: Vec<u8>) -> Message {
+        Message::new_preserialized(
             [1_u32; 8],
-            vec![AccountId::new([42_u8; 32])],
+            vec![AccountId::new([42; 32])],
             vec![Nonce(5)],
-            vec![],
-        );
+            instruction_data,
+        )
+    }
 
-        // program_id: [1_u32; 8], each word as LE u32
-        let program_id_bytes: &[u8] = &[
-            1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1,
-            0, 0, 0,
-        ];
-        // account_ids: AccountId([42_u8; 32])
-        let account_ids_bytes: &[u8] = &[42_u8; 32];
-        // nonces: u32 len=1, then Nonce(5) as LE u128
-        let nonces_bytes: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let instruction_data_bytes: &[u8] = &[0_u8; 4];
-
-        let expected_borsh_vec: Vec<u8> = [
-            program_id_bytes,
-            &[1_u8, 0, 0, 0], // account_ids len=1
-            account_ids_bytes,
-            nonces_bytes,
-            instruction_data_bytes,
-        ]
-        .concat();
-        let expected_borsh: &[u8] = &expected_borsh_vec;
-
+    fn assert_borsh_and_hash_pinned(msg: &Message, expected_borsh: &[u8]) {
         assert_eq!(
-            borsh::to_vec(&msg).unwrap(),
+            borsh::to_vec(msg).unwrap(),
             expected_borsh,
             "`public_transaction::hash()`: expected borsh order has changed"
         );
 
-        let mut preimage = Vec::with_capacity(PREFIX.len() + expected_borsh.len());
-        preimage.extend_from_slice(PREFIX);
-        preimage.extend_from_slice(expected_borsh);
+        let preimage = [&PREFIX[..], expected_borsh].concat();
         let expected_hash: [u8; 32] = Sha256::digest(&preimage).into();
 
         assert_eq!(
@@ -135,5 +118,37 @@ mod tests {
             expected_hash,
             "`public_transaction::hash()`: serialization has changed"
         );
+    }
+
+    #[test]
+    fn hash_public_pinned() {
+        // account_ids: u32 len=1 then AccountId([42; 32]); nonces: u32 len=1 then LE u128;
+        // instruction_data: u32 len=0.
+        let expected_borsh: Vec<u8> = [
+            &PROGRAM_ID_BYTES[..],
+            &[1, 0, 0, 0],
+            &[42; 32],
+            &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            &[0, 0, 0, 0],
+        ]
+        .concat();
+
+        assert_borsh_and_hash_pinned(&pinned_message(vec![]), &expected_borsh);
+    }
+
+    #[test]
+    fn hash_public_pinned_nonempty_instruction() {
+        // instruction_data is Vec<u8>: u32 len=3 then the raw bytes, one wire byte per element —
+        // pins the element width (the pre-borsh wire carried one u32 word per element).
+        let expected_borsh: Vec<u8> = [
+            &PROGRAM_ID_BYTES[..],
+            &[1, 0, 0, 0],
+            &[42; 32],
+            &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            &[3, 0, 0, 0, 7, 8, 9],
+        ]
+        .concat();
+
+        assert_borsh_and_hash_pinned(&pinned_message(vec![7, 8, 9]), &expected_borsh);
     }
 }
