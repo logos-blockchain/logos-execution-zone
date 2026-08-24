@@ -8,9 +8,9 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
     encryption::ViewingPublicKey,
     program::{
-        AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim,
+        AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
-        TimestampValidityWindow, validate_execution,
+        SystemInstruction, TimestampValidityWindow, validate_clear, validate_execution,
     },
 };
 use risc0_zkvm::guest::env;
@@ -153,13 +153,6 @@ impl ExecutionState {
                 "Mismatched instruction data between chained call and program output"
             );
 
-            // Check that `program_output` is consistent with the execution of the corresponding
-            // program.
-            let program_output_frame = lee_core::to_borsh_frame(&program_output);
-            env::verify(chained_call.program_id, &program_output_frame).unwrap_or_else(
-                |_: Infallible| unreachable!("Infallible error is never constructed"),
-            );
-
             // Verify that the program output's self_program_id matches the expected program ID.
             // This ensures the proof commits to which program produced the output.
             assert_eq!(
@@ -176,18 +169,71 @@ impl ExecutionState {
                 "Program output caller_program_id does not match actual caller"
             );
 
-            // Check that the program is well behaved.
+            // Check that `program_output` is consistent with the execution of the corresponding
+            // program and that the program is well behaved. The System Program has no guest ELF,
+            // so its clear skips both recursive-proof verification and `validate_execution`: the
+            // clear intentionally violates `validate_execution` (owner → the declared new owner,
+            // data zeroed, default-owner-with-data: rules 4, 6, 7) and is instead structurally
+            // validated here against the accounts the caller declared, which fully pins the
+            // prover-supplied post states. Every other program is verified
+            // against its proof and then checked by `validate_execution`.
             // See the # Programs section for the definition of the `validate_execution` method.
-            let validated_execution = validate_execution(
-                &program_output.pre_states,
-                &program_output.post_states,
-                chained_call.program_id,
-            );
-            if let Err(err) = validated_execution {
-                panic!(
-                    "Invalid program behavior in program {:?}: {err}",
-                    chained_call.program_id
+            if chained_call.program_id == DEFAULT_PROGRAM_ID {
+                assert_eq!(
+                    chained_call.pre_states, program_output.pre_states,
+                    "System Program clear must apply to the accounts the caller declared"
                 );
+                assert!(
+                    program_output.chained_calls.is_empty(),
+                    "System Program emits no chained calls"
+                );
+                let instruction: SystemInstruction =
+                    borsh::from_slice(&program_output.instruction_data)
+                        .expect("System Program instruction must deserialize");
+                match instruction {
+                    SystemInstruction::Clear { new_owner } => {
+                        assert_eq!(
+                            program_output.pre_states.len(),
+                            program_output.post_states.len(),
+                            "System Program clear pre/post state length mismatch"
+                        );
+                        for (pre, post) in program_output
+                            .pre_states
+                            .iter()
+                            .zip(program_output.post_states.iter())
+                        {
+                            let expected = validate_clear(pre, new_owner).unwrap_or_else(|err| {
+                                panic!("Invalid System Program clear: {err}")
+                            });
+                            assert_eq!(
+                                post.account(),
+                                &expected,
+                                "System Program clear produced a non-cleared post"
+                            );
+                            assert!(
+                                post.required_claim().is_none(),
+                                "System Program clear requests no claim"
+                            );
+                        }
+                    }
+                }
+            } else {
+                let program_output_frame = lee_core::to_borsh_frame(&program_output);
+                env::verify(chained_call.program_id, &program_output_frame).unwrap_or_else(
+                    |_: Infallible| unreachable!("Infallible error is never constructed"),
+                );
+
+                let validated_execution = validate_execution(
+                    &program_output.pre_states,
+                    &program_output.post_states,
+                    chained_call.program_id,
+                );
+                if let Err(err) = validated_execution {
+                    panic!(
+                        "Invalid program behavior in program {:?}: {err}",
+                        chained_call.program_id
+                    );
+                }
             }
 
             let authorized_accounts = execution_state.validate_and_sync_states(

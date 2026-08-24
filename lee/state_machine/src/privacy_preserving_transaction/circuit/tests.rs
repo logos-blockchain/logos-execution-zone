@@ -2,10 +2,13 @@
 
 use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
-    Nullifier, NullifierPublicKey, NullifierWitness, PrivacyPreservingCircuitOutput,
-    PrivateWitness, SharedSecretKey, WitnessKind,
+    Nullifier, NullifierPublicKey, NullifierWitness, PrivacyPreservingCircuitInput,
+    PrivacyPreservingCircuitOutput, PrivateWitness, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
-    program::{PdaSeed, PrivateAccountKind},
+    program::{
+        AccountPostState, DEFAULT_PROGRAM_ID, DEFAULT_PROGRAM_OWNER, PdaSeed, PrivateAccountKind,
+        ProgramOutput, SystemInstruction,
+    },
 };
 
 use super::*;
@@ -1075,5 +1078,147 @@ fn private_pda_init_at_root_call_may_not_declare_authorization() {
 fn private_pda_update_identifier_mismatch_fails() {
     let result = pda_update_attempt(false, 5, 99);
 
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+}
+
+/// Proves a hand-built circuit input directly, with no guest program run and no proof
+/// assumptions. Mirrors the proving tail of `execute_and_prove_with_padded_inputs`; the System
+/// Program's clear has no guest ELF, so the prover synthesizes its `ProgramOutput`.
+fn prove_synthesized_input(
+    circuit_input: &PrivacyPreservingCircuitInput,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    let mut env_builder = ExecutorEnv::builder();
+    env_builder.write_slice(&to_frame(&borsh::to_vec(circuit_input)?));
+    let env = env_builder.build().unwrap();
+    let prove_info = default_prover()
+        .prove_with_opts(env, PRIVACY_PRESERVING_CIRCUIT_ELF, &ProverOpts::succinct())
+        .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
+    let proof = Proof(borsh::to_vec(&prove_info.receipt.inner)?);
+    let output = borsh::from_slice(from_frame(&prove_info.receipt.journal.bytes).ok_or_else(
+        || {
+            LeeError::CircuitOutputDeserializationError(
+                "malformed circuit journal frame".to_owned(),
+            )
+        },
+    )?)
+    .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
+    Ok((output, proof))
+}
+
+/// A data-carrying, program-owned regular private note plus the `Clear { new_owner }` circuit
+/// input that reclaims it. Returns the note's pre-state commitment and the canonical cleared
+/// account alongside the input.
+fn clear_note_circuit_input(
+    new_owner: Option<AccountId>,
+    authorized: bool,
+) -> (
+    AccountId,
+    Commitment,
+    Account,
+    PrivacyPreservingCircuitInput,
+) {
+    let keys = test_private_account_keys_1();
+    let identifier: u128 = 7;
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+
+    let pre_account = Account {
+        program_owner: crate::test_methods::noop().id().into(),
+        balance: 55,
+        data: vec![1_u8, 2, 3].try_into().unwrap(),
+        nonce: Nonce(3),
+    };
+    let commitment_pre = Commitment::new(&account_id, &pre_account);
+    let mut commitment_set = CommitmentSet::with_capacity(1);
+    commitment_set.extend(std::slice::from_ref(&commitment_pre));
+    let membership_proof = commitment_set.get_proof_for(&commitment_pre).unwrap();
+
+    let cleared = Account {
+        program_owner: new_owner.unwrap_or(DEFAULT_PROGRAM_OWNER),
+        balance: pre_account.balance,
+        data: Data::default(),
+        nonce: pre_account.nonce,
+    };
+    let pre = AccountWithMetadata::new(pre_account, authorized, account_id);
+
+    let circuit_input = PrivacyPreservingCircuitInput {
+        program_outputs: vec![ProgramOutput::new(
+            DEFAULT_PROGRAM_ID,
+            None,
+            Program::serialize_instruction(SystemInstruction::Clear { new_owner }).unwrap(),
+            vec![pre],
+            vec![AccountPostState::new(cleared.clone())],
+        )],
+        account_identities: vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            identifier,
+            kind: WitnessKind::Regular {
+                ask: authorized.then_some(keys.ask),
+            },
+            nullifier: NullifierWitness::Update {
+                view_tag: 0,
+                nsk: keys.nsk(),
+                membership_proof,
+            },
+        })],
+        program_id: DEFAULT_PROGRAM_ID,
+        dummy_inputs: vec![],
+    };
+
+    (account_id, commitment_pre, cleared, circuit_input)
+}
+
+fn assert_private_clear_succeeds(new_owner: Option<AccountId>) {
+    let keys = test_private_account_keys_1();
+    let (account_id, commitment_pre, cleared, circuit_input) =
+        clear_note_circuit_input(new_owner, true);
+
+    let expected_nullifier = Nullifier::for_account_update(&commitment_pre, &keys.nsk());
+    let expected_post = Account {
+        nonce: cleared.nonce.private_account_nonce_increment(&keys.nsk()),
+        ..cleared
+    };
+    let expected_commitment = Commitment::new(&account_id, &expected_post);
+    let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &expected_post.nonce);
+    let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
+
+    let (output, proof) = prove_synthesized_input(&circuit_input).unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    assert_eq!(output.private_actions.len(), 1);
+    assert_eq!(output.private_actions[0].nullifier, expected_nullifier);
+    assert_eq!(output.private_actions[0].commitment, expected_commitment);
+
+    let (_kind, post) = EncryptionScheme::decrypt(
+        &output.private_actions[0].encrypted_post_state.ciphertext,
+        &ssk,
+        &output.private_actions[0].nullifier,
+    )
+    .unwrap();
+    assert_eq!(post, expected_post);
+}
+
+/// A program-owned regular private note is reclaimed by a System Program `Clear`: the successor
+/// carries the note's update nullifier and a default-owned commitment with the balance preserved
+/// and data zeroed, at the same account id.
+#[test]
+fn private_reclaim_parks_program_owned_note() {
+    assert_private_clear_succeeds(None);
+}
+
+/// The same clear with a declared `new_owner` hands the note straight to that program: the
+/// successor commitment is owned by the target, with the balance preserved and data zeroed.
+#[test]
+fn private_reclaim_reassigns_to_the_declared_new_owner() {
+    assert_private_clear_succeeds(Some(AccountId::new([7; 32])));
+}
+
+/// A witness with no `ask` leaves the note unauthorized, so `validate_clear` rejects the clear
+/// (`NotAuthorized`) and the circuit refuses to prove.
+#[test]
+fn private_reclaim_without_ask_is_rejected() {
+    let (.., circuit_input) = clear_note_circuit_input(None, false);
+
+    let result = prove_synthesized_input(&circuit_input);
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
