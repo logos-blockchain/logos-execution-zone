@@ -1,9 +1,9 @@
 use authenticated_transfer_core::Instruction as TransferInstruction;
 use cacp_bond_core::{
     BondState, Instruction, MantleSignature, Phase, Settlement, TimeoutPayout,
-    accept_candidate_commitment, can_challenge_accept, can_challenge_finalize, can_disclose_accept,
-    can_disclose_finalize, escrow_account_id, escrow_seed, proof_commitment, state_account_id,
-    state_seed, timeout_resolution, valid_accept_candidate, valid_mantle_key,
+    accept_candidate_commitment, can_challenge_accept, can_challenge_finalize, can_complete,
+    can_disclose_accept, can_disclose_finalize, escrow_account_id, escrow_seed, proof_commitment,
+    state_account_id, state_seed, timeout_resolution, valid_accept_candidate, valid_mantle_key,
 };
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
@@ -27,29 +27,51 @@ fn main() {
         caller_program_id.is_none(),
         "CACP bond is only invoked by top-level public transactions"
     );
-    let [initiator, counterparty, escrow, state_meta, clock] =
-        <[AccountWithMetadata; 5]>::try_from(pre_states)
-            .expect("CACP bond instructions require five accounts");
-    let current_block = read_clock(&clock);
-
-    let (state, transfers, claim_state) = match instruction {
+    match instruction {
         Instruction::Open {
             proposal_id,
             counterparty: declared_counterparty,
+            fee_collector: declared_fee_collector,
             expected_tx_hash,
             expected_accept_candidate_commitment,
             initiator_mantle_key,
             stake_amount,
-            challenge_bond,
+            challenge_fee,
+            response_fee,
             response_window_blocks,
         } => {
+            let [initiator, counterparty, escrow, state_meta, clock] =
+                <[AccountWithMetadata; 5]>::try_from(pre_states)
+                    .expect("Open requires five accounts");
+            let current_block = read_clock(&clock);
             assert!(initiator.is_authorized, "initiator must authorize Open");
             assert_eq!(
                 counterparty.account_id, declared_counterparty,
                 "counterparty account does not match the instruction"
             );
+            assert_ne!(
+                declared_fee_collector, initiator.account_id,
+                "initiator cannot be the neutral-zone fee collector"
+            );
+            assert_ne!(
+                declared_fee_collector, counterparty.account_id,
+                "counterparty cannot be the neutral-zone fee collector"
+            );
+            assert_ne!(
+                declared_fee_collector, escrow.account_id,
+                "escrow cannot be the neutral-zone fee collector"
+            );
+            assert_ne!(
+                declared_fee_collector, state_meta.account_id,
+                "state cannot be the neutral-zone fee collector"
+            );
+            assert_ne!(
+                declared_fee_collector, clock.account_id,
+                "clock cannot be the neutral-zone fee collector"
+            );
             assert!(stake_amount > 0, "stake must be non-zero");
-            assert!(challenge_bond > 0, "challenge bond must be non-zero");
+            assert!(challenge_fee > 0, "challenge fee must be non-zero");
+            assert!(response_fee > 0, "response fee must be non-zero");
             assert!(
                 valid_mantle_key(&initiator_mantle_key),
                 "initiator Mantle key is invalid"
@@ -80,10 +102,12 @@ fn main() {
                 proposal_id,
                 initiator: initiator.account_id,
                 counterparty: counterparty.account_id,
+                fee_collector: declared_fee_collector,
                 initiator_mantle_key,
                 counterparty_mantle_key: None,
                 stake_amount,
-                challenge_bond,
+                challenge_fee,
+                response_fee,
                 response_window_blocks,
                 expires_at_block: deadline(current_block, response_window_blocks),
                 tx_hash: expected_tx_hash,
@@ -93,9 +117,48 @@ fn main() {
                 settlement: None,
             };
             let transfer = deposit_call(&initiator, &escrow, stake_amount, proposal_id);
-            (state, vec![transfer], true)
+            let mut state_account = state_meta.account.clone();
+            state_account.data = state
+                .to_bytes()
+                .try_into()
+                .expect("CACP bond state fits in account data");
+            let state_post = AccountPostState::new_claimed_if_default(
+                state_account,
+                Claim::Pda(state_seed(&state.proposal_id)),
+            );
+            ProgramOutput::new(
+                self_program_id,
+                caller_program_id,
+                instruction_words,
+                vec![
+                    initiator.clone(),
+                    counterparty.clone(),
+                    escrow.clone(),
+                    state_meta,
+                    clock.clone(),
+                ],
+                vec![
+                    AccountPostState::new(initiator.account),
+                    AccountPostState::new(counterparty.account),
+                    AccountPostState::new(escrow.account),
+                    state_post,
+                    AccountPostState::new(clock.account),
+                ],
+            )
+            .with_chained_calls(vec![transfer])
+            .write();
         }
         other => {
+            let [
+                initiator,
+                counterparty,
+                escrow,
+                state_meta,
+                clock,
+                fee_collector,
+            ] = <[AccountWithMetadata; 6]>::try_from(pre_states)
+                .expect("non-Open CACP bond instructions require six accounts");
+            let current_block = read_clock(&clock);
             let mut state = load_state(self_program_id, &state_meta, &escrow)
                 .unwrap_or_else(|error| panic!("{error}"));
             assert_instruction_proposal(&other, state.proposal_id);
@@ -104,48 +167,40 @@ fn main() {
                 &initiator,
                 &counterparty,
                 &escrow,
+                &fee_collector,
                 current_block,
                 other,
             );
-            (state, transfers, false)
+            let mut state_account = state_meta.account.clone();
+            state_account.data = state
+                .to_bytes()
+                .try_into()
+                .expect("CACP bond state fits in account data");
+            ProgramOutput::new(
+                self_program_id,
+                caller_program_id,
+                instruction_words,
+                vec![
+                    initiator.clone(),
+                    counterparty.clone(),
+                    escrow.clone(),
+                    state_meta,
+                    clock.clone(),
+                    fee_collector.clone(),
+                ],
+                vec![
+                    AccountPostState::new(initiator.account),
+                    AccountPostState::new(counterparty.account),
+                    AccountPostState::new(escrow.account),
+                    AccountPostState::new(state_account),
+                    AccountPostState::new(clock.account),
+                    AccountPostState::new(fee_collector.account),
+                ],
+            )
+            .with_chained_calls(transfers)
+            .write();
         }
-    };
-
-    let mut state_account = state_meta.account.clone();
-    state_account.data = state
-        .to_bytes()
-        .try_into()
-        .expect("CACP bond state fits in account data");
-    let state_post = if claim_state {
-        AccountPostState::new_claimed_if_default(
-            state_account,
-            Claim::Pda(state_seed(&state.proposal_id)),
-        )
-    } else {
-        AccountPostState::new(state_account)
-    };
-
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        vec![
-            initiator.clone(),
-            counterparty.clone(),
-            escrow.clone(),
-            state_meta,
-            clock.clone(),
-        ],
-        vec![
-            AccountPostState::new(initiator.account),
-            AccountPostState::new(counterparty.account),
-            AccountPostState::new(escrow.account),
-            state_post,
-            AccountPostState::new(clock.account),
-        ],
-    )
-    .with_chained_calls(transfers)
-    .write();
+    }
 }
 
 fn apply_instruction(
@@ -153,10 +208,11 @@ fn apply_instruction(
     initiator: &AccountWithMetadata,
     counterparty: &AccountWithMetadata,
     escrow: &AccountWithMetadata,
+    fee_collector: &AccountWithMetadata,
     current_block: u64,
     instruction: Instruction,
 ) -> Vec<ChainedCall> {
-    ensure_accounts(state, initiator, counterparty);
+    ensure_accounts(state, initiator, counterparty, fee_collector);
     match instruction {
         Instruction::Join {
             tx_hash,
@@ -203,12 +259,7 @@ fn apply_instruction(
             assert_window_open(state, current_block);
             state.phase = Phase::AcceptChallenged;
             restart_window(state, current_block);
-            vec![deposit_call(
-                initiator,
-                escrow,
-                state.challenge_bond,
-                state.proposal_id,
-            )]
+            vec![fee_call(initiator, fee_collector, state.challenge_fee)]
         }
         Instruction::DiscloseAccept {
             accept_candidate,
@@ -225,12 +276,7 @@ fn apply_instruction(
             verify_counterparty_proof(state, &proof);
             state.phase = Phase::AwaitingFinalize;
             restart_window(state, current_block);
-            vec![payout_call(
-                escrow,
-                counterparty,
-                state.challenge_bond,
-                state.proposal_id,
-            )]
+            vec![fee_call(counterparty, fee_collector, state.response_fee)]
         }
         Instruction::ChallengeFinalize {
             accept_candidate,
@@ -249,12 +295,7 @@ fn apply_instruction(
             verify_counterparty_proof(state, &accept_proof);
             state.phase = Phase::FinalizeChallenged;
             restart_window(state, current_block);
-            vec![deposit_call(
-                counterparty,
-                escrow,
-                state.challenge_bond,
-                state.proposal_id,
-            )]
+            vec![fee_call(counterparty, fee_collector, state.challenge_fee)]
         }
         Instruction::DiscloseFinalize { proof, .. } => {
             assert!(
@@ -265,7 +306,20 @@ fn apply_instruction(
             assert_window_open(state, current_block);
             verify_initiator_proof(state, &proof);
             settle_completed(state);
-            completed_payouts(state, initiator, counterparty, escrow, Some(true))
+            let mut transfers = vec![fee_call(initiator, fee_collector, state.response_fee)];
+            let mut initiator_after_fee = initiator.clone();
+            initiator_after_fee.account.balance = initiator_after_fee
+                .account
+                .balance
+                .checked_sub(state.response_fee)
+                .expect("initiator has enough balance for the response fee");
+            transfers.extend(completed_payouts(
+                state,
+                &initiator_after_fee,
+                counterparty,
+                escrow,
+            ));
+            transfers
         }
         Instruction::Complete {
             initiator_proof,
@@ -277,24 +331,13 @@ fn apply_instruction(
                 "a participant must authorize completion"
             );
             assert!(
-                matches!(
-                    state.phase,
-                    Phase::AwaitingAccept
-                        | Phase::AcceptChallenged
-                        | Phase::AwaitingFinalize
-                        | Phase::FinalizeChallenged
-                ),
+                can_complete(state.phase),
                 "proposal is not ready for completion"
             );
             verify_counterparty_proof(state, &counterparty_proof);
             verify_initiator_proof(state, &initiator_proof);
-            let challenged = match state.phase {
-                Phase::AcceptChallenged => Some(false),
-                Phase::FinalizeChallenged => Some(true),
-                _ => None,
-            };
             settle_completed(state);
-            completed_payouts(state, initiator, counterparty, escrow, challenged)
+            completed_payouts(state, initiator, counterparty, escrow)
         }
         Instruction::SettleTimeout { .. } => {
             let resolution = timeout_resolution(state.phase)
@@ -315,10 +358,7 @@ fn apply_instruction(
                         initiator.is_authorized || counterparty.is_authorized,
                         "a participant must authorize refund"
                     );
-                    vec![
-                        payout_call(escrow, initiator, state.stake_amount, state.proposal_id),
-                        payout_call(escrow, counterparty, state.stake_amount, state.proposal_id),
-                    ]
+                    completed_payouts(state, initiator, counterparty, escrow)
                 }
                 TimeoutPayout::AwardEscrowToInitiator => {
                     assert!(
@@ -328,7 +368,7 @@ fn apply_instruction(
                     vec![payout_call(
                         escrow,
                         initiator,
-                        two_stakes_plus_bond(state),
+                        two_stakes(state),
                         state.proposal_id,
                     )]
                 }
@@ -340,7 +380,7 @@ fn apply_instruction(
                     vec![payout_call(
                         escrow,
                         counterparty,
-                        two_stakes_plus_bond(state),
+                        two_stakes(state),
                         state.proposal_id,
                     )]
                 }
@@ -358,28 +398,35 @@ fn completed_payouts(
     initiator: &AccountWithMetadata,
     counterparty: &AccountWithMetadata,
     escrow: &AccountWithMetadata,
-    challenged: Option<bool>,
 ) -> Vec<ChainedCall> {
-    let initiator_amount = state
-        .stake_amount
-        .checked_add(if challenged == Some(true) {
-            state.challenge_bond
-        } else {
-            0
-        })
-        .expect("initiator payout overflow");
-    let counterparty_amount = state
-        .stake_amount
-        .checked_add(if challenged == Some(false) {
-            state.challenge_bond
-        } else {
-            0
-        })
-        .expect("counterparty payout overflow");
+    let mut escrow_after_first_payout = escrow.clone();
+    escrow_after_first_payout.account.balance = escrow_after_first_payout
+        .account
+        .balance
+        .checked_sub(state.stake_amount)
+        .expect("escrow contains the initiator stake");
     vec![
-        payout_call(escrow, initiator, initiator_amount, state.proposal_id),
-        payout_call(escrow, counterparty, counterparty_amount, state.proposal_id),
+        payout_call(escrow, initiator, state.stake_amount, state.proposal_id),
+        payout_call(
+            &escrow_after_first_payout,
+            counterparty,
+            state.stake_amount,
+            state.proposal_id,
+        ),
     ]
+}
+
+fn fee_call(
+    sender: &AccountWithMetadata,
+    fee_collector: &AccountWithMetadata,
+    amount: u128,
+) -> ChainedCall {
+    assert!(sender.is_authorized, "fee sender must be authorized");
+    ChainedCall::new(
+        sender.account.program_owner.into(),
+        vec![sender.clone(), fee_collector.clone()],
+        &TransferInstruction::Transfer { amount },
+    )
 }
 
 fn deposit_call(
@@ -439,6 +486,7 @@ fn ensure_accounts(
     state: &BondState,
     initiator: &AccountWithMetadata,
     counterparty: &AccountWithMetadata,
+    fee_collector: &AccountWithMetadata,
 ) {
     assert_eq!(
         initiator.account_id, state.initiator,
@@ -447,6 +495,10 @@ fn ensure_accounts(
     assert_eq!(
         counterparty.account_id, state.counterparty,
         "wrong counterparty account"
+    );
+    assert_eq!(
+        fee_collector.account_id, state.fee_collector,
+        "wrong neutral-zone fee collector account"
     );
 }
 
@@ -539,10 +591,9 @@ fn settle_completed(state: &mut BondState) {
     state.settlement = Some(Settlement::Completed);
 }
 
-fn two_stakes_plus_bond(state: &BondState) -> u128 {
+fn two_stakes(state: &BondState) -> u128 {
     state
         .stake_amount
         .checked_mul(2)
-        .and_then(|amount| amount.checked_add(state.challenge_bond))
         .expect("forfeiture payout overflow")
 }

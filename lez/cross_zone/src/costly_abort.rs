@@ -1,7 +1,7 @@
 use cacp_bond_core::{Instruction, escrow_account_id, state_account_id};
 use lee::{AccountId, ProgramId};
 
-use crate::cacp::{CostlyAbortBondTerms, ProposalId};
+use crate::cacp::{CostlyEscalationBondTerms, ProposalId};
 
 /// Deterministic address binding between one CACP proposal and its neutral-zone
 /// bond state/escrow accounts.
@@ -29,16 +29,18 @@ pub fn open_instruction(
     expected_tx_hash: [u8; 32],
     expected_accept_candidate_commitment: [u8; 32],
     initiator_mantle_key: [u8; 32],
-    terms: CostlyAbortBondTerms,
+    terms: CostlyEscalationBondTerms,
 ) -> Instruction {
     Instruction::Open {
         proposal_id: proposal_id.0,
         counterparty,
+        fee_collector: terms.fee_collector,
         expected_tx_hash,
         expected_accept_candidate_commitment,
         initiator_mantle_key,
         stake_amount: terms.stake_amount,
-        challenge_bond: terms.challenge_bond,
+        challenge_fee: terms.challenge_fee,
+        response_fee: terms.response_fee,
         response_window_blocks: terms.response_window_blocks,
     }
 }
@@ -57,11 +59,13 @@ mod tests {
 
     #[test]
     fn open_instruction_uses_committed_terms() {
-        let terms = CostlyAbortBondTerms {
+        let terms = CostlyEscalationBondTerms {
             bond_zone: ChannelId::from([9; 32]),
             bond_program_id: [7; 8],
+            fee_collector: AccountId::new([6; 32]),
             stake_amount: 1_000,
-            challenge_bond: 100,
+            challenge_fee: 100,
+            response_fee: 80,
             response_window_blocks: 4,
         };
         let instruction = open_instruction(
@@ -76,7 +80,9 @@ mod tests {
             expected_tx_hash,
             expected_accept_candidate_commitment,
             stake_amount,
-            challenge_bond,
+            challenge_fee,
+            response_fee,
+            fee_collector,
             response_window_blocks,
             ..
         } = instruction
@@ -86,7 +92,9 @@ mod tests {
         assert_eq!(expected_tx_hash, [4; 32]);
         assert_eq!(expected_accept_candidate_commitment, [5; 32]);
         assert_eq!(stake_amount, 1_000);
-        assert_eq!(challenge_bond, 100);
+        assert_eq!(challenge_fee, 100);
+        assert_eq!(response_fee, 80);
+        assert_eq!(fee_collector, AccountId::new([6; 32]));
         assert_eq!(response_window_blocks, 4);
     }
 }

@@ -1331,6 +1331,7 @@ name = "cacp_demo"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "authenticated_transfer_core",
  "cacp_bond_core",
  "clock_core",
  "common",

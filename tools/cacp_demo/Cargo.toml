@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+authenticated_transfer_core.workspace = true
 cacp_bond_core.workspace = true
 clock_core.workspace = true
 common.workspace = true

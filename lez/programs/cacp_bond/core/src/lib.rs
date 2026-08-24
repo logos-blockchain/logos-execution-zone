@@ -35,11 +35,13 @@ pub enum Instruction {
     Open {
         proposal_id: ProposalId,
         counterparty: AccountId,
+        fee_collector: AccountId,
         expected_tx_hash: MantleTxHash,
         expected_accept_candidate_commitment: Commitment,
         initiator_mantle_key: MantlePublicKey,
         stake_amount: u128,
-        challenge_bond: u128,
+        challenge_fee: u128,
+        response_fee: u128,
         response_window_blocks: u64,
     },
     Join {
@@ -155,15 +157,25 @@ pub const fn can_disclose_finalize(phase: Phase) -> bool {
     matches!(phase, Phase::FinalizeChallenged)
 }
 
+/// Completion is free only while no escalation is active. Once challenged,
+/// the challenged party must use the matching disclosure instruction and pay
+/// the configured response fee.
+#[must_use]
+pub const fn can_complete(phase: Phase) -> bool {
+    matches!(phase, Phase::AwaitingAccept | Phase::AwaitingFinalize)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BondState {
     pub proposal_id: ProposalId,
     pub initiator: AccountId,
     pub counterparty: AccountId,
+    pub fee_collector: AccountId,
     pub initiator_mantle_key: MantlePublicKey,
     pub counterparty_mantle_key: Option<MantlePublicKey>,
     pub stake_amount: u128,
-    pub challenge_bond: u128,
+    pub challenge_fee: u128,
+    pub response_fee: u128,
     pub response_window_blocks: u64,
     pub expires_at_block: u64,
     pub tx_hash: MantleTxHash,
@@ -364,5 +376,13 @@ mod tests {
         assert!(!can_disclose_finalize(Phase::AwaitingFinalize));
         assert!(can_disclose_accept(Phase::AcceptChallenged));
         assert!(can_disclose_finalize(Phase::FinalizeChallenged));
+    }
+
+    #[test]
+    fn completion_cannot_bypass_an_active_escalation_fee() {
+        assert!(can_complete(Phase::AwaitingAccept));
+        assert!(can_complete(Phase::AwaitingFinalize));
+        assert!(!can_complete(Phase::AcceptChallenged));
+        assert!(!can_complete(Phase::FinalizeChallenged));
     }
 }
