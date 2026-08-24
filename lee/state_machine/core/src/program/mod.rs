@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Data},
     encryption::ViewingPublicKey,
 };
 
@@ -311,6 +311,11 @@ pub enum Claim {
     /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
     /// account is public or private.
     Pda(PdaSeed),
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub enum SystemInstruction {
+    Clear { new_owner: Option<AccountId> },
 }
 
 impl AccountPostState {
@@ -669,6 +674,12 @@ pub enum ExecutionValidationError {
     },
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum ClearValidationError {
+    #[error("Unauthorized clear of account {account_id}")]
+    NotAuthorized { account_id: AccountId },
+}
+
 /// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
 ///
 /// Returns only public-form derivations, suitable for contexts where all accounts are public
@@ -828,6 +839,24 @@ pub fn validate_execution(
     }
 
     Ok(())
+}
+
+pub fn validate_clear(
+    pre: &AccountWithMetadata,
+    new_owner: Option<AccountId>,
+) -> Result<Account, ClearValidationError> {
+    if !pre.is_authorized {
+        return Err(ClearValidationError::NotAuthorized {
+            account_id: pre.account_id,
+        });
+    }
+
+    Ok(Account {
+        program_owner: new_owner.unwrap_or(DEFAULT_PROGRAM_OWNER),
+        balance: pre.account.balance,
+        data: Data::default(),
+        nonce: pre.account.nonce,
+    })
 }
 
 fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> bool {

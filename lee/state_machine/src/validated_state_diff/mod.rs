@@ -8,8 +8,8 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
-        validate_execution,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID, DEFAULT_PROGRAM_OWNER,
+        SystemInstruction, compute_public_authorized_pdas, validate_clear, validate_execution,
     },
 };
 use log::debug;
@@ -112,6 +112,46 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
+            let authorized_pdas =
+                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
+
+            // Account is authorized if it is either in the caller's authorized accounts or in the
+            // list of PDAs the caller has authorized.
+            let is_authorized = |account_id: &AccountId| {
+                authorized_pdas.contains(account_id)
+                    || caller_data.authorized_accounts.contains(account_id)
+            };
+
+            if chained_call.program_id == DEFAULT_PROGRAM_ID {
+                let instruction: SystemInstruction =
+                    borsh::from_slice(&chained_call.instruction_data)
+                        .map_err(|e| LeeError::InstructionSerializationError(e.to_string()))?;
+
+                match instruction {
+                    SystemInstruction::Clear { new_owner } => {
+                        for pre_state in &chained_call.pre_states {
+                            let account_id = pre_state.account_id;
+                            let pre = AccountWithMetadata::new(
+                                state_diff
+                                    .get(&account_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| state.get_account_by_id(account_id)),
+                                is_authorized(&account_id),
+                                account_id,
+                            );
+                            let post = validate_clear(&pre, new_owner)
+                                .map_err(InvalidProgramBehaviorError::ClearValidationFailed)?;
+                            state_diff.insert(account_id, post);
+                        }
+                    }
+                }
+
+                chain_calls_counter = chain_calls_counter
+                    .checked_add(1)
+                    .expect("we check the max depth at the beginning of the loop");
+                continue;
+            }
+
             let Some(program_account) = state.get_program(chained_call.program_id) else {
                 return Err(LeeError::InvalidInput("Unknown program".into()));
             };
@@ -133,16 +173,6 @@ impl ValidatedStateDiff {
                 "Program {:?} output: {:?}",
                 chained_call.program_id, program_output
             );
-
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
-
-            // Account is authorized if it is either in the caller's authorized accounts or in the
-            // list of PDAs the caller has authorized.
-            let is_authorized = |account_id: &AccountId| {
-                authorized_pdas.contains(account_id)
-                    || caller_data.authorized_accounts.contains(account_id)
-            };
 
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
