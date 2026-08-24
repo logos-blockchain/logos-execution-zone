@@ -161,3 +161,61 @@ fn clear_instruction_to_an_undeployed_program_is_rejected() {
     assert!(matches!(result, Err(LeeError::InvalidInput(_))));
     assert_eq!(state.get_account_by_id(id), account);
 }
+
+/// Reclaim is atomic in the useful sense: one `Clear { new_owner }` hands a hostile-owned account
+/// to a program that can already spend its balance in the next transaction.
+#[test]
+fn reclaimed_account_is_spendable_under_its_new_owner() {
+    let key = PrivateKey::try_new([4; 32]).unwrap();
+    let id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let recipient = AccountId::new([9; 32]);
+    let transfer = crate::test_methods::modified_transfer_program();
+
+    let mut state = V03State::new().with_test_programs();
+    state.force_insert_account(
+        id,
+        Account {
+            program_owner: HOSTILE_OWNER,
+            balance: 500_000,
+            data: vec![0xca, 0xfe].try_into().unwrap(),
+            nonce: Nonce(0),
+        },
+    );
+
+    let clear_message = public_transaction::Message::try_new(
+        DEFAULT_PROGRAM_ID,
+        vec![id],
+        vec![Nonce(0)],
+        SystemInstruction::Clear {
+            new_owner: Some(transfer.id().into()),
+        },
+    )
+    .unwrap();
+    let clear_witness_set = public_transaction::WitnessSet::for_message(&clear_message, &[&key]);
+    let clear_tx = PublicTransaction::new(clear_message, clear_witness_set);
+
+    state
+        .transition_from_public_transaction(&clear_tx, 1, 0)
+        .unwrap();
+
+    let amount: u128 = 1;
+    let transfer_message = public_transaction::Message::try_new(
+        transfer.id(),
+        vec![id, recipient],
+        vec![Nonce(1)],
+        amount,
+    )
+    .unwrap();
+    let transfer_witness_set =
+        public_transaction::WitnessSet::for_message(&transfer_message, &[&key]);
+    let transfer_tx = PublicTransaction::new(transfer_message, transfer_witness_set);
+
+    state
+        .transition_from_public_transaction(&transfer_tx, 2, 0)
+        .unwrap();
+
+    let reclaimed = state.get_account_by_id(id);
+    assert_eq!(reclaimed.program_owner, AccountId::from(transfer.id()));
+    assert!(reclaimed.balance < 500_000);
+    assert!(state.get_account_by_id(recipient).balance > 0);
+}

@@ -1222,3 +1222,186 @@ fn private_reclaim_without_ask_is_rejected() {
     let result = prove_synthesized_input(&circuit_input);
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
+
+/// A default-owned private note can be credited with no claim: the successor keeps the default
+/// owner and empty data while carrying the balance the program moved into it.
+#[test]
+fn private_default_owner_credited_without_claim_succeeds() {
+    let program = crate::test_methods::modified_transfer_program();
+    let recipient_keys = test_private_account_keys_1();
+    let sender = AccountWithMetadata::new(
+        Account {
+            program_owner: program.id().into(),
+            balance: 500_000,
+            ..Account::default()
+        },
+        true,
+        AccountId::new([0; 32]),
+    );
+    let recipient_account_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let recipient = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
+
+    let init_nonce = Nonce::private_account_nonce_init(&recipient_account_id);
+    let esk = EphemeralSecretKey::new(&recipient_account_id, &[0; 32], &init_nonce);
+    let shared_secret = SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &esk).0;
+
+    let (output, proof) = execute_and_prove(
+        vec![sender, recipient],
+        Program::serialize_instruction(1_u128).unwrap(),
+        vec![
+            InputAccountIdentity::Public,
+            InputAccountIdentity::Private(PrivateWitness {
+                vpk: recipient_keys.vpk(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
+        ],
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    assert_eq!(output.private_actions.len(), 1);
+    let (_kind, recipient_post) = EncryptionScheme::decrypt(
+        &output.private_actions[0].encrypted_post_state.ciphertext,
+        &shared_secret,
+        &output.private_actions[0].nullifier,
+    )
+    .unwrap();
+    assert_eq!(recipient_post.program_owner, DEFAULT_PROGRAM_OWNER);
+    assert_eq!(recipient_post.data, Data::default());
+    assert!(recipient_post.balance > 0);
+}
+
+/// The credit is one-way: a default-owned private note cannot be debited, because rule 5 gates
+/// balance decreases on the owner executing and the default owner never executes.
+#[test]
+fn private_default_owner_debit_is_rejected() {
+    let program = crate::test_methods::modified_transfer_program();
+    let keys = test_private_account_keys_1();
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
+    let sender_account = Account {
+        program_owner: DEFAULT_PROGRAM_OWNER,
+        balance: 500_000,
+        data: Data::default(),
+        nonce: Nonce(0),
+    };
+    let commitment = Commitment::new(&account_id, &sender_account);
+    let mut commitment_set = CommitmentSet::with_capacity(1);
+    commitment_set.extend(std::slice::from_ref(&commitment));
+    let membership_proof = commitment_set.get_proof_for(&commitment).unwrap();
+    let sender = AccountWithMetadata::new(sender_account, true, account_id);
+
+    let recipient = AccountWithMetadata::new(
+        Account {
+            program_owner: program.id().into(),
+            ..Account::default()
+        },
+        false,
+        AccountId::new([88; 32]),
+    );
+
+    let result = execute_and_prove(
+        vec![sender, recipient],
+        Program::serialize_instruction(1_u128).unwrap(),
+        vec![
+            InputAccountIdentity::Private(PrivateWitness {
+                vpk: keys.vpk(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular {
+                    ask: Some(keys.ask),
+                },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: keys.nsk(),
+                    membership_proof,
+                },
+            }),
+            InputAccountIdentity::Public,
+        ],
+        &program.into(),
+    );
+
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+}
+
+fn prove_forged_clear(
+    new_owner: Option<AccountId>,
+    forged_post: Account,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    let (.., mut circuit_input) = clear_note_circuit_input(new_owner, true);
+    circuit_input.program_outputs[0].post_states = vec![AccountPostState::new(forged_post)];
+
+    prove_synthesized_input(&circuit_input)
+}
+
+/// A clear cannot mint: a post claiming more balance than the note carried is not the canonical
+/// cleared account, so the circuit refuses to prove.
+#[test]
+fn private_clear_inflating_balance_is_rejected() {
+    let forged = Account {
+        program_owner: DEFAULT_PROGRAM_OWNER,
+        balance: 56,
+        data: Data::default(),
+        nonce: Nonce(3),
+    };
+
+    assert!(matches!(
+        prove_forged_clear(None, forged),
+        Err(LeeError::CircuitProvingError(_))
+    ));
+}
+
+/// A clear must zero the data: a post that keeps the note's data is not the canonical cleared
+/// account, so the circuit refuses to prove.
+#[test]
+fn private_clear_retaining_data_is_rejected() {
+    let forged = Account {
+        program_owner: DEFAULT_PROGRAM_OWNER,
+        balance: 55,
+        data: vec![1_u8, 2, 3].try_into().unwrap(),
+        nonce: Nonce(3),
+    };
+
+    assert!(matches!(
+        prove_forged_clear(None, forged),
+        Err(LeeError::CircuitProvingError(_))
+    ));
+}
+
+/// The new owner is pinned by the declared instruction: a post handing the note to an owner the
+/// `Clear` did not declare is rejected.
+#[test]
+fn private_clear_to_undeclared_owner_is_rejected() {
+    let forged = Account {
+        program_owner: AccountId::new([9; 32]),
+        balance: 55,
+        data: Data::default(),
+        nonce: Nonce(3),
+    };
+
+    assert!(matches!(
+        prove_forged_clear(Some(AccountId::new([7; 32])), forged),
+        Err(LeeError::CircuitProvingError(_))
+    ));
+}
+
+/// A clear must post exactly one state per cleared note: dropping the post state is rejected
+/// before any post is inspected.
+#[test]
+fn private_clear_length_mismatch_is_rejected() {
+    let (.., mut circuit_input) = clear_note_circuit_input(None, true);
+    circuit_input.program_outputs[0].post_states.clear();
+
+    let result = prove_synthesized_input(&circuit_input);
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+}
