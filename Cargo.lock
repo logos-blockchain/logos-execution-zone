@@ -4799,6 +4799,7 @@ dependencies = [
  "sequencer_service",
  "sequencer_service_rpc",
  "sequencer_stake_core",
+ "serde",
  "serde_json",
  "system_accounts",
  "tempfile",

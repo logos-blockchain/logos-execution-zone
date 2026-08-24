@@ -20,6 +20,16 @@ pub(crate) async fn deploy_lez_stack(
     initialize_private_accounts: bool,
     step: &Step,
 ) -> StepResult {
+    deploy_lez_stack_with_config(world, bedrock, initialize_private_accounts, None, step).await
+}
+
+pub(crate) async fn deploy_lez_stack_with_config(
+    world: &mut CucumberWorld,
+    bedrock: BedrockApp,
+    initialize_private_accounts: bool,
+    sequencer_config: Option<SequencerPartialConfig>,
+    step: &Step,
+) -> StepResult {
     if world.lez.is_some() {
         return Err(StepError::FixtureAlreadyDeployed);
     }
@@ -29,10 +39,14 @@ pub(crate) async fn deploy_lez_stack(
         .clone()
         .unwrap_or_else(|| "unknown-time".to_owned());
     let scenario_base_dir = world.scenario_base_dir.join(entropy);
-    let app = LezLocalApp::new()
+    let mut app = LezLocalApp::new()
         .with_bedrock(bedrock)
-        .with_scenario_base_dir(scenario_base_dir)
-        .with_priority_fee(10_000);
+        .with_scenario_base_dir(scenario_base_dir);
+    if let Some(sequencer_config) = sequencer_config {
+        app = app.with_sequencer_config(sequencer_config);
+    }
+    // Applied after any config override so the stack-wide fee always wins.
+    let app = app.with_priority_fee(10_000);
     let app = if initialize_private_accounts {
         app
     } else {

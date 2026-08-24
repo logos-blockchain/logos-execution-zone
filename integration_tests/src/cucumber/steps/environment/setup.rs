@@ -1,10 +1,15 @@
+use std::time::Duration;
+
 use cucumber::{gherkin::Step, given};
 
 use super::super::log_step;
 use crate::{
+    config::SequencerPartialConfig,
     cucumber::{
         error::StepResult,
-        steps::environment::helpers::{deploy_lez_sequencer_registry, deploy_lez_stack},
+        steps::environment::helpers::{
+            deploy_lez_sequencer_registry, deploy_lez_stack, deploy_lez_stack_with_config,
+        },
         world::CucumberWorld,
     },
     testing_framework::BedrockApp,
@@ -18,6 +23,28 @@ async fn deploy_lez_public_stack(world: &mut CucumberWorld, step: &Step) -> Step
         world,
         BedrockApp::nodes_with_blend_core_nodes(1, 0, world.test_context()),
         false,
+        step,
+    )
+    .await
+}
+
+#[given("a LEZ stack with fast blocks and configured public accounts")]
+async fn deploy_lez_public_stack_with_fast_blocks(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    log_step(step);
+    // Short block cadence keeps inclusion and non-inclusion waits cheap for
+    // scenarios that submit several transactions, like the stake lifecycle.
+    let sequencer_config = SequencerPartialConfig {
+        block_create_timeout: Duration::from_secs(2),
+        ..SequencerPartialConfig::default()
+    };
+    deploy_lez_stack_with_config(
+        world,
+        BedrockApp::nodes_with_blend_core_nodes(1, 0, world.test_context()),
+        false,
+        Some(sequencer_config),
         step,
     )
     .await

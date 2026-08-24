@@ -17,6 +17,7 @@ sequencer_core = { workspace = true, features = ["default", "testnet"] }
 wallet.workspace = true
 common.workspace = true
 key_protocol.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 vault_core.workspace = true
 faucet_core.workspace = true
