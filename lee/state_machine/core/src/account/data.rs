@@ -19,6 +19,11 @@ pub struct Data(Vec<u8>);
 
 impl Data {
     #[must_use]
+    pub const fn empty() -> Self {
+        Self(Vec::new())
+    }
+
+    #[must_use]
     pub fn into_inner(self) -> Vec<u8> {
         self.0
     }

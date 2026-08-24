@@ -12,12 +12,14 @@ use crate::{
 /// from hashlib import sha256
 /// prefix = b"/LEE/v0.3/Commitment/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 /// hasher = sha256()
-/// hasher.update(prefix + bytes([0] * 32 + [0] * 32 + [0] * 16 + [0] * 16 + list(sha256().digest())))
+/// account_id, nonce = bytes(32), bytes(16)
+/// slots = sha256(bytes(16) + bytes(4)).digest()   # borsh(nonce=0, slots={})
+/// hasher.update(prefix + account_id + nonce + slots)
 /// DUMMY_COMMITMENT = hasher.digest()
 /// ```
 pub const DUMMY_COMMITMENT: Commitment = Commitment([
-    55, 228, 215, 207, 112, 221, 239, 49, 238, 79, 71, 135, 155, 15, 184, 45, 104, 74, 51, 211,
-    238, 42, 160, 243, 15, 124, 253, 62, 3, 229, 90, 27,
+    73, 27, 44, 221, 177, 151, 206, 15, 211, 71, 193, 138, 62, 229, 211, 85, 43, 109, 149, 239,
+    246, 5, 74, 18, 97, 71, 254, 100, 113, 106, 123, 171,
 ]);
 
 /// The hash of the dummy commitment.
@@ -28,8 +30,8 @@ pub const DUMMY_COMMITMENT: Commitment = Commitment([
 /// DUMMY_COMMITMENT_HASH = hasher.digest()
 /// ```
 pub const DUMMY_COMMITMENT_HASH: [u8; 32] = [
-    250, 237, 192, 113, 155, 101, 119, 30, 235, 183, 20, 84, 26, 32, 196, 229, 154, 74, 254, 249,
-    129, 241, 118, 39, 41, 253, 141, 171, 184, 71, 8, 41,
+    94, 163, 143, 213, 16, 197, 211, 214, 116, 2, 86, 124, 13, 199, 100, 6, 103, 181, 41, 203, 2,
+    162, 195, 255, 149, 62, 69, 186, 76, 171, 246, 35,
 ];
 
 #[derive(Copy, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -54,7 +56,7 @@ impl std::fmt::Debug for Commitment {
 
 impl Commitment {
     /// Generates the commitment to a private account owned by user for `account_id`:
-    /// SHA256( `Comm_DS` || `account_id` || `program_owner` || balance || nonce || SHA256(data)).
+    /// SHA256( `Comm_DS` || `account_id` || nonce || SHA256(slots)).
     // TODO: Accept account_id by value as it's Copy
     #[must_use]
     pub fn new(account_id: &AccountId, account: &Account) -> Self {
@@ -66,14 +68,12 @@ impl Commitment {
         bytes.extend_from_slice(account_id.value());
         let account_bytes_with_hashed_data = {
             let mut this = Vec::new();
-            this.extend_from_slice(account.program_owner.as_ref());
-            this.extend_from_slice(&account.balance.to_le_bytes());
             this.extend_from_slice(&account.nonce.0.to_le_bytes());
-            let hashed_data: [u8; 32] = Impl::hash_bytes(&account.data)
+            let hashed_slots: [u8; 32] = Impl::hash_bytes(&account.to_bytes())
                 .as_bytes()
                 .try_into()
                 .unwrap();
-            this.extend_from_slice(&hashed_data);
+            this.extend_from_slice(&hashed_slots);
             this
         };
         bytes.extend_from_slice(&account_bytes_with_hashed_data);

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Slot},
     encryption::ViewingPublicKey,
 };
 
@@ -282,95 +282,6 @@ impl ChainedCall {
     }
 }
 
-/// Represents the final state of an `Account` after a program execution.
-///
-/// A post state may optionally request that the executing program
-/// becomes the owner of the account (a "claim"). This is used to signal
-/// that the program intends to take ownership of the account.
-#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
-pub struct AccountPostState {
-    account: Account,
-    claim: Option<Claim>,
-}
-
-/// A claim request for an account, indicating that the executing program intends to take ownership
-/// of the account.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
-)]
-pub enum Claim {
-    /// The program requests ownership of the account which was authorized by the signer.
-    ///
-    /// Note that it's possible to successfully execute program outputting [`AccountPostState`] with
-    /// `is_authorized == false` and `claim == Some(Claim::Authorized)`.
-    /// This will give no error if program had authorization in pre state and may be useful
-    /// if program decides to give up authorization for a chained call.
-    Authorized,
-    /// The program requests ownership of the account through a PDA. The program emits the
-    /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
-    /// account is public or private.
-    Pda(PdaSeed),
-}
-
-impl AccountPostState {
-    /// Creates a post state without a claim request.
-    /// The executing program is not requesting ownership of the account.
-    #[must_use]
-    pub const fn new(account: Account) -> Self {
-        Self {
-            account,
-            claim: None,
-        }
-    }
-
-    /// Creates a post state that requests ownership of the account.
-    /// This indicates that the executing program intends to claim the
-    /// account as its own and is allowed to mutate it.
-    #[must_use]
-    pub const fn new_claimed(account: Account, claim: Claim) -> Self {
-        Self {
-            account,
-            claim: Some(claim),
-        }
-    }
-
-    /// Creates a post state that requests ownership of the account
-    /// if the account's program owner is the default program ID.
-    #[must_use]
-    pub fn new_claimed_if_default(account: Account, claim: Claim) -> Self {
-        let is_default_owner = account.program_owner == DEFAULT_PROGRAM_OWNER;
-        Self {
-            account,
-            claim: is_default_owner.then_some(claim),
-        }
-    }
-
-    /// Returns whether this post state requires a claim.
-    #[must_use]
-    pub const fn required_claim(&self) -> Option<Claim> {
-        self.claim
-    }
-
-    /// Returns the underlying account.
-    #[must_use]
-    pub const fn account(&self) -> &Account {
-        &self.account
-    }
-
-    /// Returns the underlying account.
-    #[must_use]
-    pub const fn account_mut(&mut self) -> &mut Account {
-        &mut self.account
-    }
-
-    /// Consumes the post state and returns the underlying account.
-    #[must_use]
-    pub fn into_account(self) -> Account {
-        self.account
-    }
-}
-
 pub type BlockValidityWindow = ValidityWindow<BlockId>;
 pub type TimestampValidityWindow = ValidityWindow<Timestamp>;
 
@@ -485,7 +396,7 @@ pub struct ProgramOutput {
     /// The account pre states the program received to produce this output.
     pub pre_states: Vec<AccountWithMetadata>,
     /// The account post states the program execution produced.
-    pub post_states: Vec<AccountPostState>,
+    pub post_states: Vec<Account>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
     /// The block ID window where the program output is valid.
@@ -500,7 +411,7 @@ impl ProgramOutput {
         caller_program_id: Option<ProgramId>,
         instruction_data: InstructionData,
         pre_states: Vec<AccountWithMetadata>,
-        post_states: Vec<AccountPostState>,
+        post_states: Vec<Account>,
     ) -> Self {
         Self {
             self_program_id,
@@ -632,30 +543,16 @@ pub enum ExecutionValidationError {
     #[error("Unallowed modification of nonce for account {account_id}")]
     ModifiedNonce { account_id: AccountId },
 
-    #[error("Unallowed modification of program owner for account {account_id}")]
-    ModifiedProgramOwner { account_id: AccountId },
-
     #[error(
-        "Trying to decrease balance of account {account_id} owned by {owner_account_id:?} in a program {executing_program_id:?} which is not the owner"
+        "Program {executing_program_id:?} modified a slot it does not own in account {account_id}"
     )]
-    UnauthorizedBalanceDecrease {
-        account_id: AccountId,
-        owner_account_id: AccountId,
-        executing_program_id: ProgramId,
-    },
-
-    #[error(
-        "Unauthorized modification of data for account {account_id} which is not default and not owned by executing program {executing_program_id:?}"
-    )]
-    UnauthorizedDataModification {
+    ForeignSlotModified {
         account_id: AccountId,
         executing_program_id: ProgramId,
     },
 
-    #[error(
-        "Post-state for account {account_id} has default program owner but pre-state was not default"
-    )]
-    NonDefaultAccountWithDefaultOwner { account_id: AccountId },
+    #[error("Post-state for account {account_id} stores an empty slot; encoding must be canonical")]
+    NonCanonicalEmptySlot { account_id: AccountId },
 
     #[error("Total balance across accounts overflowed 2^256 - 1")]
     BalanceSumOverflow,
@@ -733,13 +630,9 @@ pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionDa
 /// - `executing_program_id`: The identifier of the program that was executed.
 pub fn validate_execution(
     pre_states: &[AccountWithMetadata],
-    post_states: &[AccountPostState],
+    post_states: &[Account],
     executing_program_id: ProgramId,
 ) -> Result<(), ExecutionValidationError> {
-    // `program_owner` is `AccountId`-typed; convert once up front rather than at each
-    // comparison below (see `From<ProgramId> for AccountId`'s doc comment).
-    let executing_account_id = AccountId::from(executing_program_id);
-
     // 1. Check account ids are all different
     if !validate_uniqueness_of_account_ids(pre_states) {
         return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
@@ -757,66 +650,53 @@ pub fn validate_execution(
 
     for (pre, post) in pre_states.iter().zip(post_states) {
         // 3. Nonce must remain unchanged
-        if pre.account.nonce != post.account.nonce {
+        if pre.account.nonce != post.nonce {
             return Err(ExecutionValidationError::ModifiedNonce {
                 account_id: pre.account_id,
             });
         }
 
-        // 4. Program ownership changes are not allowed
-        if pre.account.program_owner != post.account.program_owner {
-            return Err(ExecutionValidationError::ModifiedProgramOwner {
-                account_id: pre.account_id,
-            });
-        }
-
-        let account_program_owner = pre.account.program_owner;
-
-        // 5. Decreasing balance only allowed if owned by executing program
-        if post.account.balance < pre.account.balance
-            && account_program_owner != executing_account_id
-        {
-            return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
-                account_id: pre.account_id,
-                owner_account_id: account_program_owner,
-                executing_program_id,
-            });
-        }
-
-        // 6. Data changes only allowed if owned by executing program or if account pre state has
-        //    default values
-        if pre.account.data != post.account.data
-            && pre.account != Account::default()
-            && account_program_owner != executing_account_id
-        {
-            return Err(ExecutionValidationError::UnauthorizedDataModification {
+        // 4. A program may write only its own slot. Every other slot must survive untouched.
+        //    `BTreeMap` iterates in key order, so comparing the filtered iterators compares
+        //    the foreign slots as sets without cloning any `Data`.
+        let foreign = |account: &Account| {
+            account
+                .slots
+                .iter()
+                .filter(|(program_id, _)| **program_id != executing_program_id)
+                .map(|(program_id, slot)| (*program_id, slot.clone()))
+                .collect::<Vec<_>>()
+        };
+        if foreign(&pre.account) != foreign(post) {
+            return Err(ExecutionValidationError::ForeignSlotModified {
                 account_id: pre.account_id,
                 executing_program_id,
             });
         }
 
-        // 7. If a post state has default program owner, the pre state must have been a default
-        //    account
-        if post.account.program_owner == DEFAULT_PROGRAM_OWNER && pre.account != Account::default()
-        {
-            return Err(
-                ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
-                    account_id: pre.account_id,
-                },
-            );
+        // 5. An empty slot is never stored, so equal accounts always encode identically.
+        if post.slots.values().any(Slot::is_empty) {
+            return Err(ExecutionValidationError::NonCanonicalEmptySlot {
+                account_id: pre.account_id,
+            });
         }
     }
 
-    // 8. Total balance is preserved
-    let Some(total_balance_pre_states) =
-        WrappedBalanceSum::from_balances(pre_states.iter().map(|pre| pre.account.balance))
-    else {
+    // 6. The executing program conserves balance within its own slot. Rule 4 already pins
+    //    every other slot, so no other balance can have moved.
+    let Some(total_balance_pre_states) = WrappedBalanceSum::from_balances(
+        pre_states
+            .iter()
+            .map(|pre| pre.account.balance(executing_program_id)),
+    ) else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
-    let Some(total_balance_post_states) =
-        WrappedBalanceSum::from_balances(post_states.iter().map(|post| post.account.balance))
-    else {
+    let Some(total_balance_post_states) = WrappedBalanceSum::from_balances(
+        post_states
+            .iter()
+            .map(|post| post.balance(executing_program_id)),
+    ) else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 

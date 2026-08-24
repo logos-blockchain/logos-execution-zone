@@ -18,47 +18,20 @@ use crate::{
 
 impl Account {
     /// Serializes the account to bytes.
+    ///
+    /// `slots` is a `BTreeMap` and empty slots are never stored, so borsh is already the
+    /// canonical encoding — no hand-rolled field walk is needed.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(self.program_owner.as_ref());
-        bytes.extend_from_slice(&self.balance.to_le_bytes());
-        bytes.extend_from_slice(&self.nonce.0.to_le_bytes());
-        let data_length: u32 = u32::try_from(self.data.len()).expect("Invalid u32");
-        bytes.extend_from_slice(&data_length.to_le_bytes());
-        bytes.extend_from_slice(self.data.as_ref());
-        bytes
+        borsh::to_vec(self).expect("borsh serialization is infallible")
     }
 
     /// Deserializes an account from a cursor.
     #[cfg(feature = "host")]
     pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        use crate::account::{Nonce, data::Data};
+        use borsh::BorshDeserialize as _;
 
-        let mut u128_bytes = [0_u8; 16];
-
-        // program owner
-        let mut program_owner_bytes = [0_u8; 32];
-        cursor.read_exact(&mut program_owner_bytes)?;
-        let program_owner = AccountId::new(program_owner_bytes);
-
-        // balance
-        cursor.read_exact(&mut u128_bytes)?;
-        let balance = u128::from_le_bytes(u128_bytes);
-
-        // nonce
-        cursor.read_exact(&mut u128_bytes)?;
-        let nonce = Nonce(u128::from_le_bytes(u128_bytes));
-
-        // data
-        let data = Data::from_cursor(cursor)?;
-
-        Ok(Self {
-            program_owner,
-            balance,
-            data,
-            nonce,
-        })
+        Ok(Self::deserialize_reader(cursor)?)
     }
 }
 
@@ -177,19 +150,19 @@ mod tests {
 
     #[test]
     fn enconding() {
-        let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-            balance: 123_456_789_012_345_678_901_234_567_890_123_456,
-            nonce: 42_u128.into(),
-            data: b"hola mundo".to_vec().try_into().unwrap(),
-        };
+        let account = Account::single(
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            123_456_789_012_345_678_901_234_567_890_123_456,
+            b"hola mundo".to_vec().try_into().unwrap(),
+            42_u128.into(),
+        );
 
-        // program owner || balance || nonce || data_len || data
+        // nonce || slot_count || program_id || balance || data_len || data
         let expected_bytes = [
-            1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0, 8,
-            0, 0, 0, 192, 186, 220, 114, 113, 65, 236, 234, 222, 15, 215, 191, 227, 198, 23, 0, 42,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 104, 111, 108, 97, 32, 109,
-            117, 110, 100, 111,
+            42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3,
+            0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0, 192, 186, 220,
+            114, 113, 65, 236, 234, 222, 15, 215, 191, 227, 198, 23, 0, 10, 0, 0, 0, 104, 111, 108,
+            97, 32, 109, 117, 110, 100, 111,
         ];
 
         let bytes = account.to_bytes();
@@ -238,12 +211,12 @@ mod tests {
     #[cfg(feature = "host")]
     #[test]
     fn account_to_bytes_roundtrip() {
-        let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-            balance: 123_456_789_012_345_678_901_234_567_890_123_456,
-            nonce: 42_u128.into(),
-            data: b"hola mundo".to_vec().try_into().unwrap(),
-        };
+        let account = Account::single(
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            123_456_789_012_345_678_901_234_567_890_123_456,
+            b"hola mundo".to_vec().try_into().unwrap(),
+            42_u128.into(),
+        );
         let bytes = account.to_bytes();
         let mut cursor = Cursor::new(bytes.as_ref());
         let account_from_cursor = Account::from_cursor(&mut cursor).unwrap();

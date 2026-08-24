@@ -1,4 +1,4 @@
-use std::{fmt::Display, str::FromStr};
+use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -7,7 +7,7 @@ use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-use crate::NullifierSecretKey;
+use crate::{NullifierSecretKey, program::ProgramId};
 
 pub mod data;
 
@@ -88,15 +88,77 @@ impl BorshDeserialize for Nonce {
 
 pub type Balance = u128;
 
+/// A single program's namespace inside an account. Every program may read every slot, but
+/// may write only its own.
+#[derive(
+    Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub struct Slot {
+    pub balance: Balance,
+    pub data: Data,
+}
+
+impl Slot {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 /// Account to be used both in public and private contexts.
+///
+/// There is no owner: an account is a map from program to that program's private namespace.
+/// `BTreeMap` rather than `HashMap` because the account is hashed into commitments, so its
+/// encoding must be canonical. Empty slots are never stored (see `validate_execution`), so
+/// equal accounts always encode identically.
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct Account {
-    pub program_owner: AccountId,
-    pub balance: Balance,
-    pub data: Data,
     pub nonce: Nonce,
+    pub slots: BTreeMap<ProgramId, Slot>,
+}
+
+impl Account {
+    #[must_use]
+    pub fn slot(&self, program_id: ProgramId) -> Option<&Slot> {
+        self.slots.get(&program_id)
+    }
+
+    /// The slot a program writes through. Vacant slots materialize as empty.
+    pub fn slot_mut(&mut self, program_id: ProgramId) -> &mut Slot {
+        self.slots.entry(program_id).or_default()
+    }
+
+    #[must_use]
+    pub fn balance(&self, program_id: ProgramId) -> Balance {
+        self.slot(program_id).map_or(0, |slot| slot.balance)
+    }
+
+    #[must_use]
+    pub fn data(&self, program_id: ProgramId) -> &Data {
+        const EMPTY: &Data = &Data::empty();
+        self.slot(program_id).map_or(EMPTY, |slot| &slot.data)
+    }
+
+    /// Drops slots that have become empty, keeping the encoding canonical.
+    pub fn prune(&mut self) {
+        self.slots.retain(|_, slot| !slot.is_empty());
+    }
+
+    /// An account whose only occupied slot belongs to `program_id`.
+    #[must_use]
+    pub fn single(program_id: ProgramId, balance: Balance, data: Data, nonce: Nonce) -> Self {
+        let slot = Slot { balance, data };
+        let mut account = Self {
+            nonce,
+            slots: BTreeMap::new(),
+        };
+        if !slot.is_empty() {
+            account.slots.insert(program_id, slot);
+        }
+        account
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -200,7 +262,7 @@ mod tests {
     fn zero_balance_account_data_creation() {
         let new_acc = Account::default();
 
-        assert_eq!(new_acc.balance, 0);
+        assert_eq!(new_acc.balance(DEFAULT_PROGRAM_ID), 0);
     }
 
     #[test]
@@ -214,28 +276,28 @@ mod tests {
     fn empty_data_account_data_creation() {
         let new_acc = Account::default();
 
-        assert!(new_acc.data.is_empty());
+        assert!(new_acc.data(DEFAULT_PROGRAM_ID).is_empty());
     }
 
     #[test]
-    fn default_program_owner_account_data_creation() {
+    fn no_slots_on_account_data_creation() {
         let new_acc = Account::default();
 
-        assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_ID.into());
+        assert!(new_acc.slots.is_empty());
     }
 
     #[cfg(feature = "host")]
     #[test]
     fn account_with_metadata_constructor() {
-        let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-            balance: 1337,
-            data: b"testing_account_with_metadata_constructor"
+        let account = Account::single(
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            1337,
+            b"testing_account_with_metadata_constructor"
                 .to_vec()
                 .try_into()
                 .unwrap(),
-            nonce: Nonce(0xdead_beef),
-        };
+            Nonce(0xdead_beef),
+        );
         let fingerprint = AccountId::new([8; 32]);
         let new_acc_with_metadata = AccountWithMetadata::new(account.clone(), true, fingerprint);
         assert_eq!(new_acc_with_metadata.account, account);

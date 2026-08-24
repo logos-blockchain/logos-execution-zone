@@ -191,7 +191,7 @@ impl EncryptionScheme {
 mod tests {
     use super::*;
     use crate::{
-        account::{Account, AccountId},
+        account::{Account, AccountId, Nonce, data::Data},
         program::PdaSeed,
     };
 
@@ -233,11 +233,7 @@ mod tests {
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
-        let account = Account {
-            program_owner: [12_u32; 8].into(),
-            balance: 999,
-            ..Account::default()
-        };
+        let account = Account::single([12_u32; 8], 999, Data::default(), Nonce::default());
         let kind = PrivateAccountKind::Regular(0);
         let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
 
@@ -253,7 +249,7 @@ mod tests {
         let wrong_ss = SharedSecretKey([0_u8; 32]);
         let bad_via_ss = EncryptionScheme::decrypt(&ct, &wrong_ss, &nullifier);
         assert!(
-            bad_via_ss.is_none() || bad_via_ss.is_some_and(|(_, a)| a.balance != 999),
+            bad_via_ss.is_none() || bad_via_ss.is_some_and(|(_, a)| a.balance([12_u32; 8]) != 999),
             "wrong shared secret must not produce the correct plaintext"
         );
 
@@ -261,7 +257,8 @@ mod tests {
         let wrong_nullifier = Nullifier::for_account_initialization(&AccountId::new([9; 32]));
         let bad_via_nlf = EncryptionScheme::decrypt(&ct, &receiver_ss, &wrong_nullifier);
         assert!(
-            bad_via_nlf.is_none() || bad_via_nlf.is_some_and(|(_, a)| a.balance != 999),
+            bad_via_nlf.is_none()
+                || bad_via_nlf.is_some_and(|(_, a)| a.balance([12_u32; 8]) != 999),
             "wrong nullifier must not produce the correct plaintext"
         );
     }

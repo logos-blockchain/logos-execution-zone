@@ -1,4 +1,8 @@
 use super::*;
+use crate::account::{Balance, Nonce};
+
+const P: ProgramId = [1; 8];
+const Q: ProgramId = [2; 8];
 
 #[test]
 fn validity_window_unbounded_accepts_any_value() {
@@ -127,51 +131,6 @@ fn program_output_try_with_block_validity_window_empty_range_fails() {
     let result = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
         .try_with_block_validity_window(5_u64..5);
     assert!(result.is_err());
-}
-
-#[test]
-fn post_state_new_with_claim_constructor() {
-    let account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-        balance: 1337,
-        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
-        nonce: 10_u128.into(),
-    };
-
-    let account_post_state = AccountPostState::new_claimed(account.clone(), Claim::Authorized);
-
-    assert_eq!(account, account_post_state.account);
-    assert_eq!(account_post_state.required_claim(), Some(Claim::Authorized));
-}
-
-#[test]
-fn post_state_new_without_claim_constructor() {
-    let account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-        balance: 1337,
-        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
-        nonce: 10_u128.into(),
-    };
-
-    let account_post_state = AccountPostState::new(account.clone());
-
-    assert_eq!(account, account_post_state.account);
-    assert!(account_post_state.required_claim().is_none());
-}
-
-#[test]
-fn post_state_account_getter() {
-    let mut account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-        balance: 1337,
-        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
-        nonce: 10_u128.into(),
-    };
-
-    let mut account_post_state = AccountPostState::new(account.clone());
-
-    assert_eq!(account_post_state.account(), &account);
-    assert_eq!(account_post_state.account_mut(), &mut account);
 }
 
 // ---- AccountId::for_private_pda tests ----
@@ -396,4 +355,120 @@ fn program_id_account_id_conversion_round_trips() {
         0xfeed_face,
     ];
     assert_eq!(ProgramId::from(AccountId::from(program_id)), program_id);
+}
+
+// ---- validate_execution: the namespaced rulebook ----
+
+fn account(slots: &[(ProgramId, Balance, &[u8])]) -> Account {
+    let mut account = Account::default();
+    for (program_id, balance, data) in slots {
+        *account.slot_mut(*program_id) = Slot {
+            balance: *balance,
+            data: crate::account::data::Data::try_from(data.to_vec()).unwrap(),
+        };
+    }
+    account
+}
+
+fn pre(account: Account, id: u8) -> AccountWithMetadata {
+    AccountWithMetadata {
+        account,
+        is_authorized: false,
+        account_id: AccountId::new([id; 32]),
+    }
+}
+
+#[test]
+fn program_may_write_its_own_slot() {
+    let before = account(&[(P, 10, b"old"), (Q, 5, b"untouched")]);
+    let after = account(&[(P, 10, b"new"), (Q, 5, b"untouched")]);
+
+    assert!(validate_execution(&[pre(before, 1)], &[after], P).is_ok());
+}
+
+#[test]
+fn program_may_not_write_a_foreign_slot() {
+    let before = account(&[(P, 10, b"mine"), (Q, 5, b"theirs")]);
+    let after = account(&[(P, 10, b"mine"), (Q, 5, b"tampered")]);
+
+    assert!(matches!(
+        validate_execution(&[pre(before, 1)], &[after], P),
+        Err(ExecutionValidationError::ForeignSlotModified { .. })
+    ));
+}
+
+#[test]
+fn program_may_not_create_a_foreign_slot() {
+    let before = account(&[(P, 10, b"mine")]);
+    let after = account(&[(P, 10, b"mine"), (Q, 0, b"squatted")]);
+
+    assert!(matches!(
+        validate_execution(&[pre(before, 1)], &[after], P),
+        Err(ExecutionValidationError::ForeignSlotModified { .. })
+    ));
+}
+
+#[test]
+fn program_may_not_drain_a_foreign_slot() {
+    let before = account(&[(P, 0, b""), (Q, 100, b"")]);
+    let after = account(&[(P, 100, b""), (Q, 0, b"")]);
+
+    assert!(matches!(
+        validate_execution(&[pre(before, 1)], &[after], P),
+        Err(ExecutionValidationError::ForeignSlotModified { .. })
+    ));
+}
+
+#[test]
+fn an_empty_slot_is_not_canonical() {
+    let before = account(&[(P, 1, b"x")]);
+    let mut after = Account::default();
+    after.slots.insert(P, Slot::default());
+
+    assert!(matches!(
+        validate_execution(&[pre(before, 1)], &[after], P),
+        Err(ExecutionValidationError::NonCanonicalEmptySlot { .. })
+    ));
+}
+
+#[test]
+fn balance_moves_freely_within_the_executing_slot() {
+    let sender = account(&[(P, 100, b"")]);
+    let recipient = account(&[(P, 1, b"")]);
+
+    assert!(
+        validate_execution(
+            &[pre(sender, 1), pre(recipient, 2)],
+            &[account(&[(P, 40, b"")]), account(&[(P, 61, b"")])],
+            P,
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn balance_may_not_be_minted_in_the_executing_slot() {
+    let sender = account(&[(P, 100, b"")]);
+    let recipient = account(&[(P, 1, b"")]);
+
+    assert!(matches!(
+        validate_execution(
+            &[pre(sender, 1), pre(recipient, 2)],
+            &[account(&[(P, 100, b"")]), account(&[(P, 2, b"")])],
+            P,
+        ),
+        Err(ExecutionValidationError::MismatchedTotalBalance { .. })
+    ));
+}
+
+#[test]
+fn nonce_is_immutable() {
+    let before = account(&[(P, 1, b"")]);
+    let mut after = account(&[(P, 1, b"")]);
+    after.nonce = Nonce(7);
+
+    assert!(matches!(
+        validate_execution(&[pre(before, 1)], &[after], P),
+        Err(ExecutionValidationError::ModifiedNonce { .. })
+    ));
 }
