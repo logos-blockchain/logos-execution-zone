@@ -43,9 +43,8 @@ impl WalletSubcommand for SystemSubcommand {
                         "Shielded reclaim is not yet supported; only public accounts can be reclaimed"
                     );
                 };
-                let new_owner = Some(
-                    new_owner.unwrap_or_else(|| programs::authenticated_transfer().id().into()),
-                );
+                let new_owner =
+                    new_owner.unwrap_or_else(|| programs::authenticated_transfer().id().into());
 
                 let tx_hash = SystemProgram(wallet_core)
                     .clear(

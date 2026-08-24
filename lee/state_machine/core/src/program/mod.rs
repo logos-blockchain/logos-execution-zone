@@ -317,7 +317,7 @@ pub enum Claim {
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum SystemInstruction {
     /// Clears account data assigning new owner.
-    Clear { new_owner: Option<AccountId> },
+    Clear { new_owner: AccountId },
 }
 
 impl AccountPostState {
@@ -848,7 +848,7 @@ pub fn validate_execution(
 /// Checks authorization, clearing data and assigning a new owner.
 pub fn validate_clear(
     pre: &AccountWithMetadata,
-    new_owner: Option<AccountId>,
+    new_owner: AccountId,
 ) -> Result<Account, ClearValidationError> {
     if !pre.is_authorized {
         return Err(ClearValidationError::NotAuthorized {
@@ -857,7 +857,7 @@ pub fn validate_clear(
     }
 
     Ok(Account {
-        program_owner: new_owner.unwrap_or(DEFAULT_PROGRAM_OWNER),
+        program_owner: new_owner,
         balance: pre.account.balance,
         data: Data::default(),
         nonce: pre.account.nonce,

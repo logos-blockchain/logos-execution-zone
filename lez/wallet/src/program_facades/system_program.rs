@@ -10,7 +10,7 @@ impl SystemProgram<'_> {
     pub async fn clear(
         &self,
         account: AccountIdentity,
-        new_owner: Option<AccountId>,
+        new_owner: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = SystemInstruction::Clear { new_owner };
         let instruction_data =

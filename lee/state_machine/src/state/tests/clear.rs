@@ -26,9 +26,7 @@ fn clear_reassigns_to_the_declared_new_owner() {
         DEFAULT_PROGRAM_ID,
         vec![id],
         vec![Nonce(0)],
-        SystemInstruction::Clear {
-            new_owner: Some(new_owner),
-        },
+        SystemInstruction::Clear { new_owner },
     )
     .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&key]);
@@ -66,7 +64,9 @@ fn clear_by_non_signer_is_rejected() {
         DEFAULT_PROGRAM_ID,
         vec![victim],
         vec![Nonce(0)],
-        SystemInstruction::Clear { new_owner: None },
+        SystemInstruction::Clear {
+            new_owner: DEFAULT_PROGRAM_OWNER,
+        },
     )
     .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&attacker_key]);
@@ -112,7 +112,9 @@ fn clear_touches_only_the_named_account() {
         DEFAULT_PROGRAM_ID,
         vec![target],
         vec![Nonce(0)],
-        SystemInstruction::Clear { new_owner: None },
+        SystemInstruction::Clear {
+            new_owner: DEFAULT_PROGRAM_OWNER,
+        },
     )
     .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&key]);
@@ -150,7 +152,9 @@ fn clear_instruction_to_an_undeployed_program_is_rejected() {
         undeployed,
         vec![id],
         vec![Nonce(0)],
-        SystemInstruction::Clear { new_owner: None },
+        SystemInstruction::Clear {
+            new_owner: DEFAULT_PROGRAM_OWNER,
+        },
     )
     .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&key]);
@@ -187,7 +191,7 @@ fn reclaimed_account_is_spendable_under_its_new_owner() {
         vec![id],
         vec![Nonce(0)],
         SystemInstruction::Clear {
-            new_owner: Some(transfer.id().into()),
+            new_owner: transfer.id().into(),
         },
     )
     .unwrap();

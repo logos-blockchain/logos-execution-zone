@@ -1109,7 +1109,7 @@ fn prove_synthesized_input(
 /// input that reclaims it. Returns the note's pre-state commitment and the canonical cleared
 /// account alongside the input.
 fn clear_note_circuit_input(
-    new_owner: Option<AccountId>,
+    new_owner: AccountId,
     authorized: bool,
 ) -> (
     AccountId,
@@ -1133,7 +1133,7 @@ fn clear_note_circuit_input(
     let membership_proof = commitment_set.get_proof_for(&commitment_pre).unwrap();
 
     let cleared = Account {
-        program_owner: new_owner.unwrap_or(DEFAULT_PROGRAM_OWNER),
+        program_owner: new_owner,
         balance: pre_account.balance,
         data: Data::default(),
         nonce: pre_account.nonce,
@@ -1168,7 +1168,7 @@ fn clear_note_circuit_input(
     (account_id, commitment_pre, cleared, circuit_input)
 }
 
-fn assert_private_clear_succeeds(new_owner: Option<AccountId>) {
+fn assert_private_clear_succeeds(new_owner: AccountId) {
     let keys = test_private_account_keys_1();
     let (account_id, commitment_pre, cleared, circuit_input) =
         clear_note_circuit_input(new_owner, true);
@@ -1203,21 +1203,21 @@ fn assert_private_clear_succeeds(new_owner: Option<AccountId>) {
 /// and data zeroed, at the same account id.
 #[test]
 fn private_reclaim_parks_program_owned_note() {
-    assert_private_clear_succeeds(None);
+    assert_private_clear_succeeds(DEFAULT_PROGRAM_OWNER);
 }
 
 /// The same clear with a declared `new_owner` hands the note straight to that program: the
 /// successor commitment is owned by the target, with the balance preserved and data zeroed.
 #[test]
 fn private_reclaim_reassigns_to_the_declared_new_owner() {
-    assert_private_clear_succeeds(Some(AccountId::new([7; 32])));
+    assert_private_clear_succeeds(AccountId::new([7; 32]));
 }
 
 /// A witness with no `ask` leaves the note unauthorized, so `validate_clear` rejects the clear
 /// (`NotAuthorized`) and the circuit refuses to prove.
 #[test]
 fn private_reclaim_without_ask_is_rejected() {
-    let (.., circuit_input) = clear_note_circuit_input(None, false);
+    let (.., circuit_input) = clear_note_circuit_input(DEFAULT_PROGRAM_OWNER, false);
 
     let result = prove_synthesized_input(&circuit_input);
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -1335,7 +1335,7 @@ fn private_default_owner_debit_is_rejected() {
 }
 
 fn prove_forged_clear(
-    new_owner: Option<AccountId>,
+    new_owner: AccountId,
     forged_post: Account,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let (.., mut circuit_input) = clear_note_circuit_input(new_owner, true);
@@ -1356,7 +1356,7 @@ fn private_clear_inflating_balance_is_rejected() {
     };
 
     assert!(matches!(
-        prove_forged_clear(None, forged),
+        prove_forged_clear(DEFAULT_PROGRAM_OWNER, forged),
         Err(LeeError::CircuitProvingError(_))
     ));
 }
@@ -1373,7 +1373,7 @@ fn private_clear_retaining_data_is_rejected() {
     };
 
     assert!(matches!(
-        prove_forged_clear(None, forged),
+        prove_forged_clear(DEFAULT_PROGRAM_OWNER, forged),
         Err(LeeError::CircuitProvingError(_))
     ));
 }
@@ -1390,7 +1390,7 @@ fn private_clear_to_undeclared_owner_is_rejected() {
     };
 
     assert!(matches!(
-        prove_forged_clear(Some(AccountId::new([7; 32])), forged),
+        prove_forged_clear(AccountId::new([7; 32]), forged),
         Err(LeeError::CircuitProvingError(_))
     ));
 }
@@ -1399,7 +1399,7 @@ fn private_clear_to_undeclared_owner_is_rejected() {
 /// before any post is inspected.
 #[test]
 fn private_clear_length_mismatch_is_rejected() {
-    let (.., mut circuit_input) = clear_note_circuit_input(None, true);
+    let (.., mut circuit_input) = clear_note_circuit_input(DEFAULT_PROGRAM_OWNER, true);
     circuit_input.program_outputs[0].post_states.clear();
 
     let result = prove_synthesized_input(&circuit_input);
