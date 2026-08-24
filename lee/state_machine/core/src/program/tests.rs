@@ -319,8 +319,8 @@ fn account_id_from_program_id_reinterprets_words_as_le_bytes() {
 }
 
 #[test]
-fn account_id_from_default_program_id_is_default_program_owner() {
-    assert_eq!(AccountId::from(DEFAULT_PROGRAM_ID), DEFAULT_PROGRAM_OWNER);
+fn account_id_from_default_program_id_is_all_zeroes() {
+    assert_eq!(AccountId::from(DEFAULT_PROGRAM_ID), AccountId::new([0; 32]));
 }
 
 #[test]

@@ -12,13 +12,6 @@ use crate::{
 
 pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
 
-/// TODO: Placeholder `program_owner` for uninitialized `Account`.
-pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
-
-/// TODO: Temporary placeholder for program deployment program id; this serves as
-/// `program_owner` for program `Account`s.
-pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
-
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 pub type ProgramId = [u32; 8];
