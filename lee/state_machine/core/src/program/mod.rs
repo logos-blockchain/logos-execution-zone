@@ -313,8 +313,10 @@ pub enum Claim {
     Pda(PdaSeed),
 }
 
+/// An enum encoding the system-wide instruction to be passed to the verifier.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum SystemInstruction {
+    /// Clears account data assigning new owner.
     Clear { new_owner: Option<AccountId> },
 }
 
@@ -841,6 +843,9 @@ pub fn validate_execution(
     Ok(())
 }
 
+/// Logic of system-wide `Clear` instriction.
+///
+/// Checks authorization, clearing data and assigning a new owner.
 pub fn validate_clear(
     pre: &AccountWithMetadata,
     new_owner: Option<AccountId>,
