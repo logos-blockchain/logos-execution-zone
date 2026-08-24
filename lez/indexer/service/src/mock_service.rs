@@ -374,12 +374,10 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
 
         let records: Vec<EventRecord> = match plan_query(&filter, tip)? {
             EventQuery::ByTxHash(tx_hash) => {
-                let matched: Vec<EventRecord> =
-                    records.filter(|record| tx_hash == record.tx_hash).collect();
-                if matched.is_empty() {
+                if !state.transactions.contains_key(&tx_hash) {
                     return Err(unknown_transaction_error());
                 }
-                matched
+                records.filter(|record| tx_hash == record.tx_hash).collect()
             }
             EventQuery::ByRange {
                 from_block,
@@ -612,6 +610,25 @@ mod tests {
         };
         let miss = service.get_events(mismatched).await.unwrap();
         assert!(miss.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_known_tx_without_events_returns_empty() {
+        let service = MockIndexerService::new_with_mock_blocks();
+        // Every transaction is indexed, but only the first of each block gets an
+        // event record.
+        let tx_hash = {
+            let state = service.state.read().await;
+            *state.blocks[0].body.transactions[1].hash()
+        };
+        let records = service
+            .get_events(GetEventsFilter {
+                tx_hash: Some(tx_hash),
+                ..GetEventsFilter::default()
+            })
+            .await
+            .unwrap();
+        assert!(records.is_empty());
     }
 
     #[tokio::test]
