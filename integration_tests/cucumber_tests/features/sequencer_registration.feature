@@ -1,11 +1,10 @@
 Feature: Sequencer registration — a first Stake turns balance into stake
 
-  # Node-level (L3) port of "Flow A — Registration: balance becomes stake"
-  # from sequencer_self_join_phase1_cucumber_test_cases.md. Every scenario
-  # runs against a deployed LEZ stack: transactions are signed and submitted
-  # through the scenario wallet, executed by the real sequencer, and every
-  # assertion reads state back through the sequencer's RPC API. The @P-NN
-  # tags are the case ids shared with the test plan.
+  # Node-level (L3) registration coverage: a first Stake turns balance into
+  # stake. Every scenario runs against a deployed LEZ stack: transactions are
+  # signed and submitted through the scenario wallet, executed by the real
+  # sequencer, and every assertion reads state back through the sequencer's
+  # RPC API. The @P-NN tags are stable case ids.
   #
   # Rejection semantics at node level: an invalid transaction is admitted to
   # the mempool and only fails during block building, where the builder drops
@@ -14,7 +13,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
   # unchanged accounts; the expected in-program reason is kept as a comment
   # on each scenario and stays pinned by sequencer_core's unit tests.
   #
-  # Flow A cases not ported:
+  # Registration cases not ported:
   # - P-15, P-16 need a bad-mover guest
   # - P-17, P-19 need a chained-caller guest
   # - P-21 needs a second mover program fitting Stake's two-account slot
