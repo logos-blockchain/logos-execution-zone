@@ -1,5 +1,8 @@
-use lee_core::program::{
-    AccountPostState, Claim, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountDiff,
+    program::{
+        AccountDiffOutput, Claim, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    },
 };
 
 /// Claims two `pre_states` under the same `seed`. Used to exercise the tx-wide
@@ -9,7 +12,7 @@ use lee_core::program::{
 type Instruction = PdaSeed;
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -17,14 +20,16 @@ fn main() {
             instruction: seed,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let Ok([pre_a, pre_b]) = <[_; 2]>::try_from(pre_states) else {
         return;
     };
 
-    let claim_a = AccountPostState::new_claimed(pre_a.account.clone(), Claim::Pda(seed));
-    let claim_b = AccountPostState::new_claimed(pre_b.account.clone(), Claim::Pda(seed));
+    let claim_a =
+        AccountDiffOutput::new_claimed(AccountDiff::unchanged(pre_a.account_id), Claim::Pda(seed));
+    let claim_b =
+        AccountDiffOutput::new_claimed(AccountDiff::unchanged(pre_b.account_id), Claim::Pda(seed));
 
     ProgramOutput::new(
         self_program_id,

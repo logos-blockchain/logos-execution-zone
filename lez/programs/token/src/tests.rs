@@ -6,8 +6,8 @@
 )]
 
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data},
-    program::Claim,
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountDiffOutput, Claim},
 };
 use token_core::{
     MetadataStandard, NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding,
@@ -23,6 +23,19 @@ use crate::{
 
 // TODO: Move tests to a proper modules like burn, mint, transfer, etc, so that they are more
 // unit-test.
+
+/// Asserts that `diff_output`'s diff leaves the native balance untouched and sets the data to
+/// exactly `expected`'s data (mirroring what the old tests checked via full post-account equality
+/// of the `Account`'s `data`/`balance` fields; `program_owner`/`nonce` aren't carried by
+/// `AccountDiff` at all, and `account_id` is intentionally not checked here since it's simply
+/// echoed from the pre-state by construction — not something these functions compute).
+fn assert_data_diff(diff_output: &AccountDiffOutput, expected: &AccountWithMetadata) {
+    assert_eq!(diff_output.diff().diff_balance, BalanceDiff::Add(0));
+    assert_eq!(
+        diff_output.diff().diff_data,
+        Some(expected.account.data.clone())
+    );
+}
 
 struct BalanceForTests;
 struct IdForTests;
@@ -590,14 +603,13 @@ fn new_definition_with_valid_inputs_succeeds() {
     );
 
     let [definition_account, holding_account] = post_states.try_into().unwrap();
-    assert_eq!(
-        *definition_account.account(),
-        AccountForTests::definition_account_unclaimed().account
+    assert_data_diff(
+        &definition_account,
+        &AccountForTests::definition_account_unclaimed(),
     );
-
-    assert_eq!(
-        *holding_account.account(),
-        AccountForTests::holding_account_unclaimed().account
+    assert_data_diff(
+        &holding_account,
+        &AccountForTests::holding_account_unclaimed(),
     );
 }
 
@@ -633,13 +645,13 @@ fn transfer_with_valid_inputs_succeeds() {
     let post_states = transfer(sender, recipient, BalanceForTests::transfer_amount());
     let [sender_post, recipient_post] = post_states.try_into().unwrap();
 
-    assert_eq!(
-        *sender_post.account(),
-        AccountForTests::holding_account_init_post_transfer().account
+    assert_data_diff(
+        &sender_post,
+        &AccountForTests::holding_account_init_post_transfer(),
     );
-    assert_eq!(
-        *recipient_post.account(),
-        AccountForTests::holding_account2_init_post_transfer().account
+    assert_data_diff(
+        &recipient_post,
+        &AccountForTests::holding_account2_init_post_transfer(),
     );
 }
 
@@ -666,13 +678,13 @@ fn transfer_with_master_nft_success() {
     let post_states = transfer(sender, recipient, BalanceForTests::printable_copies());
     let [sender_post, recipient_post] = post_states.try_into().unwrap();
 
-    assert_eq!(
-        *sender_post.account(),
-        AccountForTests::holding_account_master_nft_post_transfer().account
+    assert_data_diff(
+        &sender_post,
+        &AccountForTests::holding_account_master_nft_post_transfer(),
     );
-    assert_eq!(
-        *recipient_post.account(),
-        AccountForTests::holding_account_with_master_nft_transferred_to().account
+    assert_data_diff(
+        &recipient_post,
+        &AccountForTests::holding_account_with_master_nft_transferred_to(),
     );
 }
 
@@ -683,13 +695,13 @@ fn token_initialize_account_succeeds() {
     let post_states = transfer(sender, recipient, BalanceForTests::transfer_amount());
     let [sender_post, recipient_post] = post_states.try_into().unwrap();
 
-    assert_eq!(
-        *sender_post.account(),
-        AccountForTests::holding_account_init_post_transfer().account
+    assert_data_diff(
+        &sender_post,
+        &AccountForTests::holding_account_init_post_transfer(),
     );
-    assert_eq!(
-        *recipient_post.account(),
-        AccountForTests::holding_account2_init_post_transfer().account
+    assert_data_diff(
+        &recipient_post,
+        &AccountForTests::holding_account2_init_post_transfer(),
     );
 }
 
@@ -754,14 +766,8 @@ fn burn_success() {
 
     let [def_post, holding_post] = post_states.try_into().unwrap();
 
-    assert_eq!(
-        *def_post.account(),
-        AccountForTests::definition_account_post_burn().account
-    );
-    assert_eq!(
-        *holding_post.account(),
-        AccountForTests::holding_account_post_burn().account
-    );
+    assert_data_diff(&def_post, &AccountForTests::definition_account_post_burn());
+    assert_data_diff(&holding_post, &AccountForTests::holding_account_post_burn());
 }
 
 #[test]
@@ -824,13 +830,10 @@ fn mint_success() {
 
     let [def_post, holding_post] = post_states.try_into().unwrap();
 
-    assert_eq!(
-        *def_post.account(),
-        AccountForTests::definition_account_mint().account
-    );
-    assert_eq!(
-        *holding_post.account(),
-        AccountForTests::holding_account_same_definition_mint().account
+    assert_data_diff(&def_post, &AccountForTests::definition_account_mint());
+    assert_data_diff(
+        &holding_post,
+        &AccountForTests::holding_account_same_definition_mint(),
     );
 }
 
@@ -846,14 +849,8 @@ fn mint_uninit_holding_success() {
 
     let [def_post, holding_post] = post_states.try_into().unwrap();
 
-    assert_eq!(
-        *def_post.account(),
-        AccountForTests::definition_account_mint().account
-    );
-    assert_eq!(
-        *holding_post.account(),
-        AccountForTests::init_mint().account
-    );
+    assert_data_diff(&def_post, &AccountForTests::definition_account_mint());
+    assert_data_diff(&holding_post, &AccountForTests::init_mint());
     assert_eq!(holding_post.required_claim(), Some(Claim::Authorized));
 }
 
@@ -1037,12 +1034,12 @@ fn print_nft_success() {
 
     let [post_master_nft, post_printed] = post_states.try_into().unwrap();
 
-    assert_eq!(
-        *post_master_nft.account(),
-        AccountForTests::holding_account_master_nft_after_print().account
+    assert_data_diff(
+        &post_master_nft,
+        &AccountForTests::holding_account_master_nft_after_print(),
     );
-    assert_eq!(
-        *post_printed.account(),
-        AccountForTests::holding_account_printed_nft().account
+    assert_data_diff(
+        &post_printed,
+        &AccountForTests::holding_account_printed_nft(),
     );
 }

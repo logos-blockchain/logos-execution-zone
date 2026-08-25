@@ -1,7 +1,8 @@
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data, Nonce},
+    account::{Account, AccountDiff, AccountId, AccountWithMetadata, Data, Nonce},
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
     },
 };
 
@@ -28,7 +29,7 @@ type Instruction = (
 );
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -46,12 +47,12 @@ fn main() {
                 ),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     // Echo own pre_states (attacker's account) unchanged.
     let post_states = pre_states
         .iter()
-        .map(|p| AccountPostState::new(p.account.clone()))
+        .map(|p| AccountDiffOutput::new(AccountDiff::unchanged(p.account_id)))
         .collect();
 
     // Construct victim AccountWithMetadata from primitives, stamping is_authorized=true.

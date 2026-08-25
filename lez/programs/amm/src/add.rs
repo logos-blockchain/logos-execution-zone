@@ -2,8 +2,8 @@ use std::num::NonZeroU128;
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed};
 use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall},
+    account::{AccountDiff, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountDiffOutput, ChainedCall},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -19,7 +19,7 @@ pub fn add_liquidity(
     min_amount_liquidity: NonZeroU128,
     max_amount_to_add_token_a: u128,
     max_amount_to_add_token_b: u128,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<AccountDiffOutput>, Vec<ChainedCall>) {
     // 1. Fetch Pool state
     let pool_def_data = PoolDefinition::try_from(&pool.account.data)
         .expect("Add liquidity: AMM Program expects valid Pool Definition Account");
@@ -124,7 +124,6 @@ pub fn add_liquidity(
     );
 
     // 5. Update pool account
-    let mut pool_post = pool.account;
     let pool_post_definition = PoolDefinition {
         liquidity_pool_supply: pool_def_data.liquidity_pool_supply + delta_lp,
         reserve_a: pool_def_data.reserve_a + actual_amount_a,
@@ -132,7 +131,6 @@ pub fn add_liquidity(
         ..pool_def_data
     };
 
-    pool_post.data = Data::from(&pool_post_definition);
     let token_program_id: lee_core::program::ProgramId =
         user_holding_a.account.program_owner.into();
 
@@ -167,13 +165,17 @@ pub fn add_liquidity(
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_states = vec![
-        AccountPostState::new(pool_post),
-        AccountPostState::new(vault_a.account),
-        AccountPostState::new(vault_b.account),
-        AccountPostState::new(pool_definition_lp.account),
-        AccountPostState::new(user_holding_a.account),
-        AccountPostState::new(user_holding_b.account),
-        AccountPostState::new(user_holding_lp.account),
+        AccountDiffOutput::new(AccountDiff {
+            id: pool.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: Some(Data::from(&pool_post_definition)),
+        }),
+        AccountDiffOutput::new(AccountDiff::unchanged(vault_a.account_id)),
+        AccountDiffOutput::new(AccountDiff::unchanged(vault_b.account_id)),
+        AccountDiffOutput::new(AccountDiff::unchanged(pool_definition_lp.account_id)),
+        AccountDiffOutput::new(AccountDiff::unchanged(user_holding_a.account_id)),
+        AccountDiffOutput::new(AccountDiff::unchanged(user_holding_b.account_id)),
+        AccountDiffOutput::new(AccountDiff::unchanged(user_holding_lp.account_id)),
     ];
 
     (post_states, chained_calls)

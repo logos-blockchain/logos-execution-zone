@@ -112,6 +112,18 @@ pub struct AccountDiff {
     pub diff_data: Option<Data>,
 }
 
+impl AccountDiff {
+    /// A diff that leaves `id`'s balance and data untouched.
+    #[must_use]
+    pub const fn unchanged(id: AccountId) -> Self {
+        Self {
+            id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: None,
+        }
+    }
+}
+
 /// Account to be used both in public and private contexts.
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
@@ -428,5 +440,15 @@ mod tests {
         let diff_restored = borsh::from_slice(&borsh_serialized_diff).unwrap();
 
         assert_eq!(diff, diff_restored);
+    }
+
+    #[test]
+    fn account_diff_unchanged_has_no_balance_or_data_change() {
+        let id = AccountId::new([7; 32]);
+        let diff = AccountDiff::unchanged(id);
+
+        assert_eq!(diff.id, id);
+        assert_eq!(diff.diff_balance, BalanceDiff::Add(0));
+        assert!(diff.diff_data.is_none());
     }
 }

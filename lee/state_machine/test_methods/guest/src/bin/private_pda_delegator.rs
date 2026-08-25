@@ -1,7 +1,10 @@
 use borsh::to_vec;
-use lee_core::program::{
-    AccountPostState, ChainedCall, Claim, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+use lee_core::{
+    account::AccountDiff,
+    program::{
+        AccountDiffOutput, ChainedCall, Claim, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
+    },
 };
 
 /// Claims the sole `pre_state` as a PDA with `claim_seed`, then chains to `callee_program_id`
@@ -12,7 +15,7 @@ use lee_core::program::{
 type Instruction = (PdaSeed, PdaSeed, ProgramId);
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -20,13 +23,16 @@ fn main() {
             instruction: (claim_seed, delegated_seed, callee_program_id),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let claimed = AccountPostState::new_claimed(pre.account.clone(), Claim::Pda(claim_seed));
+    let claimed = AccountDiffOutput::new_claimed(
+        AccountDiff::unchanged(pre.account_id),
+        Claim::Pda(claim_seed),
+    );
 
     let mut pre_for_callee = pre.clone();
     pre_for_callee.is_authorized = true;

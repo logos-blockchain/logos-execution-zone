@@ -1,10 +1,12 @@
-use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{
+    ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput, read_lee_call,
+};
 
 /// Instruction: (`auth_transfer_id`, `amount`) — both primitive, borsh-encoded.
 type Instruction = (ProgramId, u128);
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -12,7 +14,7 @@ fn main() {
             instruction: (simple_transfer_id, amount),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     // Output empty pre/post states. P2 processes no accounts itself, so the
     // authorization check at validated_state_diff.rs:158-182 runs over nothing.

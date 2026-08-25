@@ -1,7 +1,7 @@
 use std::io;
 
 use lee_core::{
-    account::{Account, AccountId},
+    account::{Account, AccountId, BalanceDiffError},
     program::ProgramId,
 };
 use thiserror::Error;
@@ -136,6 +136,9 @@ pub enum InvalidProgramBehaviorError {
         "Account {account_id} was declared in the transaction but is missing from the program output"
     )]
     DeclaredAccountMissingFromOutput { account_id: AccountId },
+
+    #[error(transparent)]
+    BalanceDiffFailed(#[from] BalanceDiffError),
 }
 
 #[cfg(test)]

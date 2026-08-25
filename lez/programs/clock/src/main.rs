@@ -13,8 +13,8 @@ use clock_core::{
     ClockAccountData, Instruction,
 };
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountDiff, AccountWithMetadata, BalanceDiff},
+    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
 };
 
 fn update_if_multiple(
@@ -22,22 +22,27 @@ fn update_if_multiple(
     divisor: u64,
     current_block_id: u64,
     updated_data: &[u8],
-) -> (AccountWithMetadata, AccountPostState) {
+) -> (AccountWithMetadata, AccountDiffOutput) {
     if current_block_id.is_multiple_of(divisor) {
-        let mut post_account = pre.account.clone();
-        post_account.data = updated_data
+        let diff_data = updated_data
             .to_vec()
             .try_into()
             .expect("Clock account data should fit in account data");
-        (pre, AccountPostState::new(post_account))
+        let diff = AccountDiff {
+            id: pre.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: Some(diff_data),
+        };
+        let post = AccountDiffOutput::new(diff);
+        (pre, post)
     } else {
-        let post = AccountPostState::new(pre.account.clone());
+        let post = AccountDiffOutput::new(AccountDiff::unchanged(pre.account_id));
         (pre, post)
     }
 }
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -45,7 +50,7 @@ fn main() {
             instruction: timestamp,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let Ok([pre_01, pre_10, pre_50]) = <[_; 3]>::try_from(pre_states) else {
         panic!("Invalid number of input accounts");

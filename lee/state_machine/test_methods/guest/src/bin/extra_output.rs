@@ -1,12 +1,12 @@
 use lee_core::{
-    account::Account,
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountDiff, AccountId},
+    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
 };
 
 type Instruction = ();
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -14,13 +14,13 @@ fn main() {
             ..
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let account_pre = pre.account.clone();
+    let account_id = pre.account_id;
 
     ProgramOutput::new(
         self_program_id,
@@ -28,8 +28,9 @@ fn main() {
         instruction_data,
         vec![pre],
         vec![
-            AccountPostState::new(account_pre),
-            AccountPostState::new(Account::default()),
+            AccountDiffOutput::new(AccountDiff::unchanged(account_id)),
+            // Extra, undeclared output: no matching pre-state for this account at all.
+            AccountDiffOutput::new(AccountDiff::unchanged(AccountId::default())),
         ],
     )
     .write();

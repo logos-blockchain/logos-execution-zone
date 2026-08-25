@@ -1,4 +1,7 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 
 const PRIZE: u128 = 150;
@@ -44,7 +47,7 @@ impl Challenge {
 fn main() {
     // Read input accounts.
     // It is expected to receive only two accounts: [pinata_account, winner_account]
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -52,7 +55,7 @@ fn main() {
             instruction: solution,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let Ok([pinata, winner]) = <[_; 2]>::try_from(pre_states) else {
         return;
@@ -64,21 +67,23 @@ fn main() {
         return;
     }
 
-    let mut pinata_post = pinata.account.clone();
-    let mut winner_post = winner.account.clone();
-    pinata_post.balance = pinata_post
-        .balance
-        .checked_sub(PRIZE)
-        .expect("Not enough balance in the pinata");
-    pinata_post.data = data
-        .next_data()
-        .to_vec()
-        .try_into()
-        .expect("33 bytes should fit into Data");
-    winner_post.balance = winner_post
-        .balance
-        .checked_add(PRIZE)
-        .expect("Overflow when adding prize to winner");
+    let pinata_diff = AccountDiff {
+        id: pinata.account_id,
+        diff_balance: BalanceDiff::Sub(PRIZE),
+        diff_data: Some(
+            data.next_data()
+                .to_vec()
+                .try_into()
+                .expect("33 bytes should fit into Data"),
+        ),
+    };
+    let winner_diff = AccountDiff {
+        id: winner.account_id,
+        diff_balance: BalanceDiff::Add(PRIZE),
+        diff_data: None,
+    };
+
+    let pinata_program_owner = pinata.account.program_owner;
 
     ProgramOutput::new(
         self_program_id,
@@ -86,8 +91,12 @@ fn main() {
         instruction_data,
         vec![pinata, winner],
         vec![
-            AccountPostState::new_claimed_if_default(pinata_post, Claim::Authorized),
-            AccountPostState::new(winner_post),
+            AccountDiffOutput::new_claimed_if_default(
+                pinata_diff,
+                pinata_program_owner,
+                Claim::Authorized,
+            ),
+            AccountDiffOutput::new(winner_diff),
         ],
     )
     .write();

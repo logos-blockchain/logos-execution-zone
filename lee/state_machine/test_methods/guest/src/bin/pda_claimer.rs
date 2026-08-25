@@ -1,11 +1,14 @@
-use lee_core::program::{
-    AccountPostState, Claim, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountDiff,
+    program::{
+        AccountDiffOutput, Claim, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    },
 };
 
 type Instruction = PdaSeed;
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -13,13 +16,14 @@ fn main() {
             instruction: seed,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let account_post = AccountPostState::new_claimed(pre.account.clone(), Claim::Pda(seed));
+    let account_post =
+        AccountDiffOutput::new_claimed(AccountDiff::unchanged(pre.account_id), Claim::Pda(seed));
 
     ProgramOutput::new(
         self_program_id,

@@ -1,12 +1,15 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+use lee_core::{
+    account::AccountDiff,
+    program::{
+        AccountDiffOutput, ChainedCall, InstructionData, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
+    },
 };
 
 type Instruction = (ProgramId, InstructionData, bool);
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -14,12 +17,12 @@ fn main() {
             instruction: (callee_program_id, callee_instruction, declare_pre_states),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let (output_pre_states, output_post_states) = if declare_pre_states {
         let post_states = pre_states
             .iter()
-            .map(|account| AccountPostState::new(account.account.clone()))
+            .map(|account| AccountDiffOutput::new(AccountDiff::unchanged(account.account_id)))
             .collect();
         (pre_states.clone(), post_states)
     } else {

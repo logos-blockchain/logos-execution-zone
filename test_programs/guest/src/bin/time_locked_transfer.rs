@@ -10,13 +10,16 @@
 //!   2 - clock account (read-only, e.g. `CLOCK_01`).
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+};
 
 /// (`amount`, `deadline_timestamp`).
 type Instruction = (u128, u64);
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -24,7 +27,7 @@ fn main() {
             instruction: (amount, deadline),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let Ok([sender_pre, receiver_pre, clock_pre]) = <[_; 3]>::try_from(pre_states) else {
         panic!("Expected exactly 3 input accounts: sender, receiver, clock");
@@ -42,20 +45,19 @@ fn main() {
         clock_data.timestamp,
     );
 
-    let mut sender_post = sender_pre.account.clone();
-    let mut receiver_post = receiver_pre.account.clone();
-
-    sender_post.balance = sender_post
-        .balance
-        .checked_sub(amount)
-        .expect("Insufficient balance");
-    receiver_post.balance = receiver_post
-        .balance
-        .checked_add(amount)
-        .expect("Balance overflow");
+    let sender_diff = AccountDiff {
+        id: sender_pre.account_id,
+        diff_balance: BalanceDiff::Sub(amount),
+        diff_data: None,
+    };
+    let receiver_diff = AccountDiff {
+        id: receiver_pre.account_id,
+        diff_balance: BalanceDiff::Add(amount),
+        diff_data: None,
+    };
 
     // Clock account is read-only: post state equals pre state.
-    let clock_post = clock_pre.account.clone();
+    let clock_diff = AccountDiff::unchanged(clock_pre.account_id);
 
     ProgramOutput::new(
         self_program_id,
@@ -63,9 +65,9 @@ fn main() {
         instruction_data,
         vec![sender_pre, receiver_pre, clock_pre],
         vec![
-            AccountPostState::new(sender_post),
-            AccountPostState::new(receiver_post),
-            AccountPostState::new(clock_post),
+            AccountDiffOutput::new(sender_diff),
+            AccountDiffOutput::new(receiver_diff),
+            AccountDiffOutput::new(clock_diff),
         ],
     )
     .write();

@@ -1,11 +1,15 @@
-use lee_core::program::{
-    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountDiff,
+    program::{
+        AccountDiffOutput, DEFAULT_PROGRAM_ID, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call,
+    },
 };
 
 type Instruction = ();
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id: _, // ignore the correct ID
             caller_program_id,
@@ -13,11 +17,11 @@ fn main() {
             instruction: (),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let post_states = pre_states
         .iter()
-        .map(|a| AccountPostState::new(a.account.clone()))
+        .map(|a| AccountDiffOutput::new(AccountDiff::unchanged(a.account_id)))
         .collect();
 
     // Deliberately output wrong self_program_id

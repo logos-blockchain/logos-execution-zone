@@ -1,7 +1,8 @@
 use lee_core::{
-    account::Data,
+    account::{AccountDiff, BalanceDiff, Data},
     program::{
-        AccountPostState, ChainedCall, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call,
     },
 };
 use risc0_zkvm::sha::{Impl, Sha256 as _};
@@ -50,7 +51,7 @@ fn main() {
     // Read input accounts.
     // It is expected to receive three accounts: [pinata_definition, pinata_token_holding,
     // winner_token_holding]
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -58,7 +59,7 @@ fn main() {
             instruction: solution,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let Ok(
         [
@@ -77,17 +78,18 @@ fn main() {
         return;
     }
 
-    let mut pinata_definition_post = pinata_definition.account.clone();
-    let pinata_token_holding_post = pinata_token_holding.account.clone();
-    let winner_token_holding_post = winner_token_holding.account.clone();
-    pinata_definition_post.data = data.next_data();
+    let pinata_definition_diff = AccountDiff {
+        id: pinata_definition.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(data.next_data()),
+    };
 
     // Flip authorization to true for chained call
     let mut pinata_token_holding_for_chain_call = pinata_token_holding.clone();
     pinata_token_holding_for_chain_call.is_authorized = true;
 
     let chained_call = ChainedCall::new(
-        pinata_token_holding_post.program_owner.into(),
+        pinata_token_holding.account.program_owner.into(),
         vec![
             pinata_token_holding_for_chain_call,
             winner_token_holding.clone(),
@@ -97,6 +99,9 @@ fn main() {
         },
     )
     .with_pda_seeds(vec![PdaSeed::new([0; 32])]);
+
+    let pinata_token_holding_id = pinata_token_holding.account_id;
+    let winner_token_holding_id = winner_token_holding.account_id;
 
     ProgramOutput::new(
         self_program_id,
@@ -108,9 +113,9 @@ fn main() {
             winner_token_holding,
         ],
         vec![
-            AccountPostState::new(pinata_definition_post),
-            AccountPostState::new(pinata_token_holding_post),
-            AccountPostState::new(winner_token_holding_post),
+            AccountDiffOutput::new(pinata_definition_diff),
+            AccountDiffOutput::new(AccountDiff::unchanged(pinata_token_holding_id)),
+            AccountDiffOutput::new(AccountDiff::unchanged(winner_token_holding_id)),
         ],
     )
     .with_chained_calls(vec![chained_call])

@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountDiffOutput, Claim},
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -8,7 +8,7 @@ use token_core::{TokenDefinition, TokenHolding};
 pub fn initialize_account(
     definition_account: AccountWithMetadata,
     account_to_initialize: AccountWithMetadata,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     assert_eq!(
         account_to_initialize.account,
         Account::default(),
@@ -24,12 +24,14 @@ pub fn initialize_account(
     let holding =
         TokenHolding::zeroized_from_definition(definition_account.account_id, &definition);
 
-    let definition_post = definition_account.account;
-    let mut account_to_initialize = account_to_initialize.account;
-    account_to_initialize.data = Data::from(&holding);
+    let holding_diff = AccountDiff {
+        id: account_to_initialize.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(Data::from(&holding)),
+    };
 
     vec![
-        AccountPostState::new(definition_post),
-        AccountPostState::new_claimed(account_to_initialize, Claim::Authorized),
+        AccountDiffOutput::new(AccountDiff::unchanged(definition_account.account_id)),
+        AccountDiffOutput::new_claimed(holding_diff, Claim::Authorized),
     ]
 }

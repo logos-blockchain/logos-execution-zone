@@ -1,4 +1,7 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::AccountDiff,
+    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+};
 
 /// A variant of `noop` that asserts every `pre_state.is_authorized == true` before echoing
 /// the `post_states`. Any unauthorized `pre_state` panics the guest, failing the whole
@@ -7,7 +10,7 @@ use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_
 type Instruction = ();
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -15,7 +18,7 @@ fn main() {
             ..
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     for pre in &pre_states {
         assert!(
@@ -27,7 +30,7 @@ fn main() {
 
     let post_states = pre_states
         .iter()
-        .map(|account| AccountPostState::new(account.account.clone()))
+        .map(|account| AccountDiffOutput::new(AccountDiff::unchanged(account.account_id)))
         .collect();
     ProgramOutput::new(
         self_program_id,

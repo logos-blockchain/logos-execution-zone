@@ -34,8 +34,20 @@ fn transition_from_authenticated_transfer_program_invocation_default_account_des
 fn transition_from_authenticated_transfer_program_invocation_insuficient_balance() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    // Owned by the executing program (matching the other tests in this file): otherwise the
+    // diff-native ownership check (`UnauthorizedBalanceDecrease`) rejects the balance decrease
+    // before `apply_balance_diff` ever gets a chance to reject it for being insufficient, which
+    // isn't what this test means to exercise.
+    let initial_data = [(
+        account_id,
+        Account {
+            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+            balance: 100,
+            ..Account::default()
+        },
+    )];
     let mut state = V03State::new()
-        .with_public_account_balances([(account_id, 100)])
+        .with_public_accounts(initial_data)
         .with_test_programs();
     let from = account_id;
     let from_key = key;
@@ -47,7 +59,15 @@ fn transition_from_authenticated_transfer_program_invocation_insuficient_balance
     let tx = transfer_transaction(from, &from_key, 0, to, &to_key, 0, balance_to_move);
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-    assert!(matches!(result, Err(LeeError::ProgramExecutionFailed(_))));
+    // Balance-sufficiency is no longer checked in-guest — `authenticated_transfer` emits a
+    // plain `BalanceDiff::Sub` and lets `apply_balance_diff`'s checked arithmetic (applied
+    // unconditionally to every diff, at the protocol level) reject an insufficient balance.
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(
+            InvalidProgramBehaviorError::BalanceDiffFailed(_)
+        ))
+    ));
     assert_eq!(state.get_account_by_id(from).balance, 100);
     assert_eq!(state.get_account_by_id(to).balance, 0);
     assert_eq!(state.get_account_by_id(from).nonce, Nonce(0));

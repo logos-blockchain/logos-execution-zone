@@ -1,8 +1,9 @@
 use borsh::to_vec;
 use lee_core::{
-    account::AccountWithMetadata,
+    account::{AccountDiff, AccountWithMetadata},
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
     },
 };
 
@@ -12,7 +13,7 @@ type Instruction = (u128, ProgramId);
 /// It accepts two accounts and executes a native token transfer program via chain call,
 /// but sets the `is_authorized` field of the first account to true.
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -20,7 +21,7 @@ fn main() {
             instruction: (balance, transfer_program_id),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let Ok([sender, receiver]) = <[_; 2]>::try_from(pre_states) else {
         return;
@@ -47,8 +48,8 @@ fn main() {
         instruction_data,
         vec![sender.clone(), receiver.clone()],
         vec![
-            AccountPostState::new(sender.account),
-            AccountPostState::new(receiver.account),
+            AccountDiffOutput::new(AccountDiff::unchanged(sender.account_id)),
+            AccountDiffOutput::new(AccountDiff::unchanged(receiver.account_id)),
         ],
     )
     .with_chained_calls(vec![chained_call])
