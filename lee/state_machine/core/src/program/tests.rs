@@ -409,6 +409,87 @@ fn program_may_not_create_a_foreign_data_slot() {
 }
 
 #[test]
+fn an_account_may_fill_several_roles() {
+    let before = account(&[(P, 100, b"")]);
+    let after = account(&[(P, 60, b""), (Q, 40, b"")]);
+
+    assert!(
+        validate_execution(
+            &[pre(before.clone(), 1), pre(before, 1)],
+            &[after.clone(), after],
+            P,
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn duplicate_roles_must_agree_on_the_post_state() {
+    let before = account(&[(P, 100, b"")]);
+
+    assert!(matches!(
+        validate_execution(
+            &[pre(before.clone(), 1), pre(before.clone(), 1)],
+            &[before, account(&[(P, 60, b""), (Q, 40, b"")])],
+            P,
+        ),
+        Err(ExecutionValidationError::DisagreeingDuplicateAccount { .. })
+    ));
+}
+
+#[test]
+fn duplicate_roles_must_agree_on_the_pre_state() {
+    let after = account(&[(P, 75, b"")]);
+
+    assert!(matches!(
+        validate_execution(
+            &[
+                pre(account(&[(P, 100, b"")]), 1),
+                pre(account(&[(P, 50, b"")]), 1)
+            ],
+            &[after.clone(), after],
+            P,
+        ),
+        Err(ExecutionValidationError::DisagreeingDuplicateAccount { .. })
+    ));
+}
+
+#[test]
+fn duplicate_positions_count_once_for_conservation() {
+    let recipient = account(&[(P, 0, b"x")]);
+    let sender = account(&[(P, 100, b"")]);
+    let recipient_after = account(&[(P, 50, b"x")]);
+
+    assert!(
+        validate_execution(
+            &[pre(recipient.clone(), 1), pre(recipient, 1), pre(sender, 2)],
+            &[
+                recipient_after.clone(),
+                recipient_after,
+                account(&[(P, 50, b"")]),
+            ],
+            P,
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn duplicate_positions_cannot_mint() {
+    let before = account(&[(P, 100, b"")]);
+    let after = account(&[(P, 200, b"")]);
+
+    assert!(matches!(
+        validate_execution(
+            &[pre(before.clone(), 1), pre(before, 1)],
+            &[after.clone(), after],
+            P,
+        ),
+        Err(ExecutionValidationError::MismatchedTotalBalance { .. })
+    ));
+}
+
+#[test]
 fn program_may_credit_a_foreign_slot() {
     let sender = account(&[(P, 100, b"")]);
     let recipient = Account::default();

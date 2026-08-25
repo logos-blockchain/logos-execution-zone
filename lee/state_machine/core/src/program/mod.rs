@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::guest::env;
@@ -522,8 +522,10 @@ impl From<u128> for WrappedBalanceSum {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExecutionValidationError {
-    #[error("Pre-state account IDs are not unique")]
-    PreStateAccountIdsNotUnique,
+    #[error(
+        "Account {account_id} appears at several positions with disagreeing pre or post states"
+    )]
+    DisagreeingDuplicateAccount { account_id: AccountId },
 
     #[error(
         "Pre-state and post-state lengths do not match: pre-state length {pre_state_length}, post-state length {post_state_length}"
@@ -626,12 +628,7 @@ pub fn validate_execution(
     post_states: &[Account],
     executing_program_id: ProgramId,
 ) -> Result<(), ExecutionValidationError> {
-    // 1. Check account ids are all different
-    if !validate_uniqueness_of_account_ids(pre_states) {
-        return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
-    }
-
-    // 2. Lengths must match
+    // 1. Lengths must match
     if pre_states.len() != post_states.len() {
         return Err(
             ExecutionValidationError::MismatchedPreStatePostStateLength {
@@ -639,6 +636,21 @@ pub fn validate_execution(
                 post_state_length: post_states.len(),
             },
         );
+    }
+
+    // 2. One account may fill several positions (one address playing several roles of an
+    //    instruction), but every appearance must agree: identical pre states, identical
+    //    post states. The agreed post is the account's single effect, so the id-keyed
+    //    state diff stays well-defined, and conservation counts each account once.
+    let mut distinct = HashMap::new();
+    for (pre, post) in pre_states.iter().zip(post_states) {
+        if let Some(seen) = distinct.insert(pre.account_id, (pre, post))
+            && seen != (pre, post)
+        {
+            return Err(ExecutionValidationError::DisagreeingDuplicateAccount {
+                account_id: pre.account_id,
+            });
+        }
     }
 
     for (pre, post) in pre_states.iter().zip(post_states) {
@@ -679,17 +691,17 @@ pub fn validate_execution(
     //    from the executing slot must land as a credit somewhere, and rule 4 admits no
     //    other decrease.
     let Some(total_balance_pre_states) = WrappedBalanceSum::from_balances(
-        pre_states
-            .iter()
-            .flat_map(|pre| pre.account.slots.values().map(|slot| slot.balance)),
+        distinct
+            .values()
+            .flat_map(|(pre, _)| pre.account.slots.values().map(|slot| slot.balance)),
     ) else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
     let Some(total_balance_post_states) = WrappedBalanceSum::from_balances(
-        post_states
-            .iter()
-            .flat_map(|post| post.slots.values().map(|slot| slot.balance)),
+        distinct
+            .values()
+            .flat_map(|(_, post)| post.slots.values().map(|slot| slot.balance)),
     ) else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
@@ -702,17 +714,6 @@ pub fn validate_execution(
     }
 
     Ok(())
-}
-
-fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> bool {
-    let number_of_accounts = pre_states.len();
-    let number_of_account_ids = pre_states
-        .iter()
-        .map(|account| &account.account_id)
-        .collect::<HashSet<_>>()
-        .len();
-
-    number_of_accounts == number_of_account_ids
 }
 
 #[cfg(test)]
