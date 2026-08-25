@@ -77,7 +77,7 @@ pub fn transfer(
         return vec![joint.clone(), joint];
     }
 
-    let mut recipient_holding = if recipient.account.slot(self_program_id).is_none() {
+    let mut recipient_holding = if recipient.account.data(self_program_id).is_empty() {
         TokenHolding::zeroized_clone_from(&sender_holding)
     } else {
         TokenHolding::try_from(recipient.account.data(self_program_id))

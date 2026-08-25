@@ -53,14 +53,15 @@ fn main() {
     // happens to be free is reported as the wrong account rather than as a used
     // slot.
     //
-    // No other program can occupy a record: this program's slot is writable only
-    // by itself. What remains is a race between users of one emitter, which the
+    // The record is the signal, not the slot: anyone can credit a foreign slot
+    // into existence, but only this program writes its data. What remains is a
+    // race between users of one emitter, which the
     // address already narrows to the same ordinal: the ordinal is caller-chosen
     // in a namespace they share and an emission needs no signature, so a client
     // must pick an ordinal the chain does not already hold rather than counting
     // from zero.
     assert!(
-        outbox.account.slot(self_program_id).is_none(),
+        outbox.account.data(self_program_id).is_empty(),
         "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
     );
 

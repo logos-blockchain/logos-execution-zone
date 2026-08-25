@@ -16,7 +16,7 @@ pub fn print_nft(
     );
 
     assert!(
-        printed_account.account.slot(self_program_id).is_none(),
+        printed_account.account.data(self_program_id).is_empty(),
         "Printed Account must be uninitialized"
     );
 

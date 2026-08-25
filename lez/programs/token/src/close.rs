@@ -14,9 +14,13 @@ pub fn close_holding(
         "Holding authorization is missing"
     );
 
-    let holding = TokenHolding::try_from(holding_account.account.data(self_program_id))
-        .expect("Invalid holding data");
-    assert!(holding.is_empty(), "Only an empty holding can be closed");
+    // A slot carrying no data holds no token — a stranger's bare credit can bring one into
+    // existence — so there is nothing to decode and nothing to lose by dropping it.
+    let data = holding_account.account.data(self_program_id);
+    if !data.is_empty() {
+        let holding = TokenHolding::try_from(data).expect("Invalid holding data");
+        assert!(holding.is_empty(), "Only an empty holding can be closed");
+    }
 
     let mut holding_post = holding_account.account;
     holding_post.slot_mut(self_program_id).data = Data::empty();

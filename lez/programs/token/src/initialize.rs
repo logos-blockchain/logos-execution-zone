@@ -13,8 +13,8 @@ pub fn initialize_account(
     assert!(
         account_to_initialize
             .account
-            .slot(self_program_id)
-            .is_none(),
+            .data(self_program_id)
+            .is_empty(),
         "Only Uninitialized accounts can be initialized"
     );
 

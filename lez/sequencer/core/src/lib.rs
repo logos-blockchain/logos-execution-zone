@@ -1495,7 +1495,7 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
     let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, deposit_op_id.0);
     state
         .get_account_by_id_ref(receipt_id)
-        .is_some_and(|receipt| receipt.slot(bridge_program_id).is_some())
+        .is_some_and(|receipt| !receipt.data(bridge_program_id).is_empty())
 }
 
 /// Whether a cross-zone delivery is already on the chain we are building on.

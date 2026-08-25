@@ -246,3 +246,51 @@ fn close_at_a_non_ata_address_should_fail() {
         TOKEN_PROGRAM_ID,
     );
 }
+
+/// A bare credit into the token slot leaves it present but empty. `Create` must still
+/// chain `InitializeAccount` rather than treating the address as already in use.
+#[test]
+fn create_is_not_suppressed_by_a_bare_credit() {
+    let mut squatted = Account::default();
+    squatted.slot_mut(TOKEN_PROGRAM_ID).balance = 1;
+
+    let ata = AccountWithMetadata {
+        account: squatted,
+        is_authorized: false,
+        account_id: ata_id(),
+    };
+
+    let (_post_states, chained_calls) = crate::create::create_associated_token_account(
+        owner_account(),
+        definition_account(),
+        ata,
+        ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
+    );
+
+    assert_eq!(chained_calls.len(), 1);
+}
+
+/// The same bare credit must not block closing, which decodes nothing when the slot
+/// carries no data.
+#[test]
+fn close_clears_a_bare_credit() {
+    let mut squatted = Account::default();
+    squatted.slot_mut(TOKEN_PROGRAM_ID).balance = 1;
+
+    let ata = AccountWithMetadata {
+        account: squatted,
+        is_authorized: false,
+        account_id: ata_id(),
+    };
+
+    let (_post_states, chained_calls) = crate::close::close_associated_token_account(
+        owner_account(),
+        ata,
+        definition_account(),
+        ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
+    );
+
+    assert_eq!(chained_calls.len(), 1);
+}

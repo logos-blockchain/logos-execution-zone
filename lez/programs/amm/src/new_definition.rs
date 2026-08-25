@@ -65,7 +65,7 @@ pub fn new_definition(
 
     // TODO: return here
     // Verify that Pool Account is not active
-    let is_fresh_pool = pool.account.slot(self_program_id).is_none();
+    let is_fresh_pool = pool.account.data(self_program_id).is_empty();
     let pool_account_data = if is_fresh_pool {
         PoolDefinition::default()
     } else {

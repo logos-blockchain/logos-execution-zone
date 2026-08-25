@@ -19,7 +19,11 @@ pub fn mint(
     let mut definition =
         TokenDefinition::try_from(definition_account.account.data(self_program_id))
             .expect("Token Definition account must be valid");
-    let mut holding = if user_holding_account.account.slot(self_program_id).is_none() {
+    let mut holding = if user_holding_account
+        .account
+        .data(self_program_id)
+        .is_empty()
+    {
         TokenHolding::zeroized_from_definition(definition_account.account_id, &definition)
     } else {
         TokenHolding::try_from(user_holding_account.account.data(self_program_id))

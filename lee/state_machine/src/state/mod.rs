@@ -277,13 +277,16 @@ impl V03State {
     /// Looks up a deployed program's elf by its `ProgramId`, in the [`PROGRAM_STORAGE_SLOT`] of
     /// the account at `AccountId::from(program_id)`.
     ///
-    /// No guest can have image id `[u32::MAX; 8]`, so that slot is structurally unwritable by
-    /// programs: its presence is itself the deployed-program predicate, and callers never have
-    /// to remember to re-check it themselves.
+    /// The elf itself is the predicate, not the slot's presence: no guest can have image id
+    /// `[u32::MAX; 8]` so nothing but deployment writes that slot's *data*, but any program may
+    /// credit balance into a foreign slot and so bring the slot into existence.
     #[must_use]
     pub fn get_program(&self, program_id: ProgramId) -> Option<&Data> {
         let account = self.get_account_by_id_ref(AccountId::from(program_id))?;
-        account.slot(PROGRAM_STORAGE_SLOT).map(|slot| &slot.data)
+        account
+            .slot(PROGRAM_STORAGE_SLOT)
+            .map(|slot| &slot.data)
+            .filter(|elf| !elf.is_empty())
     }
 
     #[must_use]

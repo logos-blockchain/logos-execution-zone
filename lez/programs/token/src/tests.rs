@@ -1074,3 +1074,47 @@ fn close_holding_holding_value_should_fail() {
 
     let _post_states = close_holding(holding, TOKEN_PROGRAM_ID);
 }
+
+/// Anyone may credit a foreign slot into existence, which leaves this program's slot
+/// present but empty. That is not a holding, and must not be read as one.
+#[test]
+fn a_bare_credit_does_not_look_like_a_holding() {
+    let mut squatted = Account::default();
+    squatted.slot_mut(TOKEN_PROGRAM_ID).balance = 1;
+
+    let recipient = AccountWithMetadata {
+        account: squatted.clone(),
+        is_authorized: false,
+        account_id: IdForTests::holding_id_2(),
+    };
+    let post_states = transfer(
+        AccountForTests::holding_account_init(),
+        recipient,
+        BalanceForTests::transfer_amount(),
+        TOKEN_PROGRAM_ID,
+    );
+    let [_, post_recipient] = <[_; 2]>::try_from(post_states).unwrap();
+    assert_eq!(
+        TokenHolding::try_from(post_recipient.data(TOKEN_PROGRAM_ID)).unwrap(),
+        TokenHolding::Fungible {
+            definition_id: IdForTests::pool_definition_id(),
+            balance: BalanceForTests::transfer_amount(),
+        }
+    );
+
+    // The credited balance is untouched: it was never this program's to spend.
+    assert_eq!(post_recipient.balance(TOKEN_PROGRAM_ID), 1);
+
+    // And initializing over it still works.
+    let fresh = AccountWithMetadata {
+        account: squatted,
+        is_authorized: false,
+        account_id: IdForTests::holding_id_2(),
+    };
+    let post_states = initialize_account(
+        AccountForTests::definition_account_auth(),
+        fresh,
+        TOKEN_PROGRAM_ID,
+    );
+    assert_eq!(post_states.len(), 2);
+}

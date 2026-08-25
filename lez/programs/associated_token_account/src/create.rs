@@ -25,7 +25,7 @@ pub fn create_associated_token_account(
     ];
 
     // Idempotent: already initialized → no-op
-    if ata_account.account.slot(token_program_id).is_some() {
+    if !ata_account.account.data(token_program_id).is_empty() {
         return (post_states, vec![]);
     }
 

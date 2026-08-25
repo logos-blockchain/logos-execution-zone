@@ -17,16 +17,16 @@ pub fn new_fungible_definition(
     assert!(
         definition_target_account
             .account
-            .slot(self_program_id)
-            .is_none(),
+            .data(self_program_id)
+            .is_empty(),
         "Definition target account must be uninitialized"
     );
 
     assert!(
         holding_target_account
             .account
-            .slot(self_program_id)
-            .is_none(),
+            .data(self_program_id)
+            .is_empty(),
         "Holding target account must be uninitialized"
     );
 
@@ -63,24 +63,24 @@ pub fn new_definition_with_metadata(
     assert!(
         definition_target_account
             .account
-            .slot(self_program_id)
-            .is_none(),
+            .data(self_program_id)
+            .is_empty(),
         "Definition target account must be uninitialized"
     );
 
     assert!(
         holding_target_account
             .account
-            .slot(self_program_id)
-            .is_none(),
+            .data(self_program_id)
+            .is_empty(),
         "Holding target account must be uninitialized"
     );
 
     assert!(
         metadata_target_account
             .account
-            .slot(self_program_id)
-            .is_none(),
+            .data(self_program_id)
+            .is_empty(),
         "Metadata target account must be uninitialized"
     );
 

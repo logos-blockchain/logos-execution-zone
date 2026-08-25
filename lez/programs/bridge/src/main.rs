@@ -47,17 +47,18 @@ fn main() {
                 "Third account must be the deposit-receipt PDA"
             );
 
-            // Replay protection: the receipt PDA holds a bridge slot iff this op
-            // id was already minted. On replay the slot is present and the whole
-            // instruction is a no-op.
+            // Replay protection: the receipt PDA holds this program's marker iff
+            // this op id was already minted. The marker is the signal, not the
+            // slot: rule 4 lets anyone credit a foreign slot into existence, but
+            // only this program can write its data.
             //
             // Observability note: a no-op replay and a real first mint are both
             // successful txs, so an indexer cannot tell "credited here" from
             // "already credited by a peer" without deriving the receipt id and
-            // checking whether its bridge slot existed before this block — that
-            // slot is the only on-chain signal. Relevant once the explorer
+            // checking whether its marker existed before this block — that
+            // marker is the only on-chain signal. Relevant once the explorer
             // surfaces deposits.
-            if receipt.account.slot(self_program_id).is_some() {
+            if !receipt.account.data(self_program_id).is_empty() {
                 pre_states.iter().map(|pre| pre.account.clone()).collect()
             } else {
                 let mut receipt_post = receipt.account;

@@ -12,8 +12,11 @@ use crate::{
 
 pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
 
-/// Reserved slot key under which deployed program ELFs are stored. No image id maps to it, so
-/// no program can ever execute as it — the slot is writable only by native deployment.
+/// Reserved slot key under which deployed program ELFs are stored.
+///
+/// No image id maps to it, so no program can ever execute as it, and its *data* is therefore
+/// written only by native deployment. Its existence is not reserved: credits into a foreign slot
+/// are permissionless, so read the elf rather than the slot to decide whether one is deployed.
 pub const PROGRAM_STORAGE_SLOT: AccountId = AccountId::new([0xFF; 32]);
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
