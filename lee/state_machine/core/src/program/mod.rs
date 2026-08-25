@@ -31,11 +31,13 @@ pub type ProgramId = [u32; 8];
 /// separation is needed just to use it as a `HashMap<AccountId, Account>` key.
 impl From<ProgramId> for AccountId {
     fn from(program_id: ProgramId) -> Self {
-        let bytes: Vec<u8> = program_id
-            .iter()
-            .flat_map(|word| word.to_le_bytes())
-            .collect();
-        Self::new(bytes.try_into().expect("8 u32 words are exactly 32 bytes"))
+        // Every slot accessor takes `impl Into<AccountId>` and guests pass a `ProgramId`, so
+        // this runs on each slot access: it must not allocate. Mirrors the inverse below.
+        let mut bytes = [0_u8; 32];
+        for (chunk, word) in bytes.chunks_exact_mut(4).zip(program_id) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        Self::new(bytes)
     }
 }
 
