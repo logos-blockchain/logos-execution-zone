@@ -1,6 +1,7 @@
 //! Core data structures for the Authenticated Transfer Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee_core::program::ProgramId;
 
 /// Instruction type for the Authenticated Transfer program.
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -8,10 +9,10 @@ pub enum Instruction {
     /// Transfer `amount` of native balance from sender to recipient.
     ///
     /// Required accounts: `[sender, recipient]`.
-    Transfer { amount: u128 },
-
-    /// Initialize a new account under the ownership of this program.
-    ///
-    /// Required accounts: `[account_to_initialize]`.
-    Initialize,
+    /// `recipient_program` names the slot credited at the recipient; `None` credits the
+    /// native slot (this program).
+    Transfer {
+        amount: u128,
+        recipient_program: Option<ProgramId>,
+    },
 }

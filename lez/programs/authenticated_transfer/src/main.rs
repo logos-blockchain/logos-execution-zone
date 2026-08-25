@@ -1,60 +1,51 @@
 use authenticated_transfer_core::Instruction;
 use lee_core::{
     account::{Account, AccountWithMetadata},
-    program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
-/// Initializes a default account under the ownership of this program.
-fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
-    let account_to_claim = AccountPostState::new_claimed(pre_state.account, Claim::Authorized);
-
-    // Continue only if the account to claim has default values
-    assert!(
-        account_to_claim.account() == &Account::default(),
-        "Account must be uninitialized"
-    );
-
-    account_to_claim
-}
-
-/// Transfers `balance_to_move` native balance from `sender` to `recipient`.
+/// Transfers `amount` native balance from `sender`'s native slot to `recipient_slot` at the
+/// recipient. One address may play both roles; the posts then agree by construction.
 fn transfer(
     sender: AccountWithMetadata,
     recipient: AccountWithMetadata,
-    balance_to_move: u128,
-) -> Vec<AccountPostState> {
+    amount: u128,
+    native_program_id: ProgramId,
+    recipient_slot: ProgramId,
+) -> Vec<Account> {
     // Continue only if the sender has authorized this operation.
     assert!(sender.is_authorized, "Sender must be authorized");
 
-    // Create accounts post states, with updated balances
-    let sender_post = {
-        // Modify sender's balance
-        let mut sender_post_account = sender.account;
-        sender_post_account.balance = sender_post_account
+    let debit = |account: &mut Account| {
+        let slot = account.slot_mut(native_program_id);
+        slot.balance = slot
             .balance
-            .checked_sub(balance_to_move)
+            .checked_sub(amount)
             .expect("Sender has insufficient balance");
-        AccountPostState::new(sender_post_account)
     };
-
-    let recipient_post = {
-        // Modify recipient's balance
-        let mut recipient_post_account = recipient.account;
-        recipient_post_account.balance = recipient_post_account
+    let credit = |account: &mut Account| {
+        let slot = account.slot_mut(recipient_slot);
+        slot.balance = slot
             .balance
-            .checked_add(balance_to_move)
+            .checked_add(amount)
             .expect("Recipient balance overflow");
-
-        // Claim recipient account if it has default program owner
-        if recipient_post_account.program_owner == DEFAULT_PROGRAM_OWNER {
-            AccountPostState::new_claimed(recipient_post_account, Claim::Authorized)
-        } else {
-            AccountPostState::new(recipient_post_account)
-        }
     };
+
+    if sender.account_id == recipient.account_id {
+        let mut joint = sender.account;
+        debit(&mut joint);
+        credit(&mut joint);
+        joint.prune();
+        return vec![joint.clone(), joint];
+    }
+
+    let mut sender_post = sender.account;
+    debit(&mut sender_post);
+    sender_post.prune();
+
+    let mut recipient_post = recipient.account;
+    credit(&mut recipient_post);
+    recipient_post.prune();
 
     vec![sender_post, recipient_post]
 }
@@ -74,17 +65,14 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     let post_states = match instruction {
-        Instruction::Initialize => {
-            let [account_to_claim] = <[_; 1]>::try_from(pre_states.clone())
-                .expect("Initialize requires exactly 1 account");
-            vec![initialize_account(account_to_claim)]
-        }
         Instruction::Transfer {
-            amount: balance_to_move,
+            amount,
+            recipient_program,
         } => {
             let [sender, recipient] = <[_; 2]>::try_from(pre_states.clone())
                 .expect("Transfer requires exactly 2 accounts");
-            transfer(sender, recipient, balance_to_move)
+            let recipient_slot = recipient_program.unwrap_or(self_program_id);
+            transfer(sender, recipient, amount, self_program_id, recipient_slot)
         }
     };
 

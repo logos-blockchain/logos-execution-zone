@@ -40,18 +40,8 @@ path = "pinata/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
-name = "pinata_token"
-path = "pinata_token/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
 name = "token"
 path = "token/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "vault"
-path = "vault/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
@@ -112,7 +102,6 @@ programs = [
   "dep:clock_core",
   "dep:faucet_core",
   "dep:token_core",
-  "dep:vault_core",
   "dep:cross_zone_inbox_core",
   "dep:cross_zone_marker_core",
   "dep:cross_zone_outbox_core",
@@ -134,7 +123,6 @@ bridge_core = { workspace = true, optional = true }
 clock_core = { workspace = true, optional = true }
 faucet_core = { workspace = true, optional = true }
 token_core = { workspace = true, optional = true }
-vault_core = { workspace = true, optional = true }
 cross_zone_inbox_core = { workspace = true, optional = true }
 cross_zone_marker_core = { workspace = true, optional = true }
 cross_zone_outbox_core = { workspace = true, optional = true }

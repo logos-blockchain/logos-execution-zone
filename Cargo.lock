@@ -786,6 +786,7 @@ name = "authenticated_transfer_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "lee_core",
 ]
 
 [[package]]
@@ -1280,7 +1281,6 @@ version = "0.1.0"
 dependencies = [
  "bridge_core",
  "lee_core",
- "vault_core",
 ]
 
 [[package]]
@@ -3258,7 +3258,6 @@ dependencies = [
  "authenticated_transfer_core",
  "faucet_core",
  "lee_core",
- "vault_core",
 ]
 
 [[package]]
@@ -4810,7 +4809,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
- "vault_core",
  "wallet",
  "wallet-ffi",
  "wrapped_token_core",
@@ -9049,15 +9047,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pinata_token_program"
-version = "0.1.0"
-dependencies = [
- "lee_core",
- "risc0-zkvm",
- "token_core",
-]
-
-[[package]]
 name = "ping_core"
 version = "0.1.0"
 dependencies = [
@@ -9424,7 +9413,6 @@ dependencies = [
  "sequencer_stake_core",
  "token_core",
  "token_program",
- "vault_core",
  "wrapped_token_core",
 ]
 
@@ -10998,7 +10986,6 @@ dependencies = [
  "tokio-util",
  "trait-variant",
  "url",
- "vault_core",
 ]
 
 [[package]]
@@ -13439,24 +13426,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
-name = "vault_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "vault_program"
-version = "0.1.0"
-dependencies = [
- "authenticated_transfer_core",
- "lee_core",
- "vault_core",
-]
-
-[[package]]
 name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13529,7 +13498,6 @@ dependencies = [
  "token_core",
  "tokio",
  "url",
- "vault_core",
  "zeroize",
 ]
 
@@ -13546,7 +13514,6 @@ dependencies = [
  "programs",
  "serde_json",
  "tokio",
- "vault_core",
  "wallet",
 ]
 
