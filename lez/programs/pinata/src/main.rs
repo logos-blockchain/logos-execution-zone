@@ -1,9 +1,11 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 
 const PRIZE: u128 = 150;
 
-type Instruction = u128;
+/// A solution plus the slot credited at the winner. The winner builds the transaction, so
+/// naming a slot they cannot spend from only strands their own prize.
+type Instruction = (u128, ProgramId);
 
 struct Challenge {
     difficulty: u8,
@@ -23,7 +25,7 @@ impl Challenge {
 
     // Checks if the leftmost `self.difficulty` number of bytes of SHA256(self.data || solution) are
     // zero.
-    fn validate_solution(&self, solution: Instruction) -> bool {
+    fn validate_solution(&self, solution: u128) -> bool {
         let mut bytes = [0; 32 + 16];
         bytes[..32].copy_from_slice(&self.seed);
         bytes[32..].copy_from_slice(&solution.to_le_bytes());
@@ -49,7 +51,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: solution,
+            instruction: (solution, native_program),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -58,24 +60,28 @@ fn main() {
         return;
     };
 
-    let data = Challenge::new(&pinata.account.data);
+    let data = Challenge::new(pinata.account.data(self_program_id));
 
     if !data.validate_solution(solution) {
         return;
     }
 
     let mut pinata_post = pinata.account.clone();
-    let mut winner_post = winner.account.clone();
-    pinata_post.balance = pinata_post
+    let pinata_slot = pinata_post.slot_mut(self_program_id);
+    pinata_slot.balance = pinata_slot
         .balance
         .checked_sub(PRIZE)
         .expect("Not enough balance in the pinata");
-    pinata_post.data = data
+    pinata_slot.data = data
         .next_data()
         .to_vec()
         .try_into()
         .expect("33 bytes should fit into Data");
-    winner_post.balance = winner_post
+    pinata_post.prune();
+
+    let mut winner_post = winner.account.clone();
+    let winner_slot = winner_post.slot_mut(native_program);
+    winner_slot.balance = winner_slot
         .balance
         .checked_add(PRIZE)
         .expect("Overflow when adding prize to winner");
@@ -85,10 +91,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pinata, winner],
-        vec![
-            AccountPostState::new_claimed_if_default(pinata_post, Claim::Authorized),
-            AccountPostState::new(winner_post),
-        ],
+        vec![pinata_post, winner_post],
     )
     .write();
 }

@@ -67,8 +67,8 @@ impl borsh::BorshDeserialize for SequencerKey {
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum Instruction {
-    /// Locks `amount` into the ownership account for `sequencer_key`. First
-    /// use claims the account; later calls top up the same account.
+    /// Locks `amount` into this program's slot at the ownership account for
+    /// `sequencer_key`. Later calls top up the same account.
     Stake {
         sequencer_key: SequencerKey,
         amount: u128,
@@ -86,12 +86,14 @@ pub enum Instruction {
         destination: AccountId,
     },
 
-    /// Unsigned, permissionless: releases a pending `UnstakeRequest`.
-    /// Block-inclusion validity is enforced outside this program.
-    FinalizeUnstake,
+    /// Unsigned, permissionless: releases a pending `UnstakeRequest` into the
+    /// destination's `native_program` slot. Block-inclusion validity is
+    /// enforced outside this program.
+    FinalizeUnstake { native_program: ProgramId },
 }
 
-/// Tag written into a claimed ownership account: which key it backs, plus any pending unstake.
+/// Tag written into this program's slot at an ownership account: which key it backs, plus any
+/// pending unstake.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct StakeRecord {
     pub sequencer_key: SequencerKey,
@@ -119,7 +121,7 @@ pub struct PendingUnstake {
     pub destination: AccountId,
 }
 
-/// The single program-owned config account: minimum stake plus per-key standing, kept current
+/// The single config account: minimum stake plus per-key standing, kept current
 /// incrementally.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct SequencerStakeConfig {
@@ -152,9 +154,9 @@ pub struct SequencerEntry {
 impl SequencerEntry {
     /// Stake still backing this key once every pending release has been
     /// finalized. Candidacy and every release check measure this, never the
-    /// ownership account's balance: only balance decreases require owning an
-    /// account, so anyone can credit one and push its balance above
-    /// `total_staked`.
+    /// balance of this program's slot at the ownership account: only debits
+    /// need the slot's program, so anyone can credit it and push its balance
+    /// above `total_staked`.
     #[must_use]
     pub const fn net_stake(&self) -> u128 {
         self.total_staked.saturating_sub(self.total_pending_unstake)
