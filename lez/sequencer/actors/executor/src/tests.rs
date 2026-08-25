@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
 use anyhow::Result;
 use bytesize::ByteSize;
@@ -9,7 +9,7 @@ use common::{
 };
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
-    Account, AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
+    AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
     public_transaction::{Message, WitnessSet},
 };
 use mockall::predicate::{always, eq, function};
@@ -90,16 +90,7 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
     };
     let state = V03State::new().with_public_accounts([(
         system_accounts::sequencer_stake_config_account_id(),
-        Account {
-            data: sequencer_stake_core::SequencerStakeConfig {
-                minimum_sequencer_stake: 0,
-                entries: BTreeMap::new(),
-            }
-            .to_bytes()
-            .try_into()
-            .expect("Sequencer stake config must fit into Data"),
-            ..Account::default()
-        },
+        system_accounts::sequencer_stake_config_account(),
     )]);
 
     let mut mock_storage = MockStorageActor::new();

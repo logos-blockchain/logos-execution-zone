@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{Account, AccountWithMetadata, Data},
+    program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 // Hello-world with write + move_data example program.
@@ -24,39 +24,43 @@ const MOVE_DATA_FUNCTION_ID: u8 = 1;
 
 type Instruction = (u8, Vec<u8>);
 
-fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> AccountPostState {
+fn write(pre_state: AccountWithMetadata, greeting: &[u8], self_program_id: ProgramId) -> Account {
     // Construct the post state account values
     let post_account = {
         let mut this = pre_state.account;
-        let mut bytes = this.data.into_inner();
+        let mut bytes = this.data(self_program_id).clone().into_inner();
         bytes.extend_from_slice(greeting);
-        this.data = bytes
+        this.slot_mut(self_program_id).data = bytes
             .try_into()
             .expect("Data should fit within the allowed limits");
         this
     };
 
-    AccountPostState::new_claimed_if_default(post_account, Claim::Authorized)
+    post_account
 }
 
-fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<AccountPostState> {
+fn move_data(
+    from_pre: AccountWithMetadata,
+    to_pre: AccountWithMetadata,
+    self_program_id: ProgramId,
+) -> Vec<Account> {
     // Construct the post state account values
-    let from_data: Vec<u8> = from_pre.account.data.clone().into();
+    let from_data: Vec<u8> = from_pre.account.data(self_program_id).clone().into();
 
     let from_post = {
         let mut this = from_pre.account;
-        this.data = Data::default();
-        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
+        this.slot_mut(self_program_id).data = Data::default();
+        this
     };
 
     let to_post = {
         let mut this = to_pre.account;
-        let mut bytes = this.data.into_inner();
+        let mut bytes = this.data(self_program_id).clone().into_inner();
         bytes.extend_from_slice(&from_data);
-        this.data = bytes
+        this.slot_mut(self_program_id).data = bytes
             .try_into()
             .expect("Data should fit within the allowed limits");
-        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
+        this
     };
 
     vec![from_post, to_post]
@@ -76,11 +80,15 @@ fn main() {
 
     let post_states = match (pre_states.as_slice(), function_id, data.len()) {
         ([account_pre], WRITE_FUNCTION_ID, _) => {
-            let post = write(account_pre.clone(), &data);
+            let post = write(account_pre.clone(), &data, self_program_id);
             vec![post]
         }
         ([account_from_pre, account_to_pre], MOVE_DATA_FUNCTION_ID, 0) => {
-            move_data(account_from_pre.clone(), account_to_pre.clone())
+            move_data(
+                account_from_pre.clone(),
+                account_to_pre.clone(),
+                self_program_id,
+            )
         }
         _ => panic!("invalid params"),
     };

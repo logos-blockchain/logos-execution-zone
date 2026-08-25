@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
-use lee::{AccountId, PrivateKey, PublicKey};
+use lee::PrivateKey;
 use log::{debug, warn};
 use sequencer_core::block_publisher::ED25519_SECRET_KEY_SIZE;
 use sequencer_service::{GenesisAction, SequencerHandle};
@@ -13,17 +13,12 @@ use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
 use sequencer_storage_actor::{StorageActor, protocol::DbDump};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
-use wallet::{
-    WalletCore,
-    cli::{Command, SubcommandReturnValue, programs::vault::VaultSubcommand},
-    config::WalletConfigOverrides,
-};
+use wallet::{WalletCore, config::WalletConfigOverrides};
 
 use crate::{
     BEDROCK_SERVICE_PORT, BEDROCK_SERVICE_WITH_OPEN_PORT,
     config::{self, InitialPrivateAccountForWallet},
     indexer_client::IndexerClient,
-    private_mention, public_mention,
 };
 
 #[derive(Debug)]
@@ -408,74 +403,12 @@ pub async fn setup_wallet_at(
     Ok((wallet, home.to_owned(), wallet_password))
 }
 
-pub async fn setup_public_accounts_with_initial_supply(
-    wallet: &mut WalletCore,
-    initial_public_accounts: &[(PrivateKey, u128)],
-) -> Result<()> {
-    for (private_key, amount) in initial_public_accounts {
-        let account_id = AccountId::from(&PublicKey::new_from_private_key(private_key));
-        wallet::cli::execute_subcommand(
-            wallet,
-            Command::Vault(VaultSubcommand::Claim {
-                account_id: public_mention(account_id),
-                amount: *amount,
-            }),
-        )
-        .await
-        .context("Failed to claim funds from vault into public account")?;
-    }
-
-    Ok(())
-}
-
-pub async fn setup_private_accounts_with_initial_supply(
-    wallet: &mut WalletCore,
-    initial_private_accounts: &[InitialPrivateAccountForWallet],
-) -> Result<()> {
-    for private_account in initial_private_accounts {
-        claim_funds_from_vault_to_private(
-            wallet,
-            private_account.account_id(),
-            private_account.balance,
-        )
-        .await
-        .context("Failed to claim funds from vault into private account")?;
-    }
-
-    Ok(())
-}
-
-pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {
+pub async fn sync_wallet(wallet: &mut WalletCore) -> Result<()> {
     wallet
         .sync_to_latest_block()
         .await
-        .context("Failed to sync wallet from prebuilt chain")?;
+        .context("Failed to sync wallet to the latest block")?;
 
     Ok(())
 }
 
-async fn claim_funds_from_vault_to_private(
-    wallet: &mut WalletCore,
-    owner_id: AccountId,
-    amount: u128,
-) -> Result<()> {
-    let Some(_) = wallet.storage().key_chain().private_account(owner_id) else {
-        bail!("Missing private account in wallet key chain for account {owner_id}");
-    };
-
-    let result = wallet::cli::execute_subcommand(
-        wallet,
-        Command::Vault(VaultSubcommand::Claim {
-            account_id: private_mention(owner_id),
-            amount,
-        }),
-    )
-    .await
-    .context("Failed to execute private vault claim command")?;
-
-    let SubcommandReturnValue::TransactionExecuted { .. } = result else {
-        bail!("Expected TransactionExecuted return value for private vault claim");
-    };
-
-    Ok(())
-}

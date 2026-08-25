@@ -143,6 +143,7 @@ fn dispatch(
             program_id: msg.target_program_id,
             pre_states: call_pre_states,
             instruction_data: call_instruction_data,
+            pda_seeds: vec![],
         };
         (seen_post, vec![call])
     };

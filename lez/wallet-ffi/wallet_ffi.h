@@ -180,6 +180,13 @@ typedef struct FfiAccountList {
 } FfiAccountList;
 
 /**
+ * Program ID - 8 u32 values (32 bytes total).
+ */
+typedef struct FfiProgramId {
+  uint32_t data[8];
+} FfiProgramId;
+
+/**
  * U128 - 16 bytes little endian.
  */
 typedef struct FfiU128 {
@@ -187,25 +194,42 @@ typedef struct FfiU128 {
 } FfiU128;
 
 /**
- * Account data structure - C-compatible version of lee Account.
+ * A single program's slot inside an account.
  *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
- * byte arrays since C doesn't have native u128 support.
+ * Note: `balance` is a u128 value represented as a little-endian byte array
+ * since C doesn't have native u128 support.
  */
-typedef struct FfiAccount {
-  struct FfiBytes32 program_owner;
+typedef struct FfiAccountSlot {
+  struct FfiProgramId program_id;
   /**
    * Balance as little-endian [u8; 16].
    */
   struct FfiU128 balance;
   /**
-   * Pointer to account data bytes.
+   * Pointer to slot data bytes.
    */
   const uint8_t *data;
   /**
-   * Length of account data.
+   * Length of slot data.
    */
   uintptr_t data_len;
+} FfiAccountSlot;
+
+/**
+ * Account data structure - C-compatible version of lee Account.
+ *
+ * Note: `nonce` is a u128 value represented as a little-endian byte array
+ * since C doesn't have native u128 support.
+ */
+typedef struct FfiAccount {
+  /**
+   * Pointer to the account's occupied slots, one entry per program.
+   */
+  const struct FfiAccountSlot *slots;
+  /**
+   * Number of slots.
+   */
+  uintptr_t slots_len;
   /**
    * Nonce as little-endian [u8; 16].
    */
@@ -242,14 +266,12 @@ typedef struct FfiAccountIdentity {
   const uint8_t *viewing_public_key;
   uintptr_t viewing_public_key_len;
   struct FfiU128 identifier;
+  /**
+   * Private-PDA binding: the authority program and the seed its address derives from.
+   */
+  struct FfiBytes32 authority_program_id;
+  struct FfiBytes32 pda_seed;
 } FfiAccountIdentity;
-
-/**
- * Program ID - 8 u32 values (32 bytes total).
- */
-typedef struct FfiProgramId {
-  uint32_t data[8];
-} FfiProgramId;
 
 /**
  * Result of a generic transaction operation.
@@ -353,8 +375,7 @@ enum WalletFfiError wallet_ffi_create_account_public(struct WalletHandle *handle
  *
  * This is the private-account equivalent of `wallet_ffi_create_account_public`.
  * It generates a key node, assigns a random identifier, and inserts a default
- * account record so the account can immediately be used with
- * `wallet_ffi_register_private_account`.
+ * account record for it.
  *
  * The identifier is chosen at random and is not encoded in the mnemonic seed.
  * Once the account is initialized, the identifier is embedded in the encrypted
@@ -434,14 +455,15 @@ enum WalletFfiError wallet_ffi_list_accounts(struct WalletHandle *handle,
 void wallet_ffi_free_account_list(struct FfiAccountList *list);
 
 /**
- * Get account balance.
+ * Get the balance held in one of an account's program slots.
  *
- * For public accounts, this fetches the balance from the network.
- * For private accounts, this returns the locally cached balance.
+ * For public accounts, this fetches the account from the network.
+ * For private accounts, this uses the locally cached account.
  *
  * # Parameters
  * - `handle`: Valid wallet handle
  * - `account_id`: The account ID (32 bytes)
+ * - `program_id`: The program whose slot is read
  * - `is_public`: Whether this is a public account
  * - `out_balance`: Output for balance as little-endian [u8; 16]
  *
@@ -456,6 +478,7 @@ void wallet_ffi_free_account_list(struct FfiAccountList *list);
  */
 enum WalletFfiError wallet_ffi_get_balance(struct WalletHandle *handle,
                                            const struct FfiBytes32 *account_id,
+                                           struct FfiProgramId program_id,
                                            bool is_public,
                                            uint8_t (*out_balance)[16]);
 
@@ -1450,146 +1473,12 @@ enum WalletFfiError wallet_ffi_transfer_private_owned(struct WalletHandle *handl
                                                       struct FfiTransferResult *out_result);
 
 /**
- * Register a public account on the network.
- *
- * This initializes a public account on the blockchain. The account must be
- * owned by this wallet.
- *
- * # Parameters
- * - `handle`: Valid wallet handle
- * - `account_id`: Account ID to register
- * - `out_result`: Output pointer for registration result
- *
- * # Returns
- * - `Success` if the registration was submitted successfully
- * - Error code on failure
- *
- * # Memory
- * The result must be freed with `wallet_ffi_free_transfer_result()`.
- *
- * # Safety
- * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `account_id` must be a valid pointer to a `FfiBytes32` struct
- * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
- */
-enum WalletFfiError wallet_ffi_register_public_account(struct WalletHandle *handle,
-                                                       const struct FfiBytes32 *account_id,
-                                                       struct FfiTransferResult *out_result);
-
-/**
- * Register a private account on the network.
- *
- * This initializes a private account. The account must be
- * owned by this wallet.
- *
- * # Parameters
- * - `handle`: Valid wallet handle
- * - `account_id`: Account ID to register
- * - `out_result`: Output pointer for registration result
- *
- * # Returns
- * - `Success` if the registration was submitted successfully
- * - Error code on failure
- *
- * # Memory
- * The result must be freed with `wallet_ffi_free_transfer_result()`.
- *
- * # Safety
- * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `account_id` must be a valid pointer to a `FfiBytes32` struct
- * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
- */
-enum WalletFfiError wallet_ffi_register_private_account(struct WalletHandle *handle,
-                                                        const struct FfiBytes32 *account_id,
-                                                        struct FfiTransferResult *out_result);
-
-/**
- * Free a transfer result returned by `wallet_ffi_transfer_public` or
- * `wallet_ffi_register_public_account`.
+ * Free a transfer result returned by `wallet_ffi_transfer_public`.
  *
  * # Safety
  * The result must be either null or a valid result from a transfer function.
  */
 void wallet_ffi_free_transfer_result(struct FfiTransferResult *result);
-
-/**
- * Get the claimable balance held in an account's bridge vault.
- *
- * # Parameters
- * - `handle`: Valid wallet handle
- * - `owner`: The account ID whose vault balance to query
- * - `out_balance`: Output for balance as little-endian [u8; 16]
- *
- * # Returns
- * - `Success` on successful query
- * - Error code on failure
- *
- * # Safety
- * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `owner` must be a valid pointer to a `FfiBytes32` struct
- * - `out_balance` must be a valid pointer to a `[u8; 16]` array
- */
-enum WalletFfiError wallet_ffi_get_vault_balance(struct WalletHandle *handle,
-                                                 const struct FfiBytes32 *owner,
-                                                 uint8_t (*out_balance)[16]);
-
-/**
- * Claim native tokens from a public owner's vault into their account.
- *
- * # Parameters
- * - `handle`: Valid wallet handle
- * - `owner`: Owner account ID (must be owned by this wallet, public)
- * - `amount`: Amount to claim as little-endian [u8; 16]
- * - `out_result`: Output pointer for the claim result
- *
- * # Returns
- * - `Success` if the claim was submitted successfully
- * - `InsufficientFunds` if the vault doesn't have enough balance
- * - `KeyNotFound` if the owner's signing key is not in this wallet
- * - Error code on other failures
- *
- * # Memory
- * The result must be freed with `wallet_ffi_free_transfer_result()`.
- *
- * # Safety
- * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `owner` must be a valid pointer to a `FfiBytes32` struct
- * - `amount` must be a valid pointer to a `[u8; 16]` array
- * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
- */
-enum WalletFfiError wallet_ffi_vault_claim(struct WalletHandle *handle,
-                                           const struct FfiBytes32 *owner,
-                                           const uint8_t (*amount)[16],
-                                           struct FfiTransferResult *out_result);
-
-/**
- * Claim native tokens from a private owner's vault into their account.
- *
- * # Parameters
- * - `handle`: Valid wallet handle
- * - `owner`: Owner account ID (must be owned by this wallet, private)
- * - `amount`: Amount to claim as little-endian [u8; 16]
- * - `out_result`: Output pointer for the claim result
- *
- * # Returns
- * - `Success` if the claim was submitted successfully
- * - `InsufficientFunds` if the vault doesn't have enough balance
- * - `KeyNotFound` if the owner's signing key is not in this wallet
- * - Error code on other failures
- *
- * # Memory
- * The result must be freed with `wallet_ffi_free_transfer_result()`.
- *
- * # Safety
- * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `owner` must be a valid pointer to a `FfiBytes32` struct
- * - `amount` must be a valid pointer to a `[u8; 16]` array
- * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
- */
-enum WalletFfiError wallet_ffi_vault_claim_private(struct WalletHandle *handle,
-                                                   const struct FfiBytes32 *owner,
-                                                   const uint8_t (*amount)[16],
-                                                   struct FfiTransferResult *out_result);
 
 /**
  * Create a new wallet with fresh storage.

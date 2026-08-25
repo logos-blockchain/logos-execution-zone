@@ -346,7 +346,9 @@ impl ChainState {
 mod tests {
     use common::{
         HashType,
-        test_utils::{create_transaction_native_token_transfer, produce_dummy_block},
+        test_utils::{
+            create_transaction_native_token_transfer, native_balance_slot, produce_dummy_block,
+        },
     };
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
@@ -543,8 +545,20 @@ mod tests {
         chain.revert_orphan(msg(3), &block3);
 
         assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
-        assert_eq!(chain.head_state().get_account_by_id(from).balance, 9990);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20010);
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(from)
+                .balance(native_balance_slot()),
+            9990
+        );
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .balance(native_balance_slot()),
+            20010
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -585,8 +599,20 @@ mod tests {
             [AcceptOutcome::Applied, AcceptOutcome::Applied]
         ));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 4);
-        assert_eq!(chain.head_state().get_account_by_id(from).balance, 9940);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20060);
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(from)
+                .balance(native_balance_slot()),
+            9940
+        );
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .balance(native_balance_slot()),
+            20060
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -622,7 +648,13 @@ mod tests {
             [AcceptOutcome::Applied, AcceptOutcome::Applied]
         ));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20050);
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .balance(native_balance_slot()),
+            20050
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -670,7 +702,13 @@ mod tests {
         let tip = chain.head_tip().expect("head tip");
         assert_eq!(tip.block_id, 2);
         assert_eq!(tip.hash, block2_prime.header.hash);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20000);
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .balance(native_balance_slot()),
+            20000
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -698,7 +736,13 @@ mod tests {
             AcceptOutcome::AlreadyApplied
         ));
         assert_eq!(chain.head_tip().expect("head tip").hash, peer.header.hash);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20000);
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .balance(native_balance_slot()),
+            20000
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -797,7 +841,13 @@ mod tests {
             chain.apply_adopted(msg(13), &block3_prime),
             AcceptOutcome::Applied
         ));
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20010);
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .balance(native_balance_slot()),
+            20010
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -870,9 +920,21 @@ mod tests {
         chain.apply_finalized(msg(2), &block2, slot(10));
 
         // Head still reflects both transfers
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20020);
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .balance(native_balance_slot()),
+            20020
+        );
         // ...while final reflects only the finalized prefix.
-        assert_eq!(chain.final_state().get_account_by_id(to).balance, 20010);
+        assert_eq!(
+            chain
+                .final_state()
+                .get_account_by_id(to)
+                .balance(native_balance_slot()),
+            20010
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -1035,7 +1097,13 @@ mod tests {
 
         assert_eq!(chain.final_tip().expect("final tip").block_id, 2);
         assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20010);
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .balance(native_balance_slot()),
+            20010
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -1054,7 +1122,19 @@ mod tests {
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
         chain.apply_adopted(msg(2), &block2);
 
-        assert_eq!(chain.head_state().get_account_by_id(from).balance, 9990);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20010);
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(from)
+                .balance(native_balance_slot()),
+            9990
+        );
+        assert_eq!(
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .balance(native_balance_slot()),
+            20010
+        );
     }
 }

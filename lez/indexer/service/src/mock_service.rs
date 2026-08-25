@@ -6,14 +6,18 @@
     clippy::integer_division_remainder_used,
     reason = "Mock service uses intentional casts and format patterns for test data generation"
 )]
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+    time::Duration,
+};
 
 use indexer_service_protocol::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
     CommitmentSetDigest, Data, EncryptedAccountData, HashType, IndexerStatus, IndexerSyncState,
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, PublicActionWithID,
-    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    PublicMessage, PublicTransaction, Signature, Slot, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -105,12 +109,14 @@ impl MockIndexerService {
             accounts.insert(
                 *account_id,
                 Account {
-                    program_owner: AccountId {
-                        value: [i as u8; 32],
-                    },
-                    balance: 1000 * (i as u128 + 1),
-                    data: Data(vec![0xaa, 0xbb, 0xcc]),
                     nonce: i as u128,
+                    slots: BTreeMap::from([(
+                        ProgramId([i as u32; 8]),
+                        Slot {
+                            balance: 1000 * (i as u128 + 1),
+                            data: Data(vec![0xaa, 0xbb, 0xcc]),
+                        },
+                    )]),
                 },
             );
         }
@@ -390,10 +396,14 @@ fn mock_privacy_preserving_tx(
             public_actions: vec![PublicActionWithID {
                 account_id: account_ids[tx_idx as usize % account_ids.len()],
                 post_state: Account {
-                    program_owner: AccountId { value: [1_u8; 32] },
-                    balance: 500,
-                    data: Data(vec![0xdd, 0xee]),
                     nonce: block_id as u128,
+                    slots: BTreeMap::from([(
+                        ProgramId([1; 8]),
+                        Slot {
+                            balance: 500,
+                            data: Data(vec![0xdd, 0xee]),
+                        },
+                    )]),
                 },
             }],
             nonces: vec![block_id as u128],

@@ -1,7 +1,8 @@
-use std::str::FromStr;
+use std::{collections::BTreeMap, str::FromStr};
 
 use derive_more::Display;
 use lee::AccountId;
+use lee_core::account::Slot;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -76,13 +77,19 @@ impl FromStr for AccountIdWithPrivacy {
     }
 }
 
-/// Human-readable representation of an account.
+/// Human-readable representation of a single program's slot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HumanReadableSlot {
+    balance: u128,
+    data: String,
+}
+
+/// Human-readable representation of an account, with one entry per occupied slot keyed by the
+/// owning program's [`AccountId`] rendering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HumanReadableAccount {
-    balance: u128,
-    program_owner: String,
-    data: String,
     nonce: u128,
+    slots: BTreeMap<String, HumanReadableSlot>,
 }
 
 impl FromStr for HumanReadableAccount {
@@ -100,36 +107,54 @@ impl std::fmt::Display for HumanReadableAccount {
     }
 }
 
+impl From<&Slot> for HumanReadableSlot {
+    fn from(slot: &Slot) -> Self {
+        Self {
+            balance: slot.balance,
+            data: hex::encode(&slot.data),
+        }
+    }
+}
+
 impl From<lee::Account> for HumanReadableAccount {
     fn from(account: lee::Account) -> Self {
-        let program_owner = account.program_owner.to_string();
-        let data = hex::encode(account.data);
         Self {
-            balance: account.balance,
-            program_owner,
-            data,
             nonce: account.nonce.0,
+            slots: account
+                .slots
+                .iter()
+                .map(|(&program_id, slot)| (AccountId::from(program_id).to_string(), slot.into()))
+                .collect(),
         }
     }
 }
 
 impl From<HumanReadableAccount> for lee::Account {
     fn from(account: HumanReadableAccount) -> Self {
-        let program_owner: lee::AccountId = account
-            .program_owner
-            .parse()
-            .expect("Invalid base58 in HumanReadableAccount.program_owner");
-
-        let data = hex::decode(&account.data).expect("Invalid hex in HumanReadableAccount.data");
-        let data = data
-            .try_into()
-            .expect("Invalid account data: exceeds maximum allowed size");
-
         Self {
-            balance: account.balance,
-            program_owner,
-            data,
             nonce: lee_core::account::Nonce(account.nonce),
+            slots: account
+                .slots
+                .into_iter()
+                .map(|(program_id, slot)| {
+                    let program_id: AccountId = program_id
+                        .parse()
+                        .expect("Invalid base58 in HumanReadableAccount slot key");
+                    let data =
+                        hex::decode(&slot.data).expect("Invalid hex in HumanReadableAccount.data");
+                    let data = data
+                        .try_into()
+                        .expect("Invalid account data: exceeds maximum allowed size");
+
+                    (
+                        program_id.into(),
+                        Slot {
+                            balance: slot.balance,
+                            data,
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }

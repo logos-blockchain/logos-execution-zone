@@ -43,7 +43,7 @@ async fn assert_context_follows_config(ctx: &TestContext) -> Result<()> {
         let account_id = AccountId::from(&PublicKey::new_from_private_key(&private_key));
         let balance = ctx
             .sequencer_client()
-            .get_account_balance(account_id)
+            .get_account_balance(account_id, programs::authenticated_transfer().id())
             .await?;
         assert_eq!(
             balance, expected_balance,

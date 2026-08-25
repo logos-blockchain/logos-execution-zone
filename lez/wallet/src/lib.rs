@@ -378,19 +378,20 @@ impl WalletCore {
         let vpk = keys.generate_viewing_public_key();
         let identifier = entry.identifier;
 
-        if entry.pda_seed.is_some() {
-            Some(AccountIdentity::PrivatePdaShared {
-                account_id,
+        match (entry.pda_seed, entry.authority_program_id) {
+            (Some(seed), Some(program_id)) => Some(AccountIdentity::PrivatePdaShared {
+                binding: (program_id, seed),
                 nsk: keys.nullifier_secret_key(),
                 vpk,
                 identifier,
-            })
-        } else {
-            Some(AccountIdentity::PrivateShared {
+            }),
+            // A PDA entry without its authority program cannot be addressed.
+            (Some(_), None) => None,
+            (None, _) => Some(AccountIdentity::PrivateShared {
                 ask: keys.authorization_secret_key,
                 vpk,
                 identifier,
-            })
+            }),
         }
     }
 
@@ -550,11 +551,15 @@ impl WalletCore {
         self.statistics.get(sequencer_url)
     }
 
-    /// Get account balance.
-    pub async fn get_account_balance(&self, acc: AccountId) -> Result<u128> {
+    /// Get the balance an account holds in `program_id`'s slot. The native slot is
+    /// `programs::authenticated_transfer().id()`; balances in other slots are not spendable
+    /// through it and are never summed together.
+    pub async fn get_account_balance(&self, acc: AccountId, program_id: ProgramId) -> Result<u128> {
         Ok(self
             .multi_sequencer_client
-            .metered_get(async |client: &SequencerClient| client.get_account_balance(acc).await)
+            .metered_get(async |client: &SequencerClient| {
+                client.get_account_balance(acc, program_id).await
+            })
             .await?)
     }
 

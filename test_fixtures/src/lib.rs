@@ -24,11 +24,7 @@ use wallet::{
 use crate::{
     config::{InitialPrivateAccountForWallet, MultiNodeTestContextConfig, SequencerPartialConfig},
     indexer_client::IndexerClient,
-    setup::{
-        SequencerSetup, setup_bedrock_node, setup_indexer,
-        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
-        setup_wallet, sync_wallet_from_prebuilt,
-    },
+    setup::{SequencerSetup, setup_bedrock_node, setup_indexer, setup_wallet, sync_wallet},
 };
 
 pub mod config;
@@ -754,21 +750,11 @@ impl ZoneTestContextBuilder {
             .await
             .context("Failed to setup wallet")?;
 
-            if use_prebuilt {
-                // Funds already exist on-chain in the prebuilt blocks; sync instead of
-                // claiming live.
-                sync_wallet_from_prebuilt(&mut wallet)
-                    .await
-                    .context("Failed to sync wallet from prebuilt database")?;
-            } else {
-                setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
-                    .await
-                    .context("Failed to initialize public accounts in wallet")?;
-
-                setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
-                    .await
-                    .context("Failed to initialize private accounts in wallet")?;
-            }
+            // Genesis credits every funded account directly, so there is nothing to claim
+            // in either case; the wallet only has to catch up with the chain.
+            sync_wallet(&mut wallet)
+                .await
+                .context("Failed to sync wallet to the latest block")?;
 
             Some(WalletComponents {
                 wallet,

@@ -86,19 +86,11 @@ pub fn AccountPage() -> impl IntoView {
                         .get()
                         .map(|result| match result {
                             Ok(acc) => {
-                                let Account {
-                                    program_owner,
-                                    balance,
-                                    data,
-                                    nonce,
-                                } = acc;
+                                let Account { nonce, slots } = acc;
 
                                 let acc_id = account_id().expect("Account ID should be set");
                                 let account_id_str = acc_id.to_string();
-                                let program_id = program_owner.to_string();
-                                let balance_str = balance.to_string();
                                 let nonce_str = nonce.to_string();
-                                let data_len = data.0.len();
                                 view! {
                                     <div class="account-detail">
                                         <div class="page-header">
@@ -113,21 +105,38 @@ pub fn AccountPage() -> impl IntoView {
                                                     <span class="info-value hash">{account_id_str}</span>
                                                 </div>
                                                 <div class="info-row">
-                                                    <span class="info-label">"Balance:"</span>
-                                                    <span class="info-value">{balance_str}</span>
-                                                </div>
-                                                <div class="info-row">
-                                                    <span class="info-label">"Program Owner:"</span>
-                                                    <span class="info-value hash">{program_id}</span>
-                                                </div>
-                                                <div class="info-row">
                                                     <span class="info-label">"Nonce:"</span>
                                                     <span class="info-value">{nonce_str}</span>
                                                 </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="account-info">
+                                            <h2>"Slots"</h2>
+                                            <div class="info-grid">
                                                 <div class="info-row">
-                                                    <span class="info-label">"Data:"</span>
-                                                    <span class="info-value">{format!("{data_len} bytes")}</span>
+                                                    <span class="info-label">"Program"</span>
+                                                    <span class="info-value">"Balance"</span>
+                                                    <span class="info-value">"Data"</span>
                                                 </div>
+                                                {slots
+                                                    .into_iter()
+                                                    .map(|(program_id, slot)| {
+                                                        view! {
+                                                            <div class="info-row">
+                                                                <span class="info-label hash">
+                                                                    {program_id.to_string()}
+                                                                </span>
+                                                                <span class="info-value">
+                                                                    {slot.balance.to_string()}
+                                                                </span>
+                                                                <span class="info-value">
+                                                                    {format!("{} bytes", slot.data.0.len())}
+                                                                </span>
+                                                            </div>
+                                                        }
+                                                    })
+                                                    .collect::<Vec<_>>()}
                                             </div>
                                         </div>
 

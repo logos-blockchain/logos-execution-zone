@@ -1,4 +1,4 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 // Hello-world example program.
 //
@@ -35,17 +35,15 @@ fn main() {
     // Construct the post state account values
     let post_account = {
         let mut this = pre_state.account.clone();
-        let mut bytes = this.data.into_inner();
+        let mut bytes = this.data(self_program_id).clone().into_inner();
         bytes.extend_from_slice(&greeting);
-        this.data = bytes
+        this.slot_mut(self_program_id).data = bytes
             .try_into()
             .expect("Data should fit within the allowed limits");
         this
     };
 
-    // Wrap the post state account values inside a `AccountPostState` instance.
-    // This is used to forward the account claiming request if any
-    let post_state = AccountPostState::new_claimed_if_default(post_account, Claim::Authorized);
+    let post_state = post_account;
 
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms

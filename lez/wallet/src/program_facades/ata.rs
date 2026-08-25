@@ -26,7 +26,9 @@ impl Ata<'_> {
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-        let instruction = associated_token_account_core::Instruction::Create { ata_program_id };
+        let instruction = associated_token_account_core::Instruction::Create {
+            token_program_id: programs::token().id(),
+        };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
@@ -60,7 +62,7 @@ impl Ata<'_> {
             &compute_ata_seed(owner_id, definition_id),
         );
         let instruction = associated_token_account_core::Instruction::Transfer {
-            ata_program_id,
+            token_program_id: programs::token().id(),
             amount,
         };
         let instruction_data =
@@ -95,7 +97,7 @@ impl Ata<'_> {
             &compute_ata_seed(owner_id, definition_id),
         );
         let instruction = associated_token_account_core::Instruction::Burn {
-            ata_program_id,
+            token_program_id: programs::token().id(),
             amount,
         };
         let instruction_data =
@@ -125,7 +127,9 @@ impl Ata<'_> {
             &compute_ata_seed(owner_id, definition_id),
         );
 
-        let instruction = associated_token_account_core::Instruction::Create { ata_program_id };
+        let instruction = associated_token_account_core::Instruction::Create {
+            token_program_id: programs::token().id(),
+        };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
@@ -160,7 +164,7 @@ impl Ata<'_> {
         );
 
         let instruction = associated_token_account_core::Instruction::Transfer {
-            ata_program_id,
+            token_program_id: programs::token().id(),
             amount,
         };
         let instruction_data =
@@ -196,7 +200,7 @@ impl Ata<'_> {
         );
 
         let instruction = associated_token_account_core::Instruction::Burn {
-            ata_program_id,
+            token_program_id: programs::token().id(),
             amount,
         };
         let instruction_data =

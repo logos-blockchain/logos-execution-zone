@@ -83,7 +83,10 @@ async fn main() -> Result<()> {
         } => {
             let sequencer_key = parse_sequencer_key(&sequencer_key)?;
             let mover_instruction_data = Program::serialize_instruction(
-                authenticated_transfer_core::Instruction::Transfer { amount },
+                authenticated_transfer_core::Instruction::Transfer {
+                    amount,
+                    recipient_program: Some(programs::sequencer_stake().id()),
+                },
             )
             .context("Failed to serialize mover instruction")?;
             let instruction_data =

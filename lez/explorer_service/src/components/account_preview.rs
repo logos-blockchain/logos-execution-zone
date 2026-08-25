@@ -17,28 +17,29 @@ pub fn AccountPreview(account_id: AccountId, account: Account) -> impl IntoView 
                     </div>
                 </div>
                 {move || {
-                    let Account { program_owner, balance, data, nonce } = &account;
-                    let program_id = program_owner.to_string();
+                    let Account { nonce, slots } = &account;
                     view! {
                         <div class="account-preview-body">
-                            <div class="account-field">
-                                <span class="field-label">"Balance: "</span>
-                                <span class="field-value">{balance.to_string()}</span>
-                            </div>
-                            <div class="account-field">
-                                <span class="field-label">"Program: "</span>
-                                <span class="field-value hash">{program_id}</span>
-                            </div>
                             <div class="account-field">
                                 <span class="field-label">"Nonce: "</span>
                                 <span class="field-value">{nonce.to_string()}</span>
                             </div>
-                            <div class="account-field">
-                                <span class="field-label">"Data: "</span>
-                                <span class="field-value">
-                                    {format!("{} bytes", data.0.len())}
-                                </span>
-                            </div>
+                            {slots
+                                .iter()
+                                .map(|(program_id, slot)| {
+                                    view! {
+                                        <div class="account-field">
+                                            <span class="field-label hash">
+                                                {program_id.to_string()}
+                                            </span>
+                                            <span class="field-value">{slot.balance.to_string()}</span>
+                                            <span class="field-value">
+                                                {format!("{} bytes", slot.data.0.len())}
+                                            </span>
+                                        </div>
+                                    }
+                                })
+                                .collect::<Vec<_>>()}
                         </div>
                     }
                     .into_any()

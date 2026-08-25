@@ -202,6 +202,7 @@ fn stake(
         program_id: mover_program_id,
         pre_states: vec![funding_account, ownership_account_recorded.clone()],
         instruction_data: mover_instruction_data,
+        pda_seeds: vec![],
     };
 
     // expected balance after the mover call

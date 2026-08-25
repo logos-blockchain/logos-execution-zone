@@ -360,6 +360,8 @@ pub unsafe extern "C" fn wallet_ffi_free_account_identity(
         let FfiAccountIdentity {
             kind: _,
             account_id: _,
+            authority_program_id: _,
+            pda_seed: _,
             key_path,
             authorization_secret_key: _,
             nullifier_secret_key: _,

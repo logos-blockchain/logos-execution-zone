@@ -23,6 +23,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id = programs::amm().id();
+        let token_program_id = programs::token().id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -34,10 +35,10 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let definition_token_a_id = TokenHolding::try_from(&user_a_acc.data)
+        let definition_token_a_id = TokenHolding::try_from(user_a_acc.data(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(a_id))?
             .definition_id();
-        let definition_token_b_id = TokenHolding::try_from(&user_b_acc.data)
+        let definition_token_b_id = TokenHolding::try_from(user_b_acc.data(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
@@ -50,6 +51,7 @@ impl Amm<'_> {
             token_a_amount: balance_a,
             token_b_amount: balance_b,
             amm_program_id,
+            token_program_id,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -87,6 +89,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id = programs::amm().id();
+        let token_program_id = programs::token().id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -98,10 +101,10 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let definition_token_a_id = TokenHolding::try_from(&user_a_acc.data)
+        let definition_token_a_id = TokenHolding::try_from(user_a_acc.data(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(a_id))?
             .definition_id();
-        let definition_token_b_id = TokenHolding::try_from(&user_b_acc.data)
+        let definition_token_b_id = TokenHolding::try_from(user_b_acc.data(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
@@ -168,6 +171,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id = programs::amm().id();
+        let token_program_id = programs::token().id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -179,10 +183,10 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let definition_token_a_id = TokenHolding::try_from(&user_a_acc.data)
+        let definition_token_a_id = TokenHolding::try_from(user_a_acc.data(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(a_id))?
             .definition_id();
-        let definition_token_b_id = TokenHolding::try_from(&user_b_acc.data)
+        let definition_token_b_id = TokenHolding::try_from(user_b_acc.data(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
@@ -250,6 +254,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id = programs::amm().id();
+        let token_program_id = programs::token().id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -261,10 +266,10 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let definition_token_a_id = TokenHolding::try_from(&user_a_acc.data)
+        let definition_token_a_id = TokenHolding::try_from(user_a_acc.data(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(a_id))?
             .definition_id();
-        let definition_token_b_id = TokenHolding::try_from(&user_b_acc.data)
+        let definition_token_b_id = TokenHolding::try_from(user_b_acc.data(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
@@ -308,6 +313,7 @@ impl Amm<'_> {
         min_amount_to_remove_token_b: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
         let amm_program_id = programs::amm().id();
+        let token_program_id = programs::token().id();
         let user_a_acc = self
             .0
             .get_account_public(user_holding_a)
@@ -319,10 +325,10 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let definition_token_a_id = TokenHolding::try_from(&user_a_acc.data)
+        let definition_token_a_id = TokenHolding::try_from(user_a_acc.data(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(user_holding_a))?
             .definition_id();
-        let definition_token_b_id = TokenHolding::try_from(&user_b_acc.data)
+        let definition_token_b_id = TokenHolding::try_from(user_b_acc.data(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(user_holding_b))?
             .definition_id();
 

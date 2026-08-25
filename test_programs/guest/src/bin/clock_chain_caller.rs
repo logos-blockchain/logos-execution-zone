@@ -31,6 +31,7 @@ fn main() {
         program_id: clock_program_id,
         instruction_data: to_vec(&timestamp).unwrap(),
         pre_states: pre_states.clone(),
+        pda_seeds: vec![],
     };
 
     ProgramOutput::new(

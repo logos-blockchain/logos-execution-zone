@@ -125,8 +125,12 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     let state_a = seq_a.chain().lock().await.head_state().clone();
     for account in initial_public_user_accounts() {
         assert_eq!(
-            state_b.get_account_by_id(account.account_id).balance,
-            state_a.get_account_by_id(account.account_id).balance,
+            state_b
+                .get_account_by_id(account.account_id)
+                .balance(programs::authenticated_transfer().id()),
+            state_a
+                .get_account_by_id(account.account_id)
+                .balance(programs::authenticated_transfer().id()),
         );
     }
 
@@ -812,15 +816,14 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         .expect("reconstruct");
 
     // The mint was applied exactly once.
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
     assert_eq!(
         chain_b
             .lock()
             .await
             .head_state()
-            .get_account_by_id(vault_id)
-            .balance,
-        u128::from(deposit_amount),
+            .get_account_by_id(recipient)
+            .balance(programs::authenticated_transfer().id()),
+        initial_public_user_accounts()[0].balance + u128::from(deposit_amount),
         "already-finished deposit must be applied exactly once"
     );
 
@@ -922,7 +925,13 @@ async fn reconstructed_delivery_settles_its_pending_record() {
     let record_id = ping_record_pda(programs::ping_receiver().id());
     assert_eq!(
         seq_b
-            .with_state(|state| state.get_account_by_id(record_id).data.into_inner())
+            .with_state(|state| {
+                state
+                    .get_account_by_id(record_id)
+                    .data(programs::ping_receiver().id())
+                    .clone()
+                    .into_inner()
+            })
             .await,
         payload,
         "the reconstructed delivery must reach its target program"

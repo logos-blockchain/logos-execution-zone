@@ -272,11 +272,14 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
 
     async fn handle(
         &mut self,
-        GetAccountBalance { account_id }: GetAccountBalance,
+        GetAccountBalance {
+            account_id,
+            program_id,
+        }: GetAccountBalance,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.sequencer
-            .with_state(|state| state.get_account_by_id(account_id).balance)
+            .with_state(|state| state.get_account_by_id(account_id).balance(program_id))
             .await
     }
 }

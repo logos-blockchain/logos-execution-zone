@@ -3,7 +3,7 @@
 //! Currently it mostly mimics types from `lee_core`, but it's important to have a separate crate
 //! to define a stable interface for the indexer service RPCs which evolves in its own way.
 
-use std::{fmt::Display, str::FromStr};
+use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
 use anyhow::anyhow;
 use base58::{FromBase58 as _, ToBase58 as _};
@@ -51,7 +51,17 @@ mod base64 {
 pub type Nonce = u128;
 
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema,
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    SerializeDisplay,
+    DeserializeFromStr,
+    JsonSchema,
 )]
 pub struct ProgramId(pub [u32; 8]);
 
@@ -130,11 +140,15 @@ impl FromStr for AccountId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct Account {
-    pub program_owner: AccountId,
+pub struct Slot {
     pub balance: u128,
     pub data: Data,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct Account {
     pub nonce: Nonce,
+    pub slots: BTreeMap<ProgramId, Slot>,
 }
 
 pub type BlockId = u64;

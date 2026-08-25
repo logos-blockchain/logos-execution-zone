@@ -343,6 +343,11 @@ mod stall_reason_tests {
 }
 
 #[cfg(test)]
+fn native_slot() -> lee::ProgramId {
+    programs::authenticated_transfer().id()
+}
+
+#[cfg(test)]
 mod tests {
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
     use tempfile::tempdir;
@@ -391,11 +396,19 @@ mod tests {
         }
 
         assert_eq!(
-            store.account_current_state(&from).await.unwrap().balance,
+            store
+                .account_current_state(&from)
+                .await
+                .unwrap()
+                .balance(native_slot()),
             9900
         );
         assert_eq!(
-            store.account_current_state(&to).await.unwrap().balance,
+            store
+                .account_current_state(&to)
+                .await
+                .unwrap()
+                .balance(native_slot()),
             20100
         );
         // Tip advanced to the last applied block; a clean run leaves no stall.
@@ -427,22 +440,49 @@ mod tests {
         // State at block N is inclusive of block N.
         // Block 1 (genesis, clock-only): no transfers yet.
         assert_eq!(
-            store.account_state_at_block(&from, 1).unwrap().balance,
+            store
+                .account_state_at_block(&from, 1)
+                .unwrap()
+                .balance(native_slot()),
             10000
         );
-        assert_eq!(store.account_state_at_block(&to, 1).unwrap().balance, 20000);
+        assert_eq!(
+            store
+                .account_state_at_block(&to, 1)
+                .unwrap()
+                .balance(native_slot()),
+            20000
+        );
         // Through block 5: 4 transfers applied (blocks 2..=5).
         assert_eq!(
-            store.account_state_at_block(&from, 5).unwrap().balance,
+            store
+                .account_state_at_block(&from, 5)
+                .unwrap()
+                .balance(native_slot()),
             9960
         );
-        assert_eq!(store.account_state_at_block(&to, 5).unwrap().balance, 20040);
+        assert_eq!(
+            store
+                .account_state_at_block(&to, 5)
+                .unwrap()
+                .balance(native_slot()),
+            20040
+        );
         // Through block 9: 8 transfers applied (blocks 2..=9).
         assert_eq!(
-            store.account_state_at_block(&from, 9).unwrap().balance,
+            store
+                .account_state_at_block(&from, 9)
+                .unwrap()
+                .balance(native_slot()),
             9920
         );
-        assert_eq!(store.account_state_at_block(&to, 9).unwrap().balance, 20080);
+        assert_eq!(
+            store
+                .account_state_at_block(&to, 9)
+                .unwrap()
+                .balance(native_slot()),
+            20080
+        );
     }
 }
 
@@ -663,7 +703,11 @@ mod accept_tests {
             store.accept_block(&block, Slot::from(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
-        let balance_after = store.account_current_state(&from).await.unwrap().balance;
+        let balance_after = store
+            .account_current_state(&from)
+            .await
+            .unwrap()
+            .balance(native_slot());
 
         // Re-deliver the exact same block: idempotent skip, no state change, no park.
         assert!(matches!(
@@ -671,7 +715,11 @@ mod accept_tests {
             AcceptOutcome::AlreadyApplied
         ));
         assert_eq!(
-            store.account_current_state(&from).await.unwrap().balance,
+            store
+                .account_current_state(&from)
+                .await
+                .unwrap()
+                .balance(native_slot()),
             balance_after,
             "re-delivered block must not be applied twice"
         );
@@ -723,7 +771,11 @@ mod accept_tests {
             AcceptOutcome::Applied
         ));
 
-        let balance_after = store.account_current_state(&from).await.unwrap().balance;
+        let balance_after = store
+            .account_current_state(&from)
+            .await
+            .unwrap()
+            .balance(native_slot());
 
         // Re-deliver block 2 (id below the tip): a re-delivery, not a divergence.
         assert!(matches!(
@@ -731,7 +783,11 @@ mod accept_tests {
             AcceptOutcome::AlreadyApplied
         ));
         assert_eq!(
-            store.account_current_state(&from).await.unwrap().balance,
+            store
+                .account_current_state(&from)
+                .await
+                .unwrap()
+                .balance(native_slot()),
             balance_after,
             "re-delivered block below the tip must not be applied again"
         );
@@ -784,7 +840,10 @@ mod accept_tests {
 
         // Snapshot at block 100 = genesis + 99 transfers, written with the block.
         let bp1 = store.dbio.get_breakpoint(1).expect("breakpoint 1 present");
-        assert_eq!(bp1.get_account_by_id(from).balance, 10000 - 99);
+        assert_eq!(
+            bp1.get_account_by_id(from).balance(native_slot()),
+            10000 - 99
+        );
 
         // The #605 restart: reopening past the boundary must work.
         drop(store);

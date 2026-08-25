@@ -100,6 +100,13 @@ pub fn produce_dummy_empty_transaction() -> LeeTransaction {
     LeeTransaction::Public(lee_tx)
 }
 
+/// The slot native balance lives in, for tests asserting on balances moved by
+/// [`create_transaction_native_token_transfer`].
+#[must_use]
+pub fn native_balance_slot() -> lee::ProgramId {
+    programs::authenticated_transfer().id()
+}
+
 #[must_use]
 pub fn create_transaction_native_token_transfer(
     from: AccountId,

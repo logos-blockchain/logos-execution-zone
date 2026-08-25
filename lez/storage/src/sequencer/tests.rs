@@ -15,10 +15,12 @@ fn marker_id() -> AccountId {
 fn state_with_balance(balance: u128) -> V03State {
     V03State::new().with_public_accounts([(
         marker_id(),
-        Account {
+        Account::single(
+            programs::authenticated_transfer().id(),
             balance,
-            ..Account::default()
-        },
+            lee::Data::default(),
+            lee::Nonce::default(),
+        ),
     )])
 }
 
@@ -74,7 +76,7 @@ fn stored_balance(dbio: &RocksDBIO) -> u128 {
         .unwrap()
         .expect("the store holds a chain")
         .get_account_by_id(marker_id())
-        .balance
+        .balance(programs::authenticated_transfer().id())
 }
 
 #[test]
@@ -195,7 +197,12 @@ fn final_snapshot_round_trips_and_is_absent_on_fresh_store() {
         .expect("final snapshot is stored");
     assert_eq!(meta.id, 2);
     assert_eq!(meta.hash, block2.header.hash);
-    assert_eq!(final_state.get_account_by_id(marker_id()).balance, 200);
+    assert_eq!(
+        final_state
+            .get_account_by_id(marker_id())
+            .balance(programs::authenticated_transfer().id()),
+        200
+    );
     // The head state is stored independently of the final snapshot.
     assert_eq!(stored_balance(&dbio), 300);
 }

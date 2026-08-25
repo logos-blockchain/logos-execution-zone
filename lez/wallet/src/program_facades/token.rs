@@ -133,6 +133,7 @@ impl Token<'_> {
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            sender_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -154,6 +155,7 @@ impl Token<'_> {
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            sender_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -190,6 +192,7 @@ impl Token<'_> {
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            sender_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -226,6 +229,7 @@ impl Token<'_> {
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            sender_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -259,6 +263,7 @@ impl Token<'_> {
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            sender_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -293,6 +298,7 @@ impl Token<'_> {
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            sender_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -327,6 +333,7 @@ impl Token<'_> {
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
+            holding_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -348,6 +355,7 @@ impl Token<'_> {
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
+            holding_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -382,6 +390,7 @@ impl Token<'_> {
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
+            holding_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -415,6 +424,7 @@ impl Token<'_> {
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
+            holding_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -448,6 +458,7 @@ impl Token<'_> {
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
+            definition_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -469,6 +480,7 @@ impl Token<'_> {
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
+            definition_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -505,6 +517,7 @@ impl Token<'_> {
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
+            definition_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -541,6 +554,7 @@ impl Token<'_> {
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
+            definition_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -574,6 +588,7 @@ impl Token<'_> {
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
+            definition_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -609,6 +624,7 @@ impl Token<'_> {
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
+            definition_seed: None,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");

@@ -10,8 +10,8 @@ use crate::{
     block_on, c_str_to_string,
     error::{print_error, WalletFfiError},
     types::{
-        FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, FfiPrivateAccountKeys,
-        WalletHandle,
+        FfiAccount, FfiAccountList, FfiAccountListEntry, FfiAccountSlot, FfiBytes32,
+        FfiPrivateAccountKeys, FfiProgramId, WalletHandle,
     },
     wallet::get_wallet,
     FfiU128,
@@ -69,8 +69,7 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
 ///
 /// This is the private-account equivalent of `wallet_ffi_create_account_public`.
 /// It generates a key node, assigns a random identifier, and inserts a default
-/// account record so the account can immediately be used with
-/// `wallet_ffi_register_private_account`.
+/// account record for it.
 ///
 /// The identifier is chosen at random and is not encoded in the mnemonic seed.
 /// Once the account is initialized, the identifier is embedded in the encrypted
@@ -287,14 +286,15 @@ pub unsafe extern "C" fn wallet_ffi_free_account_list(list: *mut FfiAccountList)
     }
 }
 
-/// Get account balance.
+/// Get the balance held in one of an account's program slots.
 ///
-/// For public accounts, this fetches the balance from the network.
-/// For private accounts, this returns the locally cached balance.
+/// For public accounts, this fetches the account from the network.
+/// For private accounts, this uses the locally cached account.
 ///
 /// # Parameters
 /// - `handle`: Valid wallet handle
 /// - `account_id`: The account ID (32 bytes)
+/// - `program_id`: The program whose slot is read
 /// - `is_public`: Whether this is a public account
 /// - `out_balance`: Output for balance as little-endian [u8; 16]
 ///
@@ -310,6 +310,7 @@ pub unsafe extern "C" fn wallet_ffi_free_account_list(list: *mut FfiAccountList)
 pub unsafe extern "C" fn wallet_ffi_get_balance(
     handle: *mut WalletHandle,
     account_id: *const FfiBytes32,
+    program_id: FfiProgramId,
     is_public: bool,
     out_balance: *mut [u8; 16],
 ) -> WalletFfiError {
@@ -334,15 +335,15 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
     let balance = if is_public {
-        match block_on(wallet.get_account_balance(account_id)) {
-            Ok(b) => b,
+        match block_on(wallet.get_account_public(account_id)) {
+            Ok(account) => account.balance(program_id.data),
             Err(e) => {
                 print_error(format!("Failed to get balance: {e}"));
                 return WalletFfiError::NetworkError;
             }
         }
     } else if let Some(account) = wallet.get_account_private(account_id) {
-        account.balance
+        account.balance(program_id.data)
     } else {
         print_error("Private account not found");
         return WalletFfiError::AccountNotFound;
@@ -482,10 +483,17 @@ pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) 
 
     unsafe {
         let account = &*account;
-        if !account.data.is_null() && account.data_len > 0 {
-            let slice = std::slice::from_raw_parts_mut(account.data.cast_mut(), account.data_len);
-            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
+        if account.slots.is_null() || account.slots_len == 0 {
+            return;
         }
+        let slots = std::slice::from_raw_parts_mut(account.slots.cast_mut(), account.slots_len);
+        for slot in &*slots {
+            if !slot.data.is_null() && slot.data_len > 0 {
+                let data = std::slice::from_raw_parts_mut(slot.data.cast_mut(), slot.data_len);
+                drop(Box::from_raw(std::ptr::from_mut::<[u8]>(data)));
+            }
+        }
+        drop(Box::from_raw(std::ptr::from_mut::<[FfiAccountSlot]>(slots)));
     }
 }
 

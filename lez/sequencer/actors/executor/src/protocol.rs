@@ -5,6 +5,7 @@ use kameo::Reply;
 use lee_core::{
     BlockId, Commitment,
     account::{Account, AccountId},
+    program::ProgramId,
 };
 
 /// The widest range a [`GetBlockRange`] may span.
@@ -68,6 +69,7 @@ pub struct GetLastBlockId;
 
 pub struct GetAccountBalance {
     pub account_id: AccountId,
+    pub program_id: ProgramId,
 }
 
 pub struct GetTransaction {

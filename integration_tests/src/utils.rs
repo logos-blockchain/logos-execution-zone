@@ -228,7 +228,7 @@ pub async fn token_send_claiming_new_account(
 pub async fn account_balance(ctx: &TestContext, account_id: AccountId) -> anyhow::Result<u128> {
     Ok(ctx
         .sequencer_client()
-        .get_account_balance(account_id)
+        .get_account_balance(account_id, programs::authenticated_transfer().id())
         .await?)
 }
 

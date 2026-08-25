@@ -8,7 +8,7 @@ use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
     WalletCore,
-    account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
+    account::{AccountIdWithPrivacy, HumanReadableAccount, HumanReadableSlot, Label},
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
 };
 
@@ -368,7 +368,7 @@ impl AccountSubcommand {
             Ok(())
         };
 
-        if account == Account::default() {
+        if account.slots.is_empty() {
             println!("Account is Uninitialized");
 
             if keys {
@@ -385,9 +385,10 @@ impl AccountSubcommand {
             return Ok(SubcommandReturnValue::Empty);
         }
 
-        let (description, json_view) = format_account_details(&account);
-        println!("{description}");
-        println!("{json_view}");
+        for (description, json_view) in format_account_details(&account) {
+            println!("{description}");
+            println!("{json_view}");
+        }
 
         if keys {
             display_keys(wallet_core)?;
@@ -453,10 +454,11 @@ impl AccountSubcommand {
                 )
             );
             match wallet_core.get_account_public(id).await {
-                Ok(account) if account != Account::default() => {
-                    let (description, json_view) = format_account_details(&account);
-                    println!("  {description}");
-                    println!("  {json_view}");
+                Ok(account) if !account.slots.is_empty() => {
+                    for (description, json_view) in format_account_details(&account) {
+                        println!("  {description}");
+                        println!("  {json_view}");
+                    }
                 }
                 Ok(_) => println!("  Uninitialized"),
                 Err(e) => println!("  Error fetching account: {e}"),
@@ -474,10 +476,11 @@ impl AccountSubcommand {
                 )
             );
             match wallet_core.get_account_private(id) {
-                Some(account) if account != Account::default() => {
-                    let (description, json_view) = format_account_details(&account);
-                    println!("  {description}");
-                    println!("  {json_view}");
+                Some(account) if !account.slots.is_empty() => {
+                    for (description, json_view) in format_account_details(&account) {
+                        println!("  {description}");
+                        println!("  {json_view}");
+                    }
                 }
                 Some(_) => println!("  Uninitialized"),
                 None => println!("  Not found in local storage"),
@@ -641,47 +644,42 @@ impl WalletSubcommand for ImportSubcommand {
     }
 }
 
-/// Formats account details for display, returning (description, `json_view`).
-fn format_account_details(account: &Account) -> (String, String) {
-    let auth_tr_prog_id: AccountId = programs::authenticated_transfer().id().into();
-    let token_prog_id: AccountId = programs::token().id().into();
+/// Formats each of the account's slots for display, one (description, `json_view`) per slot.
+fn format_account_details(account: &Account) -> Vec<(String, String)> {
+    let auth_tr_prog_id = programs::authenticated_transfer().id();
+    let token_prog_id = programs::token().id();
 
-    match &account.program_owner {
-        o if *o == auth_tr_prog_id => {
-            let account_hr: HumanReadableAccount = account.clone().into();
-            (
-                "Account owned by authenticated transfer program".to_owned(),
-                serde_json::to_string(&account_hr).unwrap(),
-            )
-        }
-        o if *o == token_prog_id => TokenDefinition::try_from(&account.data)
-            .map(|token_def| {
-                (
-                    "Definition account owned by token program".to_owned(),
-                    serde_json::to_string(&token_def).unwrap(),
-                )
-            })
-            .or_else(|_| {
-                TokenHolding::try_from(&account.data).map(|token_hold| {
-                    (
-                        "Holding account owned by token program".to_owned(),
-                        serde_json::to_string(&token_hold).unwrap(),
-                    )
-                })
-            })
-            .unwrap_or_else(|_| {
-                let account_hr: HumanReadableAccount = account.clone().into();
-                (
-                    "Unknown token program account".to_owned(),
-                    serde_json::to_string(&account_hr).unwrap(),
-                )
-            }),
-        _ => {
-            let account_hr: HumanReadableAccount = account.clone().into();
-            (
-                "Account".to_owned(),
-                serde_json::to_string(&account_hr).unwrap(),
-            )
-        }
-    }
+    account
+        .slots
+        .iter()
+        .map(|(&program_id, slot)| {
+            let program: AccountId = program_id.into();
+            let raw = || serde_json::to_string(&HumanReadableSlot::from(slot)).unwrap();
+
+            if program_id == auth_tr_prog_id {
+                (format!("Native balance under program {program}"), raw())
+            } else if program_id == token_prog_id {
+                TokenDefinition::try_from(&slot.data)
+                    .map(|token_def| {
+                        (
+                            format!("Token definition under program {program}"),
+                            serde_json::to_string(&token_def).unwrap(),
+                        )
+                    })
+                    .or_else(|_| {
+                        TokenHolding::try_from(&slot.data).map(|token_hold| {
+                            (
+                                format!("Token holding under program {program}"),
+                                serde_json::to_string(&token_hold).unwrap(),
+                            )
+                        })
+                    })
+                    .unwrap_or_else(|_| {
+                        (format!("Unknown token program slot under {program}"), raw())
+                    })
+            } else {
+                (format!("Slot under program {program}"), raw())
+            }
+        })
+        .collect()
 }

@@ -24,13 +24,14 @@ fn auth_transfer_preparation(
     let instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,
+            recipient_program: None,
         })
         .unwrap();
 
     // TODO: handle large Err-variant properly
     let tx_pre_check = move |accounts: &[&Account]| {
         let from = accounts[0];
-        if from.balance >= balance_to_move {
+        if from.balance(programs::authenticated_transfer().id()) >= balance_to_move {
             Ok(())
         } else {
             Err(ExecutionFailureKind::InsufficientFundsError)

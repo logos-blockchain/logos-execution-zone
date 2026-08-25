@@ -8,7 +8,7 @@ use crate::{
     HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID,
-    PublicKey, PublicMessage, PublicTransaction, Signature, StallReason, Transaction,
+    PublicKey, PublicMessage, PublicTransaction, Signature, Slot, StallReason, Transaction,
     ValidityWindow, WitnessSet,
 };
 
@@ -45,18 +45,22 @@ impl From<AccountId> for lee_core::account::AccountId {
 
 impl From<lee_core::account::Account> for Account {
     fn from(value: lee_core::account::Account) -> Self {
-        let lee_core::account::Account {
-            program_owner,
-            balance,
-            data,
-            nonce,
-        } = value;
+        let lee_core::account::Account { nonce, slots } = value;
 
         Self {
-            program_owner: program_owner.into(),
-            balance,
-            data: data.into(),
             nonce: nonce.0,
+            slots: slots
+                .into_iter()
+                .map(|(program_id, slot)| {
+                    (
+                        program_id.into(),
+                        Slot {
+                            balance: slot.balance,
+                            data: slot.data.into(),
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -65,18 +69,22 @@ impl TryFrom<Account> for lee_core::account::Account {
     type Error = lee_core::account::data::DataTooBigError;
 
     fn try_from(value: Account) -> Result<Self, Self::Error> {
-        let Account {
-            program_owner,
-            balance,
-            data,
-            nonce,
-        } = value;
+        let Account { nonce, slots } = value;
 
         Ok(Self {
-            program_owner: program_owner.into(),
-            balance,
-            data: data.try_into()?,
             nonce: Nonce(nonce),
+            slots: slots
+                .into_iter()
+                .map(|(program_id, slot)| {
+                    Ok((
+                        program_id.into(),
+                        lee_core::account::Slot {
+                            balance: slot.balance,
+                            data: slot.data.try_into()?,
+                        },
+                    ))
+                })
+                .collect::<Result<_, Self::Error>>()?,
         })
     }
 }

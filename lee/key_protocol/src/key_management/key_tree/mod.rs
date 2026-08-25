@@ -328,6 +328,8 @@ const fn split_hash(hash_value: &[u8; 64]) -> ([u8; 32], [u8; 32]) {
 mod tests {
     #![expect(clippy::shadow_unrelated, reason = "We don't care about this in tests")]
 
+    const SLOT: lee::ProgramId = [7; 8];
+
     use std::{collections::HashSet, str::FromStr as _};
 
     use lee::AccountId;
@@ -558,10 +560,7 @@ mod tests {
             .unwrap();
         acc.value.1.insert(
             PrivateAccountKind::Regular(0),
-            lee::Account {
-                balance: 2,
-                ..lee::Account::default()
-            },
+            lee::Account::single(SLOT, 2, lee::Data::default(), lee::Nonce::default()),
         );
 
         let acc = tree
@@ -570,10 +569,7 @@ mod tests {
             .unwrap();
         acc.value.1.insert(
             PrivateAccountKind::Regular(0),
-            lee::Account {
-                balance: 3,
-                ..lee::Account::default()
-            },
+            lee::Account::single(SLOT, 3, lee::Data::default(), lee::Nonce::default()),
         );
 
         let acc = tree
@@ -582,10 +578,7 @@ mod tests {
             .unwrap();
         acc.value.1.insert(
             PrivateAccountKind::Regular(0),
-            lee::Account {
-                balance: 5,
-                ..lee::Account::default()
-            },
+            lee::Account::single(SLOT, 5, lee::Data::default(), lee::Nonce::default()),
         );
 
         let acc = tree
@@ -594,10 +587,7 @@ mod tests {
             .unwrap();
         acc.value.1.insert(
             PrivateAccountKind::Regular(0),
-            lee::Account {
-                balance: 6,
-                ..lee::Account::default()
-            },
+            lee::Account::single(SLOT, 6, lee::Data::default(), lee::Nonce::default()),
         );
 
         // Update account_id_map for nodes that now have entries
@@ -630,15 +620,27 @@ mod tests {
         assert_eq!(key_set, key_set_res);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1").unwrap()];
-        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].balance, 2);
+        assert_eq!(
+            acc.value.1[&PrivateAccountKind::Regular(0)].balance(SLOT),
+            2
+        );
 
         let acc = &tree.key_map[&ChainIndex::from_str("/2").unwrap()];
-        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].balance, 3);
+        assert_eq!(
+            acc.value.1[&PrivateAccountKind::Regular(0)].balance(SLOT),
+            3
+        );
 
         let acc = &tree.key_map[&ChainIndex::from_str("/0/1").unwrap()];
-        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].balance, 5);
+        assert_eq!(
+            acc.value.1[&PrivateAccountKind::Regular(0)].balance(SLOT),
+            5
+        );
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1/0").unwrap()];
-        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].balance, 6);
+        assert_eq!(
+            acc.value.1[&PrivateAccountKind::Regular(0)].balance(SLOT),
+            6
+        );
     }
 }

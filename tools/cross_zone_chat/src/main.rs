@@ -57,7 +57,7 @@ use common::{block::BedrockStatus, transaction::LeeTransaction};
 use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, Instruction, ZoneId};
 use cross_zone_outbox_core::outbox_pda;
 use lee::{
-    Account, ProgramId, PublicTransaction,
+    ProgramId, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use log::{info, warn};

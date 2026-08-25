@@ -77,19 +77,31 @@ pub struct FfiU128 {
     pub data: [u8; 16],
 }
 
-/// Account data structure - C-compatible version of lee Account.
+/// A single program's slot inside an account.
 ///
-/// Note: `balance` and `nonce` are u128 values represented as little-endian
-/// byte arrays since C doesn't have native u128 support.
+/// Note: `balance` is a u128 value represented as a little-endian byte array
+/// since C doesn't have native u128 support.
 #[repr(C)]
-pub struct FfiAccount {
-    pub program_owner: FfiBytes32,
+pub struct FfiAccountSlot {
+    pub program_id: FfiProgramId,
     /// Balance as little-endian [u8; 16].
     pub balance: FfiU128,
-    /// Pointer to account data bytes.
+    /// Pointer to slot data bytes.
     pub data: *const u8,
-    /// Length of account data.
+    /// Length of slot data.
     pub data_len: usize,
+}
+
+/// Account data structure - C-compatible version of lee Account.
+///
+/// Note: `nonce` is a u128 value represented as a little-endian byte array
+/// since C doesn't have native u128 support.
+#[repr(C)]
+pub struct FfiAccount {
+    /// Pointer to the account's occupied slots, one entry per program.
+    pub slots: *const FfiAccountSlot,
+    /// Number of slots.
+    pub slots_len: usize,
     /// Nonce as little-endian [u8; 16].
     pub nonce: FfiU128,
 }
@@ -97,10 +109,8 @@ pub struct FfiAccount {
 impl Default for FfiAccount {
     fn default() -> Self {
         Self {
-            program_owner: FfiBytes32::default(),
-            balance: FfiU128::default(),
-            data: std::ptr::null(),
-            data_len: 0,
+            slots: std::ptr::null(),
+            slots_len: 0,
             nonce: FfiU128::default(),
         }
     }
@@ -265,6 +275,9 @@ pub struct FfiAccountIdentity {
     pub viewing_public_key: *const u8,
     pub viewing_public_key_len: usize,
     pub identifier: FfiU128,
+    /// Private-PDA binding: the authority program and the seed its address derives from.
+    pub authority_program_id: FfiBytes32,
+    pub pda_seed: FfiBytes32,
 }
 
 impl Default for FfiAccountIdentity {
@@ -272,6 +285,8 @@ impl Default for FfiAccountIdentity {
         Self {
             kind: FfiAccountIdentityKind::Public,
             account_id: FfiBytes32::default(),
+            authority_program_id: FfiBytes32::default(),
+            pda_seed: FfiBytes32::default(),
             key_path: std::ptr::null_mut(),
             authorization_secret_key: FfiBytes32::default(),
             nullifier_secret_key: FfiBytes32::default(),
@@ -321,21 +336,39 @@ impl From<lee::Account> for FfiAccount {
         reason = "We need to convert to byte arrays for FFI"
     )]
     fn from(value: lee::Account) -> Self {
-        // Convert account data to FFI type
-        let data_vec: Vec<u8> = value.data.into();
-        let data_len = data_vec.len();
-        let data = if data_len > 0 {
-            let data_boxed = data_vec.into_boxed_slice();
-            Box::into_raw(data_boxed) as *const u8
+        let slots: Vec<FfiAccountSlot> = value
+            .slots
+            .into_iter()
+            .map(|(program_id, slot)| {
+                // Convert slot data to FFI type
+                let data_vec: Vec<u8> = slot.data.into();
+                let data_len = data_vec.len();
+                let data = if data_len > 0 {
+                    let data_boxed = data_vec.into_boxed_slice();
+                    Box::into_raw(data_boxed) as *const u8
+                } else {
+                    ptr::null()
+                };
+
+                FfiAccountSlot {
+                    program_id: FfiProgramId { data: program_id },
+                    balance: slot.balance.into(),
+                    data,
+                    data_len,
+                }
+            })
+            .collect();
+
+        let slots_len = slots.len();
+        let slots = if slots_len > 0 {
+            Box::into_raw(slots.into_boxed_slice()) as *const FfiAccountSlot
         } else {
             ptr::null()
         };
 
         Self {
-            program_owner: value.program_owner.into(),
-            balance: value.balance.into(),
-            data,
-            data_len,
+            slots,
+            slots_len,
             nonce: value.nonce.0.into(),
         }
     }
@@ -345,20 +378,34 @@ impl TryFrom<&FfiAccount> for lee::Account {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiAccount) -> Result<Self, Self::Error> {
-        let data = if value.data_len > 0 {
-            unsafe {
-                let slice = slice::from_raw_parts(value.data, value.data_len);
-                Data::try_from(slice.to_vec())
-                    .map_err(|_err| WalletFfiError::InvalidTypeConversion)?
-            }
+        let slots: &[FfiAccountSlot] = if value.slots.is_null() || value.slots_len == 0 {
+            &[]
         } else {
-            Data::default()
+            unsafe { slice::from_raw_parts(value.slots, value.slots_len) }
         };
+
         Ok(Self {
-            program_owner: value.program_owner.into(),
-            balance: value.balance.into(),
-            data,
             nonce: lee_core::account::Nonce(value.nonce.into()),
+            slots: slots
+                .iter()
+                .map(|slot| {
+                    let data = if slot.data_len > 0 {
+                        let bytes = unsafe { slice::from_raw_parts(slot.data, slot.data_len) };
+                        Data::try_from(bytes.to_vec())
+                            .map_err(|_err| WalletFfiError::InvalidTypeConversion)?
+                    } else {
+                        Data::default()
+                    };
+
+                    Ok((
+                        slot.program_id.data,
+                        lee_core::account::Slot {
+                            balance: slot.balance.into(),
+                            data,
+                        },
+                    ))
+                })
+                .collect::<Result<_, Self::Error>>()?,
         })
     }
 }
@@ -439,7 +486,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 ..Default::default()
             },
             AccountIdentity::PrivatePdaForeign {
-                account_id,
+                binding,
                 npk,
                 vpk,
                 identifier,
@@ -455,7 +502,10 @@ impl From<AccountIdentity> for FfiAccountIdentity {
 
                 Self {
                     kind: FfiAccountIdentityKind::PrivatePdaForeign,
-                    account_id: account_id.into(),
+                    authority_program_id: lee::AccountId::from(binding.0).into(),
+                    pda_seed: FfiBytes32 {
+                        data: *binding.1.as_ref().first_chunk::<32>().expect("seed is 32 bytes"),
+                    },
                     nullifier_public_key: npk.0.into(),
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
@@ -491,7 +541,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 }
             }
             AccountIdentity::PrivatePdaShared {
-                account_id,
+                binding,
                 nsk,
                 vpk,
                 identifier,
@@ -507,7 +557,10 @@ impl From<AccountIdentity> for FfiAccountIdentity {
 
                 Self {
                     kind: FfiAccountIdentityKind::PrivatePdaShared,
-                    account_id: account_id.into(),
+                    authority_program_id: lee::AccountId::from(binding.0).into(),
+                    pda_seed: FfiBytes32 {
+                        data: *binding.1.as_ref().first_chunk::<32>().expect("seed is 32 bytes"),
+                    },
                     nullifier_secret_key: nsk.into(),
                     nullifier_public_key: NullifierPublicKey::from(&nsk).0.into(),
                     viewing_public_key: vpk_data,
@@ -579,7 +632,10 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 }?;
 
                 Ok(Self::PrivatePdaForeign {
-                    account_id: value.account_id.into(),
+                    binding: (
+                        lee::AccountId::new(value.authority_program_id.data).into(),
+                        lee_core::program::PdaSeed::new(value.pda_seed.data),
+                    ),
                     npk: NullifierPublicKey(value.nullifier_public_key.data),
                     vpk,
                     identifier: value.identifier.into(),
@@ -633,7 +689,10 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 }
 
                 Ok(Self::PrivatePdaShared {
-                    account_id: value.account_id.into(),
+                    binding: (
+                        lee::AccountId::new(value.authority_program_id.data).into(),
+                        lee_core::program::PdaSeed::new(value.pda_seed.data),
+                    ),
                     nsk,
                     vpk,
                     identifier: value.identifier.into(),
@@ -738,7 +797,7 @@ mod tests {
         };
         let acc_identity_5 = AccountIdentity::PrivatePdaOwned(private_pda_acc_id);
         let acc_identity_6 = AccountIdentity::PrivatePdaForeign {
-            account_id: private_pda_acc_id,
+            binding: ([0_u32; 8], lee_core::program::PdaSeed::new([9; 32])),
             npk,
             vpk: vpk.clone(),
             identifier,
@@ -749,7 +808,7 @@ mod tests {
             identifier,
         };
         let acc_identity_8 = AccountIdentity::PrivatePdaShared {
-            account_id: private_pda_acc_id,
+            binding: ([0_u32; 8], lee_core::program::PdaSeed::new([9; 32])),
             nsk,
             vpk,
             identifier,
@@ -837,7 +896,7 @@ mod tests {
             identifier,
         };
         let pda_shared = AccountIdentity::PrivatePdaShared {
-            account_id: AccountId::new([46; 32]),
+            binding: ([0_u32; 8], lee_core::program::PdaSeed::new([9; 32])),
             nsk,
             vpk,
             identifier,

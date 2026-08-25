@@ -31,6 +31,7 @@ fn main() {
         })
         .unwrap(),
         pre_states: vec![faucet_pre, recipient_pre],
+        pda_seeds: vec![],
     }];
 
     ProgramOutput::new(

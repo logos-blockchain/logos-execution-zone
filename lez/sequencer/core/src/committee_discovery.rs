@@ -161,7 +161,8 @@ fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
         warn!("sequencer_stake config account is absent");
         return None;
     };
-    let config = SequencerStakeConfig::from_bytes(account.data.as_ref());
+    let config =
+        SequencerStakeConfig::from_bytes(account.data(programs::sequencer_stake().id()).as_ref());
     if config.is_none() {
         warn!("sequencer_stake config account did not decode as SequencerStakeConfig");
     }
@@ -172,7 +173,7 @@ fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
 /// whatever release is pending against it.
 fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<StakeRecord> {
     let account = state.get_account_by_id_ref(ownership_id)?;
-    StakeRecord::from_bytes(account.data.as_ref())
+    StakeRecord::from_bytes(account.data(programs::sequencer_stake().id()).as_ref())
 }
 
 #[must_use]
@@ -234,24 +235,25 @@ mod tests {
         let ownership_accounts = stakes.iter().map(|staked| {
             (
                 staked.account_id,
-                Account {
-                    program_owner: programs::sequencer_stake().id().into(),
-                    balance: staked.balance,
-                    data: StakeRecord {
+                Account::single(
+                    programs::sequencer_stake().id(),
+                    staked.balance,
+                    StakeRecord {
                         sequencer_key: staked.key,
                         pending_unstake: staked.pending,
                     }
                     .to_bytes()
                     .try_into()
                     .expect("stake record fits"),
-                    ..Account::default()
-                },
+                    lee_core::account::Nonce::default(),
+                ),
             )
         });
 
-        let config = Account {
-            program_owner: programs::sequencer_stake().id().into(),
-            data: SequencerStakeConfig {
+        let config = Account::single(
+            programs::sequencer_stake().id(),
+            0,
+            SequencerStakeConfig {
                 minimum_sequencer_stake: MINIMUM,
                 entries: stakes
                     .iter()
@@ -272,8 +274,8 @@ mod tests {
             .to_bytes()
             .try_into()
             .expect("config fits"),
-            ..Account::default()
-        };
+            lee_core::account::Nonce::default(),
+        );
 
         lee::V03State::new()
             .with_public_accounts(ownership_accounts)

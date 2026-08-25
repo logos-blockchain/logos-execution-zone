@@ -155,9 +155,16 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             .map_err(internal_error)
     }
 
-    async fn get_account_balance(&self, account_id: AccountId) -> Result<u128, ErrorObjectOwned> {
+    async fn get_account_balance(
+        &self,
+        account_id: AccountId,
+        program_id: ProgramId,
+    ) -> Result<u128, ErrorObjectOwned> {
         self.executor_ref
-            .ask(sequencer_executor_actor::protocol::GetAccountBalance { account_id })
+            .ask(sequencer_executor_actor::protocol::GetAccountBalance {
+                account_id,
+                program_id,
+            })
             .await
             .map_err(internal_error)
     }

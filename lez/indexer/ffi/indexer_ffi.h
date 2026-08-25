@@ -196,29 +196,50 @@ typedef struct FfiPublicTransactionBody {
 } FfiPublicTransactionBody;
 
 /**
- * Account data structure - C-compatible version of lee Account.
+ * A single program's slot inside an account.
  *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
- * byte arrays since C doesn't have native u128 support.
+ * Note: `balance` is a u128 value represented as a little-endian byte array
+ * since C doesn't have native u128 support.
  */
-typedef struct FfiAccount {
-  struct FfiBytes32 program_owner;
+typedef struct FfiAccountSlot {
+  struct FfiProgramId program_id;
   /**
    * Balance as little-endian [u8; 16].
    */
   struct FfiU128 balance;
   /**
-   * Pointer to account data bytes.
+   * Pointer to slot data bytes.
    */
   uint8_t *data;
   /**
-   * Length of account data.
+   * Length of slot data.
    */
   uintptr_t data_len;
   /**
-   * Capacity of account data.
+   * Capacity of slot data.
    */
   uintptr_t data_cap;
+} FfiAccountSlot;
+
+typedef struct FfiVec_FfiAccountSlot {
+  struct FfiAccountSlot *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiAccountSlot;
+
+typedef struct FfiVec_FfiAccountSlot FfiSlotList;
+
+/**
+ * Account data structure - C-compatible version of lee Account.
+ *
+ * Note: `nonce` is a u128 value represented as a little-endian byte array
+ * since C doesn't have native u128 support.
+ */
+typedef struct FfiAccount {
+  /**
+   * The account's occupied slots, one entry per program.
+   */
+  FfiSlotList slots;
   /**
    * Nonce as little-endian [u8; 16].
    */
@@ -637,9 +658,9 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
  * Frees the resources associated with the given ffi account.
  *
  * Takes ownership of the whole allocation produced by a `query_*` call: the
- * outer `Box<FfiAccount>` (the `PointerResult.value` pointer) *and* its inner
- * data buffer. Passing the struct by value previously freed only the inner
- * buffer and leaked the outer box.
+ * outer `Box<FfiAccount>` (the `PointerResult.value` pointer), its slot array
+ * *and* every slot's data buffer. Passing the struct by value previously freed
+ * only the inner buffer and leaked the outer box.
  *
  * # Arguments
  *

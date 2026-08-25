@@ -61,8 +61,14 @@ pub trait Rpc {
     #[method(name = "getLastBlockId")]
     async fn get_last_block_id(&self) -> Result<BlockId, ErrorObjectOwned>;
 
+    /// Balance held in `account_id`'s `slots[program_id]`. Slots are namespaced, so a
+    /// program must be named: there is no account-wide total to report.
     #[method(name = "getAccountBalance")]
-    async fn get_account_balance(&self, account_id: AccountId) -> Result<u128, ErrorObjectOwned>;
+    async fn get_account_balance(
+        &self,
+        account_id: AccountId,
+        program_id: ProgramId,
+    ) -> Result<u128, ErrorObjectOwned>;
 
     #[method(name = "getTransaction")]
     async fn get_transaction(
