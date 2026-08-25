@@ -144,11 +144,11 @@ fn dispatch(
 
         // The marker leads, so a target reads its source at a fixed position
         // without knowing anything about the accounts that follow it.
-        let mut call_pre_states = vec![marker.clone()];
-        call_pre_states.extend(target_accounts.clone());
+        let mut call_pre_state_refs = vec![marker.account_id];
+        call_pre_state_refs.extend(target_accounts.iter().map(|a| a.account_id));
         let call = ChainedCall {
             program_id: msg.target_program_id,
-            pre_states: call_pre_states,
+            pre_state_refs: call_pre_state_refs,
             instruction_data: call_instruction_data,
             pda_seeds: vec![],
         };

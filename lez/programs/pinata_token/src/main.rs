@@ -82,16 +82,9 @@ fn main() {
     let winner_token_holding_post = winner_token_holding.account.clone();
     pinata_definition_post.data = data.next_data();
 
-    // Flip authorization to true for chained call
-    let mut pinata_token_holding_for_chain_call = pinata_token_holding.clone();
-    pinata_token_holding_for_chain_call.is_authorized = true;
-
     let chained_call = ChainedCall::new(
         pinata_token_holding_post.program_owner.into(),
-        vec![
-            pinata_token_holding_for_chain_call,
-            winner_token_holding.clone(),
-        ],
+        vec![pinata_token_holding.account_id, winner_token_holding.account_id],
         &token_core::Instruction::Transfer {
             amount_to_transfer: PRIZE,
         },

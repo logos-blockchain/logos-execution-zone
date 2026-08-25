@@ -35,7 +35,7 @@ fn main() {
     let chained_call = ChainedCall {
         program_id: chained_program_id,
         instruction_data: chained_instruction,
-        pre_states,
+        pre_state_refs: pre_states.iter().map(|p| p.account_id).collect(),
         pda_seeds: vec![],
     };
 

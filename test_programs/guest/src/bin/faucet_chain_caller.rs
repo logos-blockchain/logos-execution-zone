@@ -26,7 +26,6 @@ fn main() {
         .collect();
 
     assert_eq!(pre_states.len(), 2);
-    let [faucet_pre, vault_pda_pre] = [pre_states[0].clone(), pre_states[1].clone()];
 
     let chained_calls = vec![ChainedCall {
         program_id: faucet_program_id,
@@ -36,7 +35,7 @@ fn main() {
             amount,
         })
         .unwrap(),
-        pre_states: vec![faucet_pre, vault_pda_pre],
+        pre_state_refs: vec![pre_states[0].account_id, pre_states[1].account_id],
         pda_seeds: vec![],
     }];
 

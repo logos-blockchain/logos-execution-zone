@@ -539,54 +539,7 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
         &program_with_deps,
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-fn sibling_declaring_delegated_pda(pda_is_authorized: bool) -> Result<(), LeeError> {
-    let delegator = crate::test_methods::selective_pda_delegator();
-    let callee = crate::test_methods::auth_asserting_noop();
-    let sibling = crate::test_methods::noop();
-    let keys = test_private_account_keys_1();
-    let npk = keys.npk();
-    let seed = PdaSeed::new([77; 32]);
-
-    let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), 0);
-    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
-
-    let callee_id = callee.id();
-    let sibling_id = sibling.id();
-    let program_with_deps = ProgramWithDependencies::new(
-        delegator,
-        [(callee_id, callee), (sibling_id, sibling)].into(),
-    );
-
-    execute_and_prove(
-        vec![pre_state],
-        Program::serialize_instruction((
-            seed,
-            seed,
-            callee_id,
-            Program::serialize_instruction(()).unwrap(),
-            Some((sibling_id, Some(pda_is_authorized))),
-        ))
-        .unwrap(),
-        vec![init_pda_witness(&keys, 0, None)],
-        &program_with_deps,
-    )
-    .map(|_| ())
-}
-
-#[test]
-fn delegated_pda_is_not_authorized_in_sibling_call() {
-    let result = sibling_declaring_delegated_pda(true);
-
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-#[test]
-fn sibling_call_may_declare_delegated_pda_unauthorized() {
-    sibling_declaring_delegated_pda(false)
-        .expect("a sibling declaring the delegated PDA unauthorized must be accepted");
+    assert!(matches!(result, Err(LeeError::ProgramProveFailed(_))));
 }
 
 #[test]
@@ -607,7 +560,7 @@ fn delegated_pda_stays_authorized_in_delegated_subtree() {
         delegator,
         [(forwarder_id, forwarder), (callee_id, callee)].into(),
     );
-    let no_sibling: Option<(ProgramId, Option<bool>)> = None;
+    let no_sibling: Option<(ProgramId, bool)> = None;
 
     execute_and_prove(
         vec![pre_state],
@@ -660,7 +613,7 @@ fn holder_authorization_survives_across_sibling_calls() {
             seed,
             callee_id,
             Program::serialize_instruction(()).unwrap(),
-            Some((sibling_id, None::<bool>)),
+            Some((sibling_id, false)),
         ))
         .unwrap(),
         vec![
@@ -701,7 +654,7 @@ fn inherited_scope_passes_through_intermediate_calls() {
         delegator,
         [(forwarder_id, forwarder), (callee_id, callee)].into(),
     );
-    let no_sibling: Option<(ProgramId, Option<bool>)> = None;
+    let no_sibling: Option<(ProgramId, bool)> = None;
     let forward_through_undeclaring_call = Program::serialize_instruction((
         forwarder_id,
         Program::serialize_instruction((
@@ -730,214 +683,6 @@ fn inherited_scope_passes_through_intermediate_calls() {
     .expect(
         "an account authorized in an ancestor's output stays authorized below a call that never mentions it",
     );
-}
-
-fn undeclaring_private_delegation(
-    delegated: bool,
-    external_binding: bool,
-    declare_authorized: bool,
-    callee: Program,
-) -> Result<(), LeeError> {
-    let delegator = crate::test_methods::undeclaring_pda_delegator();
-    let keys = test_private_account_keys_1();
-    let npk = keys.npk();
-    let seed = PdaSeed::new([77; 32]);
-
-    let delegator_id = delegator.id();
-    let account_id = AccountId::for_private_pda(&delegator_id, &seed, &npk, &keys.vpk(), 0);
-    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
-
-    let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
-
-    execute_and_prove(
-        vec![pre_state],
-        Program::serialize_instruction((
-            delegated.then_some(seed),
-            declare_authorized,
-            callee_id,
-            Program::serialize_instruction(()).unwrap(),
-            None::<ProgramId>,
-        ))
-        .unwrap(),
-        vec![init_pda_witness(
-            &keys,
-            0,
-            external_binding.then_some((delegator_id, seed)),
-        )],
-        &program_with_deps,
-    )
-    .map(|_| ())
-}
-
-#[test]
-fn delegated_private_pda_first_seen_in_callee_is_authorized() {
-    undeclaring_private_delegation(true, true, true, crate::test_methods::auth_asserting_noop())
-        .expect("a caller's pda_seeds must authorize a private PDA it delegates at first sight");
-}
-
-#[test]
-fn caller_seeds_bind_a_private_pda_first_seen_in_the_callee() {
-    undeclaring_private_delegation(
-        true,
-        false,
-        true,
-        crate::test_methods::auth_asserting_noop(),
-    )
-    .expect("a caller's pda_seeds must bind a private PDA it delegates at first sight");
-}
-
-#[test]
-fn undelegated_private_pda_in_a_callee_may_not_declare_authorization() {
-    let result = undeclaring_private_delegation(
-        false,
-        true,
-        true,
-        crate::test_methods::auth_asserting_noop(),
-    );
-
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-#[test]
-fn granted_private_pda_may_not_be_declared_unauthorized_at_first_sight() {
-    // `noop` tolerates unauthorized pre_states during host-side execution, so the only
-    // rejector left is the first-sight consistency assert on the granted edge.
-    let result = undeclaring_private_delegation(true, true, false, crate::test_methods::noop());
-
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-fn undeclaring_public_delegation(
-    account_id: AccountId,
-    delegated_seed: Option<PdaSeed>,
-    declare_authorized: bool,
-    callee: Program,
-    with_sibling: bool,
-) -> Result<lee_core::PrivacyPreservingCircuitOutput, LeeError> {
-    let delegator = crate::test_methods::undeclaring_pda_delegator();
-    let sibling = crate::test_methods::noop();
-
-    let pre_state = AccountWithMetadata::new(
-        Account {
-            program_owner: delegator.id().into(),
-            ..Account::default()
-        },
-        false,
-        account_id,
-    );
-
-    let callee_id = callee.id();
-    let sibling_id = sibling.id();
-    let program_with_deps = ProgramWithDependencies::new(
-        delegator,
-        [(callee_id, callee), (sibling_id, sibling)].into(),
-    );
-
-    execute_and_prove(
-        vec![pre_state],
-        Program::serialize_instruction((
-            delegated_seed,
-            declare_authorized,
-            callee_id,
-            Program::serialize_instruction(()).unwrap(),
-            with_sibling.then_some(sibling_id),
-        ))
-        .unwrap(),
-        vec![InputAccountIdentity::Public],
-        &program_with_deps,
-    )
-    .map(|(output, _proof)| output)
-}
-
-#[test]
-fn delegated_public_pda_first_seen_in_callee_is_authorized() {
-    let seed = PdaSeed::new([77; 32]);
-    let delegator_id = crate::test_methods::undeclaring_pda_delegator().id();
-    let pda = AccountId::for_public_pda(&delegator_id, &seed);
-
-    let output = undeclaring_public_delegation(
-        pda,
-        Some(seed),
-        true,
-        crate::test_methods::auth_asserting_noop(),
-        false,
-    )
-    .expect("a caller's pda_seeds must authorize a public PDA it delegates at first sight");
-
-    // The callee ran with the PDA authorized (auth_asserting_noop did not panic), while
-    // the journal exports the credential view: a seed grant is not a signer-backed claim.
-    assert_eq!(output.public_actions.len(), 1);
-    assert_eq!(output.public_actions[0].pre.account_id, pda);
-    assert!(!output.public_actions[0].pre.is_authorized);
-}
-
-#[test]
-fn granted_public_pda_may_not_be_declared_unauthorized_at_first_sight() {
-    let seed = PdaSeed::new([77; 32]);
-    let delegator_id = crate::test_methods::undeclaring_pda_delegator().id();
-    let pda = AccountId::for_public_pda(&delegator_id, &seed);
-
-    // `noop` tolerates unauthorized pre_states, so the only rejector left is the
-    // first-sight consistency assert on the granted edge.
-    let result =
-        undeclaring_public_delegation(pda, Some(seed), false, crate::test_methods::noop(), false);
-
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-#[test]
-fn public_pda_first_sight_grant_does_not_extend_to_sibling_calls() {
-    let seed = PdaSeed::new([77; 32]);
-    let delegator_id = crate::test_methods::undeclaring_pda_delegator().id();
-    let pda = AccountId::for_public_pda(&delegator_id, &seed);
-
-    let result = undeclaring_public_delegation(
-        pda,
-        Some(seed),
-        true,
-        crate::test_methods::auth_asserting_noop(),
-        true,
-    );
-
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-#[test]
-fn public_account_first_sight_authorization_is_exported_to_the_journal() {
-    let seed = PdaSeed::new([77; 32]);
-
-    let output = undeclaring_public_delegation(
-        AccountId::new([9; 32]),
-        Some(seed),
-        true,
-        crate::test_methods::auth_asserting_noop(),
-        false,
-    )
-    .expect("a first-sight authorization claim on a plain public account must prove");
-
-    assert!(output.public_actions[0].pre.is_authorized);
-}
-
-#[test]
-fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
-    let seed = PdaSeed::new([77; 32]);
-    let wrong_seed = PdaSeed::new([88; 32]);
-    let delegator_id = crate::test_methods::undeclaring_pda_delegator().id();
-    let pda = AccountId::for_public_pda(&delegator_id, &seed);
-
-    let output = undeclaring_public_delegation(
-        pda,
-        Some(wrong_seed),
-        true,
-        crate::test_methods::auth_asserting_noop(),
-        false,
-    )
-    .expect("an unmatched seed must fall back to the credential-claim path");
-
-    // In-circuit this is indistinguishable from a signer's claim; the exported `true`
-    // is what the verifier audits (and rejects — the id is not a signer).
-    assert!(output.public_actions[0].pre.is_authorized);
 }
 
 /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of

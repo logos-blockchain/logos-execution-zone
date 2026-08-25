@@ -58,15 +58,12 @@ fn main() {
     if instruction.return_funds {
         // Happy path: return the borrowed funds via a token transfer (receiver → vault).
         // The receiver is a PDA of this callback program (seed = [1_u8; 32]).
-        // Mark the receiver as authorized since it will be PDA-authorized in this chained call.
-        let mut receiver_authorized = receiver_pre.clone();
-        receiver_authorized.is_authorized = true;
         let transfer_instruction =
             borsh::to_vec(&instruction.amount).expect("transfer instruction serialization");
 
         chained_calls.push(ChainedCall {
             program_id: instruction.token_program_id,
-            pre_states: vec![receiver_authorized, vault_pre.clone()],
+            pre_state_refs: vec![receiver_pre.account_id, vault_pre.account_id],
             instruction_data: transfer_instruction,
             pda_seeds: vec![PdaSeed::new([1_u8; 32])],
         });

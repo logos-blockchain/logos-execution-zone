@@ -37,7 +37,6 @@ fn main() {
 
     // Unpack the input account pre state
     let [pre_state] = pre_states
-        .clone()
         .try_into()
         .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
 
@@ -50,7 +49,7 @@ fn main() {
     let chained_call = ChainedCall {
         program_id: hello_world_program_id(),
         instruction_data: chained_call_instruction_data,
-        pre_states,
+        pre_state_refs: vec![pre_state.account_id],
         pda_seeds: vec![],
     };
 
