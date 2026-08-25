@@ -12,7 +12,6 @@ pub enum Instruction {
     /// Required accounts:
     /// - Sender's Token Holding account (initialized, authorized),
     /// - Recipient's Token Holding account (initialized or uninitialized).
-    ///
     Transfer { amount_to_transfer: u128 },
 
     /// Create a new fungible token definition without metadata.
@@ -46,7 +45,6 @@ pub enum Instruction {
     /// Required accounts:
     /// - Token Definition account (initialized, any authorization),
     /// - Token Holding account (initialized, authorized).
-    ///
     Burn { amount_to_burn: u128 },
 
     /// Mint new tokens to the holder's account.
@@ -54,7 +52,6 @@ pub enum Instruction {
     /// Required accounts:
     /// - Token Definition account (initialized, authorized),
     /// - Token Holding account (initialized or uninitialized).
-    ///
     Mint { amount_to_mint: u128 },
 
     /// Print a new NFT from the master copy.

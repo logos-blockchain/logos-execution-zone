@@ -645,9 +645,9 @@ pub fn validate_execution(
     let executing_account_id = AccountId::from(executing_program_id);
 
     // 2. One account may fill several positions (one address playing several roles of an
-    //    instruction), but every appearance must agree: identical pre states, identical
-    //    post states. The agreed post is the account's single effect, so the id-keyed
-    //    state diff stays well-defined, and conservation counts each account once.
+    //    instruction), but every appearance must agree: identical pre states, identical post
+    //    states. The agreed post is the account's single effect, so the id-keyed state diff stays
+    //    well-defined, and conservation counts each account once.
     let mut distinct = HashMap::new();
     for (pre, post) in pre_states.iter().zip(post_states) {
         if let Some(seen) = distinct.insert(pre.account_id, (pre, post))
@@ -667,9 +667,9 @@ pub fn validate_execution(
             });
         }
 
-        // 4. A program may debit only its own slot: every foreign slot keeps its data and
-        //    may only gain balance. This mirrors the account-level law (credits are
-        //    permissionless, debits need the custodian), transposed to slots.
+        // 4. A program may debit only its own slot: every foreign slot keeps its data and may only
+        //    gain balance. This mirrors the account-level law (credits are permissionless, debits
+        //    need the custodian), transposed to slots.
         let empty_slot = Slot::default();
         for slot_key in pre.account.slots.keys().chain(post.slots.keys()) {
             if *slot_key == executing_account_id {
@@ -693,9 +693,8 @@ pub fn validate_execution(
         }
     }
 
-    // 6. Balance is conserved globally, across all slots of all touched accounts: a debit
-    //    from the executing slot must land as a credit somewhere, and rule 4 admits no
-    //    other decrease.
+    // 6. Balance is conserved globally, across all slots of all touched accounts: a debit from the
+    //    executing slot must land as a credit somewhere, and rule 4 admits no other decrease.
     let Some(total_balance_pre_states) = WrappedBalanceSum::from_balances(
         distinct
             .values()

@@ -5,8 +5,10 @@
     reason = "We don't care about it in tests"
 )]
 
-use lee_core::account::{Account, AccountId, AccountWithMetadata, Data};
-use lee_core::program::ProgramId;
+use lee_core::{
+    account::{Account, AccountId, AccountWithMetadata, Data},
+    program::ProgramId,
+};
 use token_core::{
     MetadataStandard, NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding,
 };
