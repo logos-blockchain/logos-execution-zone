@@ -267,7 +267,9 @@ pub fn stake_instruction(
 
 /// Serialized `sequencer_stake::ConfirmStake` expecting
 /// `expected_balance_after` on the ownership account.
-pub fn confirm_stake_instruction(expected_balance_after: u128) -> Result<InstructionData, StepError> {
+pub fn confirm_stake_instruction(
+    expected_balance_after: u128,
+) -> Result<InstructionData, StepError> {
     Program::serialize_instruction(sequencer_stake_core::Instruction::ConfirmStake {
         expected_balance_after,
     })

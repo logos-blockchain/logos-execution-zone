@@ -134,14 +134,18 @@ async fn stake_second_sequencer_key(world: &mut CucumberWorld, step: &Step) -> S
         amount,
     )
     .await?;
-    let owner = get_account(context, second_ownership_id).await?.program_owner;
+    let owner = get_account(context, second_ownership_id)
+        .await?
+        .program_owner;
     if owner != programs::sequencer_stake().id().into() {
         return Err(StepError::AssertionFailed {
             message: "staking the second sequencer key did not claim its ownership account"
                 .to_owned(),
         });
     }
-    world.stake_mut()?.set_second_ownership_id(second_ownership_id);
+    world
+        .stake_mut()?
+        .set_second_ownership_id(second_ownership_id);
     Ok(())
 }
 
