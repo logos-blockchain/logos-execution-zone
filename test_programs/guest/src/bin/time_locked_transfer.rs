@@ -10,10 +10,10 @@
 //!   2 - clock account (read-only, e.g. `CLOCK_01`).
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 /// (`amount`, `deadline_timestamp`).
-type Instruction = (u128, u64);
+type Instruction = (u128, u64, lee_core::program::ProgramId);
 
 fn main() {
     let (
@@ -21,7 +21,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: (amount, deadline),
+            instruction: (amount, deadline, clock_program_id),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -34,7 +34,7 @@ fn main() {
     assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
     // Read the current timestamp from the clock account.
-    let clock_data = ClockAccountData::from_bytes(&clock_pre.account.data);
+    let clock_data = ClockAccountData::from_bytes(clock_pre.account.data(clock_program_id));
 
     assert!(
         clock_data.timestamp >= deadline,
@@ -45,14 +45,19 @@ fn main() {
     let mut sender_post = sender_pre.account.clone();
     let mut receiver_post = receiver_pre.account.clone();
 
-    sender_post.balance = sender_post
+    let sender_slot = sender_post.slot_mut(self_program_id);
+    sender_slot.balance = sender_slot
         .balance
         .checked_sub(amount)
         .expect("Insufficient balance");
-    receiver_post.balance = receiver_post
+    sender_post.prune();
+
+    let receiver_slot = receiver_post.slot_mut(self_program_id);
+    receiver_slot.balance = receiver_slot
         .balance
         .checked_add(amount)
         .expect("Balance overflow");
+    receiver_post.prune();
 
     // Clock account is read-only: post state equals pre state.
     let clock_post = clock_pre.account.clone();
@@ -63,9 +68,9 @@ fn main() {
         instruction_data,
         vec![sender_pre, receiver_pre, clock_pre],
         vec![
-            AccountPostState::new(sender_post),
-            AccountPostState::new(receiver_post),
-            AccountPostState::new(clock_post),
+            sender_post,
+            receiver_post,
+            clock_post,
         ],
     )
     .write();

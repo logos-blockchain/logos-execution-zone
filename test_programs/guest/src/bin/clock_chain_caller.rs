@@ -2,7 +2,7 @@ use borsh::to_vec;
 use lee_core::{
     Timestamp,
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
 
@@ -24,14 +24,13 @@ fn main() {
 
     let post_states: Vec<_> = pre_states
         .iter()
-        .map(|pre| AccountPostState::new(pre.account.clone()))
+        .map(|pre| pre.account.clone())
         .collect();
 
     let chained_call = ChainedCall {
         program_id: clock_program_id,
         instruction_data: to_vec(&timestamp).unwrap(),
         pre_states: pre_states.clone(),
-        pda_seeds: vec![],
     };
 
     ProgramOutput::new(
