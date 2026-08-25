@@ -284,5 +284,4 @@ mod test_methods {
             Cow::Borrowed(test_methods::SIMPLE_TRANSFER_PROXY_ELF),
         )
     }
-
 }

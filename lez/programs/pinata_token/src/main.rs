@@ -84,7 +84,10 @@ fn main() {
 
     let chained_call = ChainedCall::new(
         pinata_token_holding_post.program_owner.into(),
-        vec![pinata_token_holding.account_id, winner_token_holding.account_id],
+        vec![
+            pinata_token_holding.account_id,
+            winner_token_holding.account_id,
+        ],
         &token_core::Instruction::Transfer {
             amount_to_transfer: PRIZE,
         },

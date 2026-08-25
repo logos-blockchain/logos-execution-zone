@@ -6,7 +6,9 @@ use lee_core::{
     PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, AccountWithMetadata},
     from_frame,
-    program::{ChainedCall, InstructionData, ProgramId, ProgramOutput, compute_public_authorized_pdas},
+    program::{
+        ChainedCall, InstructionData, ProgramId, ProgramOutput, compute_public_authorized_pdas,
+    },
     to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
@@ -82,6 +84,12 @@ pub fn execute_and_prove(
     )
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public entry point — taking ownership signals the caller hands off its top-level \
+              account values for the duration of the proof; callers already construct these \
+              freshly per call, so a borrow would just push the clone to every call site"
+)]
 pub fn execute_and_prove_with_padded_inputs(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
@@ -138,8 +146,7 @@ pub fn execute_and_prove_with_padded_inputs(
         // The top-level call's pre_states came straight from the caller of `execute_and_prove`,
         // not from a `ChainedCall`; use them as-is since a witnessed `ask` can't be re-derived
         // from `host_authorized_accounts`/`authorized_pdas`.
-        let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_id) = caller_program_id
-        {
+        let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_id) = caller_program_id {
             let authorized_pdas =
                 compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
 
@@ -171,7 +178,11 @@ pub fn execute_and_prove_with_padded_inputs(
                         })
                     });
 
-                resolved.push(AccountWithMetadata::new(account, is_authorized, *account_id));
+                resolved.push(AccountWithMetadata::new(
+                    account,
+                    is_authorized,
+                    *account_id,
+                ));
             }
             resolved
         } else {
@@ -193,7 +204,11 @@ pub fn execute_and_prove_with_padded_inputs(
             })?)
             .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
 
-        for (pre, post) in program_output.pre_states.iter().zip(&program_output.post_states) {
+        for (pre, post) in program_output
+            .pre_states
+            .iter()
+            .zip(&program_output.post_states)
+        {
             // A successful claim reassigns ownership; the guest doesn't write this into its own
             // post_state, the circuit does it afterward, so predict it here too.
             let program_owner = if post.required_claim().is_some() {

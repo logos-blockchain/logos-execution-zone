@@ -29,8 +29,7 @@ fn main() {
         AccountWithMetadata,
         AccountWithMetadata,
         Option<AccountWithMetadata>,
-    ) = if let Ok([recipient_pre, sender_pre, padding_pre]) =
-        <[_; 3]>::try_from(pre_states.clone())
+    ) = if let Ok([recipient_pre, sender_pre, padding_pre]) = <[_; 3]>::try_from(pre_states.clone())
     {
         (recipient_pre, sender_pre, Some(padding_pre))
     } else {

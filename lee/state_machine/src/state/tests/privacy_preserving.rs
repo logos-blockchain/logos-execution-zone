@@ -497,4 +497,3 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
 
     assert_circuit_proving_failure(&result, "which is not the owner");
 }
-

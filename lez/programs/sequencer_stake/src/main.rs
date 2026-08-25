@@ -197,7 +197,7 @@ fn stake(
     .try_into()
     .expect("StakeRecord should fit in account data");
     let ownership_account_post =
-        AccountPostState::new_claimed_if_default(ownership_account_data.clone(), Claim::Authorized);
+        AccountPostState::new_claimed_if_default(ownership_account_data, Claim::Authorized);
 
     let mut config_account_new = config_account.account;
     config_account_new.data = config

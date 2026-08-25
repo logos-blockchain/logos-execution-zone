@@ -126,7 +126,11 @@ impl ExecutionState {
         let initial_call = ChainedCall {
             program_id,
             instruction_data: first_output.instruction_data.clone(),
-            pre_state_refs: first_output.pre_states.iter().map(|p| p.account_id).collect(),
+            pre_state_refs: first_output
+                .pre_states
+                .iter()
+                .map(|p| p.account_id)
+                .collect(),
             pda_seeds: Vec::new(),
         };
         let initial_caller_data = CallerData {
