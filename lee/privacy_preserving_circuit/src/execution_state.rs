@@ -121,9 +121,8 @@ impl ExecutionState {
             panic!("No program outputs provided");
         };
 
-        // `pre_state_refs` is never actually read below (every check uses `program_output`,
-        // the callee's own proven echo) — this synthetic call exists only to bootstrap the
-        // loop with the right shape for the first iteration.
+        // `pre_state_refs` is never read below (every check uses `program_output` instead) —
+        // this synthetic call only bootstraps the loop's first iteration.
         let initial_call = ChainedCall {
             program_id,
             instruction_data: first_output.instruction_data.clone(),

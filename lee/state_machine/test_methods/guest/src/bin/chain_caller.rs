@@ -31,8 +31,7 @@ fn main() {
         let new_chained_call = ChainedCall {
             program_id: simple_transfer_id,
             instruction_data: call_instruction_data.clone(),
-            // Account order permuted here (sender before recipient), matching the callee's own
-            // parameter order.
+            // Account order permuted here (sender before recipient).
             pre_state_refs: vec![sender_pre.account_id, recipient_pre.account_id],
             pda_seeds: pda_seed.iter().copied().collect(),
         };

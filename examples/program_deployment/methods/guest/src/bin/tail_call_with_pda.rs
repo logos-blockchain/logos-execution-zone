@@ -53,8 +53,6 @@ fn main() {
         b"Hello from tail call with Program Derived Account ID".to_vec();
     let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
 
-    // The account is authorized for the callee via `pda_seeds` below — the protocol
-    // resolves that from the seed match, not from anything declared here.
     let chained_call = ChainedCall {
         program_id: hello_world_program_id(),
         instruction_data: chained_call_instruction_data,

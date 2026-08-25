@@ -9,14 +9,11 @@ use lee_core::{
 type Instruction = (u128, ProgramId, ProgramId);
 
 /// Chains twice, in sequence: first to a bare claimer that initializes the recipient (claims it
-/// with zero balance change), then to a plain transfer that funds it from the sender. Neither
-/// call needs to predict the other's outcome — `ChainedCall.pre_state_refs` only names accounts,
-/// the protocol resolves each one's actual current state itself.
+/// with zero balance change), then to a plain transfer that funds it from the sender.
 ///
-/// Accepts an optional third account, untouched by either chained call and echoed straight
-/// through — for callers that need a padding account to satisfy the privacy-preserving
-/// transaction's "at least one private action" precondition without involving a third real
-/// participant in the claim-and-fund logic under test.
+/// Accepts an optional third account, untouched by either call and echoed straight through — for
+/// callers that need a padding account to satisfy the privacy-preserving transaction's "at least
+/// one private action" precondition.
 fn main() {
     let (
         ProgramInput {

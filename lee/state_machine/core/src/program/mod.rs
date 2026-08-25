@@ -250,12 +250,9 @@ pub struct CallerData {
 pub struct ChainedCall {
     /// The program ID of the program to execute.
     pub program_id: ProgramId,
-    /// The accounts the callee should receive as `pre_states`, named by id only. The concrete
-    /// `Account` value and `is_authorized` are resolved by the protocol (sequencer for public
-    /// transactions, host driver for privacy-preserving ones) from its own tracked state at
-    /// dispatch time — never supplied by the calling program, which has no reliable way to
-    /// predict the outcome of an earlier chained call in the same transaction, and no business
-    /// asserting a value for an account it doesn't control.
+    /// The accounts the callee should receive as `pre_states`, named by id only. The protocol
+    /// resolves each account's real value and `is_authorized` from its own tracked state — never
+    /// supplied by the calling program.
     pub pre_state_refs: Vec<AccountId>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,

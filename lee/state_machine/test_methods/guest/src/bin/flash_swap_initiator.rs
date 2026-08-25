@@ -24,9 +24,8 @@
 //!
 //! - `self_program_id`: enables a program to chain back to itself (step 3 above)
 //! - `caller_program_id`: enables a program to restrict which callers can invoke an instruction
-//! - No intermediate-state prediction: each chained call only names its accounts by id; the
-//!   protocol resolves their actual values itself, so the initiator never has to predict what an
-//!   earlier call in the chain produced.
+//! - No intermediate-state prediction: each chained call only names its accounts by id, so the
+//!   initiator never has to predict what an earlier call in the chain produced.
 //! - Atomic rollback: if the callback doesn't return funds, the invariant check fails, and all
 //!   state changes from steps 1 and 2 are rolled back automatically.
 //!
@@ -88,9 +87,6 @@ fn main() {
             };
 
             // Capture initial vault balance, the invariant check will verify it is restored.
-            // Threaded through the instruction data below, not a pre-state — the protocol
-            // resolves each chained call's actual account values itself, so there's nothing
-            // for this program to predict.
             let min_vault_balance = vault_pre.account.balance;
 
             // Chained call 1: Token transfer (vault → receiver).

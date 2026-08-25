@@ -6,8 +6,7 @@ use lee_core::program::{
 /// Chain-calls an arbitrary target with caller-supplied instruction data,
 /// forwarding every account it was given. With a seed, the PDA derived from
 /// `(self, seed)` is delegated through `pda_seeds`, which is how a program-held
-/// authority acts on a callee — the protocol resolves that PDA's authorization
-/// from the seed match, not from anything this program declares.
+/// authority acts on a callee.
 type Instruction = (ProgramId, InstructionData, Option<PdaSeed>);
 
 fn main() {

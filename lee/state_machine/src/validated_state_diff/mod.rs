@@ -117,11 +117,8 @@ impl ValidatedStateDiff {
                     || caller_data.authorized_accounts.contains(account_id)
             };
 
-            // Construct the callee's actual pre_states from the protocol's own tracked state —
-            // live state plus any diffs already applied earlier in this transaction — rather
-            // than trusting a value the caller might assert. The caller only names which
-            // accounts to call with (`pre_state_refs`); it has no channel left to supply a
-            // fabricated or stale `Account` value.
+            // The caller only names which accounts to call with (`pre_state_refs`); resolve their
+            // actual values from the protocol's own tracked state, not from anything it asserts.
             let real_pre_states: Vec<AccountWithMetadata> = chained_call
                 .pre_state_refs
                 .iter()
@@ -148,11 +145,6 @@ impl ValidatedStateDiff {
                 chained_call.program_id, program_output
             );
 
-            // The above independently constructed the exact pre_states the callee should see;
-            // this loop now checks the callee's OWN echoed pre_states (program_output.pre_states)
-            // match what it was actually given — a pure callee-honesty check (a dishonest callee
-            // could still lie about what it received in its own output), not a caller-prediction
-            // check, since the caller no longer has anything to predict.
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
                 // Check that the program output pre_states coincide with the values in the public
