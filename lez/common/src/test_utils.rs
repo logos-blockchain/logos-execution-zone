@@ -86,7 +86,10 @@ pub fn produce_dummy_empty_transaction() -> LeeTransaction {
         program_id,
         account_ids,
         nonces,
-        authenticated_transfer_core::Instruction::Initialize,
+        authenticated_transfer_core::Instruction::Transfer {
+            amount: 0,
+            recipient_program: None,
+        },
     )
     .unwrap();
     let private_key = lee::PrivateKey::try_new([1; 32]).unwrap();
@@ -114,6 +117,7 @@ pub fn create_transaction_native_token_transfer(
         nonces,
         authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,
+            recipient_program: None,
         },
     )
     .unwrap();

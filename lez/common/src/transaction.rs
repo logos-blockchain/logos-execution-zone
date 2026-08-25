@@ -173,11 +173,24 @@ impl LeeTransaction {
         };
 
         let only_balance_increased = {
-            let expected_pre = lee::Account {
-                balance: pre.balance,
-                ..post.clone()
-            };
-            (expected_pre == pre) && (pre.balance < post.balance)
+            // Rebuild the pre-image implied by "post is pre plus credits": copy post, wind
+            // every slot balance back to its pre value, and prune. Any data/nonce/key change
+            // then shows up as a mismatch, and debits are refused explicitly per slot.
+            let mut expected_pre = post.clone();
+            for (program_id, slot) in &mut expected_pre.slots {
+                slot.balance = pre.balance(*program_id);
+            }
+            expected_pre.prune();
+
+            let no_debit = post
+                .slots
+                .iter()
+                .all(|(program_id, slot)| slot.balance >= pre.balance(*program_id));
+            let some_credit = post
+                .slots
+                .iter()
+                .any(|(program_id, slot)| slot.balance > pre.balance(*program_id));
+            expected_pre == pre && no_debit && some_credit
         };
 
         if only_balance_increased {
@@ -277,15 +290,10 @@ mod tests {
         // A diff that *only* increases the bridge balance (the legitimate deposit shape)
         // must be accepted.
         let bridge_id = system_accounts::bridge_account_id();
-        let pre = Account {
-            balance: 500,
-            nonce: Nonce(7),
-            ..Account::default()
-        };
-        let post = Account {
-            balance: 600,
-            ..pre.clone()
-        };
+        let native = programs::authenticated_transfer().id();
+        let pre = Account::single(native, 500, lee::Data::default(), Nonce(7));
+        let mut post = pre.clone();
+        post.slot_mut(native).balance = 600;
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
         let tx = any_public_transaction();
@@ -301,16 +309,11 @@ mod tests {
         // A diff that changes the bridge account's data (here: the nonce) while *also*
         // increasing its balance must be rejected.
         let bridge_id = system_accounts::bridge_account_id();
-        let pre = Account {
-            balance: 500,
-            nonce: Nonce(7),
-            ..Account::default()
-        };
-        let post = Account {
-            balance: 600,
-            nonce: Nonce(8),
-            ..pre.clone()
-        };
+        let native = programs::authenticated_transfer().id();
+        let pre = Account::single(native, 500, lee::Data::default(), Nonce(7));
+        let mut post = pre.clone();
+        post.slot_mut(native).balance = 600;
+        post.nonce = Nonce(8);
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
         let tx = any_public_transaction();
@@ -326,11 +329,8 @@ mod tests {
         // A diff that touches the bridge account without *strictly* increasing its balance
         // must be rejected — a zero-value deposit is not a real credit.
         let bridge_id = system_accounts::bridge_account_id();
-        let pre = Account {
-            balance: 500,
-            nonce: Nonce(7),
-            ..Account::default()
-        };
+        let native = programs::authenticated_transfer().id();
+        let pre = Account::single(native, 500, lee::Data::default(), Nonce(7));
         let post = pre.clone();
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
@@ -349,15 +349,11 @@ mod tests {
         // treat a changed account as unchanged and wave it through (and would flag an *unchanged*
         // account instead).
         let clock_id = system_accounts::clock_account_ids()[0];
-        let pre = Account {
-            balance: 1_000,
-            ..Account::default()
-        };
+        let native = programs::authenticated_transfer().id();
+        let pre = Account::single(native, 1_000, lee::Data::default(), Nonce::default());
 
-        let changed = Account {
-            balance: 2_000,
-            ..Account::default()
-        };
+        let mut changed = pre.clone();
+        changed.slot_mut(native).balance = 2_000;
         let (state, diff) = state_and_diff(clock_id, pre.clone(), changed);
         assert!(
             validate_doesnt_modify_account(&state, &diff, clock_id).is_err(),
@@ -389,7 +385,10 @@ mod tests {
         // (an empty diff hides the modification).
         let sender_key = PrivateKey::try_new([5_u8; 32]).expect("valid key");
         let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
-        let state = V03State::new().with_public_account_balances([(sender_id, 10_000)]);
+        let state = V03State::new().with_public_account_balances(
+            programs::authenticated_transfer().id(),
+            [(sender_id, 10_000)],
+        );
 
         let tx = create_transaction_native_token_transfer(
             sender_id,
