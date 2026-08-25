@@ -464,3 +464,51 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
     // Assert - should fail because the malicious program tries to manipulate is_authorized
     assert_circuit_proving_failure(&result, "Inconsistent authorization for account");
 }
+
+/// Rule 4 must hold identically in the circuit: the shared `validate_execution` is what makes
+/// the two paths agree, and without a guest that violates it neither side is exercised.
+#[test]
+fn writing_a_foreign_slot_should_fail_in_privacy_preserving_circuit() {
+    let program = crate::test_methods::foreign_slot_writer();
+    let foreign_program_id: lee_core::program::ProgramId = [0, 1, 2, 3, 4, 5, 6, 7];
+    let account = AccountWithMetadata::new(
+        Account::single(foreign_program_id, 100, Data::default(), Nonce::default()),
+        true,
+        AccountId::new([0; 32]),
+    );
+
+    let result = execute_and_prove(
+        vec![account],
+        Program::serialize_instruction(foreign_program_id).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    );
+
+    assert_circuit_proving_failure(
+        &result,
+        "modified data or decreased balance of a foreign slot",
+    );
+}
+
+#[test]
+fn draining_a_foreign_slot_should_fail_in_privacy_preserving_circuit() {
+    let program = crate::test_methods::foreign_slot_drainer();
+    let foreign_program_id: lee_core::program::ProgramId = [0, 1, 2, 3, 4, 5, 6, 7];
+    let account = AccountWithMetadata::new(
+        Account::single(foreign_program_id, 100, Data::default(), Nonce::default()),
+        true,
+        AccountId::new([0; 32]),
+    );
+
+    let result = execute_and_prove(
+        vec![account],
+        Program::serialize_instruction(foreign_program_id).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    );
+
+    assert_circuit_proving_failure(
+        &result,
+        "modified data or decreased balance of a foreign slot",
+    );
+}

@@ -44,6 +44,8 @@ impl V03State {
         self.insert_program(&crate::test_methods::missing_output());
         self.insert_program(&crate::test_methods::dropped_account());
         self.insert_program(&crate::test_methods::data_changer());
+        self.insert_program(&crate::test_methods::foreign_slot_writer());
+        self.insert_program(&crate::test_methods::foreign_slot_drainer());
         self.insert_program(&crate::test_methods::minter());
         self.insert_program(&crate::test_methods::burner());
         self.insert_program(&crate::test_methods::auth_asserting_noop());

@@ -244,3 +244,89 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
         ))) if total_balance_pre_states == 100.into() && total_balance_post_states == 99.into()
     ));
 }
+
+/// Rule 4, data half: a program may not rewrite a slot that is not its own. Nothing else
+/// rejects this — the account balances are untouched, so conservation is satisfied.
+#[test]
+fn program_should_fail_if_writes_data_of_a_foreign_slot() {
+    let mut state = V03State::new()
+        .with_public_accounts(HashMap::new())
+        .with_test_programs()
+        .with_accounts_untouched_by_the_executing_program();
+    let account_id = AccountId::new([255; 32]);
+    let program_id = crate::test_methods::foreign_slot_writer().id();
+    let foreign_program_id = crate::test_methods::noop().id();
+
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![account_id],
+        vec![],
+        foreign_program_id,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::ForeignSlotModified { .. }
+                )
+            ))
+        ),
+        "expected ForeignSlotModified, got: {result:?}"
+    );
+    assert!(
+        state
+            .get_account_by_id(account_id)
+            .data(foreign_program_id)
+            .is_empty()
+    );
+}
+
+/// Rule 4, debit half: moving a foreign slot's balance into one's own conserves the total,
+/// so rule 6 passes and only rule 4 stands between a program and its neighbour's funds.
+#[test]
+fn program_should_fail_if_drains_a_foreign_slot() {
+    let mut state = V03State::new()
+        .with_public_accounts(HashMap::new())
+        .with_test_programs()
+        .with_accounts_untouched_by_the_executing_program();
+    let account_id = AccountId::new([255; 32]);
+    let program_id = crate::test_methods::foreign_slot_drainer().id();
+    let foreign_program_id = crate::test_methods::noop().id();
+
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![account_id],
+        vec![],
+        foreign_program_id,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::ForeignSlotModified { .. }
+                )
+            ))
+        ),
+        "expected ForeignSlotModified, got: {result:?}"
+    );
+    assert_eq!(
+        state
+            .get_account_by_id(account_id)
+            .balance(foreign_program_id),
+        100
+    );
+}

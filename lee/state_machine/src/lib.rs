@@ -96,6 +96,22 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn foreign_slot_writer() -> Program {
+        Program::new_unchecked(
+            test_methods::FOREIGN_SLOT_WRITER_ID,
+            Cow::Borrowed(test_methods::FOREIGN_SLOT_WRITER_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn foreign_slot_drainer() -> Program {
+        Program::new_unchecked(
+            test_methods::FOREIGN_SLOT_DRAINER_ID,
+            Cow::Borrowed(test_methods::FOREIGN_SLOT_DRAINER_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn data_changer() -> Program {
         Program::new_unchecked(
             test_methods::DATA_CHANGER_ID,
