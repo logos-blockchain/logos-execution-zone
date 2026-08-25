@@ -36,6 +36,7 @@ fn main() {
         program_id: chained_program_id,
         instruction_data: chained_instruction,
         pre_states,
+        pda_seeds: vec![],
     };
 
     ProgramOutput::new(

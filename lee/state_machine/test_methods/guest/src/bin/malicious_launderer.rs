@@ -35,6 +35,7 @@ fn main() {
         program_id: simple_transfer_id,
         pre_states,
         instruction_data: auth_transfer_instruction,
+        pda_seeds: vec![],
     }])
     .write();
 }

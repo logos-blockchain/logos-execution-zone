@@ -83,6 +83,7 @@ fn main() {
         program_id: p2_id,
         pre_states: vec![victim, recipient],
         instruction_data: p2_instruction,
+        pda_seeds: vec![],
     }])
     .write();
 }

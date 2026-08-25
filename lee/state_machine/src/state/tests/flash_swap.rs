@@ -12,16 +12,13 @@ fn flash_swap_successful() {
     let initial_balance: u128 = 1000;
     let amount_out: u128 = 100;
 
-    let vault_account = Account {
-        program_owner: token.id().into(),
-        balance: initial_balance,
-        ..Account::default()
-    };
-    let receiver_account = Account {
-        program_owner: token.id().into(),
-        balance: 0,
-        ..Account::default()
-    };
+    let vault_account = Account::single(
+        token.id(),
+        initial_balance,
+        Data::default(),
+        Nonce::default(),
+    );
+    let receiver_account = Account::single(token.id(), 0, Data::default(), Nonce::default());
 
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(vault_id, vault_account);
@@ -47,8 +44,11 @@ fn flash_swap_successful() {
     assert!(result.is_ok(), "flash swap should succeed: {result:?}");
 
     // Vault balance restored, receiver back to 0
-    assert_eq!(state.get_account_by_id(vault_id).balance, initial_balance);
-    assert_eq!(state.get_account_by_id(receiver_id).balance, 0);
+    assert_eq!(
+        state.get_account_by_id(vault_id).balance(token.id()),
+        initial_balance
+    );
+    assert_eq!(state.get_account_by_id(receiver_id).balance(token.id()), 0);
 }
 
 #[test]
@@ -63,16 +63,13 @@ fn flash_swap_callback_keeps_funds_rollback() {
     let initial_balance: u128 = 1000;
     let amount_out: u128 = 100;
 
-    let vault_account = Account {
-        program_owner: token.id().into(),
-        balance: initial_balance,
-        ..Account::default()
-    };
-    let receiver_account = Account {
-        program_owner: token.id().into(),
-        balance: 0,
-        ..Account::default()
-    };
+    let vault_account = Account::single(
+        token.id(),
+        initial_balance,
+        Data::default(),
+        Nonce::default(),
+    );
+    let receiver_account = Account::single(token.id(), 0, Data::default(), Nonce::default());
 
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(vault_id, vault_account);
@@ -103,8 +100,11 @@ fn flash_swap_callback_keeps_funds_rollback() {
     );
 
     // State unchanged (rollback)
-    assert_eq!(state.get_account_by_id(vault_id).balance, initial_balance);
-    assert_eq!(state.get_account_by_id(receiver_id).balance, 0);
+    assert_eq!(
+        state.get_account_by_id(vault_id).balance(token.id()),
+        initial_balance
+    );
+    assert_eq!(state.get_account_by_id(receiver_id).balance(token.id()), 0);
 }
 
 #[test]
@@ -120,16 +120,13 @@ fn flash_swap_self_call_targets_correct_program() {
 
     let initial_balance: u128 = 1000;
 
-    let vault_account = Account {
-        program_owner: token.id().into(),
-        balance: initial_balance,
-        ..Account::default()
-    };
-    let receiver_account = Account {
-        program_owner: token.id().into(),
-        balance: 0,
-        ..Account::default()
-    };
+    let vault_account = Account::single(
+        token.id(),
+        initial_balance,
+        Data::default(),
+        Nonce::default(),
+    );
+    let receiver_account = Account::single(token.id(), 0, Data::default(), Nonce::default());
 
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(vault_id, vault_account);
@@ -166,16 +163,14 @@ fn flash_swap_standalone_invariant_check_rejected() {
 
     let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
 
-    let vault_account = Account {
-        program_owner: token.id().into(),
-        balance: 1000,
-        ..Account::default()
-    };
+    let vault_account = Account::single(token.id(), 1000, Data::default(), Nonce::default());
 
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(vault_id, vault_account);
 
+    // The vault invariant itself holds, so only the caller check can reject this.
     let instruction = FlashSwapInstruction::InvariantCheck {
+        token_program_id: token.id(),
         min_vault_balance: 1000,
     };
 

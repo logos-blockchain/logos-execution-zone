@@ -1,8 +1,4 @@
-#![expect(
-    clippy::arithmetic_side_effects,
-    clippy::shadow_unrelated,
-    reason = "We don't care about it in tests"
-)]
+#![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
 use std::collections::HashMap;
 
@@ -51,6 +47,12 @@ impl V03State {
         self.insert_program(&crate::test_methods::minter());
         self.insert_program(&crate::test_methods::burner());
         self.insert_program(&crate::test_methods::auth_asserting_noop());
+        self.insert_program(&crate::test_methods::private_pda_delegator());
+        self.insert_program(&crate::test_methods::selective_pda_delegator());
+        self.insert_program(&crate::test_methods::undeclaring_pda_delegator());
+        self.insert_program(&crate::test_methods::non_delegating_forwarder());
+        self.insert_program(&crate::test_methods::pda_spend_proxy());
+        self.insert_program(&crate::test_methods::simple_transfer_proxy());
         self.insert_program(&crate::test_methods::noop());
         self.insert_program(&crate::test_methods::chain_caller());
         self.insert_program(&crate::test_methods::modified_transfer_program());
@@ -68,7 +70,7 @@ impl V03State {
     }
 
     #[must_use]
-    pub fn with_non_default_accounts_but_no_slots(mut self) -> Self {
+    pub fn with_accounts_untouched_by_the_executing_program(mut self) -> Self {
         let unrelated = crate::test_methods::noop().id();
         let account_with_default_values_except_balance =
             Account::single(unrelated, 100, Data::default(), Nonce::default());
@@ -166,6 +168,7 @@ enum FlashSwapInstruction {
         callback_instruction_data: Vec<u8>,
     },
     InvariantCheck {
+        token_program_id: ProgramId,
         min_vault_balance: u128,
     },
 }

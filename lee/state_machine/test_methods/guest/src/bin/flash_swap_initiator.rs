@@ -134,7 +134,8 @@ fn main() {
                 program_id: token_program_id,
                 pre_states: vec![vault_pre.clone(), receiver_pre.clone()],
                 instruction_data: transfer_instruction,
-            };
+        pda_seeds: vec![],
+    };
 
             // Chained call 2: User callback.
             // Receives the post-transfer states as its pre_states. The callback may run
@@ -143,7 +144,8 @@ fn main() {
                 program_id: callback_program_id,
                 pre_states: vec![vault_after_transfer, receiver_after_transfer],
                 instruction_data: callback_instruction_data,
-            };
+        pda_seeds: vec![],
+    };
 
             // Chained call 3: Self-call to enforce the invariant.
             // Uses `self_program_id` to reference this program, the key feature that enables
@@ -161,7 +163,8 @@ fn main() {
                 program_id: self_program_id, // self-referential chained call
                 pre_states: vec![vault_after_callback],
                 instruction_data: invariant_instruction,
-            };
+        pda_seeds: vec![],
+    };
 
             // The initiator itself makes no direct state changes.
             // All mutations happen inside the chained calls (token transfers).

@@ -64,7 +64,8 @@ fn main() {
             program_id: instruction.token_program_id,
             pre_states: vec![receiver_pre.clone(), vault_pre.clone()],
             instruction_data: transfer_instruction,
-        });
+        pda_seeds: vec![],
+    });
     }
     // Malicious path (return_funds = false): emit no chained calls.
     // The vault balance will not be restored, so the invariant check in the initiator

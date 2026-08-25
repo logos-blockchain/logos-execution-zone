@@ -128,6 +128,54 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn private_pda_delegator() -> Program {
+        Program::new_unchecked(
+            test_methods::PRIVATE_PDA_DELEGATOR_ID,
+            Cow::Borrowed(test_methods::PRIVATE_PDA_DELEGATOR_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn selective_pda_delegator() -> Program {
+        Program::new_unchecked(
+            test_methods::SELECTIVE_PDA_DELEGATOR_ID,
+            Cow::Borrowed(test_methods::SELECTIVE_PDA_DELEGATOR_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn undeclaring_pda_delegator() -> Program {
+        Program::new_unchecked(
+            test_methods::UNDECLARING_PDA_DELEGATOR_ID,
+            Cow::Borrowed(test_methods::UNDECLARING_PDA_DELEGATOR_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn non_delegating_forwarder() -> Program {
+        Program::new_unchecked(
+            test_methods::NON_DELEGATING_FORWARDER_ID,
+            Cow::Borrowed(test_methods::NON_DELEGATING_FORWARDER_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn pda_spend_proxy() -> Program {
+        Program::new_unchecked(
+            test_methods::PDA_SPEND_PROXY_ID,
+            Cow::Borrowed(test_methods::PDA_SPEND_PROXY_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn simple_transfer_proxy() -> Program {
+        Program::new_unchecked(
+            test_methods::SIMPLE_TRANSFER_PROXY_ID,
+            Cow::Borrowed(test_methods::SIMPLE_TRANSFER_PROXY_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn noop() -> Program {
         Program::new_unchecked(test_methods::NOOP_ID, Cow::Borrowed(test_methods::NOOP_ELF))
     }

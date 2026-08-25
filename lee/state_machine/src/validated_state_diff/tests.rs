@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use lee_core::account::{Account, AccountId, Nonce};
+use lee_core::{
+    account::{Account, AccountId, Nonce, data::Data},
+    program::ProgramId,
+};
 
 use crate::{
     PrivateKey, PublicKey, V03State,
@@ -10,6 +13,10 @@ use crate::{
     validated_state_diff::ValidatedStateDiff,
 };
 
+fn native() -> ProgramId {
+    crate::test_methods::simple_balance_transfer().id()
+}
+
 fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<AccountId, Account> {
     initial_data
         .iter()
@@ -17,11 +24,7 @@ fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<Acc
         .map(|(account_id, balance)| {
             (
                 account_id,
-                Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-                    balance,
-                    ..Account::default()
-                },
+                Account::single(native(), balance, Data::default(), Nonce::default()),
             )
         })
         .collect()
@@ -57,7 +60,8 @@ fn public_diff_reflects_a_successful_transfer() {
         "public_diff must contain the debited sender",
     );
     assert_eq!(
-        public_diff[&from].balance, 95,
+        public_diff[&from].balance(native()),
+        95,
         "sender balance in the diff must reflect the debit",
     );
 }
@@ -98,7 +102,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         [u8; 32],                     // victim_id_raw
         u128,                         // victim_balance
         u128,                         // victim_nonce
-        lee_core::program::ProgramId, // victim_program_owner
+        lee_core::program::ProgramId, // victim_slot
         [u8; 32],                     // recipient_id_raw
         u128,                         // amount
     );
@@ -112,7 +116,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
     let recipient_id = AccountId::new([42_u8; 32]);
     let victim_balance = 5_000_u128;
 
-    // genesis sets program_owner = simple_balance_transfer_program.id() on all accounts.
+    // genesis parks every balance in simple_balance_transfer's slot.
     let state = V03State::new()
         .with_public_accounts(public_state_from_balances(&[
             (victim_id, victim_balance),
@@ -125,11 +129,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         ]);
 
     // Build attacker's private account and its local commitment tree.
-    let attacker_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-        balance: 100,
-        ..Account::default()
-    };
+    let attacker_account = Account::single(native(), 100, Data::default(), Nonce::default());
     let attacker_commitment = Commitment::new(&attacker_id, &attacker_account);
     let mut commitment_set = CommitmentSet::with_capacity(1);
     commitment_set.extend(std::slice::from_ref(&attacker_commitment));
@@ -144,9 +144,9 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         crate::test_methods::malicious_launderer().id(),
         crate::test_methods::simple_balance_transfer().id(),
         *victim_id.value(),
-        victim_account.balance,
+        victim_account.balance(native()),
         victim_account.nonce.0,
-        victim_account.program_owner.into(),
+        native(),
         *recipient_id.value(),
         victim_balance,
     );
@@ -207,8 +207,11 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         matches!(result, Err(LeeError::InvalidPrivacyPreservingProof)),
         "attack privacy transaction should be rejected with InvalidPrivacyPreservingProof"
     );
-    assert_eq!(state.get_account_by_id(victim_id).balance, victim_balance);
-    assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
+    assert_eq!(
+        state.get_account_by_id(victim_id).balance(native()),
+        victim_balance
+    );
+    assert_eq!(state.get_account_by_id(recipient_id).balance(native()), 0);
 }
 
 /// Private-victim variant of the authorization-injection attack. The test passes when the
@@ -255,7 +258,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
         [u8; 32],                     // victim_id_raw
         u128,                         // victim_balance
         u128,                         // victim_nonce
-        lee_core::program::ProgramId, // victim_program_owner
+        lee_core::program::ProgramId, // victim_slot
         [u8; 32],                     // recipient_id_raw
         u128,                         // amount
     );
@@ -283,11 +286,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
         ]);
 
     // Build attacker's private account and its local commitment tree.
-    let attacker_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-        balance: 100,
-        ..Account::default()
-    };
+    let attacker_account = Account::single(native(), 100, Data::default(), Nonce::default());
     let attacker_commitment = Commitment::new(&attacker_id, &attacker_account);
     let mut commitment_set = CommitmentSet::with_capacity(1);
     commitment_set.extend(std::slice::from_ref(&attacker_commitment));
@@ -298,16 +297,16 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
     let attacker_pre = AccountWithMetadata::new(attacker_account, true, attacker_id);
 
     // The attacker supplies the victim's account data directly — it cannot be read from
-    // public state. The injected balance and program_owner allow simple_balance_transfer
-    // to succeed inside the circuit, which has no access to chain state and cannot detect
-    // that these values are fabricated.
+    // public state. The injected balance, parked in simple_balance_transfer's slot, allows
+    // that program to succeed inside the circuit, which has no access to chain state and
+    // cannot detect that these values are fabricated.
     let instruction: InjectorInstruction = (
         crate::test_methods::malicious_launderer().id(),
         crate::test_methods::simple_balance_transfer().id(),
         *victim_id.value(),
         victim_balance,
-        0_u128,                                              // nonce
-        crate::test_methods::simple_balance_transfer().id(), // program_owner
+        0_u128, // nonce
+        native(),
         *recipient_id.value(),
         victim_balance,
     );
@@ -374,7 +373,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
     );
     // Victim has no public balance to check; confirming the recipient received nothing
     // is sufficient to show no funds moved.
-    assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
+    assert_eq!(state.get_account_by_id(recipient_id).balance(native()), 0);
 }
 
 /// Two malicious programs (injector + launderer) attempt to drain a victim's balance
@@ -395,7 +394,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
 #[test]
 fn malicious_programs_cannot_drain_victim_without_signature() {
     // p2_id, simple_balance_transfer_id, victim_id_raw, victim_balance, victim_nonce,
-    // victim_program_owner, recipient_id_raw, amount.
+    // victim_slot, recipient_id_raw, amount.
     // Primitives only — this instruction is borsh-encoded into instruction_data.
     type InjectorInstruction = (
         lee_core::program::ProgramId, // p2_id
@@ -403,7 +402,7 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
         [u8; 32],                     // victim_id_raw
         u128,                         // victim_balance
         u128,                         // victim_nonce
-        lee_core::program::ProgramId, // victim_program_owner
+        lee_core::program::ProgramId, // victim_slot
         [u8; 32],                     // recipient_id_raw
         u128,                         // amount
     );
@@ -436,9 +435,9 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
         crate::test_methods::malicious_launderer().id(),
         crate::test_methods::simple_balance_transfer().id(),
         *victim_id.value(),
-        victim_account.balance,
+        victim_account.balance(native()),
         victim_account.nonce.0,
-        victim_account.program_owner.into(),
+        native(),
         *recipient_id.value(),
         victim_balance,
     );
@@ -467,8 +466,8 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
     );
 
     // Confirm the victim's balance is untouched.
-    let victim_balance_after = state.get_account_by_id(victim_id).balance;
-    let recipient_balance_after = state.get_account_by_id(recipient_id).balance;
+    let victim_balance_after = state.get_account_by_id(victim_id).balance(native());
+    let recipient_balance_after = state.get_account_by_id(recipient_id).balance(native());
 
     assert_eq!(
         victim_balance_after, victim_balance,
