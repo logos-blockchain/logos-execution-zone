@@ -1,14 +1,9 @@
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    account::AccountWithMetadata,
+    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
-use ping_core::{
-    SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id, sender_config_seed,
-};
+use ping_core::{SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id};
 
 fn main() {
     let (
@@ -69,7 +64,7 @@ fn send(
     payload: Vec<u8>,
     ordinal: u32,
 ) {
-    // pre_states: [config PDA, outbox PDA]. The outbox claims its own slot, so
+    // pre_states: [config PDA, outbox PDA]. The outbox writes its own slot, so
     // ping_sender forwards it unchanged.
     let [config, outbox] = <[AccountWithMetadata; 2]>::try_from(pre_states)
         .expect("Send requires the config and outbox accounts");
@@ -81,8 +76,8 @@ fn send(
         sender_config_account_id(self_program_id),
         "first account must be the ping-sender config PDA"
     );
-    let outbox_program_id =
-        read_outbox(&config.account.data).expect("config account holds an outbox program id");
+    let outbox_program_id = read_outbox(config.account.data(self_program_id))
+        .expect("config account holds an outbox program id");
 
     let call = ChainedCall::new(
         outbox_program_id,
@@ -96,14 +91,14 @@ fn send(
         },
     );
 
-    let config_post = AccountPostState::new(config.account.clone());
+    let config_post = config.account.clone();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![config, outbox.clone()],
-        vec![config_post, AccountPostState::new(outbox.account)],
+        vec![config_post, outbox.account],
     )
     .with_chained_calls(vec![call])
     .write();
@@ -125,30 +120,23 @@ fn init_config(
         sender_config_account_id(self_program_id),
         "account must be the ping-sender config PDA"
     );
-    // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned one must already pin exactly this outbox, since
-    // genesis is replayed onto seeded state during multi-sequencer reconstruction.
-    // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
-    if config.account != Account::default() {
+    // Init-once, idempotent under genesis replay: an account this program has not
+    // written is a first init; an already-written one must already pin exactly
+    // this outbox, since genesis is replayed onto seeded state during
+    // multi-sequencer reconstruction.
+    if let Some(slot) = config.account.slot(self_program_id) {
         assert_eq!(
-            config.account.program_owner,
-            self_program_id.into(),
-            "ping-sender config PDA is owned by another program"
-        );
-        assert_eq!(
-            *config.account.data,
+            *slot.data,
             outbox_bytes(outbox_program_id),
             "ping-sender config already pins a different outbox"
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = outbox_bytes(outbox_program_id)
+    let mut config_post = config.account.clone();
+    config_post.slot_mut(self_program_id).data = outbox_bytes(outbox_program_id)
         .to_vec()
         .try_into()
         .expect("outbox id fits in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(sender_config_seed()));
 
     ProgramOutput::new(
         self_program_id,

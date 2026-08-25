@@ -15,7 +15,8 @@ pub type ZoneId = [u8; 32];
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
-    /// Records an outbound cross-zone message as a write to a self-owned PDA.
+    /// Records an outbound cross-zone message as a write to this program's slot
+    /// in a derived PDA.
     ///
     /// The slot is written once: a second `Emit` at the same
     /// `(emitter, target_zone, ordinal)` fails the transaction rather than
@@ -84,9 +85,9 @@ pub fn outbox_pda(
     AccountId::for_public_pda(&outbox_id, &outbox_pda_seed(emitter, target_zone, ordinal))
 }
 
-/// Seed of an outbox message PDA, exposed so the guest can claim the account.
-#[must_use]
-pub fn outbox_pda_seed(emitter: ProgramId, target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
+/// Seed of an outbox message PDA. Private: nothing outside the derivation needs
+/// it, only the address.
+fn outbox_pda_seed(emitter: ProgramId, target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 100];

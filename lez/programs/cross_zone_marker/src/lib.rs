@@ -22,10 +22,9 @@ pub type ZoneId = [u8; 32];
 /// The account the inbox passes at position 0 of a delivery's chained call, so
 /// the target can authenticate its own sources.
 ///
-/// Nothing writes or claims it, and nothing can: crediting it would leave a
-/// modified default-owner account, which the state machine rejects, and only the
-/// inbox could claim this address, which it never does. So it stays
-/// `Account::default()` and every hop round-trips it untouched.
+/// Nothing writes its data, and no other program can: a program writes only its
+/// own slot. Crediting it is legal, which merely strands the value there. Every
+/// hop round-trips the account untouched.
 ///
 /// The address is derivable by anyone, so it is not a secret and not a
 /// capability. What makes it mean something is that a target checks it only after

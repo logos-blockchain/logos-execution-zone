@@ -34,18 +34,24 @@ pub enum Instruction {
     /// then the recipient's holding PDA.
     Mint { recipient: [u8; 32], amount: u128 },
     /// Pins the minter and the peer sources it may mint for, written once into a
-    /// default config PDA at genesis. A re-run holding anything different is
-    /// refused; an identical one is a no-op, which is what genesis replay does.
+    /// config PDA this program has not yet written at genesis. A re-run holding
+    /// anything different is refused; an identical one is a no-op, which is what
+    /// genesis replay does.
     ///
     /// Required accounts (1): the wrapped-token config PDA.
     InitConfig(WrappedTokenConfig),
     /// Replaces the authorized sources. Refused unless the config names an
-    /// authority and that account authorized the transaction.
+    /// authority and that account authorized the transaction, or
+    /// `authority_seed` derives it as the calling program's PDA.
     ///
     /// Required accounts (2): the config PDA, then the authority account.
-    UpdateSources { sources: Vec<(ZoneId, ProgramId)> },
+    UpdateSources {
+        sources: Vec<(ZoneId, ProgramId)>,
+        authority_seed: Option<PdaSeed>,
+    },
     /// Gives up the authority, leaving the source list fixed for good. Refused
-    /// unless the config names an authority and that account authorized it.
+    /// unless the config names an authority and that account authorized it, or
+    /// `authority_seed` derives it as the calling program's PDA.
     ///
     /// Renounce only, never reassign. A leaked key that could rotate would move
     /// the authority to the attacker and lock the real holder out permanently;
@@ -53,7 +59,7 @@ pub enum Instruction {
     /// which is what a config with no authority does anyway.
     ///
     /// Required accounts (2): the config PDA, then the authority account.
-    RenounceAuthority,
+    RenounceAuthority { authority_seed: Option<PdaSeed> },
 }
 
 /// Who may mint, and which peer sources they may mint for.
@@ -69,8 +75,9 @@ pub struct WrappedTokenConfig {
     /// through a chained call, or `None` for top-level only.
     ///
     /// Exists because a PDA cannot sign: a program-held authority acts only by
-    /// its own program delegating it on a chained call. Unset closes the ambient
-    /// path where any program the authority signed for could rewrite the list.
+    /// its own program calling in and naming the seed that derives it. Unset
+    /// closes the ambient path where any program the authority signed for could
+    /// rewrite the list.
     pub governance: Option<ProgramId>,
     /// The account allowed to change `sources`, or `None` for a list fixed at
     /// genesis.
@@ -78,7 +85,8 @@ pub struct WrappedTokenConfig {
     /// Whoever holds this can authorize a new source, and a source can mint, so
     /// its compromise is theft rather than delay; it is seeded unset until there
     /// is a governance program worth pointing it at. An `AccountId` rather than
-    /// a key, so a PDA of such a program can hold it and act by delegation.
+    /// a key, so a PDA of such a program can hold it and act through
+    /// `authority_seed`.
     pub authority: Option<AccountId>,
     /// The `(src_zone, src_program_id)` pairs a mint may originate from. Empty on
     /// a zone with no peers, which authorizes nothing.

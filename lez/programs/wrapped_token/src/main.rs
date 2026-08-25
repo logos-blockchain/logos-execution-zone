@@ -1,14 +1,11 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    account::{AccountId, AccountWithMetadata},
+    program::{PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use wrapped_token_core::{
     Instruction, MAX_MINT_AMOUNT, WrappedTokenConfig, balance_bytes, config_account_id,
-    config_seed, holding_account_id, holding_seed, read_balance,
+    holding_account_id, read_balance,
 };
 
 fn main() {
@@ -38,25 +35,43 @@ fn main() {
             instruction_data,
             &config,
         ),
-        Instruction::RenounceAuthority => renounce_authority(
+        Instruction::RenounceAuthority { authority_seed } => renounce_authority(
             self_program_id,
             caller_program_id,
             pre_states,
             instruction_data,
+            authority_seed,
         ),
-        Instruction::UpdateSources { sources } => update_sources(
+        Instruction::UpdateSources {
+            sources,
+            authority_seed,
+        } => update_sources(
             self_program_id,
             caller_program_id,
             pre_states,
             instruction_data,
             sources,
+            authority_seed,
         ),
     }
 }
 
+fn authority_acts(
+    authority: &AccountWithMetadata,
+    caller_program_id: Option<ProgramId>,
+    authority_seed: Option<PdaSeed>,
+) -> bool {
+    authority.is_authorized
+        || caller_program_id
+            .zip(authority_seed)
+            .is_some_and(|(caller, seed)| {
+                authority.account_id == AccountId::for_public_pda(&caller, &seed)
+            })
+}
+
 fn mint(
-    self_program_id: lee_core::program::ProgramId,
-    caller_program_id: Option<lee_core::program::ProgramId>,
+    self_program_id: ProgramId,
+    caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     recipient: [u8; 32],
@@ -73,7 +88,7 @@ fn mint(
         config_account_id(self_program_id),
         "second account must be the wrapped-token config PDA"
     );
-    let cfg = WrappedTokenConfig::from_bytes(&config.account.data)
+    let cfg = WrappedTokenConfig::from_bytes(config.account.data(self_program_id))
         .expect("config account holds a wrapped-token config");
     assert_eq!(
         caller_program_id,
@@ -103,40 +118,33 @@ fn mint(
         "mint amount exceeds the per-mint cap"
     );
     // The backstop against accumulation, which the per-mint cap does not bound.
-    let new_balance = read_balance(&holding.account.data)
+    let new_balance = read_balance(holding.account.data(self_program_id))
         .checked_add(amount)
         .expect("wrapped-token balance overflow");
-    let mut holding_account = holding.account.clone();
-    holding_account.data = balance_bytes(new_balance)
+    let mut holding_post = holding.account.clone();
+    holding_post.slot_mut(self_program_id).data = balance_bytes(new_balance)
         .to_vec()
         .try_into()
         .expect("balance fits in account data");
-    let holding_post = AccountPostState::new_claimed_if_default(
-        holding_account,
-        Claim::Pda(holding_seed(&recipient)),
-    );
-    let config_post = AccountPostState::new(config.account.clone());
+    let config_post = config.account.clone();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![marker.clone(), config, holding],
-        vec![
-            AccountPostState::new(marker.account),
-            config_post,
-            holding_post,
-        ],
+        vec![marker.account, config_post, holding_post],
     )
     .write();
 }
 
 /// Gives up the authority, freezing the source list for good.
 fn renounce_authority(
-    self_program_id: lee_core::program::ProgramId,
-    caller_program_id: Option<lee_core::program::ProgramId>,
+    self_program_id: ProgramId,
+    caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
+    authority_seed: Option<PdaSeed>,
 ) {
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
@@ -148,7 +156,7 @@ fn renounce_authority(
         config_account_id(self_program_id),
         "first account must be the wrapped-token config PDA"
     );
-    let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data)
+    let mut cfg = WrappedTokenConfig::from_bytes(config_meta.account.data(self_program_id))
         .expect("config account holds a wrapped-token config");
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
@@ -167,21 +175,14 @@ fn renounce_authority(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
-    // Claims apply after post-state validation, so a first use must find the
-    // account untouched; an unowned account with history is refused for good.
     assert!(
-        authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
-        "the authority account must be untouched before its first use as one"
-    );
-    assert!(
-        authority.is_authorized,
+        authority_acts(&authority, caller_program_id, authority_seed),
         "the configured authority must authorize renouncing it"
     );
 
     cfg.authority = None;
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
+    let mut config_post = config.account.clone();
+    config_post.slot_mut(self_program_id).data = cfg
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
@@ -191,12 +192,7 @@ fn renounce_authority(
         caller_program_id,
         instruction_data,
         vec![config, authority.clone()],
-        vec![
-            AccountPostState::new(config_account),
-            // Claimed on first use: the authority's own signature bumps its
-            // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
-        ],
+        vec![config_post, authority.account],
     )
     .write();
 }
@@ -204,11 +200,12 @@ fn renounce_authority(
 /// Replaces the authorized sources, if the config names an authority and that
 /// account authorized this transaction.
 fn update_sources(
-    self_program_id: lee_core::program::ProgramId,
-    caller_program_id: Option<lee_core::program::ProgramId>,
+    self_program_id: ProgramId,
+    caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
-    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+    sources: Vec<([u8; 32], ProgramId)>,
+    authority_seed: Option<PdaSeed>,
 ) {
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
@@ -220,7 +217,7 @@ fn update_sources(
         config_account_id(self_program_id),
         "first account must be the wrapped-token config PDA"
     );
-    let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data)
+    let mut cfg = WrappedTokenConfig::from_bytes(config_meta.account.data(self_program_id))
         .expect("config account holds a wrapped-token config");
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
@@ -239,21 +236,14 @@ fn update_sources(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
-    // Claims apply after post-state validation, so a first use must find the
-    // account untouched; an unowned account with history is refused for good.
     assert!(
-        authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
-        "the authority account must be untouched before its first use as one"
-    );
-    assert!(
-        authority.is_authorized,
+        authority_acts(&authority, caller_program_id, authority_seed),
         "the configured authority must authorize a source change"
     );
 
     cfg.sources = sources;
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
+    let mut config_post = config.account.clone();
+    config_post.slot_mut(self_program_id).data = cfg
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
@@ -263,12 +253,7 @@ fn update_sources(
         caller_program_id,
         instruction_data,
         vec![config, authority.clone()],
-        vec![
-            AccountPostState::new(config_account),
-            // Claimed on first use: the authority's own signature bumps its
-            // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
-        ],
+        vec![config_post, authority.account],
     )
     .write();
 }
@@ -276,8 +261,8 @@ fn update_sources(
 /// Writes the minter and the authorized peer sources into the config PDA exactly
 /// once at genesis.
 fn init_config(
-    self_program_id: lee_core::program::ProgramId,
-    caller_program_id: Option<lee_core::program::ProgramId>,
+    self_program_id: ProgramId,
+    caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     config_value: &WrappedTokenConfig,
@@ -295,32 +280,24 @@ fn init_config(
         config_account_id(self_program_id),
         "account must be the wrapped-token config PDA"
     );
-    // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned config must already hold exactly this minter (the
-    // genesis block is replayed onto seeded state during multi-sequencer
-    // reconstruction), otherwise reject a post-genesis attempt to set a different
-    // minter. `new_claimed_if_default` alone would not stop the owning program from
-    // rewriting its own config data on a later call.
-    if config.account != Account::default() {
+    // Init-once, idempotent under genesis replay: an account this program has not
+    // written is a first init; an already-written one must already hold exactly
+    // this config (the genesis block is replayed onto seeded state during
+    // multi-sequencer reconstruction), otherwise reject a post-genesis attempt to
+    // set a different minter.
+    if let Some(slot) = config.account.slot(self_program_id) {
         assert_eq!(
-            config.account.program_owner,
-            self_program_id.into(),
-            "wrapped-token config PDA is owned by another program"
-        );
-        assert_eq!(
-            *config.account.data,
+            *slot.data,
             config_value.to_bytes(),
             "wrapped-token config already initialized differently"
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = config_value
+    let mut config_post = config.account.clone();
+    config_post.slot_mut(self_program_id).data = config_value
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
 
     ProgramOutput::new(
         self_program_id,

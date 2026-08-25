@@ -22,18 +22,24 @@ pub enum ReceiverInstruction {
     /// the record PDA.
     Record { payload: Vec<u8> },
     /// Pins the deliverer and the peer sources it may deliver from, written once
-    /// into a default config PDA at genesis. A re-run holding anything different
-    /// is refused; an identical one is a no-op, which is what genesis replay does.
+    /// into a config PDA this program has not yet written at genesis. A re-run
+    /// holding anything different is refused; an identical one is a no-op, which
+    /// is what genesis replay does.
     ///
     /// Required accounts (1): the receiver config PDA.
     InitConfig(ReceiverConfig),
     /// Replaces the authorized sources. Refused unless the config names an
-    /// authority and that account authorized the transaction.
+    /// authority and that account authorized the transaction, or
+    /// `authority_seed` derives it as the calling program's PDA.
     ///
     /// Required accounts (2): the config PDA, then the authority account.
-    UpdateSources { sources: Vec<(ZoneId, ProgramId)> },
+    UpdateSources {
+        sources: Vec<(ZoneId, ProgramId)>,
+        authority_seed: Option<PdaSeed>,
+    },
     /// Gives up the authority, leaving the source list fixed for good. Refused
-    /// unless the config names an authority and that account authorized it.
+    /// unless the config names an authority and that account authorized it, or
+    /// `authority_seed` derives it as the calling program's PDA.
     ///
     /// Renounce only, never reassign. A leaked key that could rotate would move
     /// the authority to the attacker and lock the real holder out permanently;
@@ -41,7 +47,7 @@ pub enum ReceiverInstruction {
     /// which is what a config with no authority does anyway.
     ///
     /// Required accounts (2): the config PDA, then the authority account.
-    RenounceAuthority,
+    RenounceAuthority { authority_seed: Option<PdaSeed> },
 }
 
 /// Who may deliver to this receiver, and which peer sources they may deliver from.
@@ -93,9 +99,9 @@ pub enum SenderInstruction {
         payload: Vec<u8>,
         ordinal: u32,
     },
-    /// Pins the outbox program, written once into a default config PDA at
-    /// genesis. A re-run naming a different outbox is refused; an identical one
-    /// is a no-op, which is what genesis replay does.
+    /// Pins the outbox program, written once into a config PDA this program has
+    /// not yet written at genesis. A re-run naming a different outbox is refused;
+    /// an identical one is a no-op, which is what genesis replay does.
     ///
     /// Required accounts (1): the sender config PDA.
     InitConfig { outbox_program_id: ProgramId },
@@ -107,7 +113,7 @@ pub fn ping_record_pda(receiver_id: ProgramId) -> AccountId {
     AccountId::for_public_pda(&receiver_id, &ping_record_seed())
 }
 
-/// Seed of the record PDA, exposed so the guest can claim the account.
+/// Seed of the record PDA.
 #[must_use]
 pub const fn ping_record_seed() -> PdaSeed {
     PdaSeed::new(PING_RECORD_SEED)

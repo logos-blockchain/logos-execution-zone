@@ -78,10 +78,8 @@ pub struct CrossZoneConfig {
     /// target, including the ones that mint, and whoever holds it can authorize
     /// a source, so its compromise is theft rather than delay.
     ///
-    /// Must be a fresh, never-used account: the first use has the target claim
-    /// it, renouncing seizes it the same way, whichever target acts first owns
-    /// it, and anything sent to it is frozen for good. An `AccountId` rather
-    /// than a key so a governance program's PDA can hold it later.
+    /// An `AccountId` rather than a key so a governance program's PDA can hold
+    /// it later.
     #[serde(default)]
     pub source_authority: Option<AccountId>,
     /// Program allowed to act on the source authority's behalf through a chained
@@ -228,8 +226,8 @@ pub enum Instruction {
     /// Delivers a finalized peer message to its target program.
     Dispatch(CrossZoneMessage),
     /// Initializes the inbox config account at genesis. Written once, into a
-    /// default (unclaimed) config PDA; the guest refuses a non-default pre-state,
-    /// so it cannot be re-run to overwrite the allowlists.
+    /// config PDA this program has not yet written; the guest refuses a
+    /// differing pre-state, so it cannot be re-run to overwrite the config.
     InitConfig(InboxConfig),
 }
 
@@ -260,8 +258,7 @@ pub fn inbox_config_account_id(inbox_id: ProgramId) -> AccountId {
     AccountId::for_public_pda(&inbox_id, &inbox_config_seed())
 }
 
-/// Seed of the config PDA, exposed so the guest can claim the account when it
-/// initializes the config at genesis.
+/// Seed of the config PDA.
 #[must_use]
 pub const fn inbox_config_seed() -> PdaSeed {
     PdaSeed::new(INBOX_CONFIG_SEED)
@@ -277,7 +274,7 @@ pub fn inbox_seen_shard_account_id(
     AccountId::for_public_pda(&inbox_id, &inbox_seen_shard_seed(src_zone, src_block_id))
 }
 
-/// Seed of the seen-shard PDA, exposed so the guest can claim the account.
+/// Seed of the seen-shard PDA.
 ///
 /// One shard per peer block, so a peer cannot accumulate deliveries from many
 /// blocks into one account.
