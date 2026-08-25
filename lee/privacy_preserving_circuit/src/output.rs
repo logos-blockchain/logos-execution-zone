@@ -15,7 +15,7 @@ pub fn compute_circuit_output(
     account_identities: &[InputAccountIdentity],
     dummy_inputs: Vec<DummyInput>,
 ) -> PrivacyPreservingCircuitOutput {
-    let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
+    let (block_validity_window, timestamp_validity_window, states_iter) =
         execution_state.into_parts();
     let mut output = PrivacyPreservingCircuitOutput {
         public_actions: Vec::new(),
@@ -30,9 +30,7 @@ pub fn compute_circuit_output(
         "Invalid account_identities length"
     );
 
-    for (pos, (account_identity, (pre_state, post_state))) in
-        account_identities.iter().zip(states_iter).enumerate()
-    {
+    for (account_identity, (pre_state, post_state)) in account_identities.iter().zip(states_iter) {
         match account_identity {
             InputAccountIdentity::Public => {
                 output.public_actions.push(PublicAction {
@@ -57,12 +55,10 @@ pub fn compute_circuit_output(
                         assert_eq!(derived, pre_state.account_id, "AccountId mismatch");
                         derived
                     }
-                    // The npk-to-account_id binding is established upstream in
-                    // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
-                    // match. Here we only enforce the lifecycle pre-conditions. The supplied npk
-                    // on the witness has been recorded into `private_pda_by_position` and used
-                    // for the binding check; we use `pre_state.account_id` directly for nullifier
-                    // and commitment derivation.
+                    // The npk-to-account_id binding is proven upstream in
+                    // `validate_and_sync_states`, at the account's first sight, against the
+                    // witness. Here we only enforce the lifecycle pre-conditions and use
+                    // `pre_state.account_id` directly for nullifier and commitment derivation.
                     WitnessKind::Pda { .. } => pre_state.account_id,
                 };
 
@@ -128,16 +124,13 @@ pub fn compute_circuit_output(
 
                 let account_kind = match kind {
                     WitnessKind::Regular { .. } => PrivateAccountKind::Regular(*identifier),
-                    WitnessKind::Pda { .. } => {
-                        let (authority_program_id, seed) = pda_seed_by_position
-                            .get(&pos)
-                            .expect("private PDA position must be in pda_seed_by_position");
-                        PrivateAccountKind::Pda {
-                            program_id: *authority_program_id,
-                            seed: *seed,
-                            identifier: *identifier,
-                        }
-                    }
+                    WitnessKind::Pda {
+                        binding: (program_id, seed),
+                    } => PrivateAccountKind::Pda {
+                        program_id: *program_id,
+                        seed: *seed,
+                        identifier: *identifier,
+                    },
                 };
 
                 emit_private_output(
