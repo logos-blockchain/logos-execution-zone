@@ -1,13 +1,14 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     convert::Infallible,
 };
 
 use lee_core::{
-    InputAccountIdentity, PrivateWitness, WitnessKind,
+    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata},
+    encryption::ViewingPublicKey,
     program::{
-        BlockValidityWindow, CallerData, ChainedCall, MAX_NUMBER_CHAINED_CALLS, ProgramId,
+        BlockValidityWindow, CallerData, ChainedCall, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId,
         ProgramOutput, TimestampValidityWindow, validate_execution,
     },
 };
@@ -22,6 +23,12 @@ pub struct ExecutionState {
     /// Accounts declared authorized at their first sight, anywhere in the call tree.
     /// Authorization is monotone: they remain authorized throughout all calls.
     globally_authorized: HashSet<AccountId>,
+    /// The private-PDA keys supplied at each account's first sight, so a caller's seeds can be
+    /// re-matched against the private derivation on later calls.
+    private_pda_keys: HashMap<AccountId, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
+    /// Across the whole transaction each `(program, seed)` resolves to at most one account, so
+    /// one delegated seed cannot authorize several members of the same PDA family.
+    pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
 }
 
 impl ExecutionState {
@@ -66,6 +73,8 @@ impl ExecutionState {
             block_validity_window,
             timestamp_validity_window,
             globally_authorized: HashSet::new(),
+            private_pda_keys: HashMap::new(),
+            pda_family_binding: HashMap::new(),
         };
 
         let Some(first_output) = program_outputs.first() else {
@@ -76,6 +85,7 @@ impl ExecutionState {
             program_id,
             instruction_data: first_output.instruction_data.clone(),
             pre_states: first_output.pre_states.clone(),
+            pda_seeds: Vec::new(),
         };
         let initial_caller_data = CallerData {
             program_id: None,
@@ -143,6 +153,7 @@ impl ExecutionState {
             let authorized_accounts = execution_state.validate_and_sync_states(
                 account_identities,
                 caller_data,
+                &chained_call.pda_seeds,
                 program_output.pre_states,
                 program_output.post_states,
             );
@@ -178,6 +189,7 @@ impl ExecutionState {
         &mut self,
         account_identities: &[InputAccountIdentity],
         caller: CallerData,
+        caller_pda_seeds: &[PdaSeed],
         output_pre_states: Vec<AccountWithMetadata>,
         output_post_states: Vec<Account>,
     ) -> HashSet<AccountId> {
@@ -193,6 +205,26 @@ impl ExecutionState {
             if !seen_in_frame.insert(pre_account_id) {
                 continue;
             }
+            // A caller may delegate its own PDAs to this callee by seed. That is the only way
+            // a keyless address can be authorized, in either form.
+            let seed_granted =
+                |keys: Option<&(NullifierPublicKey, ViewingPublicKey, Identifier)>| {
+                    let caller_program_id = caller.program_id?;
+                    caller_pda_seeds.iter().find_map(|seed| {
+                        let derived = match keys {
+                            Some((npk, vpk, identifier)) => AccountId::for_private_pda(
+                                &caller_program_id,
+                                seed,
+                                npk,
+                                vpk,
+                                *identifier,
+                            ),
+                            None => AccountId::for_public_pda(&caller_program_id, seed),
+                        };
+                        (derived == pre_account_id).then_some((caller_program_id, *seed))
+                    })
+                };
+
             if let Some(known_post) = self.post_states.get(&pre_account_id) {
                 // Ensure that new pre state is the same as known post state
                 assert_eq!(
@@ -200,7 +232,17 @@ impl ExecutionState {
                     "Inconsistent pre state for account {pre_account_id}",
                 );
 
-                let is_authorized = self.globally_authorized.contains(&pre_account_id)
+                let granted = seed_granted(self.private_pda_keys.get(&pre_account_id));
+                if let Some((program_id, seed)) = granted {
+                    assert_family_binding(
+                        &mut self.pda_family_binding,
+                        program_id,
+                        seed,
+                        pre_account_id,
+                    );
+                }
+                let is_authorized = granted.is_some()
+                    || self.globally_authorized.contains(&pre_account_id)
                     || caller.authorized_accounts.contains(&pre_account_id);
                 assert_eq!(
                     pre_is_authorized, is_authorized,
@@ -209,6 +251,7 @@ impl ExecutionState {
             } else {
                 // Pre state for the initial call
                 let pre_state_position = self.pre_states.len();
+                let mut journal_pre = pre.clone();
                 match account_identities.get(pre_state_position) {
                     Some(InputAccountIdentity::Private(PrivateWitness {
                         vpk,
@@ -222,31 +265,61 @@ impl ExecutionState {
                     })) => {
                         // The witness is the only link between the supplied npk and the
                         // address, so it is proven here, once, at first sight.
+                        let keys = (nullifier.npk(), vpk.clone(), *identifier);
                         assert_eq!(
                             pre_account_id,
                             AccountId::for_private_pda(
                                 authority_program_id,
                                 seed,
-                                &nullifier.npk(),
-                                vpk,
-                                *identifier,
+                                &keys.0,
+                                &keys.1,
+                                keys.2,
                             ),
                             "Private PDA at position {pre_state_position} does not match its witness binding"
                         );
-                        // A PDA is rooted in a derivation, not in a credential: nothing
-                        // could discharge such a declaration, here or at the verifier.
-                        assert!(
-                            !pre_is_authorized,
-                            "Private PDA {pre_account_id} cannot be authorized"
+                        let granted = seed_granted(Some(&keys));
+                        if let Some((granting_program, granting_seed)) = granted {
+                            assert_family_binding(
+                                &mut self.pda_family_binding,
+                                granting_program,
+                                granting_seed,
+                                pre_account_id,
+                            );
+                        }
+                        assert_eq!(
+                            pre_is_authorized,
+                            granted.is_some(),
+                            "Inconsistent authorization for private PDA {pre_account_id}"
                         );
+                        self.private_pda_keys.insert(pre_account_id, keys);
                     }
                     _ => {
-                        if pre_is_authorized {
-                            self.globally_authorized.insert(pre_account_id);
+                        match seed_granted(None) {
+                            Some((program_id, seed)) => {
+                                assert!(
+                                    pre_is_authorized,
+                                    "Caller-seeded public PDA must be declared authorized at first sight: {pre_account_id}"
+                                );
+                                assert_family_binding(
+                                    &mut self.pda_family_binding,
+                                    program_id,
+                                    seed,
+                                    pre_account_id,
+                                );
+                                // The verifier re-derives a public account's authorization from
+                                // the signer set, where a keyless PDA can never appear, so the
+                                // journal must report the credential it has, not the grant.
+                                journal_pre.is_authorized = false;
+                            }
+                            None => {
+                                if pre_is_authorized {
+                                    self.globally_authorized.insert(pre_account_id);
+                                }
+                            }
                         }
                     }
                 }
-                self.pre_states.push(pre.clone());
+                self.pre_states.push(journal_pre);
             }
 
             // If an account it authorized, push it to the autorized set.
@@ -288,5 +361,26 @@ impl ExecutionState {
             timestamp_validity_window,
             states_iter,
         )
+    }
+}
+
+fn assert_family_binding(
+    bindings: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
+    program_id: ProgramId,
+    seed: PdaSeed,
+    account_id: AccountId,
+) {
+    match bindings.entry((program_id, seed)) {
+        Entry::Vacant(e) => {
+            e.insert(account_id);
+        }
+        Entry::Occupied(e) => {
+            assert_eq!(
+                *e.get(),
+                account_id,
+                "Two different accounts resolved under the same (program, seed) in one transaction: existing {}, new {account_id}",
+                e.get()
+            );
+        }
     }
 }

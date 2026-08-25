@@ -100,6 +100,7 @@ pub fn execute_and_prove_with_padded_inputs(
         program_id: initial_program.id(),
         instruction_data,
         pre_states,
+        pda_seeds: vec![],
     };
 
     let mut chained_calls = VecDeque::from_iter([(initial_call, initial_program, None)]);

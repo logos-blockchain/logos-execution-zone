@@ -250,6 +250,10 @@ pub struct ChainedCall {
     pub pre_states: Vec<AccountWithMetadata>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
+    /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
+    /// mutate the `AccountId` derived from `(caller_program_id, seed)`, regardless of
+    /// whether the account is public or private.
+    pub pda_seeds: Vec<PdaSeed>,
 }
 
 impl ChainedCall {
@@ -264,7 +268,14 @@ impl ChainedCall {
             pre_states,
             instruction_data: borsh::to_vec(instruction)
                 .expect("borsh serialization is infallible"),
+            pda_seeds: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_pda_seeds(mut self, pda_seeds: Vec<PdaSeed>) -> Self {
+        self.pda_seeds = pda_seeds;
+        self
     }
 }
 
@@ -552,6 +563,26 @@ pub enum ExecutionValidationError {
         total_balance_pre_states: WrappedBalanceSum,
         total_balance_post_states: WrappedBalanceSum,
     },
+}
+
+/// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
+///
+/// Returns only public-form derivations, suitable for contexts where all accounts are public
+/// (e.g. the public-execution path). The privacy circuit must additionally check each private
+/// `pre_state` against [`AccountId::for_private_pda`] with the supplied npk for that
+/// `pre_state`.
+#[must_use]
+pub fn compute_public_authorized_pdas(
+    caller_program_id: Option<ProgramId>,
+    pda_seeds: &[PdaSeed],
+) -> HashSet<AccountId> {
+    let Some(caller) = caller_program_id else {
+        return HashSet::new();
+    };
+    pda_seeds
+        .iter()
+        .map(|seed| AccountId::for_public_pda(&caller, seed))
+        .collect()
 }
 
 /// Reads first 4 bytes indicating the length in bytes of the program input bytes.

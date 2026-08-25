@@ -7,7 +7,7 @@ use std::{
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
-    program::{CallerData, ChainedCall, validate_execution},
+    program::{CallerData, ChainedCall, compute_public_authorized_pdas, validate_execution},
 };
 use log::debug;
 
@@ -91,6 +91,7 @@ impl ValidatedStateDiff {
             program_id: message.program_id,
             instruction_data: message.instruction_data.clone(),
             pre_states: input_pre_states,
+            pda_seeds: vec![],
         };
 
         let initial_caller_data = CallerData {
@@ -128,8 +129,15 @@ impl ValidatedStateDiff {
                 chained_call.program_id, program_output
             );
 
-            let is_authorized =
-                |account_id: &AccountId| caller_data.authorized_accounts.contains(account_id);
+            let authorized_pdas =
+                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
+
+            // Account is authorized if it is either in the caller's authorized accounts or in the
+            // list of PDAs the caller has authorized.
+            let is_authorized = |account_id: &AccountId| {
+                authorized_pdas.contains(account_id)
+                    || caller_data.authorized_accounts.contains(account_id)
+            };
 
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
