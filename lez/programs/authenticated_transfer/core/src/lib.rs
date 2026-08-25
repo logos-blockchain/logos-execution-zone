@@ -1,9 +1,9 @@
 //! Core data structures for the Authenticated Transfer Program.
 
-use serde::{Deserialize, Serialize};
+use borsh::{BorshDeserialize, BorshSerialize};
 
 /// Instruction type for the Authenticated Transfer program.
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Transfer `amount` of native balance from sender to recipient.
     ///

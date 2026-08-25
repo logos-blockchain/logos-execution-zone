@@ -1,6 +1,6 @@
 use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
 
-/// Instruction: (`auth_transfer_id`, `amount`) — both primitive, safe for `risc0_zkvm::serde`.
+/// Instruction: (`auth_transfer_id`, `amount`) — both primitive, borsh-encoded.
 type Instruction = (ProgramId, u128);
 
 fn main() {
@@ -11,7 +11,7 @@ fn main() {
             pre_states,
             instruction: (simple_transfer_id, amount),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     // Output empty pre/post states. P2 processes no accounts itself, so the
@@ -22,13 +22,12 @@ fn main() {
     // chained_call.pre_states (this call's inputs, set by P1), which contains
     // victim(is_authorized=true). So authorized_accounts = {victim}, and the
     // subsequent check passes.
-    let auth_transfer_instruction =
-        risc0_zkvm::serde::to_vec(&amount).expect("serialization is infallible");
+    let auth_transfer_instruction = borsh::to_vec(&amount).expect("serialization is infallible");
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![],
         vec![],
     )
