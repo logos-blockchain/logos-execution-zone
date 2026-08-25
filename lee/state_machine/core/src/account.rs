@@ -88,8 +88,8 @@ impl BorshDeserialize for Nonce {
 
 pub type Balance = u128;
 
-/// A single program's namespace inside an account. Every program may read every slot, but
-/// may write only its own.
+/// A single program's namespace inside an account. Every program may read every slot,
+/// may write only its own, and may credit balance to any.
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]

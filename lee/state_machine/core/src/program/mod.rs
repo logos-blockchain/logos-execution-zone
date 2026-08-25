@@ -537,7 +537,7 @@ pub enum ExecutionValidationError {
     ModifiedNonce { account_id: AccountId },
 
     #[error(
-        "Program {executing_program_id:?} modified a slot it does not own in account {account_id}"
+        "Program {executing_program_id:?} modified data or decreased balance of a foreign slot in account {account_id}"
     )]
     ForeignSlotModified {
         account_id: AccountId,
@@ -649,22 +649,22 @@ pub fn validate_execution(
             });
         }
 
-        // 4. A program may write only its own slot. Every other slot must survive untouched.
-        //    `BTreeMap` iterates in key order, so comparing the filtered iterators compares
-        //    the foreign slots as sets without cloning any `Data`.
-        let foreign = |account: &Account| {
-            account
-                .slots
-                .iter()
-                .filter(|(program_id, _)| **program_id != executing_program_id)
-                .map(|(program_id, slot)| (*program_id, slot.clone()))
-                .collect::<Vec<_>>()
-        };
-        if foreign(&pre.account) != foreign(post) {
-            return Err(ExecutionValidationError::ForeignSlotModified {
-                account_id: pre.account_id,
-                executing_program_id,
-            });
+        // 4. A program may debit only its own slot: every foreign slot keeps its data and
+        //    may only gain balance. This mirrors the account-level law (credits are
+        //    permissionless, debits need the custodian), transposed to slots.
+        let empty_slot = Slot::default();
+        for program_id in pre.account.slots.keys().chain(post.slots.keys()) {
+            if *program_id == executing_program_id {
+                continue;
+            }
+            let pre_slot = pre.account.slots.get(program_id).unwrap_or(&empty_slot);
+            let post_slot = post.slots.get(program_id).unwrap_or(&empty_slot);
+            if post_slot.data != pre_slot.data || post_slot.balance < pre_slot.balance {
+                return Err(ExecutionValidationError::ForeignSlotModified {
+                    account_id: pre.account_id,
+                    executing_program_id,
+                });
+            }
         }
 
         // 5. An empty slot is never stored, so equal accounts always encode identically.
@@ -675,12 +675,13 @@ pub fn validate_execution(
         }
     }
 
-    // 6. The executing program conserves balance within its own slot. Rule 4 already pins
-    //    every other slot, so no other balance can have moved.
+    // 6. Balance is conserved globally, across all slots of all touched accounts: a debit
+    //    from the executing slot must land as a credit somewhere, and rule 4 admits no
+    //    other decrease.
     let Some(total_balance_pre_states) = WrappedBalanceSum::from_balances(
         pre_states
             .iter()
-            .map(|pre| pre.account.balance(executing_program_id)),
+            .flat_map(|pre| pre.account.slots.values().map(|slot| slot.balance)),
     ) else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
@@ -688,7 +689,7 @@ pub fn validate_execution(
     let Some(total_balance_post_states) = WrappedBalanceSum::from_balances(
         post_states
             .iter()
-            .map(|post| post.balance(executing_program_id)),
+            .flat_map(|post| post.slots.values().map(|slot| slot.balance)),
     ) else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };

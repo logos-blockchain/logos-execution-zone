@@ -398,13 +398,39 @@ fn program_may_not_write_a_foreign_slot() {
 }
 
 #[test]
-fn program_may_not_create_a_foreign_slot() {
+fn program_may_not_create_a_foreign_data_slot() {
     let before = account(&[(P, 10, b"mine")]);
     let after = account(&[(P, 10, b"mine"), (Q, 0, b"squatted")]);
 
     assert!(matches!(
         validate_execution(&[pre(before, 1)], &[after], P),
         Err(ExecutionValidationError::ForeignSlotModified { .. })
+    ));
+}
+
+#[test]
+fn program_may_credit_a_foreign_slot() {
+    let sender = account(&[(P, 100, b"")]);
+    let recipient = Account::default();
+
+    assert!(
+        validate_execution(
+            &[pre(sender, 1), pre(recipient, 2)],
+            &[account(&[(P, 60, b"")]), account(&[(Q, 40, b"")])],
+            P,
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn program_may_not_mint_via_a_foreign_credit() {
+    let before = account(&[(P, 100, b"")]);
+    let after = account(&[(P, 100, b""), (Q, 50, b"")]);
+
+    assert!(matches!(
+        validate_execution(&[pre(before, 1)], &[after], P),
+        Err(ExecutionValidationError::MismatchedTotalBalance { .. })
     ));
 }
 
