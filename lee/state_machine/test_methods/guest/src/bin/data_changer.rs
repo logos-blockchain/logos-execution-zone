@@ -1,4 +1,4 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 type Instruction = Vec<u8>;
 
@@ -20,19 +20,17 @@ fn main() {
 
     let account_pre = &pre.account;
     let mut account_post = account_pre.clone();
-    account_post.data = data
+    account_post.slot_mut(self_program_id).data = data
         .try_into()
         .expect("provided data should fit into data limit");
+    account_post.prune();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![pre],
-        vec![AccountPostState::new_claimed(
-            account_post,
-            Claim::Authorized,
-        )],
+        vec![account_post],
     )
     .write();
 }

@@ -2,7 +2,7 @@ use borsh::to_vec;
 use lee_core::{
     account::AccountWithMetadata,
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
 
@@ -38,7 +38,6 @@ fn main() {
         program_id: transfer_program_id,
         instruction_data: call_instruction_data,
         pre_states: vec![authorised_sender, receiver.clone()],
-        pda_seeds: vec![],
     };
 
     ProgramOutput::new(
@@ -47,8 +46,8 @@ fn main() {
         instruction_data,
         vec![sender.clone(), receiver.clone()],
         vec![
-            AccountPostState::new(sender.account),
-            AccountPostState::new(receiver.account),
+            sender.account,
+            receiver.account,
         ],
     )
     .with_chained_calls(vec![chained_call])

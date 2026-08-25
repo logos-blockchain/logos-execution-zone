@@ -96,14 +96,6 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn program_owner_changer() -> Program {
-        Program::new_unchecked(
-            test_methods::PROGRAM_OWNER_CHANGER_ID,
-            Cow::Borrowed(test_methods::PROGRAM_OWNER_CHANGER_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn data_changer() -> Program {
         Program::new_unchecked(
             test_methods::DATA_CHANGER_ID,
@@ -132,54 +124,6 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::AUTH_ASSERTING_NOOP_ID,
             Cow::Borrowed(test_methods::AUTH_ASSERTING_NOOP_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn private_pda_delegator() -> Program {
-        Program::new_unchecked(
-            test_methods::PRIVATE_PDA_DELEGATOR_ID,
-            Cow::Borrowed(test_methods::PRIVATE_PDA_DELEGATOR_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn selective_pda_delegator() -> Program {
-        Program::new_unchecked(
-            test_methods::SELECTIVE_PDA_DELEGATOR_ID,
-            Cow::Borrowed(test_methods::SELECTIVE_PDA_DELEGATOR_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn undeclaring_pda_delegator() -> Program {
-        Program::new_unchecked(
-            test_methods::UNDECLARING_PDA_DELEGATOR_ID,
-            Cow::Borrowed(test_methods::UNDECLARING_PDA_DELEGATOR_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn non_delegating_forwarder() -> Program {
-        Program::new_unchecked(
-            test_methods::NON_DELEGATING_FORWARDER_ID,
-            Cow::Borrowed(test_methods::NON_DELEGATING_FORWARDER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn pda_claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::PDA_CLAIMER_ID,
-            Cow::Borrowed(test_methods::PDA_CLAIMER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn two_pda_claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::TWO_PDA_CLAIMER_ID,
-            Cow::Borrowed(test_methods::TWO_PDA_CLAIMER_ELF),
         )
     }
 
@@ -253,43 +197,10 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn pda_spend_proxy() -> Program {
-        Program::new_unchecked(
-            test_methods::PDA_SPEND_PROXY_ID,
-            Cow::Borrowed(test_methods::PDA_SPEND_PROXY_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::CLAIMER_ID,
-            Cow::Borrowed(test_methods::CLAIMER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn changer_claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::CHANGER_CLAIMER_ID,
-            Cow::Borrowed(test_methods::CHANGER_CLAIMER_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn validity_window_chain_caller() -> Program {
         Program::new_unchecked(
             test_methods::VALIDITY_WINDOW_CHAIN_CALLER_ID,
             Cow::Borrowed(test_methods::VALIDITY_WINDOW_CHAIN_CALLER_ELF),
-        )
-    }
-
-    #[must_use]
-    #[inline]
-    pub const fn simple_transfer_proxy() -> Program {
-        Program::new_unchecked(
-            test_methods::SIMPLE_TRANSFER_PROXY_ID,
-            Cow::Borrowed(test_methods::SIMPLE_TRANSFER_PROXY_ELF),
         )
     }
 

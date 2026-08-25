@@ -1,4 +1,4 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 type Instruction = u128;
 
@@ -14,15 +14,12 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
-        let account_post =
-            AccountPostState::new_claimed_if_default(account_pre.account, Claim::Authorized);
-
         ProgramOutput::new(
             self_program_id,
             caller_program_id,
             instruction_data,
             pre_states,
-            vec![account_post],
+            vec![account_pre.account],
         )
         .write();
         return;
@@ -32,26 +29,43 @@ fn main() {
         return;
     };
 
-    let mut sender_post = sender_pre.account.clone();
-    let mut receiver_post = receiver_pre.account.clone();
-    sender_post.balance = sender_post
-        .balance
-        .checked_sub(balance)
-        .expect("Not enough balance to transfer");
-    receiver_post.balance = receiver_post
-        .balance
-        .checked_add(balance)
-        .expect("Overflow when adding balance");
+    let debit = |account: &mut lee_core::account::Account| {
+        let slot = account.slot_mut(self_program_id);
+        slot.balance = slot
+            .balance
+            .checked_sub(balance)
+            .expect("Not enough balance to transfer");
+    };
+    let credit = |account: &mut lee_core::account::Account| {
+        let slot = account.slot_mut(self_program_id);
+        slot.balance = slot
+            .balance
+            .checked_add(balance)
+            .expect("Overflow when adding balance");
+    };
+
+    let post_states = if sender_pre.account_id == receiver_pre.account_id {
+        let mut joint = sender_pre.account.clone();
+        debit(&mut joint);
+        credit(&mut joint);
+        joint.prune();
+        vec![joint.clone(), joint]
+    } else {
+        let mut sender_post = sender_pre.account.clone();
+        debit(&mut sender_post);
+        sender_post.prune();
+        let mut receiver_post = receiver_pre.account.clone();
+        credit(&mut receiver_post);
+        receiver_post.prune();
+        vec![sender_post, receiver_post]
+    };
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![sender_pre, receiver_pre],
-        vec![
-            AccountPostState::new_claimed_if_default(sender_post, Claim::Authorized),
-            AccountPostState::new_claimed_if_default(receiver_post, Claim::Authorized),
-        ],
+        post_states,
     )
     .write();
 }

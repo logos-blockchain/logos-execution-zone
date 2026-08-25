@@ -1,9 +1,7 @@
 use borsh::to_vec;
-use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-};
+use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
 
-type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
+type Instruction = (u128, ProgramId, u32);
 
 /// A program that calls another program `num_chain_calls` times.
 /// It permutes the order of the input accounts on the subsequent call
@@ -15,7 +13,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: (balance, simple_transfer_id, num_chain_calls, pda_seed),
+            instruction: (balance, simple_transfer_id, num_chain_calls),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -29,30 +27,28 @@ fn main() {
     let mut running_recipient_pre = recipient_pre.clone();
     let mut running_sender_pre = sender_pre.clone();
 
-    if pda_seed.is_some() {
-        running_sender_pre.is_authorized = true;
-    }
-
     let mut chained_calls = Vec::new();
     for _i in 0..num_chain_calls {
         let new_chained_call = ChainedCall {
             program_id: simple_transfer_id,
             instruction_data: call_instruction_data.clone(),
             pre_states: vec![running_sender_pre.clone(), running_recipient_pre.clone()], /* <- Account order permutation here */
-            pda_seeds: pda_seed.iter().copied().collect(),
         };
         chained_calls.push(new_chained_call);
 
-        running_sender_pre.account.balance =
-            match running_sender_pre.account.balance.checked_sub(balance) {
-                Some(new_balance) => new_balance,
-                None => return,
-            };
-        running_recipient_pre.account.balance =
-            match running_recipient_pre.account.balance.checked_add(balance) {
-                Some(new_balance) => new_balance,
-                None => return,
-            };
+        let sender_slot = running_sender_pre.account.slot_mut(simple_transfer_id);
+        sender_slot.balance = match sender_slot.balance.checked_sub(balance) {
+            Some(new_balance) => new_balance,
+            None => return,
+        };
+        running_sender_pre.account.prune();
+
+        let recipient_slot = running_recipient_pre.account.slot_mut(simple_transfer_id);
+        recipient_slot.balance = match recipient_slot.balance.checked_add(balance) {
+            Some(new_balance) => new_balance,
+            None => return,
+        };
+        running_recipient_pre.account.prune();
     }
 
     ProgramOutput::new(
@@ -61,8 +57,8 @@ fn main() {
         instruction_data,
         vec![sender_pre.clone(), recipient_pre.clone()],
         vec![
-            AccountPostState::new(sender_pre.account),
-            AccountPostState::new(recipient_pre.account),
+            sender_pre.account,
+            recipient_pre.account,
         ],
     )
     .with_chained_calls(chained_calls)

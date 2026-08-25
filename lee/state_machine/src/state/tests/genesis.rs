@@ -6,26 +6,21 @@ fn new_works() {
     let key2 = PrivateKey::try_new([2; 32]).unwrap();
     let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
     let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let native = crate::test_methods::simple_balance_transfer().id();
     let expected_public_state = {
         let mut this = HashMap::new();
         this.insert(
             addr1,
-            Account {
-                balance: 100,
-                ..Account::default()
-            },
+            Account::single(native, 100, Data::default(), Nonce::default()),
         );
         this.insert(
             addr2,
-            Account {
-                balance: 151,
-                ..Account::default()
-            },
+            Account::single(native, 151, Data::default(), Nonce::default()),
         );
         this
     };
-    let state =
-        V03State::new().with_public_account_balances([(addr1, 100_u128), (addr2, 151_u128)]);
+    let state = V03State::new()
+        .with_public_account_balances(native, [(addr1, 100_u128), (addr2, 151_u128)]);
 
     assert_eq!(state.public_state, expected_public_state);
 }
@@ -35,10 +30,12 @@ fn new_includes_nullifiers_for_private_accounts() {
     let keys1 = test_private_account_keys_1();
     let keys2 = test_private_account_keys_2();
 
-    let account = Account {
-        balance: 100,
-        ..Account::default()
-    };
+    let account = Account::single(
+        crate::test_methods::simple_balance_transfer().id(),
+        100,
+        Data::default(),
+        Nonce::default(),
+    );
 
     let account_id1 = AccountId::for_regular_private_account(&keys1.npk(), &keys1.vpk(), 0);
     let account_id2 = AccountId::for_regular_private_account(&keys2.npk(), &keys2.vpk(), 0);
@@ -78,11 +75,12 @@ fn get_account_by_account_id_non_default_account() {
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
     let initial_data = [(
         account_id,
-        Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-            balance: 100,
-            ..Account::default()
-        },
+        Account::single(
+            crate::test_methods::simple_balance_transfer().id(),
+            100,
+            Data::default(),
+            Nonce::default(),
+        ),
     )];
     let state = V03State::new().with_public_accounts(initial_data);
     let expected_account = &state.public_state[&account_id];

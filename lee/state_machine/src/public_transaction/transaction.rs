@@ -82,7 +82,10 @@ pub mod tests {
         let (_, _, addr1, addr2) = keys_for_tests();
         let initial_data = [(addr1, 10000), (addr2, 20000)];
         V03State::new()
-            .with_public_account_balances(initial_data)
+            .with_public_account_balances(
+                crate::test_methods::simple_balance_transfer().id(),
+                initial_data,
+            )
             .with_programs([crate::test_methods::simple_balance_transfer()])
     }
 

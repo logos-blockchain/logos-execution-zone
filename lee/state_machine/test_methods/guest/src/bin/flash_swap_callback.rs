@@ -25,7 +25,7 @@
 //! if it needs to trust the context it is called from.
 
 use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -57,18 +57,13 @@ fn main() {
 
     if instruction.return_funds {
         // Happy path: return the borrowed funds via a token transfer (receiver → vault).
-        // The receiver is a PDA of this callback program (seed = [1_u8; 32]).
-        // Mark the receiver as authorized since it will be PDA-authorized in this chained call.
-        let mut receiver_authorized = receiver_pre.clone();
-        receiver_authorized.is_authorized = true;
         let transfer_instruction =
             borsh::to_vec(&instruction.amount).expect("transfer instruction serialization");
 
         chained_calls.push(ChainedCall {
             program_id: instruction.token_program_id,
-            pre_states: vec![receiver_authorized, vault_pre.clone()],
+            pre_states: vec![receiver_pre.clone(), vault_pre.clone()],
             instruction_data: transfer_instruction,
-            pda_seeds: vec![PdaSeed::new([1_u8; 32])],
         });
     }
     // Malicious path (return_funds = false): emit no chained calls.
@@ -83,8 +78,8 @@ fn main() {
         instruction_data,
         vec![vault_pre.clone(), receiver_pre.clone()],
         vec![
-            AccountPostState::new(vault_pre.account),
-            AccountPostState::new(receiver_pre.account),
+            vault_pre.account,
+            receiver_pre.account,
         ],
     )
     .with_chained_calls(chained_calls)

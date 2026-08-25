@@ -5,12 +5,12 @@
 
 use lee_core::{
     account::{Account, AccountWithMetadata},
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
+    program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 /// Initializes a default account under the ownership of this program.
 /// This is achieved by a noop.
-fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
+fn initialize_account(pre_state: AccountWithMetadata) -> Account {
     let account_to_claim = pre_state.account;
     let is_authorized = pre_state.is_authorized;
 
@@ -23,7 +23,7 @@ fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
     // Continue only if the owner authorized this operation
     assert!(is_authorized, "Missing required authorization");
 
-    AccountPostState::new(account_to_claim)
+    account_to_claim
 }
 
 /// Transfers `balance_to_move` native balance from `sender` to `recipient`.
@@ -31,7 +31,8 @@ fn transfer(
     sender: AccountWithMetadata,
     recipient: AccountWithMetadata,
     balance_to_move: u128,
-) -> Vec<AccountPostState> {
+    self_program_id: ProgramId,
+) -> Vec<Account> {
     // Continue only if the sender has authorized this operation
     assert!(sender.is_authorized, "Missing required authorization");
 
@@ -49,12 +50,12 @@ fn transfer(
     let mut sender_post = sender.account;
     let mut recipient_post = recipient.account;
 
-    sender_post.balance -= balance_to_move + malicious_offset;
-    recipient_post.balance += balance_to_move + malicious_offset;
+    sender_post.slot_mut(self_program_id).balance -= balance_to_move + malicious_offset;
+    recipient_post.slot_mut(self_program_id).balance += balance_to_move + malicious_offset;
 
     vec![
-        AccountPostState::new(sender_post),
-        AccountPostState::new(recipient_post),
+        sender_post,
+        recipient_post,
     ]
 }
 
@@ -78,7 +79,12 @@ fn main() {
             vec![post]
         }
         ([sender, recipient], balance_to_move) => {
-            transfer(sender.clone(), recipient.clone(), balance_to_move)
+            transfer(
+                sender.clone(),
+                recipient.clone(),
+                balance_to_move,
+                self_program_id,
+            )
         }
         _ => panic!("invalid params"),
     };

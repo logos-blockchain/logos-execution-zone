@@ -1,6 +1,6 @@
 use lee_core::{
     account::Account,
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
+    program::{ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 type Instruction = ();
@@ -28,8 +28,8 @@ fn main() {
         instruction_data,
         vec![pre],
         vec![
-            AccountPostState::new(account_pre),
-            AccountPostState::new(Account::default()),
+            account_pre,
+            Account::default(),
         ],
     )
     .write();

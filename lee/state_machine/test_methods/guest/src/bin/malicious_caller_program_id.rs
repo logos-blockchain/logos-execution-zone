@@ -1,5 +1,5 @@
 use lee_core::program::{
-    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
+    DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 type Instruction = ();
@@ -17,7 +17,7 @@ fn main() {
 
     let post_states = pre_states
         .iter()
-        .map(|a| AccountPostState::new(a.account.clone()))
+        .map(|a| a.account.clone())
         .collect();
 
     // Deliberately output wrong caller_program_id.

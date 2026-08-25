@@ -38,7 +38,7 @@
 //! - `flash_swap_standalone_invariant_check_rejected`: `caller_program_id` access control
 
 use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -64,7 +64,10 @@ pub enum FlashSwapInstruction {
     /// This is enforced by checking `caller_program_id == Some(self_program_id)`.
     /// Any attempt to call this instruction as a standalone top-level transaction
     /// will be rejected because `caller_program_id` will be `None`.
-    InvariantCheck { min_vault_balance: u128 },
+    InvariantCheck {
+        token_program_id: ProgramId,
+        min_vault_balance: u128,
+    },
 }
 
 fn main() {
@@ -90,43 +93,47 @@ fn main() {
             };
 
             // Capture initial vault balance, the invariant check will verify it is restored.
-            let min_vault_balance = vault_pre.account.balance;
+            let min_vault_balance = vault_pre.account.balance(token_program_id);
 
             // Compute intermediate account states from pre_states and amount_out.
             let mut vault_after_transfer = vault_pre.clone();
-            vault_after_transfer.account.balance = vault_pre
+            vault_after_transfer
                 .account
-                .balance
+                .slot_mut(token_program_id)
+                .balance = min_vault_balance
                 .checked_sub(amount_out)
                 .expect("vault has insufficient balance for flash swap");
+            vault_after_transfer.account.prune();
 
             let mut receiver_after_transfer = receiver_pre.clone();
-            receiver_after_transfer.account.balance = receiver_pre
+            receiver_after_transfer
                 .account
-                .balance
+                .slot_mut(token_program_id)
+                .balance = receiver_pre
+                .account
+                .balance(token_program_id)
                 .checked_add(amount_out)
                 .expect("receiver balance overflow");
+            receiver_after_transfer.account.prune();
 
             let mut vault_after_callback = vault_after_transfer.clone();
-            vault_after_callback.account.balance = vault_after_transfer
+            vault_after_callback
                 .account
-                .balance
+                .slot_mut(token_program_id)
+                .balance = vault_after_transfer
+                .account
+                .balance(token_program_id)
                 .checked_add(amount_out)
                 .expect("vault balance overflow after callback");
+            vault_after_callback.account.prune();
 
             // Chained call 1: Token transfer (vault → receiver).
-            // The vault is a PDA of this initiator program (seed = [0_u8; 32]), so we provide
-            // the PDA seed to authorize the token program to debit the vault on our behalf.
-            // Mark the vault as authorized since it will be PDA-authorized in this chained call.
-            let mut vault_authorized = vault_pre.clone();
-            vault_authorized.is_authorized = true;
             let transfer_instruction =
                 borsh::to_vec(&amount_out).expect("transfer instruction serialization");
             let call_1 = ChainedCall {
                 program_id: token_program_id,
-                pre_states: vec![vault_authorized, receiver_pre.clone()],
+                pre_states: vec![vault_pre.clone(), receiver_pre.clone()],
                 instruction_data: transfer_instruction,
-                pda_seeds: vec![PdaSeed::new([0_u8; 32])],
             };
 
             // Chained call 2: User callback.
@@ -136,7 +143,6 @@ fn main() {
                 program_id: callback_program_id,
                 pre_states: vec![vault_after_transfer, receiver_after_transfer],
                 instruction_data: callback_instruction_data,
-                pda_seeds: vec![],
             };
 
             // Chained call 3: Self-call to enforce the invariant.
@@ -146,13 +152,15 @@ fn main() {
             // min_vault_balance and this call will panic, rolling back the entire
             // transaction.
             let invariant_instruction =
-                borsh::to_vec(&FlashSwapInstruction::InvariantCheck { min_vault_balance })
-                    .expect("invariant instruction serialization");
+                borsh::to_vec(&FlashSwapInstruction::InvariantCheck {
+                    token_program_id,
+                    min_vault_balance,
+                })
+                .expect("invariant instruction serialization");
             let call_3 = ChainedCall {
                 program_id: self_program_id, // self-referential chained call
                 pre_states: vec![vault_after_callback],
                 instruction_data: invariant_instruction,
-                pda_seeds: vec![],
             };
 
             // The initiator itself makes no direct state changes.
@@ -163,15 +171,18 @@ fn main() {
                 instruction_data,
                 vec![vault_pre.clone(), receiver_pre.clone()],
                 vec![
-                    AccountPostState::new(vault_pre.account),
-                    AccountPostState::new(receiver_pre.account),
+                    vault_pre.account,
+                    receiver_pre.account,
                 ],
             )
             .with_chained_calls(vec![call_1, call_2, call_3])
             .write();
         }
 
-        FlashSwapInstruction::InvariantCheck { min_vault_balance } => {
+        FlashSwapInstruction::InvariantCheck {
+            token_program_id,
+            min_vault_balance,
+        } => {
             // Visibility enforcement: `InvariantCheck` is an internal instruction.
             // It must only be called as a chained call from this program itself (via `Initiate`).
             // When called as a top-level transaction, `caller_program_id` is `None` → panics.
@@ -192,9 +203,9 @@ fn main() {
             // If the callback returned funds, this passes. If not, this panics and
             // the entire transaction (including the prior token transfer) rolls back.
             assert!(
-                vault.account.balance >= min_vault_balance,
+                vault.account.balance(token_program_id) >= min_vault_balance,
                 "Flash swap invariant violated: vault balance {} < minimum {}",
-                vault.account.balance,
+                vault.account.balance(token_program_id),
                 min_vault_balance
             );
 
@@ -204,7 +215,7 @@ fn main() {
                 caller_program_id,
                 instruction_data,
                 vec![vault.clone()],
-                vec![AccountPostState::new(vault.account)],
+                vec![vault.account],
             )
             .write();
         }

@@ -1,6 +1,6 @@
 use borsh::to_vec;
 use lee_core::program::{
-    AccountPostState, BlockValidityWindow, ChainedCall, ProgramId, ProgramInput, ProgramOutput,
+    BlockValidityWindow, ChainedCall, ProgramId, ProgramInput, ProgramOutput,
     TimestampValidityWindow, read_lee_inputs,
 };
 
@@ -36,7 +36,6 @@ fn main() {
         program_id: chained_program_id,
         instruction_data: chained_instruction,
         pre_states,
-        pda_seeds: vec![],
     };
 
     ProgramOutput::new(
@@ -44,7 +43,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pre],
-        vec![AccountPostState::new(post)],
+        vec![post],
     )
     .with_block_validity_window(block_validity_window)
     .with_chained_calls(vec![chained_call])

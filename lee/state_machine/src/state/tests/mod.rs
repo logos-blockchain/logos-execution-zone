@@ -13,8 +13,7 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
-        BlockValidityWindow, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
-        ProgramId, TimestampValidityWindow, WrappedBalanceSum,
+        BlockValidityWindow, ExecutionValidationError, PdaSeed, ProgramId, TimestampValidityWindow,
     },
 };
 
@@ -32,9 +31,7 @@ use crate::{
 };
 
 mod authenticated_transfer;
-mod changer_claimer;
 mod circuit;
-mod claiming;
 mod flash_swap;
 mod genesis;
 mod privacy_preserving;
@@ -50,14 +47,10 @@ impl V03State {
         self.insert_program(&crate::test_methods::extra_output());
         self.insert_program(&crate::test_methods::missing_output());
         self.insert_program(&crate::test_methods::dropped_account());
-        self.insert_program(&crate::test_methods::program_owner_changer());
         self.insert_program(&crate::test_methods::data_changer());
         self.insert_program(&crate::test_methods::minter());
         self.insert_program(&crate::test_methods::burner());
         self.insert_program(&crate::test_methods::auth_asserting_noop());
-        self.insert_program(&crate::test_methods::private_pda_delegator());
-        self.insert_program(&crate::test_methods::pda_claimer());
-        self.insert_program(&crate::test_methods::two_pda_claimer());
         self.insert_program(&crate::test_methods::noop());
         self.insert_program(&crate::test_methods::chain_caller());
         self.insert_program(&crate::test_methods::modified_transfer_program());
@@ -67,11 +60,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::flash_swap_callback());
         self.insert_program(&crate::test_methods::malicious_self_program_id());
         self.insert_program(&crate::test_methods::malicious_caller_program_id());
-        self.insert_program(&crate::test_methods::pda_spend_proxy());
-        self.insert_program(&crate::test_methods::claimer());
-        self.insert_program(&crate::test_methods::changer_claimer());
         self.insert_program(&crate::test_methods::validity_window_chain_caller());
-        self.insert_program(&crate::test_methods::simple_transfer_proxy());
         self.insert_program(&crate::test_methods::malicious_injector());
         self.insert_program(&crate::test_methods::malicious_launderer());
         self.insert_program(&crate::test_methods::modified_transfer_program());
@@ -79,19 +68,20 @@ impl V03State {
     }
 
     #[must_use]
-    pub fn with_non_default_accounts_but_default_program_owners(mut self) -> Self {
-        let account_with_default_values_except_balance = Account {
-            balance: 100,
-            ..Account::default()
-        };
+    pub fn with_non_default_accounts_but_no_slots(mut self) -> Self {
+        let unrelated = crate::test_methods::noop().id();
+        let account_with_default_values_except_balance =
+            Account::single(unrelated, 100, Data::default(), Nonce::default());
         let account_with_default_values_except_nonce = Account {
             nonce: Nonce(37),
             ..Account::default()
         };
-        let account_with_default_values_except_data = Account {
-            data: vec![0xca, 0xfe].try_into().unwrap(),
-            ..Account::default()
-        };
+        let account_with_default_values_except_data = Account::single(
+            unrelated,
+            0,
+            vec![0xca, 0xfe].try_into().unwrap(),
+            Nonce::default(),
+        );
         self.force_insert_account(
             AccountId::new([255; 32]),
             account_with_default_values_except_balance,
@@ -109,11 +99,12 @@ impl V03State {
 
     #[must_use]
     pub fn with_account_owned_by_burner_program(mut self) -> Self {
-        let account = Account {
-            program_owner: crate::test_methods::burner().id().into(),
-            balance: 100,
-            ..Default::default()
-        };
+        let account = Account::single(
+            crate::test_methods::burner().id(),
+            100,
+            Data::default(),
+            Nonce::default(),
+        );
         self.force_insert_account(AccountId::new([252; 32]), account);
         self
     }
@@ -186,11 +177,12 @@ fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<Acc
         .map(|(account_id, balance)| {
             (
                 account_id,
-                Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+                Account::single(
+                    crate::test_methods::simple_balance_transfer().id(),
                     balance,
-                    ..Account::default()
-                },
+                    Data::default(),
+                    Nonce::default(),
+                ),
             )
         })
         .collect()
@@ -263,7 +255,7 @@ pub fn test_private_account_keys_2() -> TestPrivateKeys {
 pub fn init_pda_witness(
     keys: &TestPrivateKeys,
     identifier: Identifier,
-    binding: Option<(ProgramId, PdaSeed)>,
+    binding: (ProgramId, PdaSeed),
 ) -> InputAccountIdentity {
     InputAccountIdentity::Private(PrivateWitness {
         vpk: keys.vpk(),
@@ -446,12 +438,12 @@ fn deshielded_balance_transfer_for_tests(
 
 fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransaction) {
     let sender_keys = test_private_account_keys_1();
-    let sender_private_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-        balance: 100,
-        nonce: Nonce(0xdead_beef),
-        ..Account::default()
-    };
+    let sender_private_account = Account::single(
+        crate::test_methods::simple_balance_transfer().id(),
+        100,
+        Data::default(),
+        Nonce(0xdead_beef),
+    );
     let recipient_keys = test_private_account_keys_2();
     let state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
     let tx = private_balance_transfer_for_tests(

@@ -1,4 +1,4 @@
-use lee_core::account::{Account, AccountId, AccountWithMetadata};
+use lee_core::account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data};
 use risc0_zkvm::{ExecutorEnv, default_executor};
 
 use crate::program::Program;
@@ -8,32 +8,30 @@ fn program_execution() {
     let program = crate::test_methods::simple_balance_transfer();
     let balance_to_move: u128 = 11_223_344_556_677;
     let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
+    let slot = program.id();
     let sender = AccountWithMetadata::new(
-        Account {
-            balance: 77_665_544_332_211,
-            ..Account::default()
-        },
+        Account::single(slot, 77_665_544_332_211, Data::default(), Nonce::default()),
         true,
         AccountId::new([0; 32]),
     );
     let recipient = AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
 
-    let expected_sender_post = Account {
-        balance: 77_665_544_332_211 - balance_to_move,
-        ..Account::default()
-    };
-    let expected_recipient_post = Account {
-        balance: balance_to_move,
-        ..Account::default()
-    };
+    let expected_sender_post = Account::single(
+        slot,
+        77_665_544_332_211 - balance_to_move,
+        Data::default(),
+        Nonce::default(),
+    );
+    let expected_recipient_post =
+        Account::single(slot, balance_to_move, Data::default(), Nonce::default());
     let program_output = program
         .execute(None, &[sender, recipient], &instruction_data)
         .unwrap();
 
     let [sender_post, recipient_post] = program_output.post_states.try_into().unwrap();
 
-    assert_eq!(sender_post.account(), &expected_sender_post);
-    assert_eq!(recipient_post.account(), &expected_recipient_post);
+    assert_eq!(sender_post, expected_sender_post);
+    assert_eq!(recipient_post, expected_recipient_post);
 }
 
 #[test]
@@ -42,10 +40,7 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
     let instruction_data = Program::serialize_instruction(7_u128).unwrap();
     let pre_states = [
         AccountWithMetadata::new(
-            Account {
-                balance: 10,
-                ..Account::default()
-            },
+            Account::single(program.id(), 10, Data::default(), Nonce::default()),
             true,
             AccountId::new([0; 32]),
         ),

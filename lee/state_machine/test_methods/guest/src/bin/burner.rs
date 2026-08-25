@@ -1,4 +1,4 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 type Instruction = u128;
 
@@ -19,14 +19,16 @@ fn main() {
 
     let account_pre = &pre.account;
     let mut account_post = account_pre.clone();
-    account_post.balance = account_post.balance.saturating_sub(balance_to_burn);
+    let slot = account_post.slot_mut(self_program_id);
+    slot.balance = slot.balance.saturating_sub(balance_to_burn);
+    account_post.prune();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![pre],
-        vec![AccountPostState::new(account_post)],
+        vec![account_post],
     )
     .write();
 }
