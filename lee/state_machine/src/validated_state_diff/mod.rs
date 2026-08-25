@@ -7,10 +7,7 @@ use std::{
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
-    program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
-        validate_execution,
-    },
+    program::{CallerData, ChainedCall, validate_execution},
 };
 use log::debug;
 
@@ -94,7 +91,6 @@ impl ValidatedStateDiff {
             program_id: message.program_id,
             instruction_data: message.instruction_data.clone(),
             pre_states: input_pre_states,
-            pda_seeds: vec![],
         };
 
         let initial_caller_data = CallerData {
@@ -112,19 +108,17 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
-            let Some(program_account) = state.get_program(chained_call.program_id) else {
+            let Some(program_data) = state.get_program(chained_call.program_id) else {
                 return Err(LeeError::InvalidInput("Unknown program".into()));
             };
-            let program = Program::new_unchecked(
-                chained_call.program_id,
-                Cow::Owned(program_account.data.to_vec()),
-            );
+            let program =
+                Program::new_unchecked(chained_call.program_id, Cow::Owned(program_data.to_vec()));
 
             debug!(
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
             );
-            let mut program_output = program.execute(
+            let program_output = program.execute(
                 caller_data.program_id,
                 &chained_call.pre_states,
                 &chained_call.instruction_data,
@@ -134,15 +128,8 @@ impl ValidatedStateDiff {
                 chained_call.program_id, program_output
             );
 
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
-
-            // Account is authorized if it is either in the caller's authorized accounts or in the
-            // list of PDAs the caller has authorized.
-            let is_authorized = |account_id: &AccountId| {
-                authorized_pdas.contains(account_id)
-                    || caller_data.authorized_accounts.contains(account_id)
-            };
+            let is_authorized =
+                |account_id: &AccountId| caller_data.authorized_accounts.contains(account_id);
 
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
@@ -212,52 +199,13 @@ impl ValidatedStateDiff {
                 LeeError::OutOfValidityWindow
             );
 
-            for (i, post) in program_output.post_states.iter_mut().enumerate() {
-                let Some(claim) = post.required_claim() else {
-                    continue;
-                };
-                let pre = &program_output.pre_states[i];
-                let account_id = pre.account_id;
-
-                // The invoked program can only claim accounts with default program id.
-                ensure!(
-                    post.account().program_owner == DEFAULT_PROGRAM_OWNER,
-                    InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
-                );
-
-                match claim {
-                    Claim::Authorized => {
-                        // The program can only claim accounts that were authorized by the signer.
-                        ensure!(
-                            pre.is_authorized,
-                            InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
-                        );
-                    }
-                    Claim::Pda(seed) => {
-                        // The program can only claim accounts that correspond to the PDAs it is
-                        // authorized to claim. The public-execution path only sees public
-                        // accounts, so the public-PDA derivation is the correct formula here.
-                        let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
-                        ensure!(
-                            account_id == pda,
-                            InvalidProgramBehaviorError::MismatchedPdaClaim {
-                                expected: pda,
-                                actual: account_id
-                            }
-                        );
-                    }
-                }
-
-                post.account_mut().program_owner = AccountId::from(chained_call.program_id);
-            }
-
             // Update the state diff
             for (pre, post) in program_output
                 .pre_states
                 .iter()
                 .zip(program_output.post_states.iter())
             {
-                state_diff.insert(pre.account_id, post.account().clone());
+                state_diff.insert(pre.account_id, post.clone());
             }
 
             // Source from `program_output.pre_states`, not `chained_call.pre_states`:
@@ -289,23 +237,6 @@ impl ValidatedStateDiff {
             chain_calls_counter = chain_calls_counter
                 .checked_add(1)
                 .expect("we check the max depth at the beginning of the loop");
-        }
-
-        // Check that all modified uninitialized accounts where claimed
-        for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
-            let pre = state.get_account_by_id(*account_id);
-            if pre.program_owner != DEFAULT_PROGRAM_OWNER {
-                return None;
-            }
-            if pre == *post {
-                return None;
-            }
-            Some((*account_id, post))
-        }) {
-            ensure!(
-                post.program_owner != DEFAULT_PROGRAM_OWNER,
-                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
-            );
         }
 
         // Every account the caller declared as part of the transaction must appear in the final

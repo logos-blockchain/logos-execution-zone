@@ -31,13 +31,13 @@ pub fn pinata_account_id() -> AccountId {
 
 #[must_use]
 pub fn pinata_account() -> Account {
-    Account {
-        program_owner: programs::pinata().id().into(),
-        balance: 1_500_000,
+    Account::single(
+        programs::pinata().id(),
+        1_500_000,
         // Difficulty: 3
-        data: vec![3; 33].try_into().expect("Should fit"),
-        nonce: Nonce::default(),
-    }
+        vec![3; 33].try_into().expect("Should fit"),
+        Nonce::default(),
+    )
 }
 
 #[must_use]
@@ -47,24 +47,17 @@ pub fn faucet_account_id() -> AccountId {
 
 #[must_use]
 pub fn faucet_account() -> Account {
-    Account {
-        program_owner: programs::authenticated_transfer().id().into(),
-        balance: u128::MAX,
-        ..Account::default()
-    }
+    Account::single(
+        programs::faucet().id(),
+        u128::MAX,
+        lee_core::account::Data::default(),
+        Nonce::default(),
+    )
 }
 
 #[must_use]
 pub fn bridge_account_id() -> AccountId {
     bridge_core::compute_bridge_account_id(programs::bridge().id())
-}
-
-#[must_use]
-pub fn bridge_account() -> Account {
-    Account {
-        program_owner: programs::authenticated_transfer().id().into(),
-        ..Account::default()
-    }
 }
 
 #[must_use]
@@ -81,30 +74,32 @@ pub fn sequencer_stake_config_account_id() -> AccountId {
 /// own, is added by replaying a `Stake` transaction, not seeded here.
 #[must_use]
 pub fn sequencer_stake_config_account() -> Account {
-    Account {
-        program_owner: programs::sequencer_stake().id().into(),
-        data: sequencer_stake_core::SequencerStakeConfig {
+    Account::single(
+        programs::sequencer_stake().id(),
+        0,
+        sequencer_stake_core::SequencerStakeConfig {
             minimum_sequencer_stake: DEFAULT_MINIMUM_SEQUENCER_STAKE,
             entries: BTreeMap::new(),
         }
         .to_bytes()
         .try_into()
         .expect("sequencer stake config data should fit"),
-        ..Account::default()
-    }
+        Nonce::default(),
+    )
 }
 
 #[must_use]
 pub fn clock_account() -> Account {
-    Account {
-        program_owner: programs::clock().id().into(),
-        data: ClockAccountData {
+    Account::single(
+        programs::clock().id(),
+        0,
+        ClockAccountData {
             block_id: 0,
             timestamp: 0,
         }
         .to_bytes()
         .try_into()
         .expect("Clock account data should fit"),
-        ..Account::default()
-    }
+        Nonce::default(),
+    )
 }

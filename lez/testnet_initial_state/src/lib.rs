@@ -4,7 +4,6 @@ use key_protocol::key_management::{
     KeyChain, key_tree::chain_index::ChainIndex, secret_holders::SecretSpendingKey,
 };
 use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State, program::Program};
-use lee_core::program::DEFAULT_PROGRAM_OWNER;
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -109,23 +108,23 @@ fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData>
 
     vec![
         PrivateAccountPrivateInitialData {
-            account: Account {
-                program_owner: DEFAULT_PROGRAM_OWNER,
-                balance: PRIV_ACC_A_INITIAL_BALANCE,
-                data: Data::default(),
-                nonce: 0.into(),
-            },
+            account: Account::single(
+                programs::authenticated_transfer().id(),
+                PRIV_ACC_A_INITIAL_BALANCE,
+                Data::default(),
+                0.into(),
+            ),
             key_chain: key_chain_1,
             chain_index: None,
             identifier: 0,
         },
         PrivateAccountPrivateInitialData {
-            account: Account {
-                program_owner: DEFAULT_PROGRAM_OWNER,
-                balance: PRIV_ACC_B_INITIAL_BALANCE,
-                data: Data::default(),
-                nonce: 0.into(),
-            },
+            account: Account::single(
+                programs::authenticated_transfer().id(),
+                PRIV_ACC_B_INITIAL_BALANCE,
+                Data::default(),
+                0.into(),
+            ),
             key_chain: key_chain_2,
             chain_index: None,
             identifier: 0,
@@ -152,12 +151,8 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
             let account_id =
                 lee::AccountId::for_regular_private_account(npk, &init_comm_data.vpk, 0);
 
-            let mut acc = init_comm_data.account.clone();
-
-            acc.program_owner = programs::authenticated_transfer().id().into();
-
             (
-                lee_core::Commitment::new(&account_id, &acc),
+                lee_core::Commitment::new(&account_id, &init_comm_data.account),
                 lee_core::Nullifier::for_account_initialization(&account_id),
             )
         })
@@ -189,21 +184,18 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
         .map(|acc_data| {
             (
                 acc_data.account_id,
-                Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
-                    balance: acc_data.balance,
-                    ..Default::default()
-                },
+                Account::single(
+                    programs::authenticated_transfer().id(),
+                    acc_data.balance,
+                    Data::default(),
+                    lee_core::account::Nonce::default(),
+                ),
             )
         })
         .chain([
             (
                 system_accounts::faucet_account_id(),
                 system_accounts::faucet_account(),
-            ),
-            (
-                system_accounts::bridge_account_id(),
-                system_accounts::bridge_account(),
             ),
         ])
         .chain(
@@ -384,12 +376,12 @@ mod tests {
                     .key_chain
                     .viewing_public_key
                     .clone(),
-                account: Account {
-                    program_owner: DEFAULT_PROGRAM_OWNER,
-                    balance: PRIV_ACC_A_INITIAL_BALANCE,
-                    data: Data::default(),
-                    nonce: 0.into(),
-                },
+                account: Account::single(
+                    programs::authenticated_transfer().id(),
+                    PRIV_ACC_A_INITIAL_BALANCE,
+                    Data::default(),
+                    0.into(),
+                ),
             }
         );
 
@@ -401,12 +393,12 @@ mod tests {
                     .key_chain
                     .viewing_public_key
                     .clone(),
-                account: Account {
-                    program_owner: DEFAULT_PROGRAM_OWNER,
-                    balance: PRIV_ACC_B_INITIAL_BALANCE,
-                    data: Data::default(),
-                    nonce: 0.into(),
-                },
+                account: Account::single(
+                    programs::authenticated_transfer().id(),
+                    PRIV_ACC_B_INITIAL_BALANCE,
+                    Data::default(),
+                    0.into(),
+                ),
             }
         );
     }
@@ -414,29 +406,20 @@ mod tests {
     #[test]
     fn genesis_system_accounts_have_expected_contents() {
         // System-account IDs must be distinct and non-default, and the genesis
-        // faucet/bridge accounts must carry their expected field values.  Catches
-        // mutations that replace `system_faucet_account`/`system_bridge_account`
-        // with `Default::default()`, delete their `balance`/`program_owner`
-        // fields, or replace `system_bridge_account_id` with `Default::default()`.
+        // faucet reserve must sit in the faucet's own slot so only faucet code
+        // can debit it.
         let faucet_id = system_accounts::faucet_account_id();
         let bridge_id = system_accounts::bridge_account_id();
         assert_ne!(bridge_id, AccountId::default());
         assert_ne!(faucet_id, bridge_id);
 
         let state = initial_state();
-        let default_owner = Account::default().program_owner;
 
         let faucet = state.get_account_by_id(faucet_id);
-        assert_eq!(faucet.balance, u128::MAX, "faucet must hold u128::MAX");
-        assert_ne!(
-            faucet.program_owner, default_owner,
-            "faucet must have a non-default program_owner"
-        );
-
-        let bridge = state.get_account_by_id(bridge_id);
-        assert_ne!(
-            bridge.program_owner, default_owner,
-            "bridge must have a non-default program_owner"
+        assert_eq!(
+            faucet.balance(programs::faucet().id()),
+            u128::MAX,
+            "faucet must hold u128::MAX in its own slot"
         );
     }
 }

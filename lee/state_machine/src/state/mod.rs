@@ -4,8 +4,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
-    account::{Account, AccountId, Data},
-    program::{PROGRAM_STORAGE_OWNER, ProgramId},
+    account::{Account, AccountId, Data, Nonce},
+    program::{PROGRAM_STORAGE_SLOT, ProgramId},
 };
 
 use crate::{
@@ -141,20 +141,18 @@ impl V03State {
         self.private_state.0.digest()
     }
 
-    /// Initializes state with given public account balances leaving other account fields at their
-    /// default values.
+    /// Initializes state with given public account balances in `native_program`'s slot, leaving
+    /// other account fields at their default values.
     #[must_use]
     pub fn with_public_account_balances(
         mut self,
+        native_program: ProgramId,
         balances: impl IntoIterator<Item = (AccountId, u128)>,
     ) -> Self {
         let public_accounts = balances.into_iter().map(|(account_id, balance)| {
             (
                 account_id,
-                Account {
-                    balance,
-                    ..Account::default()
-                },
+                Account::single(native_program, balance, Data::default(), Nonce::default()),
             )
         });
         self.public_state.extend(public_accounts);
@@ -194,14 +192,9 @@ impl V03State {
     }
 
     pub(crate) fn insert_program(&mut self, program: &Program) {
-        let account_id = AccountId::from(program.id());
-        let account = Account {
-            program_owner: PROGRAM_STORAGE_OWNER,
-            data: Data::try_from(program.elf().to_vec())
-                .expect("elf must fit under DATA_MAX_LENGTH"),
-            ..Account::default()
-        };
-        self.public_state.insert(account_id, account);
+        let account = self.get_account_by_id_mut(AccountId::from(program.id()));
+        account.slot_mut(PROGRAM_STORAGE_SLOT).data =
+            Data::try_from(program.elf().to_vec()).expect("elf must fit under DATA_MAX_LENGTH");
     }
 
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
@@ -281,16 +274,16 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
-    /// Looks up a deployed program's storage account by its `ProgramId`, verifying it is
-    /// actually owned by [`PROGRAM_STORAGE_OWNER`].
+    /// Looks up a deployed program's elf by its `ProgramId`, in the [`PROGRAM_STORAGE_SLOT`] of
+    /// the account at `AccountId::from(program_id)`.
     ///
-    /// An account at `AccountId::from(program_id)` that lacks this ownership isn't a deployed
-    /// program, whatever its contents — this is the single place that distinction is enforced,
-    /// so callers never have to remember to re-check it themselves.
+    /// No guest can have image id `[u32::MAX; 8]`, so that slot is structurally unwritable by
+    /// programs: its presence is itself the deployed-program predicate, and callers never have
+    /// to remember to re-check it themselves.
     #[must_use]
-    pub fn get_program(&self, program_id: ProgramId) -> Option<&Account> {
+    pub fn get_program(&self, program_id: ProgramId) -> Option<&Data> {
         let account = self.get_account_by_id_ref(AccountId::from(program_id))?;
-        (account.program_owner == PROGRAM_STORAGE_OWNER).then_some(account)
+        account.slot(PROGRAM_STORAGE_SLOT).map(|slot| &slot.data)
     }
 
     #[must_use]

@@ -195,16 +195,17 @@ pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
 
 /// Builds the genesis holding account funding a holder's bridgeable balance.
 ///
-/// A real native balance owned by `bridge_lock`, which can debit it on a lock; it
-/// is conserved like any other balance. Not produced by any transaction, so the
-/// sequencer and indexer both seed it through this one builder.
+/// A real native balance in the `bridge_lock` slot, which only `bridge_lock` can
+/// debit on a lock; it is conserved like any other balance. Not produced by any
+/// transaction, so the sequencer and indexer both seed it through this one builder.
 #[must_use]
 pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, Account) {
-    let account = Account {
-        program_owner: programs::bridge_lock().id().into(),
-        balance: amount,
-        ..Default::default()
-    };
+    let account = Account::single(
+        programs::bridge_lock().id(),
+        amount,
+        lee::Data::default(),
+        lee_core::account::Nonce::default(),
+    );
     (holder, account)
 }
 
@@ -257,8 +258,7 @@ fn cross_zone_targets() -> [ProgramId; 2] {
 /// The sources are the operator's own peer routes aimed at this token, moved from
 /// the inbox's allowlist to the token's own config: the same information, enforced
 /// by the program that owns the value. A zone with no peers gets an empty list,
-/// which authorizes nothing, and the config is still seeded so its PDA cannot be
-/// claimed by a first initializer.
+/// which authorizes nothing.
 #[must_use]
 pub fn build_wrapped_token_init_config_tx(
     cross_zone: Option<&CrossZoneConfig>,
