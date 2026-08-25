@@ -5,7 +5,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub use data::Data;
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
-use serde_with::{DeserializeFromStr, SerializeDisplay};
+use serde_with::{DeserializeFromStr, SerializeDisplay, serde_as};
 
 use crate::{NullifierSecretKey, program::ProgramId};
 
@@ -111,11 +111,16 @@ impl Slot {
 /// `BTreeMap` rather than `HashMap` because the account is hashed into commitments, so its
 /// encoding must be canonical. Empty slots are never stored (see `validate_execution`), so
 /// equal accounts always encode identically.
+#[serde_as]
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct Account {
     pub nonce: Nonce,
+    /// Serialized as a sequence of pairs: `ProgramId` is `[u32; 8]`, and JSON has no
+    /// representation for a non-string map key. Borsh is unaffected, so commitments and the
+    /// wire format keep the canonical map encoding.
+    #[serde_as(as = "Vec<(_, _)>")]
     pub slots: BTreeMap<ProgramId, Slot>,
 }
 
@@ -379,6 +384,21 @@ mod tests {
         let nonce_restored = serde_json::from_slice(&serde_serialized_nonce).unwrap();
 
         assert_eq!(nonce, nonce_restored);
+    }
+
+    #[test]
+    fn account_round_trips_through_json() {
+        // The wallet persists accounts as JSON, and `ProgramId` is `[u32; 8]`, which serde_json
+        // refuses as a map key. Serializing `slots` as pairs is what keeps that working.
+        let account = Account::single(
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            42,
+            b"hello".to_vec().try_into().unwrap(),
+            Nonce(7),
+        );
+        let json = serde_json::to_string(&account).expect("account must serialize as JSON");
+        let decoded: Account = serde_json::from_str(&json).expect("account must round trip");
+        assert_eq!(account, decoded);
     }
 
     #[test]
