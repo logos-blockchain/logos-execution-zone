@@ -383,6 +383,7 @@ impl ChainedCallForTests {
                 amount_to_burn: BalanceForTests::remove_amount_lp(),
             },
         )
+        .with_pda_seeds(vec![lp_seed()])
     }
 
     fn cc_new_definition_token_a() -> ChainedCall {

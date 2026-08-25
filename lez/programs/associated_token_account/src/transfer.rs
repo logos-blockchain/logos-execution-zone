@@ -29,9 +29,12 @@ pub fn transfer_from_associated_token_account(
         recipient.account.clone(),
     ];
 
+    let mut sender_ata_auth = sender_ata;
+    sender_ata_auth.is_authorized = true;
+
     let chained_call = ChainedCall::new(
         token_program_id,
-        vec![sender_ata, recipient],
+        vec![sender_ata_auth, recipient],
         &token_core::Instruction::Transfer {
             amount_to_transfer: amount,
         },

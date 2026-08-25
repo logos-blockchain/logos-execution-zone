@@ -1,6 +1,6 @@
 use std::num::NonZeroU128;
 
-use amm_core::{PoolDefinition, compute_vault_pda_seed};
+use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
     program::{ChainedCall, ProgramId},
@@ -110,10 +110,15 @@ pub fn remove_liquidity(
 
     let token_program_id = pool_def_data.token_program_id;
 
+    let mut vault_a_auth = vault_a.clone();
+    vault_a_auth.is_authorized = true;
+    let mut vault_b_auth = vault_b.clone();
+    vault_b_auth.is_authorized = true;
+
     // Chaincall for Token A withdraw
     let call_token_a = ChainedCall::new(
         token_program_id,
-        vec![vault_a.clone(), user_holding_a.clone()],
+        vec![vault_a_auth, user_holding_a.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_a,
         },
@@ -125,7 +130,7 @@ pub fn remove_liquidity(
     // Chaincall for Token B withdraw
     let call_token_b = ChainedCall::new(
         token_program_id,
-        vec![vault_b.clone(), user_holding_b.clone()],
+        vec![vault_b_auth, user_holding_b.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_b,
         },
@@ -135,13 +140,16 @@ pub fn remove_liquidity(
         pool_def_data.definition_token_b_id,
     )]);
     // Chaincall for LP adjustment
+    let mut pool_definition_lp_auth = pool_definition_lp.clone();
+    pool_definition_lp_auth.is_authorized = true;
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_definition_lp.clone(), user_holding_lp.clone()],
+        vec![pool_definition_lp_auth, user_holding_lp.clone()],
         &token_core::Instruction::Burn {
             amount_to_burn: delta_lp,
         },
-    );
+    )
+    .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]);
 
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 

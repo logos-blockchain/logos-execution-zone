@@ -392,7 +392,15 @@ pub async fn setup_wallet_at(
                 private_account.key_chain.clone(),
                 None,
                 private_account.identifier,
-                lee::Account::default(),
+                // Genesis writes a private account's commitment with no note to decrypt, so
+                // the wallet reconstructs the account it was seeded with rather than syncing
+                // it in.
+                lee::Account::single(
+                    programs::authenticated_transfer().id(),
+                    private_account.balance,
+                    lee::Data::default(),
+                    lee::Nonce::default(),
+                ),
             );
     }
 

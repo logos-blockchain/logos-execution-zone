@@ -191,6 +191,9 @@ fn swap_logic(
     );
     assert!(withdraw_amount != 0, "Withdraw amount should be nonzero");
 
+    let mut vault_withdraw = vault_withdraw;
+    vault_withdraw.is_authorized = true;
+
     let pda_seed = compute_vault_pda_seed(
         pool_id,
         token_core::TokenHolding::try_from(vault_withdraw.account.data(token_program_id))
@@ -320,6 +323,9 @@ fn exact_output_swap_logic(
         deposit_amount <= max_amount_in,
         "Required input exceeds maximum amount in"
     );
+
+    let mut vault_withdraw = vault_withdraw;
+    vault_withdraw.is_authorized = true;
 
     let pda_seed = compute_vault_pda_seed(
         pool_id,
