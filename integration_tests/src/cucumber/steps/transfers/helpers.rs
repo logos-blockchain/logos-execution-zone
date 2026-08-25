@@ -115,7 +115,7 @@ pub(super) async fn assert_public_balance_delta(
     let observed_balance = world
         .lez()?
         .sequencer_client()
-        .get_account_balance(account)
+        .get_account_balance(account, programs::authenticated_transfer().id())
         .await
         .map_err(StepError::query_failed)?;
     if observed_balance != expected_balance {
@@ -175,7 +175,7 @@ pub(super) async fn snapshot_public_sender(
     sender: AccountId,
 ) -> Result<(u128, Nonce), StepError> {
     let sender_balance = client
-        .get_account_balance(sender)
+        .get_account_balance(sender, programs::authenticated_transfer().id())
         .await
         .map_err(StepError::query_failed)?;
     let sender_nonce = client
@@ -197,7 +197,7 @@ pub(super) async fn snapshot_public_transfer(
 ) -> Result<(u128, u128, Nonce), StepError> {
     let (sender_balance, sender_nonce) = snapshot_public_sender(client, sender).await?;
     let receiver_balance = client
-        .get_account_balance(receiver)
+        .get_account_balance(receiver, programs::authenticated_transfer().id())
         .await
         .map_err(StepError::query_failed)?;
     Ok((sender_balance, receiver_balance, sender_nonce))

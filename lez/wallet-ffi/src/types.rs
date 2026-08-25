@@ -504,7 +504,11 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     kind: FfiAccountIdentityKind::PrivatePdaForeign,
                     authority_program_id: lee::AccountId::from(binding.0).into(),
                     pda_seed: FfiBytes32 {
-                        data: *binding.1.as_ref().first_chunk::<32>().expect("seed is 32 bytes"),
+                        data: *binding
+                            .1
+                            .as_ref()
+                            .first_chunk::<32>()
+                            .expect("seed is 32 bytes"),
                     },
                     nullifier_public_key: npk.0.into(),
                     viewing_public_key: vpk_data,
@@ -559,7 +563,11 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     kind: FfiAccountIdentityKind::PrivatePdaShared,
                     authority_program_id: lee::AccountId::from(binding.0).into(),
                     pda_seed: FfiBytes32 {
-                        data: *binding.1.as_ref().first_chunk::<32>().expect("seed is 32 bytes"),
+                        data: *binding
+                            .1
+                            .as_ref()
+                            .first_chunk::<32>()
+                            .expect("seed is 32 bytes"),
                     },
                     nullifier_secret_key: nsk.into(),
                     nullifier_public_key: NullifierPublicKey::from(&nsk).0.into(),

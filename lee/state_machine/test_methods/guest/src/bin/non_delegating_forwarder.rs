@@ -1,6 +1,5 @@
 use lee_core::program::{
-    ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+    ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 type Instruction = (ProgramId, InstructionData, bool);

@@ -53,10 +53,7 @@ fn transfer(
     sender_post.slot_mut(self_program_id).balance -= balance_to_move + malicious_offset;
     recipient_post.slot_mut(self_program_id).balance += balance_to_move + malicious_offset;
 
-    vec![
-        sender_post,
-        recipient_post,
-    ]
+    vec![sender_post, recipient_post]
 }
 
 /// A transfer of balance program.
@@ -78,14 +75,12 @@ fn main() {
             let post = initialize_account(account_to_claim.clone());
             vec![post]
         }
-        ([sender, recipient], balance_to_move) => {
-            transfer(
-                sender.clone(),
-                recipient.clone(),
-                balance_to_move,
-                self_program_id,
-            )
-        }
+        ([sender, recipient], balance_to_move) => transfer(
+            sender.clone(),
+            recipient.clone(),
+            balance_to_move,
+            self_program_id,
+        ),
         _ => panic!("invalid params"),
     };
     ProgramOutput::new(

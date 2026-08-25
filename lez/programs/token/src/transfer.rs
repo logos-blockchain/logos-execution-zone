@@ -4,7 +4,6 @@ use lee_core::{
 };
 use token_core::TokenHolding;
 
-
 fn debit(holding: &mut TokenHolding, balance_to_move: u128) {
     match holding {
         TokenHolding::Fungible { balance, .. } => {
@@ -62,10 +61,7 @@ pub fn transfer(
     balance_to_move: u128,
     self_program_id: ProgramId,
 ) -> Vec<Account> {
-    assert!(
-        sender.is_authorized,
-        "Sender authorization is missing"
-    );
+    assert!(sender.is_authorized, "Sender authorization is missing");
 
     let mut sender_holding =
         TokenHolding::try_from(sender.account.data(self_program_id)).expect("Invalid sender data");

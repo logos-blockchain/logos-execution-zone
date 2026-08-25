@@ -113,11 +113,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pinata, winner, clock_pre],
-        vec![
-            pinata_post,
-            winner_post,
-            clock_post,
-        ],
+        vec![pinata_post, winner_post, clock_post],
     )
     .write();
 }

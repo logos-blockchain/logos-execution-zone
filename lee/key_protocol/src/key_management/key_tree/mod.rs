@@ -328,12 +328,12 @@ const fn split_hash(hash_value: &[u8; 64]) -> ([u8; 32], [u8; 32]) {
 mod tests {
     #![expect(clippy::shadow_unrelated, reason = "We don't care about this in tests")]
 
-    const SLOT: lee::ProgramId = [7; 8];
-
     use std::{collections::HashSet, str::FromStr as _};
 
     use lee::AccountId;
     use lee_core::PrivateAccountKind;
+
+    const SLOT: lee::ProgramId = [7; 8];
 
     use super::*;
 

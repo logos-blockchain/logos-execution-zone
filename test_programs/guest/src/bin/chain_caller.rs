@@ -1,8 +1,6 @@
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use borsh::to_vec;
-use lee_core::program::{
-    ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-};
+use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
 
 type Instruction = (u128, ProgramId, u32);
 
@@ -25,12 +23,11 @@ fn main() {
         return;
     };
 
-    let call_instruction_data =
-        to_vec(&AuthTransferInstruction::Transfer {
-            amount: balance,
-            recipient_program: None,
-        })
-        .unwrap();
+    let call_instruction_data = to_vec(&AuthTransferInstruction::Transfer {
+        amount: balance,
+        recipient_program: None,
+    })
+    .unwrap();
 
     let mut running_recipient_pre = recipient_pre.clone();
     let mut running_sender_pre = sender_pre.clone();
@@ -41,8 +38,8 @@ fn main() {
             program_id: auth_transfer_id,
             instruction_data: call_instruction_data.clone(),
             pre_states: vec![running_sender_pre.clone(), running_recipient_pre.clone()], /* <- Account order permutation here */
-        pda_seeds: vec![],
-    };
+            pda_seeds: vec![],
+        };
         chained_calls.push(new_chained_call);
 
         let sender_slot = running_sender_pre.account.slot_mut(auth_transfer_id);
@@ -65,10 +62,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![sender_pre.clone(), recipient_pre.clone()],
-        vec![
-            sender_pre.account,
-            recipient_pre.account,
-        ],
+        vec![sender_pre.account, recipient_pre.account],
     )
     .with_chained_calls(chained_calls)
     .write();

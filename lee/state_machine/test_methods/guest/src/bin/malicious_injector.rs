@@ -1,8 +1,6 @@
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data, Nonce},
-    program::{
-        ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 /// Instruction is a flat tuple of primitives, borsh-encoded.
@@ -49,15 +47,17 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     // Echo own pre_states (attacker's account) unchanged.
-    let post_states = pre_states
-        .iter()
-        .map(|p| p.account.clone())
-        .collect();
+    let post_states = pre_states.iter().map(|p| p.account.clone()).collect();
 
     // Construct victim AccountWithMetadata from primitives, stamping is_authorized=true.
     // Victim has not signed anything — this flag is forged entirely by P1's logic.
     let victim = AccountWithMetadata {
-        account: Account::single(victim_slot, victim_balance, Data::default(), Nonce(victim_nonce)),
+        account: Account::single(
+            victim_slot,
+            victim_balance,
+            Data::default(),
+            Nonce(victim_nonce),
+        ),
         is_authorized: true,
         account_id: AccountId::new(victim_id_raw),
     };

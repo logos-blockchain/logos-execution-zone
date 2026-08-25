@@ -192,12 +192,10 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
                 ),
             )
         })
-        .chain([
-            (
-                system_accounts::faucet_account_id(),
-                system_accounts::faucet_account(),
-            ),
-        ])
+        .chain([(
+            system_accounts::faucet_account_id(),
+            system_accounts::faucet_account(),
+        )])
         .chain(
             system_accounts::clock_account_ids()
                 .into_iter()

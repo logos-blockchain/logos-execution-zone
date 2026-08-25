@@ -24,7 +24,7 @@ async fn query_first_public_account_balance(world: &mut CucumberWorld, step: &St
 
     let observed_balance = context
         .sequencer_client()
-        .get_account_balance(account)
+        .get_account_balance(account, programs::authenticated_transfer().id())
         .await
         .map_err(StepError::query_failed)?;
 

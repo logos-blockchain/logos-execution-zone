@@ -3075,9 +3075,9 @@ fn new_definition_lp_symmetric_amounts() {
         ],
         &token_core::Instruction::Mint {
             amount_to_mint: expected_lp,
-            },
-        )
-        .with_pda_seeds(vec![lp_seed()]);
+        },
+    )
+    .with_pda_seeds(vec![lp_seed()]);
 
     assert_eq!(chained_call_lp, expected_lp_call);
 }

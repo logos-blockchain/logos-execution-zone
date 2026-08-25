@@ -481,7 +481,9 @@ fn transfer_with_insufficient_balance_should_fail() {
     let _post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::burn_insufficient(), TOKEN_PROGRAM_ID);
+        BalanceForTests::burn_insufficient(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -491,7 +493,9 @@ fn transfer_with_valid_inputs_succeeds() {
     let post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::transfer_amount(), TOKEN_PROGRAM_ID);
+        BalanceForTests::transfer_amount(),
+        TOKEN_PROGRAM_ID,
+    );
     let [sender_post, recipient_post] = <[_; 2]>::try_from(post_states).unwrap();
 
     assert_eq!(
@@ -511,7 +515,9 @@ fn transfer_to_self_emits_agreeing_posts() {
     let post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::transfer_amount(), TOKEN_PROGRAM_ID);
+        BalanceForTests::transfer_amount(),
+        TOKEN_PROGRAM_ID,
+    );
     let [sender_post, recipient_post] = <[_; 2]>::try_from(post_states).unwrap();
 
     assert_eq!(sender_post, recipient_post);
@@ -530,7 +536,9 @@ fn transfer_to_self_beyond_balance_should_fail() {
     let _post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::burn_insufficient(), TOKEN_PROGRAM_ID);
+        BalanceForTests::burn_insufficient(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[should_panic(expected = "Invalid balance for NFT Master transfer")]
@@ -541,7 +549,9 @@ fn transfer_with_master_nft_invalid_balance() {
     let _post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::transfer_amount(), TOKEN_PROGRAM_ID);
+        BalanceForTests::transfer_amount(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[should_panic(expected = "Invalid balance in recipient account for NFT transfer")]
@@ -552,7 +562,9 @@ fn transfer_with_master_nft_invalid_recipient_balance() {
     let _post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::printable_copies(), TOKEN_PROGRAM_ID);
+        BalanceForTests::printable_copies(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[should_panic(expected = "Mismatched token holding types for transfer")]
@@ -570,7 +582,9 @@ fn transfer_between_mismatched_holding_types_should_fail() {
     let _post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::printable_copies(), TOKEN_PROGRAM_ID);
+        BalanceForTests::printable_copies(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -580,7 +594,9 @@ fn transfer_with_master_nft_success() {
     let post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::printable_copies(), TOKEN_PROGRAM_ID);
+        BalanceForTests::printable_copies(),
+        TOKEN_PROGRAM_ID,
+    );
     let [sender_post, recipient_post] = <[_; 2]>::try_from(post_states).unwrap();
 
     assert_eq!(
@@ -628,7 +644,9 @@ fn burn_mismatch_def() {
     let _post_states = burn(
         definition_account,
         holding_account,
-        BalanceForTests::burn_success(), TOKEN_PROGRAM_ID);
+        BalanceForTests::burn_success(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -639,7 +657,9 @@ fn burn_missing_authorization() {
     let _post_states = burn(
         definition_account,
         holding_account,
-        BalanceForTests::burn_success(), TOKEN_PROGRAM_ID);
+        BalanceForTests::burn_success(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -650,7 +670,9 @@ fn burn_insufficient_balance() {
     let _post_states = burn(
         definition_account,
         holding_account,
-        BalanceForTests::burn_insufficient(), TOKEN_PROGRAM_ID);
+        BalanceForTests::burn_insufficient(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -662,7 +684,9 @@ fn burn_total_supply_underflow() {
     let _post_states = burn(
         definition_account,
         holding_account,
-        BalanceForTests::mint_overflow(), TOKEN_PROGRAM_ID);
+        BalanceForTests::mint_overflow(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -690,7 +714,9 @@ fn mint_not_valid_holding_account() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
+        BalanceForTests::mint_success(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -701,7 +727,9 @@ fn mint_not_valid_definition_account() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
+        BalanceForTests::mint_success(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -712,7 +740,9 @@ fn mint_missing_authorization() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
+        BalanceForTests::mint_success(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -723,7 +753,9 @@ fn mint_mismatched_token_definition() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
+        BalanceForTests::mint_success(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -753,7 +785,9 @@ fn mint_uninit_holding_success() {
     let post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
+        BalanceForTests::mint_success(),
+        TOKEN_PROGRAM_ID,
+    );
 
     let [def_post, holding_post] = <[_; 2]>::try_from(post_states).unwrap();
 
@@ -769,7 +803,9 @@ fn mint_total_supply_overflow() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_overflow(), TOKEN_PROGRAM_ID);
+        BalanceForTests::mint_overflow(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -780,7 +816,9 @@ fn mint_holding_account_overflow() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_overflow(), TOKEN_PROGRAM_ID);
+        BalanceForTests::mint_overflow(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[test]
@@ -791,7 +829,9 @@ fn mint_cannot_mint_unmintable_tokens() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
+        BalanceForTests::mint_success(),
+        TOKEN_PROGRAM_ID,
+    );
 }
 
 #[should_panic(expected = "Definition target account must be uninitialized")]

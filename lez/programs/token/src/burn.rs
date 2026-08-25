@@ -4,7 +4,6 @@ use lee_core::{
 };
 use token_core::{TokenDefinition, TokenHolding};
 
-
 #[must_use]
 pub fn burn(
     definition_account: AccountWithMetadata,

@@ -160,9 +160,9 @@ pub fn add_liquidity(
         vec![pool_definition_lp.clone(), user_holding_lp.clone()],
         &token_core::Instruction::Mint {
             amount_to_mint: delta_lp,
-},
+        },
     )
-        .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]);
+    .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]);
 
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 

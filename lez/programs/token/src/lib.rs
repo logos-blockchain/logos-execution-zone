@@ -10,4 +10,3 @@ pub mod print_nft;
 pub mod transfer;
 
 mod tests;
-

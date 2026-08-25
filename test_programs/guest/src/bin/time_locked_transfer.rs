@@ -67,11 +67,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![sender_pre, receiver_pre, clock_pre],
-        vec![
-            sender_post,
-            receiver_post,
-            clock_post,
-        ],
+        vec![sender_post, receiver_post, clock_post],
     )
     .write();
 }

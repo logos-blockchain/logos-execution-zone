@@ -1,7 +1,6 @@
 use borsh::to_vec;
 use lee_core::program::{
-    ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+    ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 /// Chains to `callee_program_id`, delegating authorization over the sole `pre_state` with

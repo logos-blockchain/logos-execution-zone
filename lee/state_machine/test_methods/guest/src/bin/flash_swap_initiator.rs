@@ -37,9 +37,7 @@
 //! - `flash_swap_self_call_targets_correct_program`: zero-amount self-call isolation test
 //! - `flash_swap_standalone_invariant_check_rejected`: `caller_program_id` access control
 
-use lee_core::program::{
-    ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-};
+use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum FlashSwapInstruction {
@@ -134,8 +132,8 @@ fn main() {
                 program_id: token_program_id,
                 pre_states: vec![vault_pre.clone(), receiver_pre.clone()],
                 instruction_data: transfer_instruction,
-        pda_seeds: vec![],
-    };
+                pda_seeds: vec![],
+            };
 
             // Chained call 2: User callback.
             // Receives the post-transfer states as its pre_states. The callback may run
@@ -144,8 +142,8 @@ fn main() {
                 program_id: callback_program_id,
                 pre_states: vec![vault_after_transfer, receiver_after_transfer],
                 instruction_data: callback_instruction_data,
-        pda_seeds: vec![],
-    };
+                pda_seeds: vec![],
+            };
 
             // Chained call 3: Self-call to enforce the invariant.
             // Uses `self_program_id` to reference this program, the key feature that enables
@@ -153,18 +151,17 @@ fn main() {
             // If the callback did not return funds, vault_after_callback.balance <
             // min_vault_balance and this call will panic, rolling back the entire
             // transaction.
-            let invariant_instruction =
-                borsh::to_vec(&FlashSwapInstruction::InvariantCheck {
-                    token_program_id,
-                    min_vault_balance,
-                })
-                .expect("invariant instruction serialization");
+            let invariant_instruction = borsh::to_vec(&FlashSwapInstruction::InvariantCheck {
+                token_program_id,
+                min_vault_balance,
+            })
+            .expect("invariant instruction serialization");
             let call_3 = ChainedCall {
                 program_id: self_program_id, // self-referential chained call
                 pre_states: vec![vault_after_callback],
                 instruction_data: invariant_instruction,
-        pda_seeds: vec![],
-    };
+                pda_seeds: vec![],
+            };
 
             // The initiator itself makes no direct state changes.
             // All mutations happen inside the chained calls (token transfers).
@@ -173,10 +170,7 @@ fn main() {
                 caller_program_id,
                 instruction_data,
                 vec![vault_pre.clone(), receiver_pre.clone()],
-                vec![
-                    vault_pre.account,
-                    receiver_pre.account,
-                ],
+                vec![vault_pre.account, receiver_pre.account],
             )
             .with_chained_calls(vec![call_1, call_2, call_3])
             .write();

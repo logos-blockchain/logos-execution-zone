@@ -14,8 +14,7 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
-        let account_post =
-            account_pre.account;
+        let account_post = account_pre.account;
 
         ProgramOutput::new(
             self_program_id,
@@ -53,10 +52,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![sender_pre, receiver_pre],
-        vec![
-            sender_post,
-            receiver_post,
-        ],
+        vec![sender_post, receiver_post],
     )
     .write();
 }

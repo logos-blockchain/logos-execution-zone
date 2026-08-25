@@ -1,6 +1,4 @@
-use lee_core::program::{
-    ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-};
+use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
 
 // Tail Call example program.
 //

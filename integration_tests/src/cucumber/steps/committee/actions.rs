@@ -435,7 +435,7 @@ async fn submit_committee_transfer(
         })?;
     let sender_balance_before = sequencer
         .client()
-        .get_account_balance(sender)
+        .get_account_balance(sender, programs::authenticated_transfer().id())
         .await
         .map_err(StepError::query_failed)?;
     let signing_key = initial_pub_accounts_private_keys()
@@ -501,7 +501,7 @@ async fn record_committee_balance_baseline(
     let observer = require_sequencer(world.sequencer_registry()?.registry(), &observer_alias)?;
     let balance = observer
         .client()
-        .get_account_balance(account)
+        .get_account_balance(account, programs::authenticated_transfer().id())
         .await
         .map_err(StepError::query_failed)?;
     world.environment.transfers.pending_observation =

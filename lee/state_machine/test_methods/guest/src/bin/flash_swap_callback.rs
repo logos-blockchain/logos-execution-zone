@@ -24,9 +24,7 @@
 //! called by any program. In production, a callback would typically verify the caller
 //! if it needs to trust the context it is called from.
 
-use lee_core::program::{
-    ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-};
+use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct CallbackInstruction {
@@ -64,8 +62,8 @@ fn main() {
             program_id: instruction.token_program_id,
             pre_states: vec![receiver_pre.clone(), vault_pre.clone()],
             instruction_data: transfer_instruction,
-        pda_seeds: vec![],
-    });
+            pda_seeds: vec![],
+        });
     }
     // Malicious path (return_funds = false): emit no chained calls.
     // The vault balance will not be restored, so the invariant check in the initiator
@@ -78,10 +76,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![vault_pre.clone(), receiver_pre.clone()],
-        vec![
-            vault_pre.account,
-            receiver_pre.account,
-        ],
+        vec![vault_pre.account, receiver_pre.account],
     )
     .with_chained_calls(chained_calls)
     .write();

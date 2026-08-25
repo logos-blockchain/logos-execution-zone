@@ -411,4 +411,3 @@ pub async fn sync_wallet(wallet: &mut WalletCore) -> Result<()> {
 
     Ok(())
 }
-

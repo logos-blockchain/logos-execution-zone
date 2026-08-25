@@ -179,7 +179,7 @@ async fn assert_new_account_balance(
     let observed_balance = world
         .lez()?
         .sequencer_client()
-        .get_account_balance(account)
+        .get_account_balance(account, programs::authenticated_transfer().id())
         .await
         .map_err(StepError::query_failed)?;
     if observed_balance != expected_balance {
@@ -295,7 +295,7 @@ async fn assert_sender_balance_unchanged(world: &mut CucumberWorld, step: &Step)
     let observed_balance = world
         .lez()?
         .sequencer_client()
-        .get_account_balance(sender)
+        .get_account_balance(sender, programs::authenticated_transfer().id())
         .await
         .map_err(StepError::query_failed)?;
     if observed_balance != initial_balance {
@@ -316,7 +316,7 @@ async fn assert_receiver_balance_unchanged(world: &mut CucumberWorld, step: &Ste
     let observed_balance = world
         .lez()?
         .sequencer_client()
-        .get_account_balance(receiver)
+        .get_account_balance(receiver, programs::authenticated_transfer().id())
         .await
         .map_err(StepError::query_failed)?;
     if observed_balance != initial_balance {

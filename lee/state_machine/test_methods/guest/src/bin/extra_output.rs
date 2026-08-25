@@ -27,10 +27,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pre],
-        vec![
-            account_pre,
-            Account::default(),
-        ],
+        vec![account_pre, Account::default()],
     )
     .write();
 }

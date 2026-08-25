@@ -46,15 +46,15 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
     let auth_transfer_id = auth_transfer.id();
     let pwd = ProgramWithDependencies::from(auth_transfer);
 
-    // For PPE to allow the sender's balance to be decremented by this
-    // program, the sender must already be claimed by auth_transfer.
-    // Recipient stays default-owned so the first call can claim it.
+    // The sender's balance lives in auth_transfer's slot, which is the only slot
+    // that program may debit. The recipient starts with no slots at all.
     let sender = AccountWithMetadata {
-        account: Account {
-            program_owner: auth_transfer_id.into(),
-            balance: 1_000_000,
-            ..Account::default()
-        },
+        account: Account::single(
+            auth_transfer_id,
+            1_000_000,
+            lee::Data::default(),
+            lee::Nonce::default(),
+        ),
         is_authorized: true,
         account_id: AccountId::new([1; 32]),
     };
@@ -65,7 +65,10 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
     };
     let pre_states = vec![sender, recipient];
 
-    let instruction = authenticated_transfer_core::Instruction::Transfer { amount: 5_000 };
+    let instruction = authenticated_transfer_core::Instruction::Transfer {
+        amount: 5_000,
+        recipient_program: None,
+    };
     let instruction_data = to_vec(&instruction)?;
 
     let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
@@ -112,23 +115,26 @@ fn prove_chain_caller(
     deps.insert(auth_transfer.id(), auth_transfer);
     let pwd = ProgramWithDependencies::new(chain_caller, deps);
 
-    // Both accounts pre-claimed by auth_transfer. chain_caller doesn't
-    // track recipient's post-claim program_owner, so a default recipient
-    // would cause a state mismatch on subsequent chained calls.
+    // Both accounts already hold an auth_transfer slot: chain_caller computes the
+    // intermediate states itself, so a recipient that only materializes its slot on
+    // the first credit would mismatch on the subsequent chained calls.
     let recipient_pre = AccountWithMetadata {
-        account: Account {
-            program_owner: auth_transfer_id.into(),
-            ..Account::default()
-        },
+        account: Account::single(
+            auth_transfer_id,
+            1,
+            lee::Data::default(),
+            lee::Nonce::default(),
+        ),
         is_authorized: true,
         account_id: AccountId::new([2; 32]),
     };
     let sender_pre = AccountWithMetadata {
-        account: Account {
-            program_owner: auth_transfer_id.into(),
-            balance: 1_000_000,
-            ..Account::default()
-        },
+        account: Account::single(
+            auth_transfer_id,
+            1_000_000,
+            lee::Data::default(),
+            lee::Nonce::default(),
+        ),
         is_authorized: true,
         account_id: AccountId::new([1; 32]),
     };

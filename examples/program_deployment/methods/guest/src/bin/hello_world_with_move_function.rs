@@ -26,7 +26,7 @@ type Instruction = (u8, Vec<u8>);
 
 fn write(pre_state: AccountWithMetadata, greeting: &[u8], self_program_id: ProgramId) -> Account {
     // Construct the post state account values
-    let post_account = {
+    {
         let mut this = pre_state.account;
         let mut bytes = this.data(self_program_id).clone().into_inner();
         bytes.extend_from_slice(greeting);
@@ -34,9 +34,7 @@ fn write(pre_state: AccountWithMetadata, greeting: &[u8], self_program_id: Progr
             .try_into()
             .expect("Data should fit within the allowed limits");
         this
-    };
-
-    post_account
+    }
 }
 
 fn move_data(
@@ -83,13 +81,11 @@ fn main() {
             let post = write(account_pre.clone(), &data, self_program_id);
             vec![post]
         }
-        ([account_from_pre, account_to_pre], MOVE_DATA_FUNCTION_ID, 0) => {
-            move_data(
-                account_from_pre.clone(),
-                account_to_pre.clone(),
-                self_program_id,
-            )
-        }
+        ([account_from_pre, account_to_pre], MOVE_DATA_FUNCTION_ID, 0) => move_data(
+            account_from_pre.clone(),
+            account_to_pre.clone(),
+            self_program_id,
+        ),
         _ => panic!("invalid params"),
     };
 

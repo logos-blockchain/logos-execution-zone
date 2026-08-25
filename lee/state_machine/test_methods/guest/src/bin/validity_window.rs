@@ -1,6 +1,5 @@
 use lee_core::program::{
-    BlockValidityWindow, ProgramInput, ProgramOutput, TimestampValidityWindow,
-    read_lee_inputs,
+    BlockValidityWindow, ProgramInput, ProgramOutput, TimestampValidityWindow, read_lee_inputs,
 };
 
 type Instruction = (BlockValidityWindow, TimestampValidityWindow);

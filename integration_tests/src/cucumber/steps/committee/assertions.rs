@@ -122,7 +122,7 @@ async fn sequencer_observes_receiver_balance_increase(
         loop {
             let observed = observer
                 .client()
-                .get_account_balance(receiver)
+                .get_account_balance(receiver, programs::authenticated_transfer().id())
                 .await
                 .map_err(StepError::query_failed)?;
             if observed == expected_balance {
