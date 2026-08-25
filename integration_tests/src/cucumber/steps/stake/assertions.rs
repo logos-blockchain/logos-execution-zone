@@ -4,6 +4,7 @@
 )]
 
 use cucumber::{gherkin::Step, then};
+use futures::future::try_join_all;
 use lee::Account;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, StakeRecord};
 
@@ -175,8 +176,20 @@ async fn stake_accounts_are_unchanged(world: &mut CucumberWorld, step: &Step) ->
     log_step(step);
     let context = world.lez()?;
     let snapshot = world.stake()?.snapshot()?;
-    for (account_id, before) in snapshot.accounts() {
-        let after = get_account(context, *account_id).await?;
+    let current = try_join_all(
+        snapshot
+            .accounts()
+            .iter()
+            .map(|(account_id, before)| async move {
+                Ok::<_, StepError>((
+                    *account_id,
+                    before,
+                    get_account(context, *account_id).await?,
+                ))
+            }),
+    )
+    .await?;
+    for (account_id, before, after) in current {
         if after != *before {
             return Err(StepError::AssertionFailed {
                 message: format!(

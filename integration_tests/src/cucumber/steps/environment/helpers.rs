@@ -14,6 +14,19 @@ use crate::{
     testing_framework::{BedrockApp, IndexerApp, LezLocalApp, LezSequencerRegistryApp},
 };
 
+/// Bedrock priority fee every Cucumber LEZ deployment publishes with.
+const STACK_PRIORITY_FEE: u64 = 10_000;
+
+/// Base sequencer configuration for Cucumber LEZ deployments: framework
+/// defaults plus the stack-wide Bedrock priority fee. Scenario configs start
+/// from this base, so every field they set is honored as-is.
+pub(crate) fn base_sequencer_config() -> SequencerPartialConfig {
+    SequencerPartialConfig {
+        priority_fee: STACK_PRIORITY_FEE,
+        ..SequencerPartialConfig::default()
+    }
+}
+
 pub(crate) async fn deploy_lez_stack(
     world: &mut CucumberWorld,
     bedrock: BedrockApp,
@@ -39,14 +52,11 @@ pub(crate) async fn deploy_lez_stack_with_config(
         .clone()
         .unwrap_or_else(|| "unknown-time".to_owned());
     let scenario_base_dir = world.scenario_base_dir.join(entropy);
-    let mut app = LezLocalApp::new()
+    let sequencer_config = sequencer_config.unwrap_or_else(base_sequencer_config);
+    let app = LezLocalApp::new()
         .with_bedrock(bedrock)
-        .with_scenario_base_dir(scenario_base_dir);
-    if let Some(sequencer_config) = sequencer_config {
-        app = app.with_sequencer_config(sequencer_config);
-    }
-    // Applied after any config override so the stack-wide fee always wins.
-    let app = app.with_priority_fee(10_000);
+        .with_scenario_base_dir(scenario_base_dir)
+        .with_sequencer_config(sequencer_config);
     let app = if initialize_private_accounts {
         app
     } else {
@@ -64,7 +74,7 @@ pub(crate) async fn deploy_lez_stack_with_config(
         StepError::deployment_failed_boxed(error, "Cucumber LEZ stack deployment failed")
     })?;
 
-    world.set_lez(LezScenarioContext::from_stack(stack))
+    world.set_lez(LezScenarioContext::from_stack(stack, sequencer_config))
 }
 
 pub(crate) async fn deploy_lez_sequencer_registry(
@@ -119,8 +129,7 @@ pub(crate) async fn deploy_lez_sequencer_registry(
         })?;
     let sequencer_config = SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(5),
-        priority_fee: 10_000,
-        ..SequencerPartialConfig::default()
+        ..base_sequencer_config()
     };
     let registry = LezSequencerRegistryApp::new(sequencer_config, bedrock.primary_api_addr())
         .with_scenario_base_dir(PathBuf::from(&scenario_base_dir));
