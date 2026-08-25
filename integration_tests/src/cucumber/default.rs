@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{fs, num::NonZeroUsize, path::PathBuf};
 
 use anyhow::{Context as _, Result, anyhow};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -56,18 +56,20 @@ pub fn create_scenario_output_dir() -> Result<PathBuf> {
     Ok(output_dir)
 }
 
-/// Get the number of retries for failed scenarios from the `CUCUMBER_RETRIES`
-/// environment variable. If the variable is not set, defaults to 2 retries. If
-/// the variable is set to 0, returns None.
-pub fn get_retries() -> Result<Option<usize>> {
+/// Get the number of retries for failed scenarios from the
+/// `CUCUMBER_RETRIES` environment variable.
+///
+/// If the variable is not set, defaults to 2 retries. If the variable is set
+/// to 0, returns None. Any returned retry count is non-zero.
+pub fn get_retries() -> Result<Option<NonZeroUsize>> {
     std::env::var_os(CUCUMBER_RETRIES).map_or_else(
-        || Ok(Some(2)),
+        || Ok(Some(NonZeroUsize::new(2).unwrap())),
         |raw_retries| {
             let retries_value = raw_retries.to_string_lossy();
             let retries = retries_value.parse::<usize>().with_context(|| {
                 format!("Invalid value for {CUCUMBER_RETRIES}: '{retries_value}'")
             })?;
-            Ok((retries != 0).then_some(retries))
+            Ok(NonZeroUsize::new(retries))
         },
     )
 }

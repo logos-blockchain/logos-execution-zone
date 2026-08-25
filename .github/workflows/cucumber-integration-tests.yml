@@ -56,6 +56,10 @@ jobs:
         uses: ./.github/actions/run-in-ci-image
         with:
           image: ${{ needs.ci-image.outputs.image }}
+          # Temporary CI-only suppression for the single-use-lifetimes
+          # warning triggered while the pinned logos-blockchain dependency is
+          # built in the LEZ environment. Normal linting remains strict with
+          # -D warnings.
           env: |
             RUSTFLAGS=-A single-use-lifetimes
             RISC0_DEV_MODE=1
