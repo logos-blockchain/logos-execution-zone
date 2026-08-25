@@ -1,10 +1,9 @@
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::{PdaSeed, ProgramId},
+    program::ProgramId,
 };
 use token_core::TokenHolding;
 
-use crate::seed_authorized;
 
 fn debit(holding: &mut TokenHolding, balance_to_move: u128) {
     match holding {
@@ -61,12 +60,10 @@ pub fn transfer(
     sender: AccountWithMetadata,
     recipient: AccountWithMetadata,
     balance_to_move: u128,
-    sender_seed: Option<PdaSeed>,
     self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
 ) -> Vec<Account> {
     assert!(
-        seed_authorized(&sender, caller_program_id, sender_seed),
+        sender.is_authorized,
         "Sender authorization is missing"
     );
 

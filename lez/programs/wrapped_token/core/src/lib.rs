@@ -41,17 +41,12 @@ pub enum Instruction {
     /// Required accounts (1): the wrapped-token config PDA.
     InitConfig(WrappedTokenConfig),
     /// Replaces the authorized sources. Refused unless the config names an
-    /// authority and that account authorized the transaction, or
-    /// `authority_seed` derives it as the calling program's PDA.
+    /// authority and that account authorized the transaction.
     ///
     /// Required accounts (2): the config PDA, then the authority account.
-    UpdateSources {
-        sources: Vec<(ZoneId, ProgramId)>,
-        authority_seed: Option<PdaSeed>,
-    },
+    UpdateSources { sources: Vec<(ZoneId, ProgramId)> },
     /// Gives up the authority, leaving the source list fixed for good. Refused
-    /// unless the config names an authority and that account authorized it, or
-    /// `authority_seed` derives it as the calling program's PDA.
+    /// unless the config names an authority and that account authorized it.
     ///
     /// Renounce only, never reassign. A leaked key that could rotate would move
     /// the authority to the attacker and lock the real holder out permanently;
@@ -59,7 +54,7 @@ pub enum Instruction {
     /// which is what a config with no authority does anyway.
     ///
     /// Required accounts (2): the config PDA, then the authority account.
-    RenounceAuthority { authority_seed: Option<PdaSeed> },
+    RenounceAuthority,
 }
 
 /// Who may mint, and which peer sources they may mint for.
@@ -85,8 +80,7 @@ pub struct WrappedTokenConfig {
     /// Whoever holds this can authorize a new source, and a source can mint, so
     /// its compromise is theft rather than delay; it is seeded unset until there
     /// is a governance program worth pointing it at. An `AccountId` rather than
-    /// a key, so a PDA of such a program can hold it and act through
-    /// `authority_seed`.
+    /// a key, so a PDA of such a program can hold it and act by delegation.
     pub authority: Option<AccountId>,
     /// The `(src_zone, src_program_id)` pairs a mint may originate from. Empty on
     /// a zone with no peers, which authorizes nothing.

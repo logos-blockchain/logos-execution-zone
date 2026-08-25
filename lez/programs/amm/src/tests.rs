@@ -193,7 +193,6 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_max_amount_a(),
-                sender_seed: None,
             },
         )
     }
@@ -209,9 +208,9 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
-                sender_seed: Some(vault_seed(IdForTests::token_b_definition_id())),
             },
         )
+        .with_pda_seeds(vec![vault_seed(IdForTests::token_b_definition_id())])
     }
 
     fn cc_swap_token_a_test_2() -> ChainedCall {
@@ -225,9 +224,9 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
-                sender_seed: Some(vault_seed(IdForTests::token_a_definition_id())),
             },
         )
+        .with_pda_seeds(vec![vault_seed(IdForTests::token_a_definition_id())])
     }
 
     fn cc_swap_token_b_test_2() -> ChainedCall {
@@ -239,7 +238,6 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_max_amount_b(),
-                sender_seed: None,
             },
         )
     }
@@ -255,7 +253,6 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
-                sender_seed: None,
             },
         )
     }
@@ -271,9 +268,9 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
-                sender_seed: Some(vault_seed(IdForTests::token_b_definition_id())),
             },
         )
+        .with_pda_seeds(vec![vault_seed(IdForTests::token_b_definition_id())])
     }
 
     fn cc_swap_exact_output_token_a_test_2() -> ChainedCall {
@@ -287,9 +284,9 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
-                sender_seed: Some(vault_seed(IdForTests::token_a_definition_id())),
             },
         )
+        .with_pda_seeds(vec![vault_seed(IdForTests::token_a_definition_id())])
     }
 
     fn cc_swap_exact_output_token_b_test_2() -> ChainedCall {
@@ -303,7 +300,6 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
-                sender_seed: None,
             },
         )
     }
@@ -317,7 +313,6 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_successful_amount_a(),
-                sender_seed: None,
             },
         )
     }
@@ -331,7 +326,6 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_successful_amount_b(),
-                sender_seed: None,
             },
         )
     }
@@ -345,9 +339,9 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Mint {
                 amount_to_mint: 282,
-                definition_seed: Some(lp_seed()),
             },
         )
+        .with_pda_seeds(vec![lp_seed()])
     }
 
     fn cc_remove_token_a() -> ChainedCall {
@@ -359,9 +353,9 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::remove_actual_a_successful(),
-                sender_seed: Some(vault_seed(IdForTests::token_a_definition_id())),
             },
         )
+        .with_pda_seeds(vec![vault_seed(IdForTests::token_a_definition_id())])
     }
 
     fn cc_remove_token_b() -> ChainedCall {
@@ -373,9 +367,9 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: 70,
-                sender_seed: Some(vault_seed(IdForTests::token_b_definition_id())),
             },
         )
+        .with_pda_seeds(vec![vault_seed(IdForTests::token_b_definition_id())])
     }
 
     fn cc_remove_pool_lp() -> ChainedCall {
@@ -387,7 +381,6 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Burn {
                 amount_to_burn: BalanceForTests::remove_amount_lp(),
-                holding_seed: None,
             },
         )
     }
@@ -401,7 +394,6 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_successful_amount_a(),
-                sender_seed: None,
             },
         )
     }
@@ -415,7 +407,6 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_successful_amount_b(),
-                sender_seed: None,
             },
         )
     }
@@ -429,9 +420,9 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Mint {
                 amount_to_mint: BalanceForTests::lp_supply_init(),
-                definition_seed: Some(lp_seed()),
             },
         )
+        .with_pda_seeds(vec![lp_seed()])
     }
 }
 
@@ -3084,9 +3075,9 @@ fn new_definition_lp_symmetric_amounts() {
         ],
         &token_core::Instruction::Mint {
             amount_to_mint: expected_lp,
-            definition_seed: Some(lp_seed()),
-        },
-    );
+            },
+        )
+        .with_pda_seeds(vec![lp_seed()]);
 
     assert_eq!(chained_call_lp, expected_lp_call);
 }

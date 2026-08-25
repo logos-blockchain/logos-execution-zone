@@ -1,22 +1,19 @@
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::{PdaSeed, ProgramId},
+    program::ProgramId,
 };
 use token_core::{TokenDefinition, TokenHolding};
 
-use crate::seed_authorized;
 
 #[must_use]
 pub fn mint(
     definition_account: AccountWithMetadata,
     user_holding_account: AccountWithMetadata,
     amount_to_mint: u128,
-    definition_seed: Option<PdaSeed>,
     self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
 ) -> Vec<Account> {
     assert!(
-        seed_authorized(&definition_account, caller_program_id, definition_seed),
+        definition_account.is_authorized,
         "Definition authorization is missing"
     );
 

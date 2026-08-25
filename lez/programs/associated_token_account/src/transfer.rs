@@ -34,9 +34,9 @@ pub fn transfer_from_associated_token_account(
         vec![sender_ata, recipient],
         &token_core::Instruction::Transfer {
             amount_to_transfer: amount,
-            sender_seed: Some(seed),
         },
-    );
+    )
+    .with_pda_seeds(vec![seed]);
 
     (post_states, vec![chained_call])
 }

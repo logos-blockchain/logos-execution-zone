@@ -25,19 +25,11 @@ fn main() {
     let post_states = match instruction {
         Instruction::Transfer {
             amount_to_transfer: balance_to_move,
-            sender_seed,
         } => {
             let [sender, recipient] = pre_states
                 .try_into()
                 .expect("Transfer instruction requires exactly two accounts");
-            token_program::transfer::transfer(
-                sender,
-                recipient,
-                balance_to_move,
-                sender_seed,
-                self_program_id,
-                caller_program_id,
-            )
+            token_program::transfer::transfer(sender, recipient, balance_to_move, self_program_id)
         }
         Instruction::NewFungibleDefinition { name, total_supply } => {
             let [definition_account, holding_account] = pre_states
@@ -77,10 +69,7 @@ fn main() {
                 self_program_id,
             )
         }
-        Instruction::Burn {
-            amount_to_burn,
-            holding_seed,
-        } => {
+        Instruction::Burn { amount_to_burn } => {
             let [definition_account, user_holding_account] = pre_states
                 .try_into()
                 .expect("Burn instruction requires exactly two accounts");
@@ -88,15 +77,10 @@ fn main() {
                 definition_account,
                 user_holding_account,
                 amount_to_burn,
-                holding_seed,
                 self_program_id,
-                caller_program_id,
             )
         }
-        Instruction::Mint {
-            amount_to_mint,
-            definition_seed,
-        } => {
+        Instruction::Mint { amount_to_mint } => {
             let [definition_account, user_holding_account] = pre_states
                 .try_into()
                 .expect("Mint instruction requires exactly two accounts");
@@ -104,9 +88,7 @@ fn main() {
                 definition_account,
                 user_holding_account,
                 amount_to_mint,
-                definition_seed,
                 self_program_id,
-                caller_program_id,
             )
         }
         Instruction::PrintNft => {

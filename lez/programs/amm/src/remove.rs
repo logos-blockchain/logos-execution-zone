@@ -116,31 +116,30 @@ pub fn remove_liquidity(
         vec![vault_a.clone(), user_holding_a.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_a,
-            sender_seed: Some(compute_vault_pda_seed(
+},
+    )
+        .with_pda_seeds(vec![compute_vault_pda_seed(
                 pool.account_id,
                 pool_def_data.definition_token_a_id,
-            )),
-        },
-    );
+            )]);
     // Chaincall for Token B withdraw
     let call_token_b = ChainedCall::new(
         token_program_id,
         vec![vault_b.clone(), user_holding_b.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_b,
-            sender_seed: Some(compute_vault_pda_seed(
+},
+    )
+        .with_pda_seeds(vec![compute_vault_pda_seed(
                 pool.account_id,
                 pool_def_data.definition_token_b_id,
-            )),
-        },
-    );
+            )]);
     // Chaincall for LP adjustment
     let call_token_lp = ChainedCall::new(
         token_program_id,
         vec![pool_definition_lp.clone(), user_holding_lp.clone()],
         &token_core::Instruction::Burn {
             amount_to_burn: delta_lp,
-            holding_seed: None,
         },
     );
 

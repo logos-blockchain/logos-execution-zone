@@ -144,7 +144,6 @@ pub fn add_liquidity(
         vec![user_holding_a.clone(), vault_a.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: actual_amount_a,
-            sender_seed: None,
         },
     );
     // Chain call for Token B (UserHoldingB -> Vault_B)
@@ -153,7 +152,6 @@ pub fn add_liquidity(
         vec![user_holding_b.clone(), vault_b.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: actual_amount_b,
-            sender_seed: None,
         },
     );
     // Chain call for LP (mint new tokens for user_holding_lp)
@@ -162,9 +160,9 @@ pub fn add_liquidity(
         vec![pool_definition_lp.clone(), user_holding_lp.clone()],
         &token_core::Instruction::Mint {
             amount_to_mint: delta_lp,
-            definition_seed: Some(compute_liquidity_token_pda_seed(pool.account_id)),
-        },
-    );
+},
+    )
+        .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]);
 
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 

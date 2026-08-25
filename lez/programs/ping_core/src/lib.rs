@@ -29,17 +29,12 @@ pub enum ReceiverInstruction {
     /// Required accounts (1): the receiver config PDA.
     InitConfig(ReceiverConfig),
     /// Replaces the authorized sources. Refused unless the config names an
-    /// authority and that account authorized the transaction, or
-    /// `authority_seed` derives it as the calling program's PDA.
+    /// authority and that account authorized the transaction.
     ///
     /// Required accounts (2): the config PDA, then the authority account.
-    UpdateSources {
-        sources: Vec<(ZoneId, ProgramId)>,
-        authority_seed: Option<PdaSeed>,
-    },
+    UpdateSources { sources: Vec<(ZoneId, ProgramId)> },
     /// Gives up the authority, leaving the source list fixed for good. Refused
-    /// unless the config names an authority and that account authorized it, or
-    /// `authority_seed` derives it as the calling program's PDA.
+    /// unless the config names an authority and that account authorized it.
     ///
     /// Renounce only, never reassign. A leaked key that could rotate would move
     /// the authority to the attacker and lock the real holder out permanently;
@@ -47,7 +42,7 @@ pub enum ReceiverInstruction {
     /// which is what a config with no authority does anyway.
     ///
     /// Required accounts (2): the config PDA, then the authority account.
-    RenounceAuthority { authority_seed: Option<PdaSeed> },
+    RenounceAuthority,
 }
 
 /// Who may deliver to this receiver, and which peer sources they may deliver from.

@@ -461,7 +461,15 @@ fn new_definition_with_valid_inputs_succeeds() {
 fn transfer_with_different_definition_ids_should_fail() {
     let sender = AccountForTests::holding_same_definition_with_authorization();
     let recipient = AccountForTests::holding_different_definition();
-    let _post_states = transfer(sender, recipient, 10, None, TOKEN_PROGRAM_ID, None);
+    let _post_states = transfer(sender, recipient, 10, TOKEN_PROGRAM_ID);
+}
+
+#[should_panic(expected = "Sender authorization is missing")]
+#[test]
+fn transfer_without_sender_authorization_should_fail() {
+    let sender = AccountForTests::holding_same_definition_without_authorization();
+    let recipient = AccountForTests::holding_account_uninit();
+    let _post_states = transfer(sender, recipient, 37, TOKEN_PROGRAM_ID);
 }
 
 #[should_panic(expected = "Insufficient balance")]
@@ -473,77 +481,7 @@ fn transfer_with_insufficient_balance_should_fail() {
     let _post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::burn_insufficient(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
-}
-
-#[should_panic(expected = "Sender authorization is missing")]
-#[test]
-fn transfer_without_sender_authorization_should_fail() {
-    let sender = AccountForTests::holding_same_definition_without_authorization();
-    let recipient = AccountForTests::holding_account_uninit();
-    let _post_states = transfer(sender, recipient, 37, None, TOKEN_PROGRAM_ID, None);
-}
-
-#[test]
-fn transfer_with_caller_pda_seed_succeeds() {
-    let caller = OTHER_PROGRAM_ID;
-    let seed = lee_core::program::PdaSeed::new([3; 32]);
-    let sender = AccountWithMetadata {
-        account: token_account(Data::from(&TokenHolding::Fungible {
-            definition_id: IdForTests::pool_definition_id(),
-            balance: BalanceForTests::init_supply(),
-        })),
-        is_authorized: false,
-        account_id: AccountId::for_public_pda(&caller, &seed),
-    };
-    let recipient = AccountForTests::holding_account2_init();
-
-    let post_states = transfer(
-        sender,
-        recipient,
-        BalanceForTests::transfer_amount(),
-        Some(seed),
-        TOKEN_PROGRAM_ID,
-        Some(caller),
-    );
-
-    let [sender_post, recipient_post] = <[_; 2]>::try_from(post_states).unwrap();
-    assert_eq!(
-        sender_post,
-        AccountForTests::holding_account_init_post_transfer()
-    );
-    assert_eq!(
-        recipient_post,
-        AccountForTests::holding_account2_init_post_transfer()
-    );
-}
-
-#[should_panic(expected = "Sender authorization is missing")]
-#[test]
-fn transfer_with_seed_for_another_caller_should_fail() {
-    let seed = lee_core::program::PdaSeed::new([3; 32]);
-    let sender = AccountWithMetadata {
-        account: token_account(Data::from(&TokenHolding::Fungible {
-            definition_id: IdForTests::pool_definition_id(),
-            balance: BalanceForTests::init_supply(),
-        })),
-        is_authorized: false,
-        account_id: AccountId::for_public_pda(&OTHER_PROGRAM_ID, &seed),
-    };
-    let recipient = AccountForTests::holding_account2_init();
-
-    let _post_states = transfer(
-        sender,
-        recipient,
-        BalanceForTests::transfer_amount(),
-        Some(seed),
-        TOKEN_PROGRAM_ID,
-        Some(TOKEN_PROGRAM_ID),
-    );
+        BalanceForTests::burn_insufficient(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -553,11 +491,7 @@ fn transfer_with_valid_inputs_succeeds() {
     let post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::transfer_amount(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::transfer_amount(), TOKEN_PROGRAM_ID);
     let [sender_post, recipient_post] = <[_; 2]>::try_from(post_states).unwrap();
 
     assert_eq!(
@@ -577,11 +511,7 @@ fn transfer_to_self_emits_agreeing_posts() {
     let post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::transfer_amount(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::transfer_amount(), TOKEN_PROGRAM_ID);
     let [sender_post, recipient_post] = <[_; 2]>::try_from(post_states).unwrap();
 
     assert_eq!(sender_post, recipient_post);
@@ -600,11 +530,7 @@ fn transfer_to_self_beyond_balance_should_fail() {
     let _post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::burn_insufficient(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::burn_insufficient(), TOKEN_PROGRAM_ID);
 }
 
 #[should_panic(expected = "Invalid balance for NFT Master transfer")]
@@ -615,11 +541,7 @@ fn transfer_with_master_nft_invalid_balance() {
     let _post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::transfer_amount(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::transfer_amount(), TOKEN_PROGRAM_ID);
 }
 
 #[should_panic(expected = "Invalid balance in recipient account for NFT transfer")]
@@ -630,11 +552,7 @@ fn transfer_with_master_nft_invalid_recipient_balance() {
     let _post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::printable_copies(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::printable_copies(), TOKEN_PROGRAM_ID);
 }
 
 #[should_panic(expected = "Mismatched token holding types for transfer")]
@@ -652,11 +570,7 @@ fn transfer_between_mismatched_holding_types_should_fail() {
     let _post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::printable_copies(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::printable_copies(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -666,11 +580,7 @@ fn transfer_with_master_nft_success() {
     let post_states = transfer(
         sender,
         recipient,
-        BalanceForTests::printable_copies(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::printable_copies(), TOKEN_PROGRAM_ID);
     let [sender_post, recipient_post] = <[_; 2]>::try_from(post_states).unwrap();
 
     assert_eq!(
@@ -718,11 +628,7 @@ fn burn_mismatch_def() {
     let _post_states = burn(
         definition_account,
         holding_account,
-        BalanceForTests::burn_success(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::burn_success(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -733,11 +639,7 @@ fn burn_missing_authorization() {
     let _post_states = burn(
         definition_account,
         holding_account,
-        BalanceForTests::burn_success(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::burn_success(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -748,11 +650,7 @@ fn burn_insufficient_balance() {
     let _post_states = burn(
         definition_account,
         holding_account,
-        BalanceForTests::burn_insufficient(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::burn_insufficient(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -764,11 +662,7 @@ fn burn_total_supply_underflow() {
     let _post_states = burn(
         definition_account,
         holding_account,
-        BalanceForTests::mint_overflow(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::mint_overflow(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -779,38 +673,7 @@ fn burn_success() {
         definition_account,
         holding_account,
         BalanceForTests::burn_success(),
-        None,
         TOKEN_PROGRAM_ID,
-        None,
-    );
-
-    let [def_post, holding_post] = <[_; 2]>::try_from(post_states).unwrap();
-
-    assert_eq!(def_post, AccountForTests::definition_account_post_burn());
-    assert_eq!(holding_post, AccountForTests::holding_account_post_burn());
-}
-
-#[test]
-fn burn_with_caller_pda_seed_succeeds() {
-    let caller = OTHER_PROGRAM_ID;
-    let seed = lee_core::program::PdaSeed::new([4; 32]);
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = AccountWithMetadata {
-        account: token_account(Data::from(&TokenHolding::Fungible {
-            definition_id: IdForTests::pool_definition_id(),
-            balance: BalanceForTests::holding_balance(),
-        })),
-        is_authorized: false,
-        account_id: AccountId::for_public_pda(&caller, &seed),
-    };
-
-    let post_states = burn(
-        definition_account,
-        holding_account,
-        BalanceForTests::burn_success(),
-        Some(seed),
-        TOKEN_PROGRAM_ID,
-        Some(caller),
     );
 
     let [def_post, holding_post] = <[_; 2]>::try_from(post_states).unwrap();
@@ -827,11 +690,7 @@ fn mint_not_valid_holding_account() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -842,11 +701,7 @@ fn mint_not_valid_definition_account() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -857,11 +712,7 @@ fn mint_missing_authorization() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -872,11 +723,7 @@ fn mint_mismatched_token_definition() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -887,9 +734,7 @@ fn mint_success() {
         definition_account,
         holding_account,
         BalanceForTests::mint_success(),
-        None,
         TOKEN_PROGRAM_ID,
-        None,
     );
 
     let [def_post, holding_post] = <[_; 2]>::try_from(post_states).unwrap();
@@ -902,61 +747,13 @@ fn mint_success() {
 }
 
 #[test]
-fn mint_with_caller_pda_seed_succeeds() {
-    let caller = OTHER_PROGRAM_ID;
-    let seed = lee_core::program::PdaSeed::new([5; 32]);
-    let definition_id = AccountId::for_public_pda(&caller, &seed);
-    let definition_account = AccountWithMetadata {
-        account: token_account(Data::from(&TokenDefinition::Fungible {
-            name: String::from("test"),
-            total_supply: BalanceForTests::init_supply(),
-            metadata_id: None,
-        })),
-        is_authorized: false,
-        account_id: definition_id,
-    };
-    let holding_account = AccountWithMetadata {
-        account: token_account(Data::from(&TokenHolding::Fungible {
-            definition_id,
-            balance: BalanceForTests::holding_balance(),
-        })),
-        is_authorized: false,
-        account_id: IdForTests::holding_id(),
-    };
-
-    let post_states = mint(
-        definition_account,
-        holding_account,
-        BalanceForTests::mint_success(),
-        Some(seed),
-        TOKEN_PROGRAM_ID,
-        Some(caller),
-    );
-
-    let [def_post, holding_post] = <[_; 2]>::try_from(post_states).unwrap();
-
-    assert_eq!(def_post, AccountForTests::definition_account_mint());
-    assert_eq!(
-        holding_post,
-        token_account(Data::from(&TokenHolding::Fungible {
-            definition_id,
-            balance: BalanceForTests::holding_balance_mint(),
-        }))
-    );
-}
-
-#[test]
 fn mint_uninit_holding_success() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_account_uninit();
     let post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
 
     let [def_post, holding_post] = <[_; 2]>::try_from(post_states).unwrap();
 
@@ -972,11 +769,7 @@ fn mint_total_supply_overflow() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_overflow(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::mint_overflow(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -987,11 +780,7 @@ fn mint_holding_account_overflow() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_overflow(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::mint_overflow(), TOKEN_PROGRAM_ID);
 }
 
 #[test]
@@ -1002,11 +791,7 @@ fn mint_cannot_mint_unmintable_tokens() {
     let _post_states = mint(
         definition_account,
         holding_account,
-        BalanceForTests::mint_success(),
-        None,
-        TOKEN_PROGRAM_ID,
-        None,
-    );
+        BalanceForTests::mint_success(), TOKEN_PROGRAM_ID);
 }
 
 #[should_panic(expected = "Definition target account must be uninitialized")]

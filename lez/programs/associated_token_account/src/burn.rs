@@ -34,9 +34,9 @@ pub fn burn_from_associated_token_account(
         vec![token_definition, holder_ata],
         &token_core::Instruction::Burn {
             amount_to_burn: amount,
-            holding_seed: Some(seed),
         },
-    );
+    )
+    .with_pda_seeds(vec![seed]);
 
     (post_states, vec![chained_call])
 }

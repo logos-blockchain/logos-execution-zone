@@ -1,7 +1,7 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{AccountId, AccountWithMetadata},
-    program::{PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::AccountWithMetadata,
+    program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use wrapped_token_core::{
     Instruction, MAX_MINT_AMOUNT, WrappedTokenConfig, balance_bytes, config_account_id,
@@ -35,38 +35,20 @@ fn main() {
             instruction_data,
             &config,
         ),
-        Instruction::RenounceAuthority { authority_seed } => renounce_authority(
+        Instruction::RenounceAuthority => renounce_authority(
             self_program_id,
             caller_program_id,
             pre_states,
             instruction_data,
-            authority_seed,
         ),
-        Instruction::UpdateSources {
-            sources,
-            authority_seed,
-        } => update_sources(
+        Instruction::UpdateSources { sources } => update_sources(
             self_program_id,
             caller_program_id,
             pre_states,
             instruction_data,
             sources,
-            authority_seed,
         ),
     }
-}
-
-fn authority_acts(
-    authority: &AccountWithMetadata,
-    caller_program_id: Option<ProgramId>,
-    authority_seed: Option<PdaSeed>,
-) -> bool {
-    authority.is_authorized
-        || caller_program_id
-            .zip(authority_seed)
-            .is_some_and(|(caller, seed)| {
-                authority.account_id == AccountId::for_public_pda(&caller, &seed)
-            })
 }
 
 fn mint(
@@ -144,7 +126,6 @@ fn renounce_authority(
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
-    authority_seed: Option<PdaSeed>,
 ) {
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
@@ -176,7 +157,7 @@ fn renounce_authority(
         "second account must be the configured authority"
     );
     assert!(
-        authority_acts(&authority, caller_program_id, authority_seed),
+        authority.is_authorized,
         "the configured authority must authorize renouncing it"
     );
 
@@ -205,7 +186,6 @@ fn update_sources(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     sources: Vec<([u8; 32], ProgramId)>,
-    authority_seed: Option<PdaSeed>,
 ) {
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
@@ -237,7 +217,7 @@ fn update_sources(
         "second account must be the configured authority"
     );
     assert!(
-        authority_acts(&authority, caller_program_id, authority_seed),
+        authority.is_authorized,
         "the configured authority must authorize a source change"
     );
 

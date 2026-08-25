@@ -509,7 +509,6 @@ fn main() -> Result<()> {
             programs::token(),
             token_transfer_pre_states(),
             &token_core::Instruction::Transfer {
-                sender_seed: None,
                 amount_to_transfer: 5_000,
             },
         )?,
@@ -519,7 +518,6 @@ fn main() -> Result<()> {
             programs::token(),
             token_mint_pre_states(),
             &token_core::Instruction::Mint {
-                definition_seed: None,
                 amount_to_mint: 5_000,
             },
         )?,
@@ -529,7 +527,6 @@ fn main() -> Result<()> {
             programs::token(),
             token_burn_pre_states(),
             &token_core::Instruction::Burn {
-                holding_seed: None,
                 amount_to_burn: 500,
             },
         )?,

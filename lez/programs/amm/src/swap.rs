@@ -204,7 +204,6 @@ fn swap_logic(
             vec![user_deposit, vault_deposit],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount_in,
-                sender_seed: None,
             },
         ),
         ChainedCall::new(
@@ -212,9 +211,9 @@ fn swap_logic(
             vec![vault_withdraw, user_withdraw],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: withdraw_amount,
-                sender_seed: Some(pda_seed),
-            },
-        ),
+        },
+    )
+    .with_pda_seeds(vec![pda_seed]),
     ];
 
     (chained_calls, swap_amount_in, withdraw_amount)
@@ -335,7 +334,6 @@ fn exact_output_swap_logic(
             vec![user_deposit, vault_deposit],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: deposit_amount,
-                sender_seed: None,
             },
         ),
         ChainedCall::new(
@@ -343,9 +341,9 @@ fn exact_output_swap_logic(
             vec![vault_withdraw, user_withdraw],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: exact_amount_out,
-                sender_seed: Some(pda_seed),
-            },
-        ),
+        },
+    )
+    .with_pda_seeds(vec![pda_seed]),
     ];
 
     (chained_calls, deposit_amount, exact_amount_out)

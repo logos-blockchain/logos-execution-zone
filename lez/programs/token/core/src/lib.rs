@@ -1,10 +1,7 @@
 //! This crate contains core data structures and utilities for the Token Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{
-    account::{AccountId, Data},
-    program::PdaSeed,
-};
+use lee_core::account::{AccountId, Data};
 use serde::{Deserialize, Serialize};
 
 /// Token Program Instruction.
@@ -16,11 +13,7 @@ pub enum Instruction {
     /// - Sender's Token Holding account (initialized, authorized),
     /// - Recipient's Token Holding account (initialized or uninitialized).
     ///
-    /// `sender_seed` authorizes a sender the caller custodies as its own PDA.
-    Transfer {
-        amount_to_transfer: u128,
-        sender_seed: Option<PdaSeed>,
-    },
+    Transfer { amount_to_transfer: u128 },
 
     /// Create a new fungible token definition without metadata.
     ///
@@ -54,11 +47,7 @@ pub enum Instruction {
     /// - Token Definition account (initialized, any authorization),
     /// - Token Holding account (initialized, authorized).
     ///
-    /// `holding_seed` authorizes a holding the caller custodies as its own PDA.
-    Burn {
-        amount_to_burn: u128,
-        holding_seed: Option<PdaSeed>,
-    },
+    Burn { amount_to_burn: u128 },
 
     /// Mint new tokens to the holder's account.
     ///
@@ -66,11 +55,7 @@ pub enum Instruction {
     /// - Token Definition account (initialized, authorized),
     /// - Token Holding account (initialized or uninitialized).
     ///
-    /// `definition_seed` authorizes a definition the caller custodies as its own PDA.
-    Mint {
-        amount_to_mint: u128,
-        definition_seed: Option<PdaSeed>,
-    },
+    Mint { amount_to_mint: u128 },
 
     /// Print a new NFT from the master copy.
     ///

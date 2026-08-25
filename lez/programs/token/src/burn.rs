@@ -1,22 +1,19 @@
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::{PdaSeed, ProgramId},
+    program::ProgramId,
 };
 use token_core::{TokenDefinition, TokenHolding};
 
-use crate::seed_authorized;
 
 #[must_use]
 pub fn burn(
     definition_account: AccountWithMetadata,
     user_holding_account: AccountWithMetadata,
     amount_to_burn: u128,
-    holding_seed: Option<PdaSeed>,
     self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
 ) -> Vec<Account> {
     assert!(
-        seed_authorized(&user_holding_account, caller_program_id, holding_seed),
+        user_holding_account.is_authorized,
         "Authorization is missing"
     );
 

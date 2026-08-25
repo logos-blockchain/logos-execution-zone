@@ -87,7 +87,6 @@ pub fn new_definition(
     } else {
         token_core::Instruction::Mint {
             amount_to_mint: initial_lp,
-            definition_seed: Some(compute_liquidity_token_pda_seed(pool.account_id)),
         }
     };
 
@@ -115,7 +114,6 @@ pub fn new_definition(
         vec![user_holding_a.clone(), vault_a.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_a_amount.into(),
-            sender_seed: None,
         },
     );
 
@@ -125,7 +123,6 @@ pub fn new_definition(
         vec![user_holding_b.clone(), vault_b.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_b_amount.into(),
-            sender_seed: None,
         },
     );
 
@@ -133,7 +130,8 @@ pub fn new_definition(
         token_program_id,
         vec![pool_definition_lp.clone(), user_holding_lp.clone()],
         &instruction,
-    );
+    )
+    .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]);
 
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
