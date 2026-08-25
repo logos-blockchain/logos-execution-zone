@@ -283,20 +283,14 @@ impl Case {
     }
 }
 
-fn authenticated_transfer_init() -> Vec<AccountWithMetadata> {
-    vec![AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
-    }]
-}
-
 fn authenticated_transfer_transfer() -> Vec<AccountWithMetadata> {
     let sender = AccountWithMetadata {
-        account: Account {
-            balance: 1_000_000,
-            ..Account::default()
-        },
+        account: Account::single(
+            programs::authenticated_transfer().id(),
+            1_000_000,
+            Data::default(),
+            0_u128.into(),
+        ),
         is_authorized: true,
         account_id: AccountId::new([1; 32]),
     };
@@ -315,15 +309,15 @@ fn token_holding(
     is_authorized: bool,
 ) -> AccountWithMetadata {
     AccountWithMetadata {
-        account: Account {
-            program_owner: programs::token().id().into(),
-            balance: 0,
-            data: Data::from(&TokenHolding::Fungible {
+        account: Account::single(
+            programs::token().id(),
+            0,
+            Data::from(&TokenHolding::Fungible {
                 definition_id,
                 balance,
             }),
-            nonce: 0_u128.into(),
-        },
+            0_u128.into(),
+        ),
         is_authorized,
         account_id,
     }
@@ -335,16 +329,16 @@ fn token_definition(
     is_authorized: bool,
 ) -> AccountWithMetadata {
     AccountWithMetadata {
-        account: Account {
-            program_owner: programs::token().id().into(),
-            balance: 0,
-            data: Data::from(&TokenDefinition::Fungible {
+        account: Account::single(
+            programs::token().id(),
+            0,
+            Data::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
                 total_supply,
                 metadata_id: None,
             }),
-            nonce: 0_u128.into(),
-        },
+            0_u128.into(),
+        ),
         is_authorized,
         account_id,
     }
@@ -373,18 +367,18 @@ fn token_burn_pre_states() -> Vec<AccountWithMetadata> {
 
 fn clock_account(account_id: AccountId, block_id: u64) -> AccountWithMetadata {
     AccountWithMetadata {
-        account: Account {
-            program_owner: programs::clock().id().into(),
-            balance: 0,
-            data: ClockAccountData {
+        account: Account::single(
+            programs::clock().id(),
+            0,
+            ClockAccountData {
                 block_id,
                 timestamp: Timestamp::from(0_u64),
             }
             .to_bytes()
             .try_into()
             .expect("ClockAccountData should fit in account data"),
-            nonce: 0_u128.into(),
-        },
+            0_u128.into(),
+        ),
         is_authorized: false,
         account_id,
     }
@@ -427,10 +421,11 @@ fn amm_pool_account() -> AccountWithMetadata {
     let reserve_b: u128 = 500;
     let lp_supply = (reserve_a * reserve_b).isqrt();
     AccountWithMetadata {
-        account: Account {
-            program_owner: programs::amm().id().into(),
-            balance: 0,
-            data: Data::from(&PoolDefinition {
+        account: Account::single(
+            programs::amm().id(),
+            0,
+            Data::from(&PoolDefinition {
+                token_program_id: programs::token().id(),
                 definition_token_a_id: amm_token_a_def_id(),
                 definition_token_b_id: amm_token_b_def_id(),
                 vault_a_id: amm_vault_a_id(),
@@ -442,8 +437,8 @@ fn amm_pool_account() -> AccountWithMetadata {
                 fees: 0,
                 active: true,
             }),
-            nonce: 0_u128.into(),
-        },
+            0_u128.into(),
+        ),
         is_authorized: true,
         account_id: amm_pool_id(),
     }
@@ -503,14 +498,10 @@ fn main() -> Result<()> {
             "Transfer",
             programs::authenticated_transfer(),
             authenticated_transfer_transfer(),
-            &authenticated_transfer_core::Instruction::Transfer { amount: 5_000 },
-        )?,
-        Case::new(
-            "authenticated_transfer",
-            "Initialize",
-            programs::authenticated_transfer(),
-            authenticated_transfer_init(),
-            &authenticated_transfer_core::Instruction::Initialize,
+            &authenticated_transfer_core::Instruction::Transfer {
+                amount: 5_000,
+                recipient_program: None,
+            },
         )?,
         Case::new(
             "token",
@@ -518,6 +509,7 @@ fn main() -> Result<()> {
             programs::token(),
             token_transfer_pre_states(),
             &token_core::Instruction::Transfer {
+                sender_seed: None,
                 amount_to_transfer: 5_000,
             },
         )?,
@@ -527,6 +519,7 @@ fn main() -> Result<()> {
             programs::token(),
             token_mint_pre_states(),
             &token_core::Instruction::Mint {
+                definition_seed: None,
                 amount_to_mint: 5_000,
             },
         )?,
@@ -536,6 +529,7 @@ fn main() -> Result<()> {
             programs::token(),
             token_burn_pre_states(),
             &token_core::Instruction::Burn {
+                holding_seed: None,
                 amount_to_burn: 500,
             },
         )?,
@@ -574,7 +568,7 @@ fn main() -> Result<()> {
             programs::ata(),
             ata_create_pre_states(),
             &associated_token_account_core::Instruction::Create {
-                ata_program_id: programs::ata().id(),
+                token_program_id: programs::token().id(),
             },
         )?,
     ];

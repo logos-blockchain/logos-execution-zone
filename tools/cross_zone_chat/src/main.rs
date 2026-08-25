@@ -430,7 +430,7 @@ async fn next_free_ordinal(client: &SequencerClient, target_zone: &ZoneId) -> Re
                 }
             }
         };
-        if account == Account::default() {
+        if account.slot(outbox_id).is_none() {
             return Ok(ordinal);
         }
     }
