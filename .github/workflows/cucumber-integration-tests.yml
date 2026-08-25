@@ -1,37 +1,19 @@
 on:
-  push:
-    branches:
-      - main
-      - dev
-    paths-ignore:
-      - "**.md"
-      - "!.github/workflows/*.yml"
-
-  pull_request:
-    paths-ignore:
-      - "**.md"
-      - "!.github/workflows/*.yml"
+  workflow_call:
+    inputs:
+      image:
+        description: LEZ CI image reference from the caller workflow
+        required: true
+        type: string
 
 name: Cucumber integration tests
 
-concurrency:
-  group: ${{ github.workflow }}@${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
-  pull-requests: read
   packages: read
 
 jobs:
-  ci-image:
-    permissions:
-      contents: read
-      packages: write
-    uses: ./.github/workflows/ci-image.yml
-
   cucumber:
-    needs: ci-image
     name: Run cucumber integration tests
     runs-on: ubuntu-latest
     timeout-minutes: 240
@@ -49,13 +31,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download resolved Bedrock node
+        uses: actions/download-artifact@v4
+        with:
+          name: bedrock-node
+          path: bedrock/.resolved
+
+      - name: Make resolved Bedrock node executable
+        run: chmod +x bedrock/.resolved/logos-blockchain-node
+
       # Build the Cucumber test target first so compile time is separate from
       # the individual scenario suite timings below.
       - name: Build cucumber tests
         id: build_cucumber
         uses: ./.github/actions/run-in-ci-image
         with:
-          image: ${{ needs.ci-image.outputs.image }}
+          image: ${{ inputs.image }}
           # Temporary CI-only suppression for the single-use-lifetimes
           # warning triggered while the pinned logos-blockchain dependency is
           # built in the LEZ environment. Normal linting remains strict with
@@ -64,7 +55,6 @@ jobs:
             RUSTFLAGS=-A single-use-lifetimes
             RISC0_DEV_MODE=1
           run: >-
-            env -u GITHUB_ACTIONS -u CI
             cargo test -p integration_tests --features cucumber
             --test cucumber --no-run
 
@@ -78,7 +68,8 @@ jobs:
           suite_name: smoke
           artifact_subdir: "LEZ integration environment"
           max_concurrent_scenarios: "1"
-          image: ${{ needs.ci-image.outputs.image }}
+          image: ${{ inputs.image }}
+          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
 
       # Feature: Authenticated transfers (@auth_transfer_ci)
       - name: Run cucumber suite - authenticated transfers
@@ -90,7 +81,8 @@ jobs:
           suite_name: auth-transfer
           artifact_subdir: "Authenticated transfers"
           max_concurrent_scenarios: "1"
-          image: ${{ needs.ci-image.outputs.image }}
+          image: ${{ inputs.image }}
+          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
 
       # Feature: Indexer state (@indexer_state_ci)
       - name: Run cucumber suite - indexer state
@@ -102,7 +94,8 @@ jobs:
           suite_name: indexer-state
           artifact_subdir: "LEZ indexer state consistency"
           max_concurrent_scenarios: "1"
-          image: ${{ needs.ci-image.outputs.image }}
+          image: ${{ inputs.image }}
+          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
 
       # Feature: Multi sequencer (@multi_sequencer_ci)
       - name: Run cucumber suite - multi sequencer
@@ -114,7 +107,8 @@ jobs:
           suite_name: multi-sequencer
           artifact_subdir: "LEZ multi-sequencer committee convergence"
           max_concurrent_scenarios: "1"
-          image: ${{ needs.ci-image.outputs.image }}
+          image: ${{ inputs.image }}
+          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
 
       - name: Upload cucumber JUnit results
         if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
