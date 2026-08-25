@@ -740,12 +740,8 @@ pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionDa
 
 /// Validates well-behaved program execution.
 ///
-/// Diff-native: every rule here reads only `pre_states` and each `AccountDiff`'s
-/// `diff_balance`/`diff_data`, never a materialized post-state. `AccountDiff` has no `nonce` or
-/// `program_owner` field, so a program cannot express a nonce or ownership change through it at
-/// all — those used to be explicit rules here (comparing `pre.account.nonce`/`program_owner`
-/// against a program-constructed post-state) but are now enforced by the type itself, not by a
-/// runtime check. Ownership is exclusively handled by the separate claim-eligibility check.
+/// `AccountDiff` has no `nonce`/`program_owner` field, so a program can't forge either; ownership
+/// is checked separately, via claims.
 ///
 /// # Parameters
 /// - `pre_states`: The list of input accounts, each annotated with authorization metadata.
@@ -803,8 +799,7 @@ pub fn validate_execution(
         }
     }
 
-    // 5. Total balance is preserved: within this call's own diffs, every decrease must be balanced
-    //    by an equal increase.
+    // 5. Total balance is preserved
     let Some(total_added) =
         WrappedBalanceSum::from_balances(post_diff.iter().filter_map(|diff_output| {
             match diff_output.diff().diff_balance {

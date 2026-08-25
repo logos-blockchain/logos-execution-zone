@@ -20,9 +20,7 @@ fn main() {
         return;
     };
 
-    // Preserve the old saturating_sub semantics (burn at most the account's current balance,
-    // never underflow) by clamping the amount actually subtracted, rather than emitting the raw
-    // instruction value as the diff.
+    // Clamp to preserve the old saturating_sub semantics (burn at most what's there).
     let burned = balance_to_burn.min(pre.account.balance);
     let diff = AccountDiff {
         id: pre.account_id,

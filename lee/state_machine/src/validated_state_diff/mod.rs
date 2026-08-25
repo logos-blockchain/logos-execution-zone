@@ -212,7 +212,6 @@ impl ValidatedStateDiff {
                 LeeError::OutOfValidityWindow
             );
 
-            // Materialize each account's diff into a full post-state and update the state diff.
             for (pre, diff_output) in program_output
                 .pre_states
                 .iter()
@@ -229,9 +228,8 @@ impl ValidatedStateDiff {
                     .clone()
                     .unwrap_or_else(|| pre.account.data.clone());
 
-                // Ownership is either inherited unchanged, or explicitly overwritten by a claim
-                // — never reverts to default. `AccountDiff` carries no ownership info at all, so
-                // this is the only place a materialized account's owner can change.
+                // Owner is inherited unless a claim overrides it (AccountDiff carries no
+                // ownership).
                 let program_owner = if let Some(claim) = diff_output.required_claim() {
                     // The invoked program can only claim accounts with default program id.
                     ensure!(

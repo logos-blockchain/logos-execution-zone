@@ -8,8 +8,8 @@ use token_core::{
 
 #[must_use]
 pub fn new_fungible_definition(
-    definition_target_account: AccountWithMetadata,
-    holding_target_account: AccountWithMetadata,
+    definition_target_account: &AccountWithMetadata,
+    holding_target_account: &AccountWithMetadata,
     name: String,
     total_supply: u128,
 ) -> Vec<AccountDiffOutput> {
@@ -55,9 +55,9 @@ pub fn new_fungible_definition(
 
 #[must_use]
 pub fn new_definition_with_metadata(
-    definition_target_account: AccountWithMetadata,
-    holding_target_account: AccountWithMetadata,
-    metadata_target_account: AccountWithMetadata,
+    definition_target_account: &AccountWithMetadata,
+    holding_target_account: &AccountWithMetadata,
+    metadata_target_account: &AccountWithMetadata,
     new_definition: NewTokenDefinition,
     metadata: NewTokenMetadata,
 ) -> Vec<AccountDiffOutput> {

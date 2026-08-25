@@ -6,8 +6,8 @@ use token_core::{TokenDefinition, TokenHolding};
 
 #[must_use]
 pub fn mint(
-    definition_account: AccountWithMetadata,
-    user_holding_account: AccountWithMetadata,
+    definition_account: &AccountWithMetadata,
+    user_holding_account: &AccountWithMetadata,
     amount_to_mint: u128,
 ) -> Vec<AccountDiffOutput> {
     assert!(

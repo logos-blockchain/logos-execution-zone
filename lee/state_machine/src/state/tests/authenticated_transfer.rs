@@ -34,10 +34,8 @@ fn transition_from_authenticated_transfer_program_invocation_default_account_des
 fn transition_from_authenticated_transfer_program_invocation_insuficient_balance() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-    // Owned by the executing program (matching the other tests in this file): otherwise the
-    // diff-native ownership check (`UnauthorizedBalanceDecrease`) rejects the balance decrease
-    // before `apply_balance_diff` ever gets a chance to reject it for being insufficient, which
-    // isn't what this test means to exercise.
+    // Owned by the executing program, or UnauthorizedBalanceDecrease fires before
+    // apply_balance_diff gets a chance to.
     let initial_data = [(
         account_id,
         Account {
@@ -59,9 +57,7 @@ fn transition_from_authenticated_transfer_program_invocation_insuficient_balance
     let tx = transfer_transaction(from, &from_key, 0, to, &to_key, 0, balance_to_move);
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-    // Balance-sufficiency is no longer checked in-guest — `authenticated_transfer` emits a
-    // plain `BalanceDiff::Sub` and lets `apply_balance_diff`'s checked arithmetic (applied
-    // unconditionally to every diff, at the protocol level) reject an insufficient balance.
+    // Balance-sufficiency is now checked centrally, by apply_balance_diff, not in-guest.
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(

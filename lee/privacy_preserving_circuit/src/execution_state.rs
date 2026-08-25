@@ -275,10 +275,7 @@ impl ExecutionState {
         for (mut pre, diff_output) in output_pre_states.into_iter().zip(output_post_states) {
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
-            // `pre` is fully consumed by the match below (destructured in the `Occupied` arm,
-            // moved into `self.pre_states` in the `Vacant` arm), so anything needed afterward —
-            // for materializing this account's diff into a full post-state — must be captured
-            // now.
+            // `pre` is consumed by the match below, so capture what materialization needs now.
             let pre_account = pre.account.clone();
             let post_states_entry = self.post_states.entry(pre.account_id);
             match &post_states_entry {
@@ -422,9 +419,7 @@ impl ExecutionState {
                 .clone()
                 .unwrap_or_else(|| pre_account.data.clone());
 
-            // Ownership is either inherited unchanged, or explicitly overwritten by a claim —
-            // never reverts to default. `AccountDiff` carries no ownership info at all, so this
-            // is the only place a materialized account's owner can change.
+            // Owner is inherited unless a claim overrides it (AccountDiff carries no ownership).
             let post_program_owner = if let Some(claim) = diff_output.required_claim() {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(

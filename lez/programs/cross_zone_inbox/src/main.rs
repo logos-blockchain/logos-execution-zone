@@ -11,7 +11,7 @@ use lee_core::{
     },
 };
 
-fn unchanged(pre: &AccountWithMetadata) -> AccountDiffOutput {
+const fn unchanged(pre: &AccountWithMetadata) -> AccountDiffOutput {
     AccountDiffOutput::new(AccountDiff::unchanged(pre.account_id))
 }
 
