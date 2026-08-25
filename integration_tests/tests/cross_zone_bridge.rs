@@ -120,12 +120,18 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // has already landed (it preceded delivery), so zone A reflects the debit and
     // escrow now.
     let escrow_id = bridge_lock_core::escrow_account_id(programs::bridge_lock().id());
-    let escrowed = seq_client_a.get_account(escrow_id).await?.balance;
+    let escrowed = seq_client_a
+        .get_account(escrow_id)
+        .await?
+        .balance(programs::bridge_lock().id());
     assert_eq!(
         escrowed, LOCK_AMOUNT,
         "zone A escrow must hold the locked amount"
     );
-    let remaining = seq_client_a.get_account(holder_id).await?.balance;
+    let remaining = seq_client_a
+        .get_account(holder_id)
+        .await?
+        .balance(programs::bridge_lock().id());
     assert_eq!(
         remaining,
         INITIAL_BALANCE - LOCK_AMOUNT,
@@ -187,7 +193,13 @@ async fn wait_for_mint(indexer: &IndexerClient, holding_id: AccountId) -> Result
         loop {
             let account =
                 indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
-            let balance = wrapped_token_core::read_balance(&account.data.0);
+            let holding = account
+                .slots
+                .get(&indexer_service_protocol::ProgramId(
+                    programs::wrapped_token().id(),
+                ))
+                .map_or(&[][..], |slot| slot.data.0.as_slice());
+            let balance = wrapped_token_core::read_balance(holding);
             if balance != 0 {
                 return Ok::<u128, anyhow::Error>(balance);
             }

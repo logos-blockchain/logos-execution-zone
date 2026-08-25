@@ -72,29 +72,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .key_chain_mut()
         .add_imported_public_account(funding_private_key);
 
-    // Claim the genesis supply out of its vault.
-    let owner_vault_id = vault_core::compute_vault_account_id(programs::vault().id(), funding_id);
-    let claim_instruction_data = Program::serialize_instruction(vault_core::Instruction::Claim {
-        amount: FUNDING_BALANCE,
-    })
-    .context("Failed to serialize vault Claim instruction")?;
-    ctx.wallet()
-        .send_pub_tx(
-            vec![
-                AccountIdentity::Public(funding_id),
-                AccountIdentity::PublicNoSign(owner_vault_id),
-            ],
-            claim_instruction_data,
-            programs::vault().id(),
-        )
-        .await
-        .map_err(|err| {
-            anyhow::anyhow!(
-                "Failed to claim the demo funding account from its genesis vault: {err:?}"
-            )
-        })?;
-    info!("Waiting for the vault-claim transaction's block to land");
-    poll_until("vault claim to land", 30, || async {
+    info!("Waiting for the genesis supply to be visible");
+    poll_until("the genesis supply to land", 30, || async {
         Ok(account_balance(&ctx, funding_id).await? == FUNDING_BALANCE)
     })
     .await?;
@@ -108,6 +87,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let mover_instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: FUNDING_BALANCE,
+            recipient_program: Some(programs::sequencer_stake().id()),
         })
         .context("Failed to serialize mover instruction")?;
     let stake_instruction_data =
@@ -138,9 +118,11 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
 
     info!("Waiting for the Stake transaction's block to land");
-    poll_until("stake to take ownership", 30, || async {
-        Ok(get_account(&ctx, ownership_id).await?.program_owner
-            == programs::sequencer_stake().id().into())
+    poll_until("the stake to land in the ownership account", 30, || async {
+        Ok(get_account(&ctx, ownership_id)
+            .await?
+            .balance(programs::sequencer_stake().id())
+            == FUNDING_BALANCE)
     })
     .await?;
 
@@ -148,20 +130,20 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .await
         .context("Failed to read the stake ownership account")?;
     assert_eq!(
-        ownership_account.program_owner,
-        programs::sequencer_stake().id().into(),
-        "ownership account should now be owned by sequencer_stake"
-    );
-    assert_eq!(
-        ownership_account.balance, FUNDING_BALANCE,
+        ownership_account.balance(programs::sequencer_stake().id()),
+        FUNDING_BALANCE,
         "ownership account should hold the staked balance"
     );
-    let record = sequencer_stake_core::StakeRecord::from_bytes(ownership_account.data.as_ref())
-        .context("ownership account data did not decode as a StakeRecord")?;
+    let record = sequencer_stake_core::StakeRecord::from_bytes(
+        ownership_account
+            .data(programs::sequencer_stake().id())
+            .as_ref(),
+    )
+    .context("ownership account data did not decode as a StakeRecord")?;
     assert_eq!(record.sequencer_key, demo_stake_key);
     info!(
         "Ownership account confirmed: {} staked for sequencer key {}",
-        ownership_account.balance,
+        ownership_account.balance(programs::sequencer_stake().id()),
         hex::encode(record.sequencer_key)
     );
 
@@ -260,10 +242,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // Exit flow: full UnstakeRequest, wait for the committee removal to land on
     // Bedrock, then check the sequencer's own FinalizeUnstake releases the stake.
     //
-    // FinalizeUnstake is unsigned/permissionless, so it can't claim a fresh
-    // destination account (that needs the owner's own signature, same as
-    // authenticated_transfer's Transfer). Reuse funding_id: already
-    // authenticated_transfer-owned, drained to 0 by the Stake above.
+    // Reuse funding_id: drained to 0 by the Stake above.
     let destination_id = funding_id;
 
     let unstake_request_data =
@@ -317,7 +296,12 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     poll_until(
         "FinalizeUnstake to drain the ownership account",
         90,
-        || async { Ok(get_account(&ctx, ownership_id).await?.balance == 0) },
+        || async {
+            Ok(get_account(&ctx, ownership_id)
+                .await?
+                .balance(programs::sequencer_stake().id())
+                == 0)
+        },
     )
     .await?;
 
@@ -325,12 +309,16 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .await
         .context("Failed to read the drained ownership account")?;
     assert_eq!(
-        drained_ownership_account.balance, 0,
+        drained_ownership_account.balance(programs::sequencer_stake().id()),
+        0,
         "ownership account should be fully drained"
     );
-    let drained_record =
-        sequencer_stake_core::StakeRecord::from_bytes(drained_ownership_account.data.as_ref())
-            .context("drained ownership account data did not decode as a StakeRecord")?;
+    let drained_record = sequencer_stake_core::StakeRecord::from_bytes(
+        drained_ownership_account
+            .data(programs::sequencer_stake().id())
+            .as_ref(),
+    )
+    .context("drained ownership account data did not decode as a StakeRecord")?;
     assert!(
         drained_record.pending_unstake.is_none(),
         "pending unstake should be cleared"
@@ -367,9 +355,12 @@ async fn stake_entry(
     let config_account = get_account(ctx, config_id)
         .await
         .context("Failed to read the sequencer_stake config account")?;
-    let config =
-        sequencer_stake_core::SequencerStakeConfig::from_bytes(config_account.data.as_ref())
-            .context("config account data did not decode as a SequencerStakeConfig")?;
+    let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
+        config_account
+            .data(programs::sequencer_stake().id())
+            .as_ref(),
+    )
+    .context("config account data did not decode as a SequencerStakeConfig")?;
     Ok(config.entries.get(&sequencer_key).copied())
 }
 

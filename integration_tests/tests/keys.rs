@@ -84,7 +84,10 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .wallet()
         .get_account_private(to_account_id)
         .context("Failed to get recipient's private account")?;
-    assert_eq!(to_res_acc.balance, 100);
+    assert_eq!(
+        to_res_acc.balance(programs::authenticated_transfer().id()),
+        100
+    );
 
     log::info!("Successfully transferred using claiming path");
 
@@ -142,16 +145,15 @@ async fn restore_keys_from_seed() -> Result<()> {
     assert_public_account_restored(&ctx, to_account_id4, "Acc 4");
 
     assert_eq!(
-        acc1.account.program_owner,
-        programs::authenticated_transfer().id().into()
+        acc1.account
+            .balance(programs::authenticated_transfer().id()),
+        100
     );
     assert_eq!(
-        acc2.account.program_owner,
-        programs::authenticated_transfer().id().into()
+        acc2.account
+            .balance(programs::authenticated_transfer().id()),
+        101
     );
-
-    assert_eq!(acc1.account.balance, 100);
-    assert_eq!(acc2.account.balance, 101);
 
     log::info!("Tree checks passed, testing restored accounts can transact");
 
@@ -189,11 +191,11 @@ async fn restore_keys_from_seed() -> Result<()> {
     // Verify public account balances
     let acc3 = ctx
         .sequencer_client()
-        .get_account_balance(to_account_id3)
+        .get_account_balance(to_account_id3, programs::authenticated_transfer().id())
         .await?;
     let acc4 = ctx
         .sequencer_client()
-        .get_account_balance(to_account_id4)
+        .get_account_balance(to_account_id4, programs::authenticated_transfer().id())
         .await?;
 
     assert_eq!(acc3, 91); // 102 - 11

@@ -25,10 +25,7 @@ use wallet::{
 };
 
 use super::LezSequencerClient;
-use crate::{
-    config::InitialPrivateAccountForWallet,
-    setup::setup_wallet,
-};
+use crate::{config::InitialPrivateAccountForWallet, setup::setup_wallet};
 
 struct WalletComponents {
     wallet: WalletCore,

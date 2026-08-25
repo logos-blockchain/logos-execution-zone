@@ -69,7 +69,9 @@ async fn gossiped_transaction_reaches_producing_sequencer() -> Result<()> {
     let to = accounts[1].account_id;
     let sign_key = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
 
-    let to_balance_before = seq_client_a.get_account_balance(to).await?;
+    let to_balance_before = seq_client_a
+        .get_account_balance(to, programs::authenticated_transfer().id())
+        .await?;
     let nonce = seq_client_b.get_accounts_nonces(vec![from]).await?[0];
     let tx = common::test_utils::create_transaction_native_token_transfer(
         from,
@@ -117,7 +119,11 @@ async fn wait_for_balance(
 
     let wait = async {
         loop {
-            if client.get_account_balance(account).await? == expected {
+            if client
+                .get_account_balance(account, programs::authenticated_transfer().id())
+                .await?
+                == expected
+            {
                 return Ok::<(), anyhow::Error>(());
             }
             tokio::time::sleep(POLL_INTERVAL).await;

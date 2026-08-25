@@ -27,13 +27,10 @@ async fn get_existing_account() -> Result<()> {
 
     let account = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
 
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
-    assert_eq!(account.balance, 10000);
-    assert!(account.data.is_empty());
-    assert_eq!(account.nonce.0, 1);
+    let native = programs::authenticated_transfer().id();
+    assert_eq!(account.balance(native), 10000);
+    assert!(account.data(native).is_empty());
+    assert_eq!(account.nonce.0, 0);
 
     log::info!("Successfully retrieved account with correct details");
 
@@ -148,12 +145,12 @@ async fn import_private_account() -> Result<()> {
         &key_chain.viewing_public_key,
         0,
     ));
-    let account = lee::Account {
-        program_owner: programs::authenticated_transfer().id().into(),
-        balance: 777,
-        data: Data::default(),
-        nonce: Nonce::default(),
-    };
+    let account = lee::Account::single(
+        programs::authenticated_transfer().id(),
+        777,
+        Data::default(),
+        Nonce::default(),
+    );
 
     let key_chain_json = serde_json::to_string(&key_chain)
         .context("Failed to serialize key chain for private import")?;
@@ -212,12 +209,12 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     let key_chain_json =
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;
 
-    let initial_account = lee::Account {
-        program_owner: programs::authenticated_transfer().id().into(),
-        balance: 100,
-        data: Data::default(),
-        nonce: Nonce::default(),
-    };
+    let initial_account = lee::Account::single(
+        programs::authenticated_transfer().id(),
+        100,
+        Data::default(),
+        Nonce::default(),
+    );
 
     // First import
     wallet::cli::execute_subcommand(
@@ -231,12 +228,12 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     )
     .await?;
 
-    let updated_account = lee::Account {
-        program_owner: programs::authenticated_transfer().id().into(),
-        balance: 999,
-        data: Data::default(),
-        nonce: Nonce::default(),
-    };
+    let updated_account = lee::Account::single(
+        programs::authenticated_transfer().id(),
+        999,
+        Data::default(),
+        Nonce::default(),
+    );
 
     // Second import with different account data (same key chain)
     wallet::cli::execute_subcommand(

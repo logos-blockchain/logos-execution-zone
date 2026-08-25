@@ -152,7 +152,7 @@ async fn wait_for_delivery(client: SequencerClient, record_id: AccountId) -> Res
     let wait = async {
         loop {
             let account = client.get_account(record_id).await?;
-            let data = account.data.into_inner();
+            let data = account.data(programs::ping_receiver().id()).to_vec();
             if !data.is_empty() {
                 return Ok::<Vec<u8>, anyhow::Error>(data);
             }

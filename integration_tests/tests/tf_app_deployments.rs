@@ -177,7 +177,7 @@ async fn assert_lez_stack_works(deployment: &DeployContext<AppHostEnv>) -> Resul
     assert_eq!(
         sequencer
             .client()
-            .get_account_balance(wallet_account)
+            .get_account_balance(wallet_account, programs::authenticated_transfer().id())
             .await?,
         expected_balance
     );

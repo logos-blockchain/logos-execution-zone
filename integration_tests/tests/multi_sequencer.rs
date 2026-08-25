@@ -105,7 +105,9 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
     let to = accounts[1].account_id;
     let sign_key = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
 
-    let to_balance_before = a.get_account_balance(to).await?;
+    let to_balance_before = a
+        .get_account_balance(to, programs::authenticated_transfer().id())
+        .await?;
     let nonce = b.get_accounts_nonces(vec![from]).await?[0];
     let tx = common::test_utils::create_transaction_native_token_transfer(
         from,
@@ -120,7 +122,11 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
 
     let expected = to_balance_before + TRANSFER_AMOUNT;
     wait_until("the cross-sequencer transfer to reach A", || async {
-        Ok(a.get_account_balance(to).await? == expected)
+        Ok(
+            a.get_account_balance(to, programs::authenticated_transfer().id())
+                .await?
+                == expected,
+        )
     })
     .await?;
 

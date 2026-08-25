@@ -60,8 +60,11 @@ async fn fund_private_pda(
     let sender_pre = AccountWithMetadata::new(sender_account.clone(), true, sender);
     let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_account_id);
 
-    let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
-        .context("failed to serialize auth_transfer instruction")?;
+    let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer {
+        amount,
+        recipient_program: None,
+    })
+    .context("failed to serialize auth_transfer instruction")?;
 
     let account_identities = vec![
         InputAccountIdentity::Public,
@@ -70,7 +73,7 @@ async fn fund_private_pda(
             random_seed: [0; 32],
             identifier,
             kind: WitnessKind::Pda {
-                binding: Some((authority_program_id, seed)),
+                binding: (authority_program_id, seed),
             },
             nullifier: NullifierWitness::Init {
                 npk,
@@ -219,13 +222,19 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .wallet()
         .get_account_private(alice_pda_0_id)
         .context("alice_pda_0 not found after sync")?;
-    assert_eq!(pda_0_account.balance, amount);
+    assert_eq!(
+        pda_0_account.balance(programs::authenticated_transfer().id()),
+        amount
+    );
 
     let pda_1_account = ctx
         .wallet()
         .get_account_private(alice_pda_1_id)
         .context("alice_pda_1 not found after sync")?;
-    assert_eq!(pda_1_account.balance, amount);
+    assert_eq!(
+        pda_1_account.balance(programs::authenticated_transfer().id()),
+        amount
+    );
 
     // Commitments for both PDAs must be in the sequencer's state.
     let commitment_0 = ctx
@@ -298,13 +307,19 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .wallet()
         .get_account_private(alice_pda_0_id)
         .context("alice_pda_0 not found after spend sync")?;
-    assert_eq!(pda_0_spent.balance, amount - amount_spend_0);
+    assert_eq!(
+        pda_0_spent.balance(programs::authenticated_transfer().id()),
+        amount - amount_spend_0
+    );
 
     let pda_1_spent = ctx
         .wallet()
         .get_account_private(alice_pda_1_id)
         .context("alice_pda_1 not found after spend sync")?;
-    assert_eq!(pda_1_spent.balance, amount - amount_spend_1);
+    assert_eq!(
+        pda_1_spent.balance(programs::authenticated_transfer().id()),
+        amount - amount_spend_1
+    );
 
     // Post-spend commitments must be in state.
     let post_spend_commitment_0 = ctx

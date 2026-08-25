@@ -110,7 +110,10 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B removed from the Bedrock committee");
 
     wait_until("B's stake to be released", || async {
-        Ok(get_account(&ctx, ownership_b).await?.balance == 0)
+        Ok(get_account(&ctx, ownership_b)
+            .await?
+            .balance(programs::sequencer_stake().id())
+            == 0)
     })
     .await?;
     ensure!(
@@ -123,10 +126,11 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     );
     info!("B's stake released in full");
 
-    // B rejoins on the same ownership account, which stays claimed after an exit.
+    // B rejoins on the same ownership account, which keeps its record after an exit.
     let mover_instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: STAKE,
+            recipient_program: Some(programs::sequencer_stake().id()),
         })
         .context("Failed to serialize the mover instruction")?;
     send_stake_tx(
@@ -147,7 +151,10 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     .context("Failed to submit B's re-stake")?;
 
     wait_until("B's re-stake to land", || async {
-        Ok(get_account(&ctx, ownership_b).await?.balance == STAKE)
+        Ok(get_account(&ctx, ownership_b)
+            .await?
+            .balance(programs::sequencer_stake().id())
+            == STAKE)
     })
     .await?;
     info!("B staked again");
@@ -207,7 +214,9 @@ async fn stake_entry(
     let account = get_account(ctx, system_accounts::sequencer_stake_config_account_id())
         .await
         .context("Failed to read the sequencer_stake config account")?;
-    let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(account.data.as_ref())
-        .context("config account data did not decode as a SequencerStakeConfig")?;
+    let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
+        account.data(programs::sequencer_stake().id()).as_ref(),
+    )
+    .context("config account data did not decode as a SequencerStakeConfig")?;
     Ok(config.entries.get(&sequencer_key).copied())
 }

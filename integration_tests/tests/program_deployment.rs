@@ -19,9 +19,9 @@ use wallet::{cli::Command, config::WalletConfigOverrides};
 async fn deploy_and_execute_program() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let claimer = test_programs::claimer();
+    let program = test_programs::simple_balance_transfer();
     let mut tempfile = tempfile::NamedTempFile::new()?;
-    tempfile.write_all(claimer.elf())?;
+    tempfile.write_all(program.elf())?;
 
     let binary_filepath = tempfile.path().to_owned();
 
@@ -39,7 +39,7 @@ async fn deploy_and_execute_program() -> Result<()> {
         .get_account_public_signing_key(account_id)
         .unwrap();
     let message =
-        lee::public_transaction::Message::try_new(claimer.id(), vec![account_id], nonces, ())?;
+        lee::public_transaction::Message::try_new(program.id(), vec![account_id], nonces, 0_u128)?;
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[private_key]);
     let transaction = lee::PublicTransaction::new(message, witness_set);
     let _response = ctx
@@ -55,9 +55,11 @@ async fn deploy_and_execute_program() -> Result<()> {
     let post_state_account = get_account(&ctx, account_id).await?;
 
     let expected_data: &[u8] = &[];
-    assert_eq!(post_state_account.program_owner, claimer.id().into());
-    assert_eq!(post_state_account.balance, 0);
-    assert_eq!(post_state_account.data.as_ref(), expected_data);
+    assert_eq!(post_state_account.balance(program.id()), 0);
+    assert_eq!(
+        post_state_account.data(program.id()).as_ref(),
+        expected_data
+    );
     assert_eq!(post_state_account.nonce.0, 1);
 
     log::info!("Successfully deployed and executed program");

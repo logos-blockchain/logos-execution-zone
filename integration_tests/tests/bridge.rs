@@ -19,23 +19,31 @@ use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 // const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
 
+async fn bridge_balance(
+    ctx: &TestContext,
+    bridge_account_id: lee::AccountId,
+) -> anyhow::Result<u128> {
+    Ok(ctx
+        .sequencer_client()
+        .get_account_balance(bridge_account_id, programs::bridge().id())
+        .await?)
+}
+
 #[test]
 async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
 
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
-    let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
     let receipt_id = bridge_core::deposit_receipt_account_id(programs::bridge().id(), [0_u8; 32]);
 
     let message = public_transaction::Message::try_new(
         programs::bridge().id(),
-        vec![bridge_account_id, recipient_vault_id, receipt_id],
+        vec![bridge_account_id, recipient_id, receipt_id],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
-            vault_program_id,
+            native_program: programs::authenticated_transfer().id(),
             recipient_id,
             amount: 1,
         },
@@ -47,19 +55,19 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
 
-    let bridge_balance_before = account_balance(&ctx, bridge_account_id).await?;
-    let vault_balance_before = account_balance(&ctx, recipient_vault_id).await?;
+    let bridge_balance_before = bridge_balance(&ctx, bridge_account_id).await?;
+    let recipient_balance_before = account_balance(&ctx, recipient_id).await?;
 
     let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let bridge_balance_after = account_balance(&ctx, bridge_account_id).await?;
-    let vault_balance_after = account_balance(&ctx, recipient_vault_id).await?;
+    let bridge_balance_after = bridge_balance(&ctx, bridge_account_id).await?;
+    let recipient_balance_after = account_balance(&ctx, recipient_id).await?;
     let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(bridge_balance_after, bridge_balance_before);
-    assert_eq!(vault_balance_after, vault_balance_before);
+    assert_eq!(recipient_balance_after, recipient_balance_before);
     assert!(
         tx_on_chain.is_none(),
         "Direct public bridge::Deposit invocation should be rejected"
@@ -74,17 +82,15 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
 
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
-    let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
     let receipt_id = bridge_core::deposit_receipt_account_id(programs::bridge().id(), [0_u8; 32]);
 
     let message = public_transaction::Message::try_new(
         programs::bridge().id(),
-        vec![bridge_account_id, recipient_vault_id, receipt_id],
+        vec![bridge_account_id, recipient_id, receipt_id],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
-            vault_program_id,
+            native_program: programs::authenticated_transfer().id(),
             recipient_id,
             amount: 0,
         },
@@ -96,31 +102,19 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
 
-    let bridge_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(bridge_account_id)
-        .await?;
-    let vault_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(recipient_vault_id)
-        .await?;
+    let bridge_balance_before = bridge_balance(&ctx, bridge_account_id).await?;
+    let recipient_balance_before = account_balance(&ctx, recipient_id).await?;
 
     let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let bridge_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(bridge_account_id)
-        .await?;
-    let vault_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(recipient_vault_id)
-        .await?;
+    let bridge_balance_after = bridge_balance(&ctx, bridge_account_id).await?;
+    let recipient_balance_after = account_balance(&ctx, recipient_id).await?;
     let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(bridge_balance_after, bridge_balance_before);
-    assert_eq!(vault_balance_after, vault_balance_before);
+    assert_eq!(recipient_balance_after, recipient_balance_before);
     assert!(
         tx_on_chain.is_none(),
         "Public bridge::Deposit with zero amount should be rejected"
@@ -135,43 +129,31 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
-    let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
     let receipt_id = bridge_core::deposit_receipt_account_id(programs::bridge().id(), [0_u8; 32]);
 
-    // Get pre-state of bridge and vault accounts; the receipt is unminted (a
+    // Get pre-state of the bridge and recipient accounts; the receipt is unminted (a
     // default account), so the program would create it on a first mint.
     let bridge_pre = AccountWithMetadata::new(
         get_account(&ctx, bridge_account_id).await?,
         false,
         bridge_account_id,
     );
-    let vault_pre = AccountWithMetadata::new(
-        get_account(&ctx, recipient_vault_id).await?,
-        false,
-        recipient_vault_id,
-    );
+    let recipient_pre =
+        AccountWithMetadata::new(get_account(&ctx, recipient_id).await?, false, recipient_id);
     let receipt_pre =
         AccountWithMetadata::new(lee_core::account::Account::default(), false, receipt_id);
 
-    // Create program with dependencies
+    // The bridge issues no chained calls, so it has no program dependencies.
     let program_with_deps =
         lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
             programs::bridge(),
-            [
-                (vault_program_id, programs::vault()),
-                (
-                    programs::authenticated_transfer().id(),
-                    programs::authenticated_transfer(),
-                ),
-            ]
-            .into(),
+            [].into(),
         );
 
     // Serialize the bridge deposit instruction
     let instruction = Program::serialize_instruction(bridge_core::Instruction::Deposit {
         l1_deposit_op_id: [0_u8; 32],
-        vault_program_id,
+        native_program: programs::authenticated_transfer().id(),
         recipient_id,
         amount: 1,
     })
@@ -179,7 +161,11 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     // Execute and prove the bridge deposit
     let (output, proof) = execute_and_prove(
-        vec![bridge_pre.clone(), vault_pre.clone(), receipt_pre.clone()],
+        vec![
+            bridge_pre.clone(),
+            recipient_pre.clone(),
+            receipt_pre.clone(),
+        ],
         instruction,
         vec![
             InputAccountIdentity::Public,
@@ -194,7 +180,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let message = privacy_preserving_transaction::Message::from_circuit_output(
         vec![
             bridge_pre.account.nonce,
-            vault_pre.account.nonce,
+            recipient_pre.account.nonce,
             receipt_pre.account.nonce,
         ],
         output,
@@ -206,19 +192,19 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         witness_set,
     ));
 
-    let bridge_balance_before = account_balance(&ctx, bridge_account_id).await?;
-    let vault_balance_before = account_balance(&ctx, recipient_vault_id).await?;
+    let bridge_balance_before = bridge_balance(&ctx, bridge_account_id).await?;
+    let recipient_balance_before = account_balance(&ctx, recipient_id).await?;
 
     let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let bridge_balance_after = account_balance(&ctx, bridge_account_id).await?;
-    let vault_balance_after = account_balance(&ctx, recipient_vault_id).await?;
+    let bridge_balance_after = bridge_balance(&ctx, bridge_account_id).await?;
+    let recipient_balance_after = account_balance(&ctx, recipient_id).await?;
     let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(bridge_balance_after, bridge_balance_before);
-    assert_eq!(vault_balance_after, vault_balance_before);
+    assert_eq!(recipient_balance_after, recipient_balance_before);
     assert!(
         tx_on_chain.is_none(),
         "Privacy-preserving bridge::Deposit invocation should be rejected"

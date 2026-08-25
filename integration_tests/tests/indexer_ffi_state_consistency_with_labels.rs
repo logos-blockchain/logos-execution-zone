@@ -58,12 +58,14 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
         sequencer_service_rpc::RpcClient::get_account_balance(
             ctx.sequencer_client(),
             ctx.existing_public_accounts()[0],
+            programs::authenticated_transfer().id(),
         )
     })?;
     let acc_2_balance = ctx.block_on(|ctx| {
         sequencer_service_rpc::RpcClient::get_account_balance(
             ctx.sequencer_client(),
             ctx.existing_public_accounts()[1],
+            programs::authenticated_transfer().id(),
         )
     })?;
 

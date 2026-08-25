@@ -153,7 +153,13 @@ async fn wait_for_indexer_delivery(
         loop {
             let account =
                 indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
-            let data = account.data.0;
+            let data = account
+                .slots
+                .get(&indexer_service_protocol::ProgramId(
+                    programs::ping_receiver().id(),
+                ))
+                .map(|slot| slot.data.0.clone())
+                .unwrap_or_default();
             if !data.is_empty() {
                 return Ok::<Vec<u8>, anyhow::Error>(data);
             }

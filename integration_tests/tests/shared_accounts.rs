@@ -161,7 +161,6 @@ async fn group_invite_join_key_agreement() -> Result<()> {
 }
 
 /// Fund a shared account from a public account via auth-transfer, then sync.
-/// TODO: Requires auth-transfer init to work with shared accounts (authorization flow).
 #[test]
 async fn fund_shared_account_from_public() -> Result<()> {
     let mut ctx = TestContext::new().await?;
@@ -187,17 +186,6 @@ async fn fund_shared_account_from_public() -> Result<()> {
     else {
         anyhow::bail!("Expected RegisterAccount return value");
     };
-
-    // Initialize the shared account under auth-transfer
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: private_mention(shared_id),
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
-    // Sync private accounts
-    sync_private(&mut ctx).await?;
 
     // Fund from a public account
     let from_public = ctx.existing_public_accounts()[0];
@@ -227,10 +215,15 @@ async fn fund_shared_account_from_public() -> Result<()> {
 
     log::info!(
         "Shared account balance after funding: {}",
-        entry.account.balance
+        entry
+            .account
+            .balance(programs::authenticated_transfer().id())
     );
     assert_eq!(
-        entry.account.balance, 100,
+        entry
+            .account
+            .balance(programs::authenticated_transfer().id()),
+        100,
         "Shared account should have received 100"
     );
 

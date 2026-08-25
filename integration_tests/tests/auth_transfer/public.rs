@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention,
-    utils::{account_balance, get_account, new_account, send, send_claiming_new_account},
+    utils::{account_balance, new_account, send, send_claiming_new_account},
 };
 use lee::{PublicKey, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
@@ -198,33 +198,6 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
 }
 
 #[test]
-async fn initialize_public_account() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
-
-    let account_id = new_account(&mut ctx, false, None).await?;
-
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: public_mention(account_id),
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    log::info!("Checking correct execution");
-    let account = get_account(&ctx, account_id).await?;
-
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
-    assert_eq!(account.balance, 0);
-    assert_eq!(account.nonce.0, 1);
-    assert!(account.data.is_empty());
-
-    log::info!("Successfully initialized public account");
-
-    Ok(())
-}
-
-#[test]
 async fn successful_transfer_using_from_label() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
@@ -300,6 +273,16 @@ async fn successful_transfer_using_to_label() -> Result<()> {
     Ok(())
 }
 
+async fn faucet_balance(ctx: &TestContext) -> Result<u128> {
+    Ok(ctx
+        .sequencer_client()
+        .get_account_balance(
+            system_accounts::faucet_account_id(),
+            programs::faucet().id(),
+        )
+        .await?)
+}
+
 #[test]
 async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
     let ctx = TestContext::new().await?;
@@ -307,14 +290,17 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
 
     let recipient = ctx.existing_public_accounts()[0];
     let recipient_balance_before = account_balance(&ctx, recipient).await?;
-    let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
+    let faucet_balance_before = faucet_balance(&ctx).await?;
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
         programs::authenticated_transfer().id(),
         vec![faucet_account_id, recipient],
         vec![],
-        authenticated_transfer_core::Instruction::Transfer { amount },
+        authenticated_transfer_core::Instruction::Transfer {
+            amount,
+            recipient_program: None,
+        },
     )?;
     let tx = lee::PublicTransaction::new(
         message,
@@ -329,7 +315,7 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let recipient_balance_after = account_balance(&ctx, recipient).await?;
-    let faucet_balance_after = account_balance(&ctx, faucet_account_id).await?;
+    let faucet_balance_after = faucet_balance(&ctx).await?;
     let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(recipient_balance_after, recipient_balance_before);
@@ -345,20 +331,17 @@ async fn cannot_execute_faucet_program() -> Result<()> {
     let faucet_account_id = system_accounts::faucet_account_id();
 
     let recipient = ctx.existing_public_accounts()[0];
-    let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient);
 
     let recipient_balance_before = account_balance(&ctx, recipient).await?;
-    let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
+    let faucet_balance_before = faucet_balance(&ctx).await?;
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
         programs::faucet().id(),
-        vec![faucet_account_id, recipient_vault_id],
+        vec![faucet_account_id, recipient],
         vec![],
-        faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
-            recipient_id: recipient,
+        faucet_core::Instruction::GenesisTransferDirect {
+            recipient_program: programs::authenticated_transfer().id(),
             amount,
         },
     )?;
@@ -375,7 +358,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let recipient_balance_after = account_balance(&ctx, recipient).await?;
-    let faucet_balance_after = account_balance(&ctx, faucet_account_id).await?;
+    let faucet_balance_after = faucet_balance(&ctx).await?;
     let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(recipient_balance_after, recipient_balance_before);
@@ -401,35 +384,34 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let faucet_account_id = system_accounts::faucet_account_id();
     let attacker = ctx.existing_public_accounts()[0];
     let faucet_program_id = programs::faucet().id();
-    let vault_program_id = programs::vault().id();
-    let attacker_vault_id = vault_core::compute_vault_account_id(vault_program_id, attacker);
+    let native_program = programs::authenticated_transfer().id();
     let amount: u128 = 1;
 
     let message = public_transaction::Message::try_new(
         faucet_chain_caller.id(),
-        vec![faucet_account_id, attacker_vault_id],
+        vec![faucet_account_id, attacker],
         vec![],
-        (faucet_program_id, vault_program_id, attacker, amount),
+        (faucet_program_id, native_program, amount),
     )?;
     let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
 
-    let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
-    let vault_balance_before = account_balance(&ctx, attacker_vault_id).await?;
+    let faucet_balance_before = faucet_balance(&ctx).await?;
+    let attacker_balance_before = account_balance(&ctx, attacker).await?;
 
     let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
 
     log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let faucet_balance_after = account_balance(&ctx, faucet_account_id).await?;
-    let vault_balance_after = account_balance(&ctx, attacker_vault_id).await?;
+    let faucet_balance_after = faucet_balance(&ctx).await?;
+    let attacker_balance_after = account_balance(&ctx, attacker).await?;
     let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(faucet_balance_after, faucet_balance_before);
-    assert_eq!(vault_balance_after, vault_balance_before);
+    assert_eq!(attacker_balance_after, attacker_balance_before);
     assert!(tx_on_chain.is_none());
 
     Ok(())

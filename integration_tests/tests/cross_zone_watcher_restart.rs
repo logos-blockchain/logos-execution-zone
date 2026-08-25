@@ -135,7 +135,7 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
     // The delivery itself must survive the restart untouched.
     let account = client_b.get_account(record_id).await?;
     assert_eq!(
-        account.data.into_inner(),
+        account.data(programs::ping_receiver().id()).as_ref(),
         PING_PAYLOAD,
         "the delivered payload must survive the restart"
     );
@@ -224,7 +224,7 @@ async fn wait_for_delivery(client: SequencerClient, record_id: AccountId) -> Res
     let wait = async {
         loop {
             let account = client.get_account(record_id).await?;
-            let data = account.data.into_inner();
+            let data = account.data(programs::ping_receiver().id()).to_vec();
             if !data.is_empty() {
                 return Ok::<Vec<u8>, anyhow::Error>(data);
             }
