@@ -282,24 +282,6 @@ fn for_private_account_dispatches_correctly() {
 }
 
 #[test]
-fn compute_public_authorized_pdas_with_seeds() {
-    let caller: ProgramId = [1; 8];
-    let seed = PdaSeed::new([2; 32]);
-    let result = compute_public_authorized_pdas(Some(caller), &[seed]);
-    let expected = AccountId::for_public_pda(&caller, &seed);
-    assert!(result.contains(&expected));
-    assert_eq!(result.len(), 1);
-}
-
-/// With no caller (top-level call), the result is always empty.
-#[test]
-fn compute_public_authorized_pdas_no_caller_returns_empty() {
-    let seed = PdaSeed::new([2; 32]);
-    let result = compute_public_authorized_pdas(None, &[seed]);
-    assert!(result.is_empty());
-}
-
-#[test]
 fn account_id_from_program_id_reinterprets_words_as_le_bytes() {
     let program_id: ProgramId = [
         0x0403_0201,
