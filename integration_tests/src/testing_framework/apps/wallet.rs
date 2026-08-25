@@ -25,7 +25,10 @@ use wallet::{
 };
 
 use super::LezSequencerClient;
-use crate::{config::InitialPrivateAccountForWallet, setup::setup_wallet};
+use crate::{
+    config::{self, InitialPrivateAccountForWallet},
+    setup::{fund_private_accounts, setup_wallet},
+};
 
 struct WalletComponents {
     wallet: WalletCore,
@@ -691,14 +694,20 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                         }),
                     }?;
                     let mut wallet = wallet;
-                    // Genesis credits funded accounts directly, so the wallet only syncs.
+                    // Genesis credits public accounts directly, so they only need a sync;
+                    // private accounts have no state until something writes their commitment.
+                    wallet
+                        .sync_to_latest_block()
+                        .await
+                        .context("failed to synchronize LEZ wallet accounts")?;
                     if initialize_private_account_funding {
-                        for _private_account in &private_accounts {
-                            wallet
-                                .sync_to_latest_block()
-                                .await
-                                .context("failed to synchronize LEZ private wallet accounts")?;
-                        }
+                        fund_private_accounts(
+                            &mut wallet,
+                            &public_accounts[config::PRIVATE_FUNDER_INDEX].0,
+                            &private_accounts,
+                        )
+                        .await
+                        .context("failed to fund LEZ private wallet accounts")?;
                     }
                     Ok((wallet, initialized_state_dir, password))
                 })

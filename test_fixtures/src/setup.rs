@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
-use lee::PrivateKey;
+use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
 use sequencer_core::block_publisher::ED25519_SECRET_KEY_SIZE;
 use sequencer_service::{GenesisAction, SequencerHandle};
@@ -13,12 +13,17 @@ use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
 use sequencer_storage_actor::{StorageActor, protocol::DbDump};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
-use wallet::{WalletCore, config::WalletConfigOverrides};
+use wallet::{
+    WalletCore,
+    cli::{Command, programs::native_token_transfer::AuthTransferSubcommand},
+    config::WalletConfigOverrides,
+};
 
 use crate::{
     BEDROCK_SERVICE_PORT, BEDROCK_SERVICE_WITH_OPEN_PORT,
     config::{self, InitialPrivateAccountForWallet},
     indexer_client::IndexerClient,
+    private_mention, public_mention,
 };
 
 #[derive(Debug)]
@@ -392,15 +397,7 @@ pub async fn setup_wallet_at(
                 private_account.key_chain.clone(),
                 None,
                 private_account.identifier,
-                // Genesis writes a private account's commitment with no note to decrypt, so
-                // the wallet reconstructs the account it was seeded with rather than syncing
-                // it in.
-                lee::Account::single(
-                    programs::authenticated_transfer().id(),
-                    private_account.balance,
-                    lee::Data::default(),
-                    lee::Nonce::default(),
-                ),
+                lee::Account::default(),
             );
     }
 
@@ -409,6 +406,47 @@ pub async fn setup_wallet_at(
         .context("Failed to store wallet persistent data")?;
 
     Ok((wallet, home.to_owned(), wallet_password))
+}
+
+/// Funds each of the wallet's private accounts from one of its public accounts.
+///
+/// Genesis credits public accounts directly, but a private account has no state until a
+/// transaction writes its commitment, so this is what brings them into existence.
+pub async fn fund_private_accounts(
+    wallet: &mut WalletCore,
+    funder: &PrivateKey,
+    initial_private_accounts: &[InitialPrivateAccountForWallet],
+) -> Result<()> {
+    let funder_id = AccountId::from(&PublicKey::new_from_private_key(funder));
+
+    for private_account in initial_private_accounts {
+        wallet::cli::execute_subcommand(
+            wallet,
+            Command::AuthTransfer(AuthTransferSubcommand::Send {
+                from: public_mention(funder_id),
+                to: Some(private_mention(private_account.account_id())),
+                to_npk: None,
+                to_vpk: None,
+                to_keys: None,
+                to_identifier: Some(private_account.identifier),
+                amount: private_account.balance,
+            }),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to fund private account {}",
+                private_account.account_id()
+            )
+        })?;
+
+        wallet
+            .sync_to_latest_block()
+            .await
+            .context("Failed to sync wallet after funding a private account")?;
+    }
+
+    Ok(())
 }
 
 pub async fn sync_wallet(wallet: &mut WalletCore) -> Result<()> {

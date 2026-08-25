@@ -14,8 +14,8 @@ use sequencer_storage_actor::{
 use test_fixtures::{
     config,
     setup::{
-        SequencerSetup, prebuilt_sequencer_db_dump_path, setup_bedrock_node, setup_wallet,
-        sync_wallet,
+        SequencerSetup, fund_private_accounts, prebuilt_sequencer_db_dump_path, setup_bedrock_node,
+        setup_wallet, sync_wallet,
     },
 };
 use wallet::config::WalletConfigOverrides;
@@ -71,6 +71,16 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     sync_wallet(&mut wallet)
         .await
         .context("Failed to sync wallet for fixture generation")?;
+
+    // The prebuilt store must already contain the private accounts' commitments, since a
+    // context restored from it does no funding of its own.
+    fund_private_accounts(
+        &mut wallet,
+        &initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0,
+        &initial_private_accounts,
+    )
+    .await
+    .context("Failed to fund private accounts for fixture generation")?;
 
     // Shut down gracefully to release the rocksdb lock before reopening the store.
     drop(wallet);

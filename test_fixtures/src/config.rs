@@ -19,6 +19,13 @@ use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, Wallet
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 
+/// The public account genesis over-supplies so it can seed the private accounts.
+///
+/// Only the circuit writes a commitment, so genesis — a run of public transactions — cannot
+/// create a private account. Their balances are supplied here instead and moved into
+/// commitments by `fund_private_accounts`, which leaves this account at its configured balance.
+pub const PRIVATE_FUNDER_INDEX: usize = 0;
+
 /// Fixed sequencer signing key; exposed so the fixture generator can reopen the produced store.
 pub const SEQUENCER_SIGNING_KEY: [u8; 32] = [37; 32];
 
@@ -211,26 +218,31 @@ pub fn genesis_from_accounts(
     public_accounts: &[(PrivateKey, u128)],
     private_accounts: &[InitialPrivateAccountForWallet],
 ) -> Vec<GenesisAction> {
-    let public_genesis = public_accounts.iter().map(|(private_key, balance)| {
-        let public_key = PublicKey::new_from_private_key(private_key);
-        let account_id = AccountId::from(&public_key);
-        GenesisAction::SupplyAccount {
-            account_id,
-            balance: *balance,
-        }
-    });
+    let private_total: u128 = private_accounts.iter().map(|account| account.balance).sum();
 
-    let private_genesis = private_accounts
-        .iter()
-        .map(|account| GenesisAction::SupplyAccount {
-            account_id: account.account_id(),
-            balance: account.balance,
-        });
+    let public_genesis =
+        public_accounts
+            .iter()
+            .enumerate()
+            .map(|(index, (private_key, balance))| {
+                let public_key = PublicKey::new_from_private_key(private_key);
+                let account_id = AccountId::from(&public_key);
+                let balance = if index == PRIVATE_FUNDER_INDEX {
+                    balance
+                        .checked_add(private_total)
+                        .expect("private funder genesis balance overflow")
+                } else {
+                    *balance
+                };
+                GenesisAction::SupplyAccount {
+                    account_id,
+                    balance,
+                }
+            });
 
     let supply_bridge_account = GenesisAction::SupplyBridgeAccount { balance: 1_000_000 };
 
     public_genesis
-        .chain(private_genesis)
         .chain(std::iter::once(supply_bridge_account))
         .collect()
 }
@@ -386,6 +398,45 @@ pub fn bedrock_funding_key() -> ZkPublicKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `fund_private_accounts` drains the private balances out of the funder, so genesis has to
+    /// supply it that much on top of its own or the last private account goes unfunded.
+    #[test]
+    fn genesis_supplies_the_funder_enough_to_seed_every_private_account() {
+        let public_accounts = default_public_accounts_for_wallet();
+        let private_accounts = default_private_accounts_for_wallet();
+        let genesis = genesis_from_accounts(&public_accounts, &private_accounts);
+
+        let funder = AccountId::from(&PublicKey::new_from_private_key(
+            &public_accounts[PRIVATE_FUNDER_INDEX].0,
+        ));
+        let private_total: u128 = private_accounts.iter().map(|account| account.balance).sum();
+        let supplied = |wanted: AccountId| {
+            genesis.iter().find_map(|action| match action {
+                GenesisAction::SupplyAccount {
+                    account_id,
+                    balance,
+                } if *account_id == wanted => Some(*balance),
+                GenesisAction::SupplyAccount { .. }
+                | GenesisAction::SupplyBridgeAccount { .. }
+                | GenesisAction::SupplyBridgeLockHolding { .. }
+                | GenesisAction::StakeSequencer { .. } => None,
+            })
+        };
+
+        let funder_supply = supplied(funder).expect("the funder is supplied at genesis");
+        assert_eq!(
+            funder_supply.checked_sub(public_accounts[PRIVATE_FUNDER_INDEX].1),
+            Some(private_total),
+            "genesis must give the funder its own balance plus every private balance"
+        );
+
+        // A private account has no state until the circuit writes its commitment, so a genesis
+        // supply at its id would only strand the balance in the public map.
+        for account in &private_accounts {
+            assert_eq!(supplied(account.account_id()), None);
+        }
+    }
 
     #[test]
     fn default_priority_fee_matches_sequencer_default() {

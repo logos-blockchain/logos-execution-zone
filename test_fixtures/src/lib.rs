@@ -24,7 +24,10 @@ use wallet::{
 use crate::{
     config::{InitialPrivateAccountForWallet, MultiNodeTestContextConfig, SequencerPartialConfig},
     indexer_client::IndexerClient,
-    setup::{SequencerSetup, setup_bedrock_node, setup_indexer, setup_wallet, sync_wallet},
+    setup::{
+        SequencerSetup, fund_private_accounts, setup_bedrock_node, setup_indexer, setup_wallet,
+        sync_wallet,
+    },
 };
 
 pub mod config;
@@ -750,11 +753,21 @@ impl ZoneTestContextBuilder {
             .await
             .context("Failed to setup wallet")?;
 
-            // Genesis credits every funded account directly, so there is nothing to claim
-            // in either case; the wallet only has to catch up with the chain.
+            // Genesis credits public accounts directly, so they only need a sync; private
+            // accounts have no state until something writes their commitment.
             sync_wallet(&mut wallet)
                 .await
                 .context("Failed to sync wallet to the latest block")?;
+
+            if !use_prebuilt {
+                fund_private_accounts(
+                    &mut wallet,
+                    &initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0,
+                    &initial_private_accounts,
+                )
+                .await
+                .context("Failed to fund the wallet's private accounts")?;
+            }
 
             Some(WalletComponents {
                 wallet,
@@ -1076,10 +1089,9 @@ async fn build_sequencer_components(
     let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
 
     let genesis_actions = if enable_wallet {
-        // Wallet genesis must always be present so that
-        // setup_public/private_accounts_with_initial_supply can claim from the vault
-        // PDAs. When a test supplies custom genesis, merge rather
-        // than replace.
+        // Wallet genesis must always be present so the wallet's accounts are funded, and so
+        // `fund_private_accounts` has a funder to draw on. When a test supplies custom genesis,
+        // merge rather than replace.
         let wallet_genesis =
             config::genesis_from_accounts(initial_public_accounts, initial_private_accounts);
         match genesis_transactions {
