@@ -512,7 +512,7 @@ fn program_may_not_drain_a_foreign_slot() {
 fn an_empty_slot_is_not_canonical() {
     let before = account(&[(P, 1, b"x")]);
     let mut after = Account::default();
-    after.slots.insert(P, Slot::default());
+    after.slots.insert(AccountId::from(P), Slot::default());
 
     assert!(matches!(
         validate_execution(&[pre(before, 1)], &[after], P),

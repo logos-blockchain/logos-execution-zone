@@ -5,9 +5,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub use data::Data;
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
-use serde_with::{DeserializeFromStr, SerializeDisplay, serde_as};
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-use crate::{NullifierSecretKey, program::ProgramId};
+use crate::NullifierSecretKey;
 
 pub mod data;
 
@@ -111,39 +111,34 @@ impl Slot {
 /// `BTreeMap` rather than `HashMap` because the account is hashed into commitments, so its
 /// encoding must be canonical. Empty slots are never stored (see `validate_execution`), so
 /// equal accounts always encode identically.
-#[serde_as]
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct Account {
     pub nonce: Nonce,
-    /// Serialized as a sequence of pairs: `ProgramId` is `[u32; 8]`, and JSON has no
-    /// representation for a non-string map key. Borsh is unaffected, so commitments and the
-    /// wire format keep the canonical map encoding.
-    #[serde_as(as = "Vec<(_, _)>")]
-    pub slots: BTreeMap<ProgramId, Slot>,
+    pub slots: BTreeMap<AccountId, Slot>,
 }
 
 impl Account {
     #[must_use]
-    pub fn slot(&self, program_id: ProgramId) -> Option<&Slot> {
-        self.slots.get(&program_id)
+    pub fn slot(&self, program: impl Into<AccountId>) -> Option<&Slot> {
+        self.slots.get(&program.into())
     }
 
     /// The slot a program writes through. Vacant slots materialize as empty.
-    pub fn slot_mut(&mut self, program_id: ProgramId) -> &mut Slot {
-        self.slots.entry(program_id).or_default()
+    pub fn slot_mut(&mut self, program: impl Into<AccountId>) -> &mut Slot {
+        self.slots.entry(program.into()).or_default()
     }
 
     #[must_use]
-    pub fn balance(&self, program_id: ProgramId) -> Balance {
-        self.slot(program_id).map_or(0, |slot| slot.balance)
+    pub fn balance(&self, program: impl Into<AccountId>) -> Balance {
+        self.slot(program).map_or(0, |slot| slot.balance)
     }
 
     #[must_use]
-    pub fn data(&self, program_id: ProgramId) -> &Data {
+    pub fn data(&self, program: impl Into<AccountId>) -> &Data {
         const EMPTY: &Data = &Data::empty();
-        self.slot(program_id).map_or(EMPTY, |slot| &slot.data)
+        self.slot(program).map_or(EMPTY, |slot| &slot.data)
     }
 
     /// Drops slots that have become empty, keeping the encoding canonical.
@@ -153,14 +148,19 @@ impl Account {
 
     /// An account whose only occupied slot belongs to `program_id`.
     #[must_use]
-    pub fn single(program_id: ProgramId, balance: Balance, data: Data, nonce: Nonce) -> Self {
+    pub fn single(
+        program: impl Into<AccountId>,
+        balance: Balance,
+        data: Data,
+        nonce: Nonce,
+    ) -> Self {
         let slot = Slot { balance, data };
         let mut account = Self {
             nonce,
             slots: BTreeMap::new(),
         };
         if !slot.is_empty() {
-            account.slots.insert(program_id, slot);
+            account.slots.insert(program.into(), slot);
         }
         account
     }
@@ -193,10 +193,11 @@ impl AccountWithMetadata {
     PartialEq,
     Eq,
     Hash,
+    PartialOrd,
+    Ord,
     BorshSerialize,
     BorshDeserialize,
 )]
-#[cfg_attr(any(feature = "host", test), derive(PartialOrd, Ord))]
 pub struct AccountId {
     value: [u8; 32],
 }

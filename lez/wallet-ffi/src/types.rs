@@ -351,7 +351,9 @@ impl From<lee::Account> for FfiAccount {
                 };
 
                 FfiAccountSlot {
-                    program_id: FfiProgramId { data: program_id },
+                    program_id: FfiProgramId {
+                        data: lee::ProgramId::from(program_id),
+                    },
                     balance: slot.balance.into(),
                     data,
                     data_len,
@@ -398,7 +400,7 @@ impl TryFrom<&FfiAccount> for lee::Account {
                     };
 
                     Ok((
-                        slot.program_id.data,
+                        lee::AccountId::from(slot.program_id.data),
                         lee_core::account::Slot {
                             balance: slot.balance.into(),
                             data,

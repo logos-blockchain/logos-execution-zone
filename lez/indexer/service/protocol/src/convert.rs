@@ -53,7 +53,7 @@ impl From<lee_core::account::Account> for Account {
                 .into_iter()
                 .map(|(program_id, slot)| {
                     (
-                        program_id.into(),
+                        ProgramId(lee::ProgramId::from(program_id)),
                         Slot {
                             balance: slot.balance,
                             data: slot.data.into(),
@@ -77,7 +77,7 @@ impl TryFrom<Account> for lee_core::account::Account {
                 .into_iter()
                 .map(|(program_id, slot)| {
                     Ok((
-                        program_id.into(),
+                        lee::AccountId::from(program_id.0),
                         lee_core::account::Slot {
                             balance: slot.balance,
                             data: slot.data.try_into()?,

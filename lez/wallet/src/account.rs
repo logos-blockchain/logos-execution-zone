@@ -123,7 +123,7 @@ impl From<lee::Account> for HumanReadableAccount {
             slots: account
                 .slots
                 .iter()
-                .map(|(&program_id, slot)| (AccountId::from(program_id).to_string(), slot.into()))
+                .map(|(&program, slot)| (program.to_string(), slot.into()))
                 .collect(),
         }
     }
@@ -147,7 +147,7 @@ impl From<HumanReadableAccount> for lee::Account {
                         .expect("Invalid account data: exceeds maximum allowed size");
 
                     (
-                        program_id.into(),
+                        program_id,
                         Slot {
                             balance: slot.balance,
                             data,

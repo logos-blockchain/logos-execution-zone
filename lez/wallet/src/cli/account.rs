@@ -646,19 +646,18 @@ impl WalletSubcommand for ImportSubcommand {
 
 /// Formats each of the account's slots for display, one (description, `json_view`) per slot.
 fn format_account_details(account: &Account) -> Vec<(String, String)> {
-    let auth_tr_prog_id = programs::authenticated_transfer().id();
-    let token_prog_id = programs::token().id();
+    let auth_tr_prog_id = AccountId::from(programs::authenticated_transfer().id());
+    let token_prog_id = AccountId::from(programs::token().id());
 
     account
         .slots
         .iter()
-        .map(|(&program_id, slot)| {
-            let program: AccountId = program_id.into();
+        .map(|(&program, slot)| {
             let raw = || serde_json::to_string(&HumanReadableSlot::from(slot)).unwrap();
 
-            if program_id == auth_tr_prog_id {
+            if program == auth_tr_prog_id {
                 (format!("Native balance under program {program}"), raw())
-            } else if program_id == token_prog_id {
+            } else if program == token_prog_id {
                 TokenDefinition::try_from(&slot.data)
                     .map(|token_def| {
                         (

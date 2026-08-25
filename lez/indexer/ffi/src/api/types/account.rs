@@ -48,7 +48,9 @@ impl From<lee::Account> for FfiAccount {
                     let (data, data_len, data_cap) = slot.data.into_inner().into_raw_parts();
 
                     FfiAccountSlot {
-                        program_id: FfiProgramId { data: program_id },
+                        program_id: FfiProgramId {
+                            data: lee::ProgramId::from(program_id),
+                        },
                         balance: slot.balance.into(),
                         data,
                         data_len,

@@ -12,9 +12,9 @@ use crate::{
 
 pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
 
-/// Reserved slot key under which deployed program ELFs are stored. Not a real image id, so
+/// Reserved slot key under which deployed program ELFs are stored. No image id maps to it, so
 /// no program can ever execute as it — the slot is writable only by native deployment.
-pub const PROGRAM_STORAGE_SLOT: ProgramId = [u32::MAX; 8];
+pub const PROGRAM_STORAGE_SLOT: AccountId = AccountId::new([0xFF; 32]);
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
@@ -642,6 +642,8 @@ pub fn validate_execution(
         );
     }
 
+    let executing_account_id = AccountId::from(executing_program_id);
+
     // 2. One account may fill several positions (one address playing several roles of an
     //    instruction), but every appearance must agree: identical pre states, identical
     //    post states. The agreed post is the account's single effect, so the id-keyed
@@ -669,12 +671,12 @@ pub fn validate_execution(
         //    may only gain balance. This mirrors the account-level law (credits are
         //    permissionless, debits need the custodian), transposed to slots.
         let empty_slot = Slot::default();
-        for program_id in pre.account.slots.keys().chain(post.slots.keys()) {
-            if *program_id == executing_program_id {
+        for slot_key in pre.account.slots.keys().chain(post.slots.keys()) {
+            if *slot_key == executing_account_id {
                 continue;
             }
-            let pre_slot = pre.account.slots.get(program_id).unwrap_or(&empty_slot);
-            let post_slot = post.slots.get(program_id).unwrap_or(&empty_slot);
+            let pre_slot = pre.account.slots.get(slot_key).unwrap_or(&empty_slot);
+            let post_slot = post.slots.get(slot_key).unwrap_or(&empty_slot);
             if post_slot.data != pre_slot.data || post_slot.balance < pre_slot.balance {
                 return Err(ExecutionValidationError::ForeignSlotModified {
                     account_id: pre.account_id,
