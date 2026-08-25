@@ -46,11 +46,13 @@ pub(super) async fn get_account(
 pub(super) async fn stake_config(
     context: &LezScenarioContext,
 ) -> Result<SequencerStakeConfig, StepError> {
-    let account = get_account(context, system_accounts::sequencer_stake_config_account_id()).await?;
-    SequencerStakeConfig::from_bytes(account.data.as_ref()).ok_or_else(|| {
-        StepError::LogicalError {
-            message: "the config account does not decode as a SequencerStakeConfig".to_owned(),
-        }
+    let account = get_account(
+        context,
+        system_accounts::sequencer_stake_config_account_id(),
+    )
+    .await?;
+    SequencerStakeConfig::from_bytes(account.data.as_ref()).ok_or_else(|| StepError::LogicalError {
+        message: "the config account does not decode as a SequencerStakeConfig".to_owned(),
     })
 }
 
@@ -59,7 +61,11 @@ pub(super) async fn config_entry(
     context: &LezScenarioContext,
     sequencer_key: SequencerKey,
 ) -> Result<Option<SequencerEntry>, StepError> {
-    Ok(stake_config(context).await?.entries.get(&sequencer_key).copied())
+    Ok(stake_config(context)
+        .await?
+        .entries
+        .get(&sequencer_key)
+        .copied())
 }
 
 /// Returns the first public account configured into the scenario wallet.
@@ -129,10 +135,7 @@ pub(super) async fn submit_and_record(
 }
 
 /// Waits until `hash` appears in a block.
-pub(super) async fn wait_for_inclusion(
-    context: &LezScenarioContext,
-    hash: HashType,
-) -> StepResult {
+pub(super) async fn wait_for_inclusion(context: &LezScenarioContext, hash: HashType) -> StepResult {
     let poll = async {
         loop {
             let included = context
