@@ -8,7 +8,8 @@ use crate::{
     cucumber::{
         error::StepResult,
         steps::environment::helpers::{
-            deploy_lez_sequencer_registry, deploy_lez_stack, deploy_lez_stack_with_config,
+            base_sequencer_config, deploy_lez_sequencer_registry, deploy_lez_stack,
+            deploy_lez_stack_with_config,
         },
         world::CucumberWorld,
     },
@@ -38,7 +39,7 @@ async fn deploy_lez_public_stack_with_fast_blocks(
     // scenarios that submit several transactions, like the stake lifecycle.
     let sequencer_config = SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(2),
-        ..SequencerPartialConfig::default()
+        ..base_sequencer_config()
     };
     deploy_lez_stack_with_config(
         world,

@@ -4,12 +4,14 @@
 use std::time::Duration;
 
 use common::HashType;
-use lee::{Account, AccountId};
+use futures::future::try_join_all;
+use lee::{Account, AccountId, PublicKey};
 use lee_core::program::{InstructionData, ProgramId};
 use sequencer_service_rpc::RpcClient as _;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig};
 use wallet::AccountIdentity;
 
+use super::super::wait_until;
 use crate::cucumber::{
     context::LezScenarioContext,
     error::{StepError, StepResult},
@@ -20,14 +22,24 @@ use crate::cucumber::{
 /// Cadence of the inclusion and non-inclusion polls.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Upper bound on every wait; generous because a freshly accredited key with
-/// no node behind it slows block production down to the posting-turn reclaim.
-const WAIT_TIMEOUT: Duration = Duration::from_secs(120);
+/// Upper bound on every wait, in block periods; generous because a freshly
+/// accredited key with no node behind it slows block production down to the
+/// posting-turn reclaim.
+const WAIT_TIMEOUT_BLOCKS: u32 = 60;
 
-/// Blocks past the submission tip that prove a dropped transaction: the
+/// Blocks past the post-admission tip that prove a dropped transaction: the
 /// builder pulls the whole mempool on every turn, so once two more blocks
-/// exist the transaction was tried and dropped rather than still queued.
+/// exist at least one pull happened after admission and the transaction was
+/// tried and dropped rather than still queued.
 const NON_INCLUSION_BLOCKS: u64 = 2;
+
+/// Upper bound on every wait, derived from the block cadence the deployed
+/// stack was configured with.
+const fn wait_timeout(context: &LezScenarioContext) -> Duration {
+    context
+        .block_create_timeout()
+        .saturating_mul(WAIT_TIMEOUT_BLOCKS)
+}
 
 /// Reads one account from the sequencer; an untouched account comes back with
 /// default values.
@@ -68,15 +80,19 @@ pub(super) async fn config_entry(
         .copied())
 }
 
-/// Returns the first public account configured into the scenario wallet.
+/// Returns the first genesis-funded public account configured into the
+/// scenario wallet, identified by its fixture-derived id so the choice does
+/// not depend on the wallet's account iteration order.
 pub(super) async fn first_configured_public_account(
     context: &LezScenarioContext,
 ) -> Result<AccountId, StepError> {
-    context
-        .existing_public_accounts()
-        .await?
-        .into_iter()
-        .next()
+    let existing = context.existing_public_accounts().await?;
+    crate::config::default_public_accounts_for_wallet()
+        .iter()
+        .map(|(private_key, _balance)| {
+            AccountId::from(&PublicKey::new_from_private_key(private_key))
+        })
+        .find(|account_id| existing.contains(account_id))
         .ok_or(StepError::MissingSelectedAccount)
 }
 
@@ -101,10 +117,10 @@ pub(super) async fn scenario_snapshot(
     account_ids.extend(scenario.ownership_id().ok());
     account_ids.extend(scenario.second_ownership_id().ok());
 
-    let mut accounts = Vec::with_capacity(account_ids.len());
-    for account_id in account_ids {
-        accounts.push((account_id, get_account(context, account_id).await?));
-    }
+    let accounts = try_join_all(account_ids.into_iter().map(|account_id| async move {
+        Ok::<_, StepError>((account_id, get_account(context, account_id).await?))
+    }))
+    .await?;
     Ok(AccountsSnapshot::new(accounts))
 }
 
@@ -119,10 +135,13 @@ pub(super) async fn submit_and_record(
 ) -> StepResult {
     let snapshot = scenario_snapshot(world).await?;
     let context = world.lez()?;
-    let submitted_at_block = last_block(context).await?;
     let hash = context
         .send_program_transaction(accounts, instruction_data, program_id)
         .await?;
+    // Mempool admission is synchronous with the send reply, so a tip read
+    // here is at or past the admission point and the non-inclusion window is
+    // guaranteed to cover a post-admission mempool pull.
+    let submitted_at_block = last_block(context).await?;
 
     let scenario = world.stake_mut()?;
     scenario.set_snapshot(snapshot);
@@ -136,30 +155,24 @@ pub(super) async fn submit_and_record(
 
 /// Waits until `hash` appears in a block.
 pub(super) async fn wait_for_inclusion(context: &LezScenarioContext, hash: HashType) -> StepResult {
-    let poll = async {
-        loop {
-            let included = context
+    wait_until(
+        POLL_INTERVAL,
+        wait_timeout(context),
+        format!("transaction {hash} to be included"),
+        || async move {
+            Ok(context
                 .sequencer_client()
                 .get_transaction(hash)
                 .await
                 .map_err(StepError::query_failed)?
-                .is_some();
-            if included {
-                return Ok(());
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    };
-    match tokio::time::timeout(WAIT_TIMEOUT, poll).await {
-        Ok(result) => result,
-        Err(_elapsed) => Err(StepError::Timeout {
-            message: format!("transaction {hash} was not included within {WAIT_TIMEOUT:?}"),
-        }),
-    }
+                .map(|_included| ()))
+        },
+    )
+    .await
 }
 
 /// Waits until the chain has moved [`NON_INCLUSION_BLOCKS`] past the
-/// submission tip and asserts the transaction is in none of them.
+/// post-admission tip and asserts the transaction is in none of them.
 pub(super) async fn assert_not_included(
     context: &LezScenarioContext,
     submission: &SubmissionRecord,
@@ -167,25 +180,13 @@ pub(super) async fn assert_not_included(
     let target = submission
         .submitted_at_block
         .saturating_add(NON_INCLUSION_BLOCKS);
-    let poll = async {
-        loop {
-            if last_block(context).await? >= target {
-                return Ok::<(), StepError>(());
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    };
-    match tokio::time::timeout(WAIT_TIMEOUT, poll).await {
-        Ok(result) => result?,
-        Err(_elapsed) => {
-            return Err(StepError::Timeout {
-                message: format!(
-                    "the chain did not reach block {target} within {WAIT_TIMEOUT:?} to prove \
-                     non-inclusion"
-                ),
-            });
-        }
-    }
+    wait_until(
+        POLL_INTERVAL,
+        wait_timeout(context),
+        format!("the chain to reach block {target} proving non-inclusion"),
+        || async move { Ok((last_block(context).await? >= target).then_some(())) },
+    )
+    .await?;
 
     let included = context
         .sequencer_client()

@@ -57,6 +57,7 @@ cucumber = { features = [
   "macros",
   "output-junit",
 ], workspace = true, optional = true }
+futures.workspace = true
 hex.workspace = true
 log.workspace = true
 num-bigint.workspace = true

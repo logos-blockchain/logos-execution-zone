@@ -9,8 +9,7 @@ use super::{
 use crate::cucumber::{
     error::{StepError, StepResult},
     stake_scenario::{
-        EXTRA_ACCOUNT_ID, confirm_stake_instruction, raw_stake_instruction, stake_instruction,
-        transfer_instruction,
+        confirm_stake_instruction, raw_stake_instruction, stake_instruction, transfer_instruction,
     },
     world::CucumberWorld,
 };
@@ -25,12 +24,15 @@ fn stake_accounts(funding_id: AccountId, ownership_id: AccountId) -> Vec<Account
     ]
 }
 
-#[when(expr = "a Stake of {string} is submitted")]
-async fn submit_stake(world: &mut CucumberWorld, step: &Step, expression: String) -> StepResult {
-    log_step(step);
+/// Resolves the amount expression, builds the scenario's `Stake` instruction
+/// and submits it with `accounts` as the pre-state list.
+async fn submit_stake_with_accounts(
+    world: &mut CucumberWorld,
+    expression: &str,
+    accounts: Vec<AccountIdentity>,
+) -> StepResult {
     let scenario = world.stake()?;
-    let amount = scenario.amount(&expression)?;
-    let accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
+    let amount = scenario.amount(expression)?;
     let instruction = stake_instruction(scenario.sequencer_key(), amount)?;
     submit_and_record(
         world,
@@ -42,6 +44,14 @@ async fn submit_stake(world: &mut CucumberWorld, step: &Step, expression: String
     .await
 }
 
+#[when(expr = "a Stake of {string} is submitted")]
+async fn submit_stake(world: &mut CucumberWorld, step: &Step, expression: String) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
+    submit_stake_with_accounts(world, &expression, accounts).await
+}
+
 #[when(expr = "a Stake of {string} is submitted without the ownership account's signature")]
 async fn submit_stake_unsigned_ownership(
     world: &mut CucumberWorld,
@@ -50,21 +60,12 @@ async fn submit_stake_unsigned_ownership(
 ) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;
-    let amount = scenario.amount(&expression)?;
     let accounts = vec![
         AccountIdentity::Public(scenario.funding_id()?),
         AccountIdentity::PublicNoSign(scenario.ownership_id()?),
         AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id()),
     ];
-    let instruction = stake_instruction(scenario.sequencer_key(), amount)?;
-    submit_and_record(
-        world,
-        accounts,
-        instruction,
-        programs::sequencer_stake().id(),
-        amount,
-    )
-    .await
+    submit_stake_with_accounts(world, &expression, accounts).await
 }
 
 #[when(
@@ -78,21 +79,12 @@ async fn submit_stake_with_ownership_as_config(
 ) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;
-    let amount = scenario.amount(&expression)?;
     let accounts = vec![
         AccountIdentity::Public(scenario.funding_id()?),
         AccountIdentity::Public(scenario.ownership_id()?),
         AccountIdentity::PublicNoSign(scenario.second_ownership_id()?),
     ];
-    let instruction = stake_instruction(scenario.sequencer_key(), amount)?;
-    submit_and_record(
-        world,
-        accounts,
-        instruction,
-        programs::sequencer_stake().id(),
-        amount,
-    )
-    .await
+    submit_stake_with_accounts(world, &expression, accounts).await
 }
 
 #[when(expr = "a Stake of {string} is submitted with {int} pre-state accounts")]
@@ -104,35 +96,28 @@ async fn submit_stake_with_account_count(
 ) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;
-    let amount = scenario.amount(&expression)?;
-    let funding_id = scenario.funding_id()?;
-    let ownership_id = scenario.ownership_id()?;
-    let accounts = match count {
-        2 => vec![
-            AccountIdentity::Public(funding_id),
-            AccountIdentity::Public(ownership_id),
-        ],
-        4 => vec![
-            AccountIdentity::Public(funding_id),
-            AccountIdentity::Public(ownership_id),
-            AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id()),
-            AccountIdentity::PublicNoSign(AccountId::new(EXTRA_ACCOUNT_ID)),
-        ],
-        other => {
-            return Err(StepError::InvalidArgument {
-                message: format!("unsupported pre-state account count {other}"),
-            });
-        }
+    let canonical = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
+    // Deterministic, unsigned filler accounts pad the pre-state list past the
+    // canonical three; the program rejects on the account count before
+    // touching them. The high byte pattern keeps them clear of other fixed
+    // test account ids.
+    let filler_account = |index: usize| {
+        u8::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_add(0xE0))
+            .map(|byte| AccountIdentity::PublicNoSign(AccountId::new([byte; 32])))
+            .ok_or_else(|| StepError::InvalidArgument {
+                message: format!("unsupported pre-state account count {count}"),
+            })
     };
-    let instruction = stake_instruction(scenario.sequencer_key(), amount)?;
-    submit_and_record(
-        world,
-        accounts,
-        instruction,
-        programs::sequencer_stake().id(),
-        amount,
-    )
-    .await
+    let accounts = (0..count)
+        .map(|index| {
+            canonical
+                .get(index)
+                .map_or_else(|| filler_account(index), |identity| Ok(identity.clone()))
+        })
+        .collect::<Result<Vec<_>, StepError>>()?;
+    submit_stake_with_accounts(world, &expression, accounts).await
 }
 
 #[when(

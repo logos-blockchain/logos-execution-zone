@@ -22,13 +22,11 @@ use sequencer_stake_core::SequencerKey;
 
 use crate::cucumber::error::StepError;
 
-/// Deterministic Bedrock signing seeds: each scenario runs against a fresh
-/// chain, so fixed seeds cannot collide across scenarios.
-const SEQUENCER_KEY_SEED: u8 = 0x51;
-const SECOND_SEQUENCER_KEY_SEED: u8 = 0x52;
-
-/// Padding account used to inflate `Stake`'s pre-state list (case P-20).
-pub const EXTRA_ACCOUNT_ID: [u8; 32] = [0xEE; 32];
+/// Deterministic Bedrock signing seeds, fed through the shared
+/// `sequencer_signing_key_from_seed` fixture derivation: each scenario runs
+/// against a fresh chain, so fixed seeds cannot collide across scenarios.
+const SEQUENCER_KEY_SEED: u32 = 0x51;
+const SECOND_SEQUENCER_KEY_SEED: u32 = 0x52;
 
 /// The last transaction handed to the sequencer, kept for the
 /// inclusion/non-inclusion assertions.
@@ -37,7 +35,7 @@ pub struct SubmissionRecord {
     pub hash: HashType,
     /// Amount the submission attempted to move.
     pub amount: u128,
-    /// Sequencer tip observed immediately before submission.
+    /// Sequencer tip observed immediately after mempool admission.
     pub submitted_at_block: u64,
 }
 
@@ -234,9 +232,11 @@ enum RawStakeInstruction {
     },
 }
 
-/// Derives the Bedrock-style sequencer key for a fixed seed byte.
-fn sequencer_key_from_seed(seed: u8) -> SequencerKey {
-    let bytes = Ed25519Key::from_bytes(&[seed; 32]).public_key().to_bytes();
+/// Derives the sequencer key for a fixed seed through the shared fixture
+/// derivation, keeping every test sequencer key on one derivation path.
+fn sequencer_key_from_seed(seed: u32) -> SequencerKey {
+    let signing_key = crate::config::sequencer_signing_key_from_seed(seed);
+    let bytes = Ed25519Key::from_bytes(&signing_key).public_key().to_bytes();
     SequencerKey::new(bytes).expect("a Bedrock public key is a valid Ed25519 public key")
 }
 
@@ -295,13 +295,47 @@ pub fn raw_stake_instruction(
     })
 }
 
+/// Layout guard for [`RawStakeInstruction`]: a raw instruction carrying
+/// on-curve key bytes must round-trip into the real `Instruction::Stake`.
+/// Without this positive control, any drift in the `Instruction` enum would
+/// make every raw instruction fail to decode and case P-24 pass vacuously.
+fn assert_raw_stake_layout_matches(amount: u128) -> Result<(), StepError> {
+    let control_key = sequencer_key_from_seed(SEQUENCER_KEY_SEED);
+    let words = raw_stake_instruction(control_key.to_bytes(), amount)?;
+    let decoded = risc0_zkvm::serde::from_slice::<sequencer_stake_core::Instruction, u32>(&words)
+        .map_err(|error| StepError::LogicalError {
+        message: format!(
+            "RawStakeInstruction no longer mirrors Instruction::Stake: an on-curve control \
+                 key fails to decode: {error}"
+        ),
+    })?;
+    let expected = sequencer_stake_core::Instruction::Stake {
+        sequencer_key: control_key,
+        amount,
+        mover_program_id: programs::authenticated_transfer().id(),
+        mover_instruction_data: transfer_instruction(amount)?,
+    };
+    if decoded != expected {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "RawStakeInstruction no longer mirrors Instruction::Stake: the on-curve control \
+                 key decodes as {decoded:?}"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Whether instruction data carrying `key_bytes` in the `SequencerKey`
-/// position fails host-side deserialization as a `sequencer_stake`
-/// instruction (the serde half of case P-24).
+/// position fails to deserialize (the serde half of case P-24).
+///
+/// Guarded by a positive control so the failure is attributable to
+/// `key_bytes` rather than to instruction-layout drift.
 pub fn raw_key_instruction_fails_to_decode(
     key_bytes: [u8; 32],
     amount: u128,
 ) -> Result<bool, StepError> {
+    assert_raw_stake_layout_matches(amount)?;
     let words = raw_stake_instruction(key_bytes, amount)?;
     Ok(risc0_zkvm::serde::from_slice::<sequencer_stake_core::Instruction, u32>(&words).is_err())
 }

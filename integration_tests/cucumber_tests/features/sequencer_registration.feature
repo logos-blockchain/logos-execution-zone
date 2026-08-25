@@ -13,6 +13,16 @@ Feature: Sequencer registration — a first Stake turns balance into stake
   # unchanged accounts; the expected in-program reason is kept as a comment
   # on each scenario and stays pinned by sequencer_core's unit tests.
   #
+  # The non-inclusion protocol depends on two node properties that no API
+  # documents or pins; if either changes, the rejection scenarios weaken to
+  # vacuous passes rather than failing:
+  # - mempool admission is synchronous with the send RPC reply, so a tip read
+  #   after submission is at or past the admission point
+  # - the block builder pulls the whole mempool on every turn, so two blocks
+  #   past that tip guarantee a post-admission pull tried the transaction
+  # Should the node ever gain a transaction status API (pending, included, or
+  # dropped with a reason), replace the two-block window with it.
+  #
   # Registration cases not ported:
   # - P-15, P-16 need a bad-mover guest
   # - P-17, P-19 need a chained-caller guest
@@ -145,7 +155,8 @@ Feature: Sequencer registration — a first Stake turns balance into stake
   # The borsh half mirrors sequencer_stake core's
   # a_non_curve_point_is_not_a_sequencer_key; the serde/instruction half is
   # the 🆕 path of the plan: an off-curve Stake never reaches the handler
-  # (the host-side instruction decode panics before the guest runs).
+  # (the instruction decode panics inside the zkVM guest and surfaces as a
+  # program-execution failure).
   Scenario: SequencerKey accepts only Ed25519 curve points
     Given 32 bytes that are not an Ed25519 curve point
     Then the bytes are not decodable as a SequencerKey
