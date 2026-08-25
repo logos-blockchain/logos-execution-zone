@@ -1,6 +1,6 @@
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
+    program::ProgramId,
 };
 use token_core::TokenHolding;
 
@@ -8,20 +8,21 @@ use token_core::TokenHolding;
 pub fn print_nft(
     master_account: AccountWithMetadata,
     printed_account: AccountWithMetadata,
-) -> Vec<AccountPostState> {
+    self_program_id: ProgramId,
+) -> Vec<Account> {
     assert!(
         master_account.is_authorized,
         "Master NFT Account must be authorized"
     );
 
-    assert_eq!(
-        printed_account.account,
-        Account::default(),
+    assert!(
+        printed_account.account.slot(self_program_id).is_none(),
         "Printed Account must be uninitialized"
     );
 
     let mut master_account_data =
-        TokenHolding::try_from(&master_account.account.data).expect("Invalid Token Holding data");
+        TokenHolding::try_from(master_account.account.data(self_program_id))
+            .expect("Invalid Token Holding data");
 
     let TokenHolding::NftMaster {
         definition_id,
@@ -40,16 +41,14 @@ pub fn print_nft(
     *print_balance = print_balance.checked_sub(1).expect("Checked above");
 
     let mut master_account_post = master_account.account;
-    master_account_post.data = Data::from(&master_account_data);
+    master_account_post.slot_mut(self_program_id).data = Data::from(&master_account_data);
 
     let mut printed_account_post = printed_account.account;
-    printed_account_post.data = Data::from(&TokenHolding::NftPrintedCopy {
-        definition_id,
-        owned: true,
-    });
+    printed_account_post.slot_mut(self_program_id).data =
+        Data::from(&TokenHolding::NftPrintedCopy {
+            definition_id,
+            owned: true,
+        });
 
-    vec![
-        AccountPostState::new(master_account_post),
-        AccountPostState::new_claimed(printed_account_post, Claim::Authorized),
-    ]
+    vec![master_account_post, printed_account_post]
 }

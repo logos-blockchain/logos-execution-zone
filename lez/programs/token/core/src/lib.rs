@@ -1,7 +1,10 @@
 //! This crate contains core data structures and utilities for the Token Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::{AccountId, Data};
+use lee_core::{
+    account::{AccountId, Data},
+    program::PdaSeed,
+};
 use serde::{Deserialize, Serialize};
 
 /// Token Program Instruction.
@@ -11,22 +14,27 @@ pub enum Instruction {
     ///
     /// Required accounts:
     /// - Sender's Token Holding account (initialized, authorized),
-    /// - Recipient's Token Holding account (initialized or authorized and uninitialized).
-    Transfer { amount_to_transfer: u128 },
+    /// - Recipient's Token Holding account (initialized or uninitialized).
+    ///
+    /// `sender_seed` authorizes a sender the caller custodies as its own PDA.
+    Transfer {
+        amount_to_transfer: u128,
+        sender_seed: Option<PdaSeed>,
+    },
 
     /// Create a new fungible token definition without metadata.
     ///
     /// Required accounts:
-    /// - Token Definition account (uninitialized, authorized),
-    /// - Token Holding account (uninitialized, authorized).
+    /// - Token Definition account (uninitialized),
+    /// - Token Holding account (uninitialized).
     NewFungibleDefinition { name: String, total_supply: u128 },
 
     /// Create a new fungible or non-fungible token definition with metadata.
     ///
     /// Required accounts:
-    /// - Token Definition account (uninitialized, authorized),
-    /// - Token Holding account (uninitialized, authorized),
-    /// - Token Metadata account (uninitialized, authorized).
+    /// - Token Definition account (uninitialized),
+    /// - Token Holding account (uninitialized),
+    /// - Token Metadata account (uninitialized).
     NewDefinitionWithMetadata {
         new_definition: NewTokenDefinition,
         /// Boxed to avoid large enum variant size.
@@ -37,7 +45,7 @@ pub enum Instruction {
     ///
     /// Required accounts:
     /// - Token Definition account (initialized, any authorization),
-    /// - Token Holding account (uninitialized, authorized),
+    /// - Token Holding account (uninitialized),
     InitializeAccount,
 
     /// Burn tokens from the holder's account.
@@ -45,20 +53,30 @@ pub enum Instruction {
     /// Required accounts:
     /// - Token Definition account (initialized, any authorization),
     /// - Token Holding account (initialized, authorized).
-    Burn { amount_to_burn: u128 },
+    ///
+    /// `holding_seed` authorizes a holding the caller custodies as its own PDA.
+    Burn {
+        amount_to_burn: u128,
+        holding_seed: Option<PdaSeed>,
+    },
 
     /// Mint new tokens to the holder's account.
     ///
     /// Required accounts:
     /// - Token Definition account (initialized, authorized),
-    /// - Token Holding account (uninitialized or authorized and initialized).
-    Mint { amount_to_mint: u128 },
+    /// - Token Holding account (initialized or uninitialized).
+    ///
+    /// `definition_seed` authorizes a definition the caller custodies as its own PDA.
+    Mint {
+        amount_to_mint: u128,
+        definition_seed: Option<PdaSeed>,
+    },
 
     /// Print a new NFT from the master copy.
     ///
     /// Required accounts:
     /// - NFT Master Token Holding account (authorized),
-    /// - NFT Printed Copy Token Holding account (uninitialized, authorized).
+    /// - NFT Printed Copy Token Holding account (uninitialized).
     PrintNft,
 }
 

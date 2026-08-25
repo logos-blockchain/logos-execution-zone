@@ -25,11 +25,19 @@ fn main() {
     let post_states = match instruction {
         Instruction::Transfer {
             amount_to_transfer: balance_to_move,
+            sender_seed,
         } => {
             let [sender, recipient] = pre_states
                 .try_into()
                 .expect("Transfer instruction requires exactly two accounts");
-            token_program::transfer::transfer(sender, recipient, balance_to_move)
+            token_program::transfer::transfer(
+                sender,
+                recipient,
+                balance_to_move,
+                sender_seed,
+                self_program_id,
+                caller_program_id,
+            )
         }
         Instruction::NewFungibleDefinition { name, total_supply } => {
             let [definition_account, holding_account] = pre_states
@@ -40,6 +48,7 @@ fn main() {
                 holding_account,
                 name,
                 total_supply,
+                self_program_id,
             )
         }
         Instruction::NewDefinitionWithMetadata {
@@ -55,31 +64,56 @@ fn main() {
                 metadata_account,
                 new_definition,
                 *metadata,
+                self_program_id,
             )
         }
         Instruction::InitializeAccount => {
             let [definition_account, account_to_initialize] = pre_states
                 .try_into()
                 .expect("InitializeAccount instruction requires exactly two accounts");
-            token_program::initialize::initialize_account(definition_account, account_to_initialize)
+            token_program::initialize::initialize_account(
+                definition_account,
+                account_to_initialize,
+                self_program_id,
+            )
         }
-        Instruction::Burn { amount_to_burn } => {
+        Instruction::Burn {
+            amount_to_burn,
+            holding_seed,
+        } => {
             let [definition_account, user_holding_account] = pre_states
                 .try_into()
                 .expect("Burn instruction requires exactly two accounts");
-            token_program::burn::burn(definition_account, user_holding_account, amount_to_burn)
+            token_program::burn::burn(
+                definition_account,
+                user_holding_account,
+                amount_to_burn,
+                holding_seed,
+                self_program_id,
+                caller_program_id,
+            )
         }
-        Instruction::Mint { amount_to_mint } => {
+        Instruction::Mint {
+            amount_to_mint,
+            definition_seed,
+        } => {
             let [definition_account, user_holding_account] = pre_states
                 .try_into()
                 .expect("Mint instruction requires exactly two accounts");
-            token_program::mint::mint(definition_account, user_holding_account, amount_to_mint)
+            token_program::mint::mint(
+                definition_account,
+                user_holding_account,
+                amount_to_mint,
+                definition_seed,
+                self_program_id,
+                caller_program_id,
+            )
         }
         Instruction::PrintNft => {
             let [master_account, printed_account] = pre_states
                 .try_into()
                 .expect("PrintNft instruction requires exactly two accounts");
-            token_program::print_nft::print_nft(master_account, printed_account)
+            token_program::print_nft::print_nft(master_account, printed_account, self_program_id)
         }
     };
 

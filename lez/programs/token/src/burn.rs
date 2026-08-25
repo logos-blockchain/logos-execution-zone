@@ -1,23 +1,29 @@
 use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::AccountPostState,
+    account::{Account, AccountWithMetadata, Data},
+    program::{PdaSeed, ProgramId},
 };
 use token_core::{TokenDefinition, TokenHolding};
+
+use crate::seed_authorized;
 
 #[must_use]
 pub fn burn(
     definition_account: AccountWithMetadata,
     user_holding_account: AccountWithMetadata,
     amount_to_burn: u128,
-) -> Vec<AccountPostState> {
+    holding_seed: Option<PdaSeed>,
+    self_program_id: ProgramId,
+    caller_program_id: Option<ProgramId>,
+) -> Vec<Account> {
     assert!(
-        user_holding_account.is_authorized,
+        seed_authorized(&user_holding_account, caller_program_id, holding_seed),
         "Authorization is missing"
     );
 
-    let mut definition = TokenDefinition::try_from(&definition_account.account.data)
-        .expect("Token Definition account must be valid");
-    let mut holding = TokenHolding::try_from(&user_holding_account.account.data)
+    let mut definition =
+        TokenDefinition::try_from(definition_account.account.data(self_program_id))
+            .expect("Token Definition account must be valid");
+    let mut holding = TokenHolding::try_from(user_holding_account.account.data(self_program_id))
         .expect("Token Holding account must be valid");
 
     assert_eq!(
@@ -93,13 +99,10 @@ pub fn burn(
     }
 
     let mut definition_post = definition_account.account;
-    definition_post.data = Data::from(&definition);
+    definition_post.slot_mut(self_program_id).data = Data::from(&definition);
 
     let mut holding_post = user_holding_account.account;
-    holding_post.data = Data::from(&holding);
+    holding_post.slot_mut(self_program_id).data = Data::from(&holding);
 
-    vec![
-        AccountPostState::new(definition_post),
-        AccountPostState::new(holding_post),
-    ]
+    vec![definition_post, holding_post]
 }

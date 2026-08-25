@@ -29,6 +29,7 @@ fn main() {
             token_a_amount,
             token_b_amount,
             amm_program_id,
+            token_program_id,
         } => {
             let [
                 pool,
@@ -52,6 +53,8 @@ fn main() {
                 NonZero::new(token_a_amount).expect("Token A should have a nonzero amount"),
                 NonZero::new(token_b_amount).expect("Token B should have a nonzero amount"),
                 amm_program_id,
+                token_program_id,
+                self_program_id,
             )
         }
         Instruction::AddLiquidity {
@@ -82,6 +85,7 @@ fn main() {
                     .expect("Min amount of liquidity should be nonzero"),
                 max_amount_to_add_token_a,
                 max_amount_to_add_token_b,
+                self_program_id,
             )
         }
         Instruction::RemoveLiquidity {
@@ -112,6 +116,7 @@ fn main() {
                     .expect("Remove liquidity amount must be nonzero"),
                 min_amount_to_remove_token_a,
                 min_amount_to_remove_token_b,
+                self_program_id,
             )
         }
         Instruction::SwapExactInput {
@@ -131,6 +136,7 @@ fn main() {
                 swap_amount_in,
                 min_amount_out,
                 token_definition_id_in,
+                self_program_id,
             )
         }
         Instruction::SwapExactOutput {
@@ -150,6 +156,7 @@ fn main() {
                 exact_amount_out,
                 max_amount_in,
                 token_definition_id_in,
+                self_program_id,
             )
         }
     };

@@ -1,7 +1,7 @@
 pub use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall},
+    account::{Account, AccountId, AccountWithMetadata, Data},
+    program::{ChainedCall, ProgramId},
 };
 
 /// Validates swap setup: checks pool is active, vaults match, and reserves are sufficient.
@@ -9,8 +9,9 @@ fn validate_swap_setup(
     pool: &AccountWithMetadata,
     vault_a: &AccountWithMetadata,
     vault_b: &AccountWithMetadata,
+    self_program_id: ProgramId,
 ) -> PoolDefinition {
-    let pool_def_data = PoolDefinition::try_from(&pool.account.data)
+    let pool_def_data = PoolDefinition::try_from(pool.account.data(self_program_id))
         .expect("AMM Program expects a valid Pool Definition Account");
 
     assert!(pool_def_data.active, "Pool is inactive");
@@ -23,8 +24,9 @@ fn validate_swap_setup(
         "Vault B was not provided"
     );
 
-    let vault_a_token_holding = token_core::TokenHolding::try_from(&vault_a.account.data)
-        .expect("AMM Program expects a valid Token Holding Account for Vault A");
+    let vault_a_token_holding =
+        token_core::TokenHolding::try_from(vault_a.account.data(pool_def_data.token_program_id))
+            .expect("AMM Program expects a valid Token Holding Account for Vault A");
     let token_core::TokenHolding::Fungible {
         definition_id: _,
         balance: vault_a_balance,
@@ -38,8 +40,9 @@ fn validate_swap_setup(
         "Reserve for Token A exceeds vault balance"
     );
 
-    let vault_b_token_holding = token_core::TokenHolding::try_from(&vault_b.account.data)
-        .expect("AMM Program expects a valid Token Holding Account for Vault B");
+    let vault_b_token_holding =
+        token_core::TokenHolding::try_from(vault_b.account.data(pool_def_data.token_program_id))
+            .expect("AMM Program expects a valid Token Holding Account for Vault B");
     let token_core::TokenHolding::Fungible {
         definition_id: _,
         balance: vault_b_balance,
@@ -73,7 +76,8 @@ fn create_swap_post_states(
     withdraw_a: u128,
     deposit_b: u128,
     withdraw_b: u128,
-) -> Vec<AccountPostState> {
+    self_program_id: ProgramId,
+) -> Vec<Account> {
     let mut pool_post = pool.account;
     let pool_post_definition = PoolDefinition {
         reserve_a: pool_def_data.reserve_a + deposit_a - withdraw_a,
@@ -81,14 +85,14 @@ fn create_swap_post_states(
         ..pool_def_data
     };
 
-    pool_post.data = Data::from(&pool_post_definition);
+    pool_post.slot_mut(self_program_id).data = Data::from(&pool_post_definition);
 
     vec![
-        AccountPostState::new(pool_post),
-        AccountPostState::new(vault_a.account),
-        AccountPostState::new(vault_b.account),
-        AccountPostState::new(user_holding_a.account),
-        AccountPostState::new(user_holding_b.account),
+        pool_post,
+        vault_a.account,
+        vault_b.account,
+        user_holding_a.account,
+        user_holding_b.account,
     ]
 }
 
@@ -103,8 +107,9 @@ pub fn swap_exact_input(
     swap_amount_in: u128,
     min_amount_out: u128,
     token_in_id: AccountId,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
-    let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b);
+    self_program_id: ProgramId,
+) -> (Vec<Account>, Vec<ChainedCall>) {
+    let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b, self_program_id);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
         if token_in_id == pool_def_data.definition_token_a_id {
@@ -118,6 +123,7 @@ pub fn swap_exact_input(
                 pool_def_data.reserve_a,
                 pool_def_data.reserve_b,
                 pool.account_id,
+                pool_def_data.token_program_id,
             );
 
             (chained_calls, [deposit_a, 0], [0, withdraw_b])
@@ -132,6 +138,7 @@ pub fn swap_exact_input(
                 pool_def_data.reserve_b,
                 pool_def_data.reserve_a,
                 pool.account_id,
+                pool_def_data.token_program_id,
             );
 
             (chained_calls, [0, withdraw_a], [deposit_b, 0])
@@ -150,6 +157,7 @@ pub fn swap_exact_input(
         withdraw_a,
         deposit_b,
         withdraw_b,
+        self_program_id,
     );
 
     (post_states, chained_calls)
@@ -166,6 +174,7 @@ fn swap_logic(
     reserve_deposit_vault_amount: u128,
     reserve_withdraw_vault_amount: u128,
     pool_id: AccountId,
+    token_program_id: ProgramId,
 ) -> (Vec<ChainedCall>, u128, u128) {
     // Compute withdraw amount
     // Maintains pool constant product
@@ -182,37 +191,31 @@ fn swap_logic(
     );
     assert!(withdraw_amount != 0, "Withdraw amount should be nonzero");
 
-    let token_program_id: lee_core::program::ProgramId = user_deposit.account.program_owner.into();
-
-    let mut chained_calls = Vec::new();
-    chained_calls.push(ChainedCall::new(
-        token_program_id,
-        vec![user_deposit, vault_deposit],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: swap_amount_in,
-        },
-    ));
-
-    let mut vault_withdraw = vault_withdraw;
-    vault_withdraw.is_authorized = true;
-
     let pda_seed = compute_vault_pda_seed(
         pool_id,
-        token_core::TokenHolding::try_from(&vault_withdraw.account.data)
+        token_core::TokenHolding::try_from(vault_withdraw.account.data(token_program_id))
             .expect("Swap Logic: AMM Program expects valid token data")
             .definition_id(),
     );
 
-    chained_calls.push(
+    let chained_calls = vec![
+        ChainedCall::new(
+            token_program_id,
+            vec![user_deposit, vault_deposit],
+            &token_core::Instruction::Transfer {
+                amount_to_transfer: swap_amount_in,
+                sender_seed: None,
+            },
+        ),
         ChainedCall::new(
             token_program_id,
             vec![vault_withdraw, user_withdraw],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: withdraw_amount,
+                sender_seed: Some(pda_seed),
             },
-        )
-        .with_pda_seeds(vec![pda_seed]),
-    );
+        ),
+    ];
 
     (chained_calls, swap_amount_in, withdraw_amount)
 }
@@ -228,8 +231,9 @@ pub fn swap_exact_output(
     exact_amount_out: u128,
     max_amount_in: u128,
     token_in_id: AccountId,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
-    let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b);
+    self_program_id: ProgramId,
+) -> (Vec<Account>, Vec<ChainedCall>) {
+    let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b, self_program_id);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
         if token_in_id == pool_def_data.definition_token_a_id {
@@ -243,6 +247,7 @@ pub fn swap_exact_output(
                 pool_def_data.reserve_a,
                 pool_def_data.reserve_b,
                 pool.account_id,
+                pool_def_data.token_program_id,
             );
 
             (chained_calls, [deposit_a, 0], [0, withdraw_b])
@@ -257,6 +262,7 @@ pub fn swap_exact_output(
                 pool_def_data.reserve_b,
                 pool_def_data.reserve_a,
                 pool.account_id,
+                pool_def_data.token_program_id,
             );
 
             (chained_calls, [0, withdraw_a], [deposit_b, 0])
@@ -275,6 +281,7 @@ pub fn swap_exact_output(
         withdraw_a,
         deposit_b,
         withdraw_b,
+        self_program_id,
     );
 
     (post_states, chained_calls)
@@ -291,6 +298,7 @@ fn exact_output_swap_logic(
     reserve_deposit_vault_amount: u128,
     reserve_withdraw_vault_amount: u128,
     pool_id: AccountId,
+    token_program_id: ProgramId,
 ) -> (Vec<ChainedCall>, u128, u128) {
     // Guard: exact_amount_out must be nonzero
     assert_ne!(exact_amount_out, 0, "Exact amount out must be nonzero");
@@ -314,37 +322,31 @@ fn exact_output_swap_logic(
         "Required input exceeds maximum amount in"
     );
 
-    let token_program_id: lee_core::program::ProgramId = user_deposit.account.program_owner.into();
-
-    let mut chained_calls = Vec::new();
-    chained_calls.push(ChainedCall::new(
-        token_program_id,
-        vec![user_deposit, vault_deposit],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: deposit_amount,
-        },
-    ));
-
-    let mut vault_withdraw = vault_withdraw;
-    vault_withdraw.is_authorized = true;
-
     let pda_seed = compute_vault_pda_seed(
         pool_id,
-        token_core::TokenHolding::try_from(&vault_withdraw.account.data)
+        token_core::TokenHolding::try_from(vault_withdraw.account.data(token_program_id))
             .expect("Exact Output Swap Logic: AMM Program expects valid token data")
             .definition_id(),
     );
 
-    chained_calls.push(
+    let chained_calls = vec![
+        ChainedCall::new(
+            token_program_id,
+            vec![user_deposit, vault_deposit],
+            &token_core::Instruction::Transfer {
+                amount_to_transfer: deposit_amount,
+                sender_seed: None,
+            },
+        ),
         ChainedCall::new(
             token_program_id,
             vec![vault_withdraw, user_withdraw],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: exact_amount_out,
+                sender_seed: Some(pda_seed),
             },
-        )
-        .with_pda_seeds(vec![pda_seed]),
-    );
+        ),
+    ];
 
     (chained_calls, deposit_amount, exact_amount_out)
 }

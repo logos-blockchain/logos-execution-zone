@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
-use lee_core::account::{Account, AccountId, AccountWithMetadata, Data};
+use lee_core::account::{Account, AccountId, AccountWithMetadata, Data, Nonce};
 use token_core::{TokenDefinition, TokenHolding};
 
 const ATA_PROGRAM_ID: lee_core::program::ProgramId = [1u32; 8];
@@ -32,16 +32,16 @@ fn owner_account() -> AccountWithMetadata {
 
 fn definition_account() -> AccountWithMetadata {
     AccountWithMetadata {
-        account: Account {
-            program_owner: TOKEN_PROGRAM_ID.into(),
-            balance: 0,
-            data: Data::from(&TokenDefinition::Fungible {
+        account: Account::single(
+            TOKEN_PROGRAM_ID,
+            0,
+            Data::from(&TokenDefinition::Fungible {
                 name: "TEST".to_string(),
                 total_supply: 1000,
                 metadata_id: None,
             }),
-            nonce: lee_core::account::Nonce(0),
-        },
+            Nonce(0),
+        ),
         is_authorized: false,
         account_id: definition_id(),
     }
@@ -57,15 +57,15 @@ fn uninitialized_ata_account() -> AccountWithMetadata {
 
 fn initialized_ata_account() -> AccountWithMetadata {
     AccountWithMetadata {
-        account: Account {
-            program_owner: TOKEN_PROGRAM_ID.into(),
-            balance: 0,
-            data: Data::from(&TokenHolding::Fungible {
+        account: Account::single(
+            TOKEN_PROGRAM_ID,
+            0,
+            Data::from(&TokenHolding::Fungible {
                 definition_id: definition_id(),
                 balance: 100,
             }),
-            nonce: lee_core::account::Nonce(0),
-        },
+            Nonce(0),
+        ),
         is_authorized: false,
         account_id: ata_id(),
     }
@@ -78,6 +78,7 @@ fn create_emits_chained_call_for_uninitialized_ata() {
         definition_account(),
         uninitialized_ata_account(),
         ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
     );
 
     assert_eq!(post_states.len(), 3);
@@ -92,6 +93,7 @@ fn create_is_idempotent_for_initialized_ata() {
         definition_account(),
         initialized_ata_account(),
         ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
     );
 
     assert_eq!(post_states.len(), 3);
@@ -115,7 +117,24 @@ fn create_panics_on_wrong_ata_address() {
         definition_account(),
         wrong_ata,
         ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
     );
+}
+
+#[test]
+fn create_ignores_slots_of_other_programs_on_the_ata() {
+    let mut ata = uninitialized_ata_account();
+    ata.account.slot_mut([9u32; 8]).balance = 7;
+
+    let (_post_states, chained_calls) = crate::create::create_associated_token_account(
+        owner_account(),
+        definition_account(),
+        ata,
+        ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
+    );
+
+    assert_eq!(chained_calls.len(), 1);
 }
 
 #[test]

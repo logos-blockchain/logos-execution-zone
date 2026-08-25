@@ -2,11 +2,11 @@ use std::num::NonZeroU128;
 
 use amm_core::{
     PoolDefinition, compute_liquidity_token_pda, compute_liquidity_token_pda_seed,
-    compute_pool_pda, compute_pool_pda_seed, compute_vault_pda, compute_vault_pda_seed,
+    compute_pool_pda, compute_vault_pda,
 };
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall, Claim, ProgramId},
+    program::{ChainedCall, ProgramId},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -22,22 +22,19 @@ pub fn new_definition(
     token_a_amount: NonZeroU128,
     token_b_amount: NonZeroU128,
     amm_program_id: ProgramId,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+    token_program_id: ProgramId,
+    self_program_id: ProgramId,
+) -> (Vec<Account>, Vec<ChainedCall>) {
     // Verify token_a and token_b are different
-    let definition_token_a_id = token_core::TokenHolding::try_from(&user_holding_a.account.data)
-        .expect("New definition: AMM Program expects valid Token Holding account for Token A")
-        .definition_id();
-    let definition_token_b_id = token_core::TokenHolding::try_from(&user_holding_b.account.data)
-        .expect("New definition: AMM Program expects valid Token Holding account for Token B")
-        .definition_id();
+    let definition_token_a_id =
+        token_core::TokenHolding::try_from(user_holding_a.account.data(token_program_id))
+            .expect("New definition: AMM Program expects valid Token Holding account for Token A")
+            .definition_id();
+    let definition_token_b_id =
+        token_core::TokenHolding::try_from(user_holding_b.account.data(token_program_id))
+            .expect("New definition: AMM Program expects valid Token Holding account for Token B")
+            .definition_id();
 
-    // both instances of the same token program
-    let token_program = user_holding_a.account.program_owner;
-
-    assert_eq!(
-        user_holding_b.account.program_owner, token_program,
-        "User Token holdings must use the same Token Program"
-    );
     assert!(
         definition_token_a_id != definition_token_b_id,
         "Cannot set up a swap for a token with itself"
@@ -65,10 +62,11 @@ pub fn new_definition(
 
     // TODO: return here
     // Verify that Pool Account is not active
-    let pool_account_data = if pool.account == Account::default() {
+    let is_fresh_pool = pool.account.slot(self_program_id).is_none();
+    let pool_account_data = if is_fresh_pool {
         PoolDefinition::default()
     } else {
-        PoolDefinition::try_from(&pool.account.data)
+        PoolDefinition::try_from(pool.account.data(self_program_id))
             .expect("AMM program expects a valid Pool account")
     };
 
@@ -81,7 +79,7 @@ pub fn new_definition(
     let initial_lp = (token_a_amount.get() * token_b_amount.get()).isqrt();
 
     // Chain call for liquidity token (TokenLP definition -> User LP Holding)
-    let instruction = if pool.account == Account::default() {
+    let instruction = if is_fresh_pool {
         token_core::Instruction::NewFungibleDefinition {
             name: String::from("LP Token"),
             total_supply: initial_lp,
@@ -89,12 +87,14 @@ pub fn new_definition(
     } else {
         token_core::Instruction::Mint {
             amount_to_mint: initial_lp,
+            definition_seed: Some(compute_liquidity_token_pda_seed(pool.account_id)),
         }
     };
 
     // Update pool account
     let mut pool_post = pool.account;
     let pool_post_definition = PoolDefinition {
+        token_program_id,
         definition_token_a_id,
         definition_token_b_id,
         vault_a_id: vault_a.account_id,
@@ -107,65 +107,44 @@ pub fn new_definition(
         active: true,
     };
 
-    pool_post.data = Data::from(&pool_post_definition);
-    let pool_pda_seed = compute_pool_pda_seed(definition_token_a_id, definition_token_b_id);
-    let pool_post = AccountPostState::new_claimed_if_default(pool_post, Claim::Pda(pool_pda_seed));
-
-    let token_program_id: lee_core::program::ProgramId =
-        user_holding_a.account.program_owner.into();
+    pool_post.slot_mut(self_program_id).data = Data::from(&pool_post_definition);
 
     // Chain call for Token A (user_holding_a -> Vault_A)
-    let vault_a_seed = compute_vault_pda_seed(pool.account_id, definition_token_a_id);
-    let vault_a_authorized = AccountWithMetadata {
-        is_authorized: true,
-        ..vault_a.clone()
-    };
     let call_token_a = ChainedCall::new(
         token_program_id,
-        vec![user_holding_a.clone(), vault_a_authorized],
+        vec![user_holding_a.clone(), vault_a.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_a_amount.into(),
+            sender_seed: None,
         },
-    )
-    .with_pda_seeds(vec![vault_a_seed]);
+    );
 
     // Chain call for Token B (user_holding_b -> Vault_B)
-    let vault_b_seed = compute_vault_pda_seed(pool.account_id, definition_token_b_id);
-    let vault_b_authorized = AccountWithMetadata {
-        is_authorized: true,
-        ..vault_b.clone()
-    };
     let call_token_b = ChainedCall::new(
         token_program_id,
-        vec![user_holding_b.clone(), vault_b_authorized],
+        vec![user_holding_b.clone(), vault_b.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_b_amount.into(),
+            sender_seed: None,
         },
-    )
-    .with_pda_seeds(vec![vault_b_seed]);
+    );
 
-    let pool_lp_pda_seed = compute_liquidity_token_pda_seed(pool.account_id);
-    let pool_lp_authorized = AccountWithMetadata {
-        is_authorized: true,
-        ..pool_definition_lp.clone()
-    };
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_lp_authorized, user_holding_lp.clone()],
+        vec![pool_definition_lp.clone(), user_holding_lp.clone()],
         &instruction,
-    )
-    .with_pda_seeds(vec![pool_lp_pda_seed]);
+    );
 
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_states = vec![
         pool_post,
-        AccountPostState::new(vault_a.account),
-        AccountPostState::new(vault_b.account),
-        AccountPostState::new(pool_definition_lp.account),
-        AccountPostState::new(user_holding_a.account),
-        AccountPostState::new(user_holding_b.account),
-        AccountPostState::new(user_holding_lp.account),
+        vault_a.account,
+        vault_b.account,
+        pool_definition_lp.account,
+        user_holding_a.account,
+        user_holding_b.account,
+        user_holding_lp.account,
     ];
 
     (post_states, chained_calls)

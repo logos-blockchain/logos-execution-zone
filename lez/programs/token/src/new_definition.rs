@@ -1,6 +1,6 @@
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
+    program::ProgramId,
 };
 use token_core::{
     NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding, TokenMetadata,
@@ -12,17 +12,22 @@ pub fn new_fungible_definition(
     holding_target_account: AccountWithMetadata,
     name: String,
     total_supply: u128,
-) -> Vec<AccountPostState> {
-    assert_eq!(
-        definition_target_account.account,
-        Account::default(),
-        "Definition target account must have default values"
+    self_program_id: ProgramId,
+) -> Vec<Account> {
+    assert!(
+        definition_target_account
+            .account
+            .slot(self_program_id)
+            .is_none(),
+        "Definition target account must be uninitialized"
     );
 
-    assert_eq!(
-        holding_target_account.account,
-        Account::default(),
-        "Holding target account must have default values"
+    assert!(
+        holding_target_account
+            .account
+            .slot(self_program_id)
+            .is_none(),
+        "Holding target account must be uninitialized"
     );
 
     let token_definition = TokenDefinition::Fungible {
@@ -36,15 +41,14 @@ pub fn new_fungible_definition(
     };
 
     let mut definition_target_account_post = definition_target_account.account;
-    definition_target_account_post.data = Data::from(&token_definition);
+    definition_target_account_post
+        .slot_mut(self_program_id)
+        .data = Data::from(&token_definition);
 
     let mut holding_target_account_post = holding_target_account.account;
-    holding_target_account_post.data = Data::from(&token_holding);
+    holding_target_account_post.slot_mut(self_program_id).data = Data::from(&token_holding);
 
-    vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
-    ]
+    vec![definition_target_account_post, holding_target_account_post]
 }
 
 #[must_use]
@@ -54,23 +58,30 @@ pub fn new_definition_with_metadata(
     metadata_target_account: AccountWithMetadata,
     new_definition: NewTokenDefinition,
     metadata: NewTokenMetadata,
-) -> Vec<AccountPostState> {
-    assert_eq!(
-        definition_target_account.account,
-        Account::default(),
-        "Definition target account must have default values"
+    self_program_id: ProgramId,
+) -> Vec<Account> {
+    assert!(
+        definition_target_account
+            .account
+            .slot(self_program_id)
+            .is_none(),
+        "Definition target account must be uninitialized"
     );
 
-    assert_eq!(
-        holding_target_account.account,
-        Account::default(),
-        "Holding target account must have default values"
+    assert!(
+        holding_target_account
+            .account
+            .slot(self_program_id)
+            .is_none(),
+        "Holding target account must be uninitialized"
     );
 
-    assert_eq!(
-        metadata_target_account.account,
-        Account::default(),
-        "Metadata target account must have default values"
+    assert!(
+        metadata_target_account
+            .account
+            .slot(self_program_id)
+            .is_none(),
+        "Metadata target account must be uninitialized"
     );
 
     let (token_definition, token_holding) = match new_definition {
@@ -110,17 +121,19 @@ pub fn new_definition_with_metadata(
     };
 
     let mut definition_target_account_post = definition_target_account.account;
-    definition_target_account_post.data = Data::from(&token_definition);
+    definition_target_account_post
+        .slot_mut(self_program_id)
+        .data = Data::from(&token_definition);
 
     let mut holding_target_account_post = holding_target_account.account;
-    holding_target_account_post.data = Data::from(&token_holding);
+    holding_target_account_post.slot_mut(self_program_id).data = Data::from(&token_holding);
 
     let mut metadata_target_account_post = metadata_target_account.account;
-    metadata_target_account_post.data = Data::from(&token_metadata);
+    metadata_target_account_post.slot_mut(self_program_id).data = Data::from(&token_metadata);
 
     vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(metadata_target_account_post, Claim::Authorized),
+        definition_target_account_post,
+        holding_target_account_post,
+        metadata_target_account_post,
     ]
 }

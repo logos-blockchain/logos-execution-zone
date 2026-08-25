@@ -23,6 +23,9 @@ pub enum Instruction {
         token_a_amount: u128,
         token_b_amount: u128,
         amm_program_id: ProgramId,
+        /// Pinned into the [`PoolDefinition`]; every later chained call uses that pinned id
+        /// rather than one read off a user-supplied account.
+        token_program_id: ProgramId,
     },
 
     /// Adds liquidity to the Pool.
@@ -92,6 +95,8 @@ pub enum Instruction {
 
 #[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 pub struct PoolDefinition {
+    /// The Token Program governing both reserves and the liquidity token.
+    pub token_program_id: ProgramId,
     pub definition_token_a_id: AccountId,
     pub definition_token_b_id: AccountId,
     pub vault_a_id: AccountId,

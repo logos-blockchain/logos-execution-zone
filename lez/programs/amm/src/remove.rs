@@ -1,9 +1,9 @@
 use std::num::NonZeroU128;
 
-use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
+use amm_core::{PoolDefinition, compute_vault_pda_seed};
 use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall},
+    account::{Account, AccountWithMetadata, Data},
+    program::{ChainedCall, ProgramId},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -19,11 +19,12 @@ pub fn remove_liquidity(
     remove_liquidity_amount: NonZeroU128,
     min_amount_to_remove_token_a: u128,
     min_amount_to_remove_token_b: u128,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+    self_program_id: ProgramId,
+) -> (Vec<Account>, Vec<ChainedCall>) {
     let remove_liquidity_amount: u128 = remove_liquidity_amount.into();
 
     // 1. Fetch Pool state
-    let pool_def_data = PoolDefinition::try_from(&pool.account.data)
+    let pool_def_data = PoolDefinition::try_from(pool.account.data(self_program_id))
         .expect("Remove liquidity: AMM Program expects a valid Pool Definition Account");
 
     assert!(pool_def_data.active, "Pool is inactive");
@@ -40,14 +41,6 @@ pub fn remove_liquidity(
         "Vault B was not provided"
     );
 
-    // Vault addresses do not need to be checked with PDA
-    // calculation for setting authorization since stored
-    // in the Pool Definition.
-    let mut running_vault_a = vault_a.clone();
-    let mut running_vault_b = vault_b.clone();
-    running_vault_a.is_authorized = true;
-    running_vault_b.is_authorized = true;
-
     assert!(
         min_amount_to_remove_token_a != 0,
         "Minimum withdraw amount must be nonzero"
@@ -58,8 +51,10 @@ pub fn remove_liquidity(
     );
 
     // 2. Compute withdrawal amounts
-    let user_holding_lp_data = token_core::TokenHolding::try_from(&user_holding_lp.account.data)
-        .expect("Remove liquidity: AMM Program expects a valid Token Account for liquidity token");
+    let user_holding_lp_data = token_core::TokenHolding::try_from(
+        user_holding_lp.account.data(pool_def_data.token_program_id),
+    )
+    .expect("Remove liquidity: AMM Program expects a valid Token Account for liquidity token");
     let token_core::TokenHolding::Fungible {
         definition_id: _,
         balance: user_lp_balance,
@@ -111,57 +106,54 @@ pub fn remove_liquidity(
         ..pool_def_data
     };
 
-    pool_post.data = Data::from(&pool_post_definition);
+    pool_post.slot_mut(self_program_id).data = Data::from(&pool_post_definition);
 
-    let token_program_id: lee_core::program::ProgramId =
-        user_holding_a.account.program_owner.into();
+    let token_program_id = pool_def_data.token_program_id;
 
     // Chaincall for Token A withdraw
     let call_token_a = ChainedCall::new(
         token_program_id,
-        vec![running_vault_a, user_holding_a.clone()],
+        vec![vault_a.clone(), user_holding_a.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_a,
+            sender_seed: Some(compute_vault_pda_seed(
+                pool.account_id,
+                pool_def_data.definition_token_a_id,
+            )),
         },
-    )
-    .with_pda_seeds(vec![compute_vault_pda_seed(
-        pool.account_id,
-        pool_def_data.definition_token_a_id,
-    )]);
+    );
     // Chaincall for Token B withdraw
     let call_token_b = ChainedCall::new(
         token_program_id,
-        vec![running_vault_b, user_holding_b.clone()],
+        vec![vault_b.clone(), user_holding_b.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_b,
+            sender_seed: Some(compute_vault_pda_seed(
+                pool.account_id,
+                pool_def_data.definition_token_b_id,
+            )),
         },
-    )
-    .with_pda_seeds(vec![compute_vault_pda_seed(
-        pool.account_id,
-        pool_def_data.definition_token_b_id,
-    )]);
+    );
     // Chaincall for LP adjustment
-    let mut pool_definition_lp_auth = pool_definition_lp.clone();
-    pool_definition_lp_auth.is_authorized = true;
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_definition_lp_auth, user_holding_lp.clone()],
+        vec![pool_definition_lp.clone(), user_holding_lp.clone()],
         &token_core::Instruction::Burn {
             amount_to_burn: delta_lp,
+            holding_seed: None,
         },
-    )
-    .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]);
+    );
 
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_states = vec![
-        AccountPostState::new(pool_post),
-        AccountPostState::new(vault_a.account),
-        AccountPostState::new(vault_b.account),
-        AccountPostState::new(pool_definition_lp.account),
-        AccountPostState::new(user_holding_a.account),
-        AccountPostState::new(user_holding_b.account),
-        AccountPostState::new(user_holding_lp.account),
+        pool_post,
+        vault_a.account,
+        vault_b.account,
+        pool_definition_lp.account,
+        user_holding_a.account,
+        user_holding_b.account,
+        user_holding_lp.account,
     ];
 
     (post_states, chained_calls)

@@ -13,36 +13,30 @@ pub enum Instruction {
     /// Required accounts (3):
     /// - Owner account
     /// - Token definition account
-    /// - Associated token account (default/uninitialized, or already initialized)
-    ///
-    /// `token_program_id` is derived from `token_definition.account.program_owner`.
-    Create { ata_program_id: ProgramId },
+    /// - Associated token account (uninitialized, or already initialized)
+    Create { token_program_id: ProgramId },
 
     /// Transfer tokens FROM owner's ATA to a recipient holding account.
-    /// Uses PDA seeds to authorize the ATA in the chained Token::Transfer call.
+    /// Passes the ATA's seed to the chained Token::Transfer call to authorize it.
     ///
     /// Required accounts (3):
     /// - Owner account (authorized)
     /// - Sender ATA (owner's token holding)
-    /// - Recipient token holding (any account; auto-created if default)
-    ///
-    /// `token_program_id` is derived from `sender_ata.account.program_owner`.
+    /// - Recipient token holding (any account; auto-created if uninitialized)
     Transfer {
-        ata_program_id: ProgramId,
+        token_program_id: ProgramId,
         amount: u128,
     },
 
     /// Burn tokens FROM owner's ATA.
-    /// Uses PDA seeds to authorize the ATA in the chained Token::Burn call.
+    /// Passes the ATA's seed to the chained Token::Burn call to authorize it.
     ///
     /// Required accounts (3):
     /// - Owner account (authorized)
     /// - Owner's ATA (the holding to burn from)
     /// - Token definition account
-    ///
-    /// `token_program_id` is derived from `holder_ata.account.program_owner`.
     Burn {
-        ata_program_id: ProgramId,
+        token_program_id: ProgramId,
         amount: u128,
     },
 }

@@ -1,26 +1,32 @@
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
+    program::{PdaSeed, ProgramId},
 };
 use token_core::{TokenDefinition, TokenHolding};
+
+use crate::seed_authorized;
 
 #[must_use]
 pub fn mint(
     definition_account: AccountWithMetadata,
     user_holding_account: AccountWithMetadata,
     amount_to_mint: u128,
-) -> Vec<AccountPostState> {
+    definition_seed: Option<PdaSeed>,
+    self_program_id: ProgramId,
+    caller_program_id: Option<ProgramId>,
+) -> Vec<Account> {
     assert!(
-        definition_account.is_authorized,
+        seed_authorized(&definition_account, caller_program_id, definition_seed),
         "Definition authorization is missing"
     );
 
-    let mut definition = TokenDefinition::try_from(&definition_account.account.data)
-        .expect("Token Definition account must be valid");
-    let mut holding = if user_holding_account.account == Account::default() {
+    let mut definition =
+        TokenDefinition::try_from(definition_account.account.data(self_program_id))
+            .expect("Token Definition account must be valid");
+    let mut holding = if user_holding_account.account.slot(self_program_id).is_none() {
         TokenHolding::zeroized_from_definition(definition_account.account_id, &definition)
     } else {
-        TokenHolding::try_from(&user_holding_account.account.data)
+        TokenHolding::try_from(user_holding_account.account.data(self_program_id))
             .expect("Token Holding account must be valid")
     };
 
@@ -60,13 +66,10 @@ pub fn mint(
     }
 
     let mut definition_post = definition_account.account;
-    definition_post.data = Data::from(&definition);
+    definition_post.slot_mut(self_program_id).data = Data::from(&definition);
 
     let mut holding_post = user_holding_account.account;
-    holding_post.data = Data::from(&holding);
+    holding_post.slot_mut(self_program_id).data = Data::from(&holding);
 
-    vec![
-        AccountPostState::new(definition_post),
-        AccountPostState::new_claimed_if_default(holding_post, Claim::Authorized),
-    ]
+    vec![definition_post, holding_post]
 }
