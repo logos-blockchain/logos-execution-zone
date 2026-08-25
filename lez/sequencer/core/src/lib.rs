@@ -2187,7 +2187,7 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
     }
 
     match borsh::from_slice::<sequencer_stake_core::Instruction>(&message.instruction_data) {
-        Ok(sequencer_stake_core::Instruction::FinalizeUnstake { .. }) => {
+        Ok(sequencer_stake_core::Instruction::FinalizeUnstake) => {
             message.account_ids.first().copied()
         }
         Ok(_) | Err(_) => None,
@@ -2221,9 +2221,7 @@ fn build_finalize_unstake_tx(
             system_accounts::sequencer_stake_config_account_id(),
         ],
         vec![],
-        sequencer_stake_core::Instruction::FinalizeUnstake {
-            native_program: programs::authenticated_transfer().id(),
-        },
+        sequencer_stake_core::Instruction::FinalizeUnstake,
     )
     .context("Failed to build FinalizeUnstake message")?;
 

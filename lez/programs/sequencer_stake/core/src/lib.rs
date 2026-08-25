@@ -79,17 +79,19 @@ pub enum Instruction {
     /// Self-chained only: verifies the mover deposited `expected_balance_after`.
     ConfirmStake { expected_balance_after: u128 },
 
-    /// Records a request to release `amount` to `destination`; no balance
-    /// moves yet. Must leave the account at zero or at/above the minimum.
+    /// Records a request to release `amount` into `destination`'s
+    /// `native_program` slot; no balance moves yet. Must leave the account at
+    /// zero or at/above the minimum.
     UnstakeRequest {
         amount: u128,
         destination: AccountId,
+        native_program: ProgramId,
     },
 
-    /// Unsigned, permissionless: releases a pending `UnstakeRequest` into the
-    /// destination's `native_program` slot. Block-inclusion validity is
-    /// enforced outside this program.
-    FinalizeUnstake { native_program: ProgramId },
+    /// Unsigned, permissionless: releases a pending `UnstakeRequest` to where
+    /// the request said. Block-inclusion validity is enforced outside this
+    /// program.
+    FinalizeUnstake,
 }
 
 /// Tag written into this program's slot at an ownership account: which key it backs, plus any
@@ -119,6 +121,10 @@ impl StakeRecord {
 pub struct PendingUnstake {
     pub amount: u128,
     pub destination: AccountId,
+    /// The slot credited at `destination`. Recorded here rather than taken from
+    /// `FinalizeUnstake`, which carries no signature: a caller-chosen slot could
+    /// route the release into one no program can ever debit.
+    pub native_program: ProgramId,
 }
 
 /// The single config account: minimum stake plus per-key standing, kept current
@@ -231,6 +237,7 @@ mod tests {
             pending_unstake: Some(PendingUnstake {
                 amount: 42,
                 destination: test_destination(),
+                native_program: [9; 8],
             }),
         };
         let bytes = record.to_bytes();
@@ -268,6 +275,7 @@ mod tests {
             Some(PendingUnstake {
                 amount: 0,
                 destination: AccountId::new([0; 32]),
+                native_program: [0; 8],
             }),
         ] {
             let bytes = StakeRecord {

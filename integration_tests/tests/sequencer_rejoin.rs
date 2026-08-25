@@ -94,6 +94,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         &sequencer_stake_core::Instruction::UnstakeRequest {
             amount: STAKE,
             destination: settlement,
+            native_program: programs::authenticated_transfer().id(),
         },
     )
     .await

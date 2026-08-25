@@ -249,6 +249,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
             amount: FUNDING_BALANCE,
             destination: destination_id,
+            native_program: programs::authenticated_transfer().id(),
         })
         .context("Failed to serialize UnstakeRequest instruction")?;
     ctx.wallet()

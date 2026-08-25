@@ -120,6 +120,7 @@ async fn main() -> Result<()> {
                 Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
                     amount,
                     destination,
+                    native_program: programs::authenticated_transfer().id(),
                 })
                 .context("Failed to serialize UnstakeRequest instruction")?;
 

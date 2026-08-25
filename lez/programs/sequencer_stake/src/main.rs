@@ -56,20 +56,27 @@ fn main() {
         Instruction::UnstakeRequest {
             amount,
             destination,
+            native_program,
         } => {
             assert!(
                 caller_program_id.is_none(),
                 "UnstakeRequest is only invoked as a top-level user transaction"
             );
-            let post = unstake_request(self_program_id, pre_states.clone(), amount, destination);
+            let post = unstake_request(
+                self_program_id,
+                pre_states.clone(),
+                amount,
+                destination,
+                native_program,
+            );
             (post, Vec::new())
         }
-        Instruction::FinalizeUnstake { native_program } => {
+        Instruction::FinalizeUnstake => {
             assert!(
                 caller_program_id.is_none(),
                 "FinalizeUnstake is only invoked as a top-level user transaction"
             );
-            let post = finalize_unstake(self_program_id, native_program, pre_states.clone());
+            let post = finalize_unstake(self_program_id, pre_states.clone());
             (post, Vec::new())
         }
     };
@@ -252,6 +259,7 @@ fn unstake_request(
     pre_states: Vec<AccountWithMetadata>,
     amount: u128,
     destination: AccountId,
+    native_program: ProgramId,
 ) -> Vec<Account> {
     let [ownership_account, config_account] = <[AccountWithMetadata; 2]>::try_from(pre_states)
         .expect("UnstakeRequest requires the ownership account and the config account");
@@ -290,6 +298,7 @@ fn unstake_request(
     record.pending_unstake = Some(PendingUnstake {
         amount,
         destination,
+        native_program,
     });
     entry.total_pending_unstake = entry
         .total_pending_unstake
@@ -314,7 +323,6 @@ fn unstake_request(
 
 fn finalize_unstake(
     self_program_id: ProgramId,
-    native_program: ProgramId,
     pre_states: Vec<AccountWithMetadata>,
 ) -> Vec<Account> {
     let [ownership_account, destination_account, config_account] =
@@ -347,7 +355,7 @@ fn finalize_unstake(
     ownership_account_post.prune();
 
     let mut destination_post = destination_account.account;
-    let destination_slot = destination_post.slot_mut(native_program);
+    let destination_slot = destination_post.slot_mut(pending.native_program);
     destination_slot.balance = destination_slot
         .balance
         .checked_add(pending.amount)

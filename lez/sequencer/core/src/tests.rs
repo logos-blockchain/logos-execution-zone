@@ -1350,6 +1350,7 @@ fn the_committee_gate_holds_back_neither_ordinary_txs_nor_unknown_accounts() {
         sequencer_stake_core::PendingUnstake {
             amount: 10,
             destination: AccountId::new([2; 32]),
+            native_program: programs::authenticated_transfer().id(),
         },
     )
     .expect("FinalizeUnstake tx should build");
@@ -3232,6 +3233,7 @@ fn unstake_request_transaction(
         sequencer_stake_core::Instruction::UnstakeRequest {
             amount,
             destination,
+            native_program: programs::authenticated_transfer().id(),
         },
     )
     .unwrap();
@@ -3481,6 +3483,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         sequencer_stake_core::Instruction::UnstakeRequest {
             amount,
             destination: funding_id,
+            native_program: programs::authenticated_transfer().id(),
         },
     )
     .unwrap();
@@ -3494,6 +3497,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         sequencer_stake_core::PendingUnstake {
             amount,
             destination: funding_id,
+            native_program: programs::authenticated_transfer().id(),
         },
     )
     .unwrap();
@@ -3598,6 +3602,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         sequencer_stake_core::Instruction::UnstakeRequest {
             amount: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
             destination,
+            native_program: programs::authenticated_transfer().id(),
         },
     )
     .unwrap();
