@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountDiff, AccountId, AccountWithMetadata, Data},
+    account::{Account, AccountDiff, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
 };
 
@@ -729,33 +729,16 @@ pub enum ExecutionValidationError {
 /// Discriminates which entrypoint a single guest invocation is for. Written by the (trusted)
 /// orchestrator only.
 ///
-/// Never derived from caller-supplied `instruction_data` — so a calling program can never trick
-/// a callee into running its `update_from_diff` path instead of its real logic.
+/// Currently only ever `Execute`; this exists so a future protocol upgrade can introduce
+/// additional entrypoints without changing the shape of a guest invocation's inputs.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum CallKind {
     Execute,
-    UpdateFromDiff,
 }
 
-/// The guest-side view of a single invocation: either a normal instruction execution, or a
-/// request to materialize an `AccountDiff`'s `diff_data` into the account's new `data`.
-///
-/// The latter goes via that program's own `update_from_diff`.
+/// The guest-side view of a single invocation.
 pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
-    UpdateFromDiff { pre_state: Account, diff_data: Data },
-}
-
-/// Journal of an `UpdateFromDiff` invocation; this is an inner receipt consumed by the
-/// privacy-preserving circuit.
-///
-/// Binds `pre_state`/`diff_data` to the result `data` so the privacy-preserving circuit can
-/// confirm `data`'s construction.
-#[derive(Serialize, Deserialize)]
-pub struct UpdateFromDiffOutput {
-    pub pre_state: Account,
-    pub diff_data: Data,
-    pub data: Data,
 }
 
 /// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
@@ -804,16 +787,6 @@ pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
         CallKind::Execute => {
             let (program_input, instruction_words) = read_lee_inputs();
             ProgramCall::Execute(program_input, instruction_words)
-        }
-        CallKind::UpdateFromDiff => {
-            let pre_state: Account =
-                borsh::from_slice(&read_input_frame()).expect("pre-state must decode from borsh");
-            let diff_data: Data =
-                borsh::from_slice(&read_input_frame()).expect("diff data must decode from borsh");
-            ProgramCall::UpdateFromDiff {
-                pre_state,
-                diff_data,
-            }
         }
     }
 }
@@ -956,15 +929,6 @@ fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> boo
         .len();
 
     number_of_accounts == number_of_account_ids
-}
-
-/// Commits an `update_from_diff` result to the journal, bound to the inputs that produced it.
-pub fn write_update_from_diff_output(pre_state: Account, diff_data: Data, data: Data) {
-    env::commit(&UpdateFromDiffOutput {
-        pre_state,
-        diff_data,
-        data,
-    });
 }
 
 #[cfg(test)]
