@@ -25,6 +25,9 @@ use crate::{
     config::BedrockConfig,
 };
 
+/// Channel id a test uses to make the mock report that no channel exists.
+pub const ABSENT_CHANNEL_ID: [u8; 32] = [0xAB_u8; 32];
+
 pub type SequencerCoreWithMockClients = crate::SequencerCore<MockBlockPublisher>;
 
 #[derive(Clone)]
@@ -36,10 +39,10 @@ pub struct MockBlockPublisher {
     tip_slot: Option<Slot>,
     /// Canned finalized channel history returned by [`Self::read_channel_after`].
     messages: Vec<(ZoneMessage, Slot)>,
-    /// Canned signer; `None` means nothing can be attributed.
-    inscription_signer: Option<Ed25519PublicKey>,
     /// Last entry a publish left the channel at, for the pinned-parent check.
     channel_tip: Arc<Mutex<Option<MsgId>>>,
+    /// When set, the tip a read reports instead of the real one.
+    stale_tip_read: Arc<Mutex<Option<MsgId>>>,
     /// When set, fails every publish, as zone-sdk does for an atomic withdraw
     /// at this revision.
     publish_fails: Arc<AtomicBool>,
@@ -60,17 +63,10 @@ impl MockBlockPublisher {
             driver_cancellation: CancellationToken::new(),
             tip_slot,
             messages,
-            inscription_signer: None,
             channel_tip: Arc::new(Mutex::new(None)),
+            stale_tip_read: Arc::new(Mutex::new(None)),
             publish_fails: Arc::new(AtomicBool::new(false)),
         }
-    }
-
-    /// Attributes every inscription to `signer`.
-    #[must_use]
-    pub const fn with_inscription_signer(mut self, signer: Ed25519PublicKey) -> Self {
-        self.inscription_signer = Some(signer);
-        self
     }
 
     /// Makes every later publish fail.
@@ -81,6 +77,11 @@ impl MockBlockPublisher {
     /// Moves the canned channel tip, as an L1 reorg dropping inscriptions does.
     pub fn set_channel_tip(&self, tip: Option<MsgId>) {
         *self.channel_tip.lock().expect("channel tip lock poisoned") = tip;
+    }
+
+    /// Makes tip reads report `tip` while the channel stays where it is.
+    pub fn set_stale_tip_read(&self, tip: MsgId) {
+        *self.stale_tip_read.lock().expect("stale tip lock poisoned") = Some(tip);
     }
 
     /// Records `block` as the channel tip and reports what its publish produced.
@@ -119,10 +120,11 @@ impl BlockPublisherTrait for MockBlockPublisher {
             // An existing but empty channel: `None` means *missing*, which the
             // startup guard reads as a wiped Bedrock. Tests that want that say
             // so via [`Self::with_canned_channel`].
-            tip_slot: Some(Slot::from(0)),
+            tip_slot: (config.channel_id != ChannelId::from(ABSENT_CHANNEL_ID))
+                .then(|| Slot::from(0)),
             messages: Vec::new(),
-            inscription_signer: None,
             channel_tip: Arc::new(Mutex::new(None)),
+            stale_tip_read: Arc::new(Mutex::new(None)),
             publish_fails: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -161,21 +163,14 @@ impl BlockPublisherTrait for MockBlockPublisher {
         self.publish_block(block, Vec::new()).await
     }
 
-    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, Slot)>> {
-        Ok(self.tip_slot.map(|slot| (Vec::new(), slot)))
+    /// The mock's config entry is always the root, which is what
+    /// [`checkpoint_at`] reports finalized, so its committee reads as final.
+    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, MsgId)>> {
+        Ok(self.tip_slot.map(|_| (Vec::new(), MsgId::root())))
     }
 
     async fn submit_channel_config(&self, _new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
         Ok(())
-    }
-
-    /// Whatever [`Self::with_inscription_signer`] canned.
-    async fn inscription_signer(
-        &self,
-        _slot: Slot,
-        _msg_id: MsgId,
-    ) -> Result<Option<Ed25519PublicKey>> {
-        Ok(self.inscription_signer)
     }
 
     fn channel_id(&self) -> ChannelId {
@@ -195,6 +190,10 @@ impl BlockPublisherTrait for MockBlockPublisher {
     }
 
     async fn channel_tip_message(&self) -> Result<Option<MsgId>> {
+        let stale = *self.stale_tip_read.lock().expect("stale tip lock poisoned");
+        if stale.is_some() {
+            return Ok(stale);
+        }
         Ok(*self.channel_tip.lock().expect("channel tip lock poisoned"))
     }
 
@@ -243,6 +242,8 @@ pub(crate) fn checkpoint_at(tip: MsgId) -> SequencerCheckpoint {
         pending_txs: Vec::new(),
         lib: HeaderId::from([0; 32]),
         lib_slot: Slot::from(0),
+        channel_notes: Vec::new(),
+        finalized_config: MsgId::root(),
     }
 }
 

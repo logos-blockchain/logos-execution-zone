@@ -60,7 +60,7 @@ pub struct SequencerPartialConfig {
     pub max_block_size: ByteSize,
     pub mempool_max_size: usize,
     pub block_create_timeout: Duration,
-    pub priority_fee: u64,
+    pub priority_fee_percent: u64,
 }
 
 impl Default for SequencerPartialConfig {
@@ -70,7 +70,7 @@ impl Default for SequencerPartialConfig {
             max_block_size: ByteSize::mib(1),
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(10),
-            priority_fee: sequencer_core::config::default_priority_fee(),
+            priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
         }
     }
 }
@@ -126,7 +126,7 @@ pub fn sequencer_config(
         max_block_size,
         mempool_max_size,
         block_create_timeout,
-        priority_fee,
+        priority_fee_percent,
     } = partial;
 
     Ok(SequencerConfig {
@@ -144,7 +144,7 @@ pub fn sequencer_config(
                 .context("Failed to convert bedrock addr to URL")?,
             funding_key,
             auth: None,
-            priority_fee,
+            priority_fee_percent,
         },
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
@@ -389,19 +389,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_priority_fee_matches_sequencer_default() {
+    fn default_priority_fee_percent_matches_sequencer_default() {
         assert_eq!(
-            SequencerPartialConfig::default().priority_fee,
-            sequencer_core::config::default_priority_fee()
+            SequencerPartialConfig::default().priority_fee_percent,
+            sequencer_core::config::default_priority_fee_percent()
         );
     }
 
     #[test]
-    fn custom_priority_fee_reaches_bedrock_config() {
-        let priority_fee = 1_000;
+    fn custom_priority_fee_percent_reaches_bedrock_config() {
+        let priority_fee_percent = 20;
         let config = sequencer_config(
             SequencerPartialConfig {
-                priority_fee,
+                priority_fee_percent,
                 ..SequencerPartialConfig::default()
             },
             PathBuf::from("test-sequencer"),
@@ -415,6 +415,9 @@ mod tests {
         )
         .expect("custom priority fee should produce a valid sequencer config");
 
-        assert_eq!(config.bedrock_config.priority_fee, priority_fee);
+        assert_eq!(
+            config.bedrock_config.priority_fee_percent,
+            priority_fee_percent
+        );
     }
 }

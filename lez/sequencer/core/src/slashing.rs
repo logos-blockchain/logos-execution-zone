@@ -12,16 +12,15 @@ use common::transaction::LeeTransaction;
 use kameo::actor::ActorRef;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use log::{error, warn};
-use logos_blockchain_zone_sdk::Slot;
 use sequencer_stake_core::{SequencerKey, SlashApproval};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{GetSlashRecordBytes, PutSlashRecordBytes},
 };
 
-use crate::block_publisher::{BlockPublisherTrait, Ed25519Key, MsgId};
+use crate::block_publisher::{Ed25519Key, Ed25519PublicKey, MsgId};
 
-/// Offending inscriptions, before and after the writer is known.
+/// Offending inscriptions and the key that wrote each.
 #[derive(Clone, Default)]
 pub(crate) struct SlashRecord {
     state: Arc<RwLock<Offences>>,
@@ -29,8 +28,6 @@ pub(crate) struct SlashRecord {
 
 #[derive(Debug, Default, borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct Offences {
-    /// Reported by the follow path, still to be attributed to a writer.
-    unattributed: BTreeSet<([u8; 32], u64)>,
     /// Never removed: an offending key stays liable for good.
     found: BTreeSet<(SequencerKey, [u8; 32])>,
 }
@@ -51,53 +48,29 @@ impl SlashRecord {
         }
     }
 
-    /// Records what the follow path saw. Attribution happens later, so this reads
-    /// no L1.
+    /// Records what the follow path saw. The inscription names its own signer,
+    /// so this reads no L1.
     pub(crate) async fn report<S: StorageActorTrait>(
         &self,
         storage_ref: &ActorRef<S>,
-        undecodable: &[(MsgId, Slot)],
+        undecodable: &[(MsgId, Ed25519PublicKey)],
     ) {
         if undecodable.is_empty() {
             return;
         }
         let bytes = {
             let mut offences = self.state.write().expect("slash record lock poisoned");
-            for (msg_id, slot) in undecodable {
+            for (msg_id, signer) in undecodable {
+                let Some(offender) = SequencerKey::new(signer.to_bytes()) else {
+                    warn!("Undecodable inscription {msg_id} signed by an invalid key");
+                    continue;
+                };
                 error!(
-                    "Undecodable inscription {msg_id} at slot {}",
-                    slot.into_inner()
+                    "Undecodable inscription {msg_id} written by {}",
+                    hex::encode(offender)
                 );
-                offences
-                    .unattributed
-                    .insert(((*msg_id).into(), slot.into_inner()));
+                offences.found.insert((offender, (*msg_id).into()));
             }
-            encoded(&offences)
-        };
-        persist(storage_ref, bytes).await;
-    }
-
-    fn unattributed(&self) -> Vec<([u8; 32], u64)> {
-        self.state
-            .read()
-            .expect("slash record lock poisoned")
-            .unattributed
-            .iter()
-            .copied()
-            .collect()
-    }
-
-    async fn attribute<S: StorageActorTrait>(
-        &self,
-        storage_ref: &ActorRef<S>,
-        inscription: [u8; 32],
-        slot: u64,
-        offender: SequencerKey,
-    ) {
-        let bytes = {
-            let mut offences = self.state.write().expect("slash record lock poisoned");
-            offences.unattributed.remove(&(inscription, slot));
-            offences.found.insert((offender, inscription));
             encoded(&offences)
         };
         persist(storage_ref, bytes).await;
@@ -124,34 +97,6 @@ async fn persist<S: StorageActorTrait>(storage_ref: &ActorRef<S>, bytes: Vec<u8>
         .ask(PutSlashRecordBytes { bytes })
         .await
         .unwrap_or_else(|err| panic!("Failed to persist the slash record: {err}"));
-}
-
-/// Asks L1 who wrote each offence. Anything unattributed stays for the next turn.
-pub(crate) async fn attribute_offences<BP: BlockPublisherTrait, S: StorageActorTrait>(
-    publisher: &BP,
-    record: &SlashRecord,
-    storage_ref: &ActorRef<S>,
-) -> Result<()> {
-    for (inscription, slot) in record.unattributed() {
-        let signer = publisher
-            .inscription_signer(Slot::from(slot), MsgId::from(inscription))
-            .await
-            .context("Failed to attribute an offending inscription")?;
-        let Some(offender) = signer.and_then(|signer| SequencerKey::new(signer.to_bytes())) else {
-            warn!("No signer to attribute the inscription at slot {slot} to");
-            continue;
-        };
-
-        error!(
-            "Inscription at slot {slot} attributed to {}",
-            hex::encode(offender)
-        );
-        record
-            .attribute(storage_ref, inscription, slot, offender)
-            .await;
-    }
-
-    Ok(())
 }
 
 /// A `Slash` for every offence whose key still has stake, approved by this node.
@@ -244,16 +189,13 @@ pub(crate) fn build_slash_tx(
 mod tests {
     use kameo::actor::Spawn as _;
     use lee_core::account::Account;
-    use logos_blockchain_core::mantle::ops::channel::ChannelId;
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
     use sequencer_stake_core::{SequencerEntry, SequencerStakeConfig};
     use sequencer_storage_actor::mock::MockStorageActor;
 
     use super::*;
-    use crate::mock::MockBlockPublisher;
 
     const INSCRIPTION: [u8; 32] = [7; 32];
-    const SLOT: u64 = 42;
 
     /// A storage actor that holds no record and accepts every write.
     fn storage() -> ActorRef<MockStorageActor> {
@@ -273,20 +215,16 @@ mod tests {
         SequencerKey::new(offender_signing_key().public_key().to_bytes()).expect("valid key")
     }
 
-    fn publisher(attributes: bool) -> MockBlockPublisher {
-        let publisher =
-            MockBlockPublisher::with_canned_channel(ChannelId::from([0; 32]), None, Vec::new());
-        if attributes {
-            publisher.with_inscription_signer(offender_signing_key().public_key())
-        } else {
-            publisher
-        }
-    }
-
     async fn reported() -> SlashRecord {
         let record = SlashRecord::default();
         record
-            .report(&storage(), &[(MsgId::from(INSCRIPTION), Slot::from(SLOT))])
+            .report(
+                &storage(),
+                &[(
+                    MsgId::from(INSCRIPTION),
+                    offender_signing_key().public_key(),
+                )],
+            )
             .await;
         record
     }
@@ -317,29 +255,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_reported_offence_is_attributed_to_its_writer() {
+    async fn a_reported_offence_names_its_writer() {
         let record = reported().await;
-        // Reporting alone names nobody, so there is nothing to slash yet.
-        assert!(record.all().is_empty());
-
-        attribute_offences(&publisher(true), &record, &storage())
-            .await
-            .expect("attribute");
-        assert_eq!(record.all(), vec![(offender(), INSCRIPTION)]);
-    }
-
-    #[tokio::test]
-    async fn an_unattributable_offence_is_kept_for_the_next_turn() {
-        let record = reported().await;
-        attribute_offences(&publisher(false), &record, &storage())
-            .await
-            .expect("attribute");
-        assert!(record.all().is_empty());
-
-        // Still on record, so a later turn can name it.
-        attribute_offences(&publisher(true), &record, &storage())
-            .await
-            .expect("attribute");
         assert_eq!(record.all(), vec![(offender(), INSCRIPTION)]);
     }
 
@@ -357,14 +274,14 @@ mod tests {
             .report(
                 &storage(),
                 &[
-                    (MsgId::from(INSCRIPTION), Slot::from(SLOT)),
-                    (MsgId::from([9; 32]), Slot::from(SLOT)),
+                    (
+                        MsgId::from(INSCRIPTION),
+                        offender_signing_key().public_key(),
+                    ),
+                    (MsgId::from([9; 32]), offender_signing_key().public_key()),
                 ],
             )
             .await;
-        attribute_offences(&publisher(true), &record, &storage())
-            .await
-            .expect("attribute");
         assert_eq!(record.all().len(), 2);
 
         // The first burn takes everything, so the second would only abort.
@@ -378,9 +295,6 @@ mod tests {
     #[tokio::test]
     async fn only_an_offender_with_stake_left_is_a_candidate() {
         let record = reported().await;
-        attribute_offences(&publisher(true), &record, &storage())
-            .await
-            .expect("attribute");
 
         // An unaccredited approver proposes nothing.
         let outsider = Ed25519Key::from_bytes(&[9; 32]);

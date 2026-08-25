@@ -1079,10 +1079,7 @@ async fn wait_until_genesis(client: &SequencerClient) -> Result<()> {
         .with_context(|| "Timed out waiting for genesis")?
 }
 
-async fn wait_until_channel_exists(
-    bedrock_addr: SocketAddr,
-    channel_id: ChannelId,
-) -> Result<()> {
+async fn wait_until_channel_exists(bedrock_addr: SocketAddr, channel_id: ChannelId) -> Result<()> {
     log::info!("Waiting for the channel to land on Bedrock");
 
     let bedrock_config = sequencer_core::config::BedrockConfig {
@@ -1090,7 +1087,7 @@ async fn wait_until_channel_exists(
         node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
         funding_key: config::bedrock_funding_key(),
         auth: None,
-        priority_fee: sequencer_core::config::default_priority_fee(),
+        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
     };
     let wait = async {
         loop {

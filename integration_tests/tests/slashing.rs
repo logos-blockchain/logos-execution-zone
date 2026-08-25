@@ -110,7 +110,7 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         node_url: config::addr_to_url(config::UrlProtocol::Http, ctx.bedrock_addr())?,
         funding_key: config::bedrock_funding_key(),
         auth: None,
-        priority_fee: sequencer_core::config::default_priority_fee(),
+        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
     };
 
     // An unaccredited key writes nothing that L1 accepts.

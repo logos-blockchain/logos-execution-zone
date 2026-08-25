@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, ensure};
+use chain_state::zone_indexer::ZoneIndexer;
 use common::block::Block;
 use futures::{Stream, future::BoxFuture};
 use log::{info, warn};
@@ -22,7 +23,7 @@ use logos_blockchain_core::{
             },
         },
         traits::Hashable as _,
-        transactions::{MantleTxBuilder, OpsProofs, mantle_tx::MantleTx as _, states::Unverified},
+        transactions::{MantleTxBuilder, OpsProofs, states::Unverified},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -34,11 +35,10 @@ pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage,
     adapter::{Node as _, NodeHttpClient},
-    indexer::ZoneIndexer,
     sequencer::{
         ChannelUpdateTx, DepositInfo, Event, FinalizedOp, FundingConfig, InscriptionInfo,
         PendingTx, SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg,
-        WithdrawInfo, ZoneSequencer, channel_inscriptions,
+        WithdrawInfo, WithdrawInputs, ZoneSequencer, channel_inscriptions,
     },
 };
 use tokio::sync::{mpsc, oneshot, watch};
@@ -78,8 +78,8 @@ pub struct FollowUpdate {
     pub deposits: Vec<DepositInfo>,
     /// Finalized Bedrock withdraw events, to reconcile against local intents.
     pub withdrawals: Vec<WithdrawInfo>,
-    /// Finalized inscriptions that are not blocks, with the slot naming their writer.
-    pub undecodable: Vec<(MsgId, Slot)>,
+    /// Finalized inscriptions that are not blocks, with the key that signed each.
+    pub undecodable: Vec<(MsgId, Ed25519PublicKey)>,
 }
 
 /// Sink for the follow path: apply the channel delta to chain state and
@@ -173,19 +173,12 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
     ) -> Result<PublishOutcome>;
 
     /// Live (adopted, possibly not yet finalized) accredited-key snapshot for
-    /// this channel with the slot its tip sits at, from one read of the
+    /// this channel with the config entry it comes from, from one read of the
     /// connected Bedrock node. `None` if the channel does not exist.
-    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, Slot)>>;
-
-    /// The key that signed inscription `msg_id` at `slot`, or `None` if there is
-    /// none.
     ///
-    /// Read from the L1 block, since the follow path drops the signer.
-    fn inscription_signer(
-        &self,
-        slot: Slot,
-        msg_id: MsgId,
-    ) -> impl Future<Output = Result<Option<Ed25519PublicKey>>> + Send;
+    /// The config entry is what tells a caller whether this committee is the
+    /// finalized one: compare it to the checkpoint's `finalized_config`.
+    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, MsgId)>>;
 
     /// Submit a committee `ChannelConfigOp` as its own, independent Mantle
     /// tx (not bundled with any block publish). `new_keys` is the full
@@ -243,7 +236,7 @@ pub struct ZoneSdkPublisher {
     indexer: ZoneIndexer<NodeHttpClient>,
     bedrock_signing_key: Ed25519Key,
     funding_key: ZkPublicKey,
-    priority_fee: u64,
+    priority_fee_percent: u64,
 }
 
 impl ZoneSdkPublisher {
@@ -306,8 +299,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             resubmit_interval,
             ..ZoneSdkSequencerConfig::new(FundingConfig {
                 funding_pk: config.funding_key,
+                // Withdraw change goes back to the funding key.
+                change_pk: None,
                 max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-                priority_fee: config.priority_fee,
+                priority_fee_percent: config.priority_fee_percent,
             })
         };
 
@@ -355,7 +350,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                             .context("Failed to publish block")
                                     } else {
                                         sequencer.handle()
-                                            .publish_atomic_withdraw(data_bounded, withdrawals)
+                                            .publish_atomic_withdraw(data_bounded, withdrawals, WithdrawInputs::Auto)
                                             .await
                                             .context("Failed to publish block with withdrawals")
                                     };
@@ -452,27 +447,38 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     let mut deposits = Vec::new();
                                     let mut withdrawals = Vec::new();
                                     let mut undecodable = Vec::new();
-                                    for (l1_slot, op) in finalized.into_iter().flat_map(|item| {
-                                        item.ops.into_iter().map(move |op| (item.l1_slot, op))
-                                    }) {
+                                    for op in finalized
+                                        .into_iter()
+                                        .flat_map(|item| item.ops.into_iter())
+                                    {
                                         match op {
                                             FinalizedOp::Inscription(inscription) => {
                                                 match block_from_inscription(&inscription) {
                                                     Some(block) => finalized_blocks.push(block),
-                                                    // A `ChannelConfig` arrives
-                                                    // empty and offends nobody.
+                                                    // An empty payload is not a
+                                                    // block, but we don't slash
+                                                    // for it.
                                                     None if <Inscription as AsRef<[u8]>>::as_ref(
                                                         &inscription.payload,
                                                     )
                                                     .is_empty() => {}
-                                                    None => undecodable
-                                                        .push((inscription.this_msg, l1_slot)),
+                                                    // An inscription always names
+                                                    // its signer.
+                                                    None => undecodable.extend(
+                                                        inscription.signer.map(|signer| {
+                                                            (inscription.this_msg, signer)
+                                                        }),
+                                                    ),
                                                 }
                                             }
                                             FinalizedOp::Deposit(deposit) => deposits.push(deposit),
                                             FinalizedOp::Withdraw(withdraw) => {
                                                 withdrawals.push(withdraw);
                                             }
+                                            // Neither carries a block or an
+                                            // author the LEZ chain models.
+                                            FinalizedOp::Config(_)
+                                            | FinalizedOp::ChannelTransfer(_) => {}
                                         }
                                     }
 
@@ -520,7 +526,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             drive_task: TaskGroup::new(vec![drive_task]),
             bedrock_signing_key,
             funding_key: config.funding_key,
-            priority_fee: config.priority_fee,
+            priority_fee_percent: config.priority_fee_percent,
         })
     }
 
@@ -563,7 +569,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let funded = fund_ops(
             &self.node,
             self.funding_key,
-            self.priority_fee,
+            self.priority_fee_percent,
             [Op::ChannelInscribe(inscribe_op)],
         )
         .await?;
@@ -600,6 +606,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
         let config_op = ChannelConfigOp {
             channel: self.channel_id,
+            // The channel does not exist yet, so the config lineage starts here.
+            parent: MsgId::root(),
             keys,
             posting_timeframe: SlotTimeframe::from(
                 system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
@@ -613,11 +621,11 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let inscription: Inscription = data
             .try_into()
             .context("Genesis block exceeds maximum allowed size")?;
-        // The config op runs first and becomes the tip, so it is the parent.
+        // A config moves the config tip only, so the first block chains on the root.
         let inscribe_op = InscriptionOp {
             channel_id: self.channel_id,
             inscription,
-            parent: config_op.id(),
+            parent: MsgId::root(),
             signer: own_key,
         };
         let msg_id = inscribe_op.id();
@@ -625,7 +633,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let funded = fund_ops(
             &self.node,
             self.funding_key,
-            self.priority_fee,
+            self.priority_fee_percent,
             [
                 Op::ChannelConfig(config_op),
                 Op::ChannelInscribe(inscribe_op),
@@ -660,42 +668,11 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             .await
     }
 
-    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, Slot)>> {
+    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, MsgId)>> {
         Ok(self
             .live_channel_state()
             .await?
-            .map(|state| (state.accredited_keys.to_vec(), state.tip_slot)))
-    }
-
-    async fn inscription_signer(
-        &self,
-        slot: Slot,
-        msg_id: MsgId,
-    ) -> Result<Option<Ed25519PublicKey>> {
-        let blocks = self
-            .node
-            .immutable_blocks(slot, slot)
-            .await
-            .context("Failed to read immutable blocks for inscription attribution")?;
-
-        Ok(blocks
-            .iter()
-            .flat_map(|block| block.transactions.iter())
-            .flat_map(|tx| tx.mantle_tx().ops())
-            .filter_map(|op| match op {
-                Op::ChannelInscribe(inscribe) => Some(inscribe),
-                Op::ChannelConfig(_)
-                | Op::ChannelDeposit(_)
-                | Op::ChannelWithdraw(_)
-                | Op::ChannelTransfer(_)
-                | Op::SDPDeclare(_)
-                | Op::SDPWithdraw(_)
-                | Op::SDPActive(_)
-                | Op::LeaderClaim(_)
-                | Op::Transfer(_) => None,
-            })
-            .find(|inscribe| inscribe.channel_id == self.channel_id && inscribe.id() == msg_id)
-            .map(|inscribe| inscribe.signer))
+            .map(|state| (state.accredited_keys.to_vec(), state.config_tip_hash)))
     }
 
     async fn submit_channel_config(&self, new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
@@ -773,6 +750,8 @@ fn adopted_blocks(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<Block> {
     match tx {
         ChannelUpdateTx::Inscription(info) => entry(info).into_iter().collect(),
         ChannelUpdateTx::AtomicWithdraw(bundle) => entry(&bundle.inscription).into_iter().collect(),
+        // A config-only tx carries no payload to apply.
+        ChannelUpdateTx::Config(_) => Vec::new(),
         ChannelUpdateTx::Custom(signed_tx) => channel_inscriptions(signed_tx, channel_id)
             .iter()
             .filter_map(entry)
@@ -798,7 +777,7 @@ const fn channel_update_inscription(orphan: &ChannelUpdateTx) -> Option<&Inscrip
     match orphan {
         ChannelUpdateTx::Inscription(info) => Some(info),
         ChannelUpdateTx::AtomicWithdraw(bundle) => Some(&bundle.inscription),
-        ChannelUpdateTx::Custom(_signed_mantle_tx) => None,
+        ChannelUpdateTx::Config(_) | ChannelUpdateTx::Custom(_) => None,
     }
 }
 
@@ -807,7 +786,7 @@ const fn channel_update_inscription(orphan: &ChannelUpdateTx) -> Option<&Inscrip
 async fn fund_ops(
     node: &NodeHttpClient,
     funding_key: ZkPublicKey,
-    priority_fee: u64,
+    priority_fee_percent: u64,
     ops: impl IntoIterator<Item = Op>,
 ) -> Result<logos_blockchain_http_api_common::bodies::wallet::fund::WalletFundResponseBody> {
     let tx_builder = MantleTxBuilder::new()
@@ -819,7 +798,7 @@ async fn fund_ops(
         change_public_key: funding_key,
         funding_public_keys: vec![funding_key],
         max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-        priority_fee,
+        priority_fee_percent,
     })
     .await
     .context("Failed to fund channel transaction")
@@ -872,8 +851,14 @@ pub async fn post_channel_config(
     );
 
     let keys = Keys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
+    // Configs chain on the channel's config tip, or the root if there is none.
+    let parent = read_channel_state(config)
+        .await
+        .context("Failed to read the channel state for the config parent")?
+        .map_or_else(MsgId::root, |channel| channel.config_tip_hash);
     let config_op = ChannelConfigOp {
         channel: config.channel_id,
+        parent,
         keys,
         posting_timeframe: SlotTimeframe::from(posting_timeframe),
         posting_timeout: SlotTimeout::from(posting_timeout),
@@ -889,7 +874,7 @@ pub async fn post_channel_config(
     let funded = fund_ops(
         &node,
         config.funding_key,
-        config.priority_fee,
+        config.priority_fee_percent,
         [Op::ChannelConfig(config_op)],
     )
     .await?;

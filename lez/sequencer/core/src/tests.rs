@@ -36,7 +36,7 @@ use tempfile::tempdir;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
 use crate::{
-    MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, TransactionOrigin,
+    LiveCommittee, MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, TransactionOrigin,
     apply_follow_update,
     block_publisher::FollowUpdate,
     build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, build_genesis_state,
@@ -140,7 +140,7 @@ fn setup_sequencer_config() -> SequencerConfig {
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
             auth: None,
             funding_key: ZkPublicKey::zero(),
-            priority_fee: config::default_priority_fee(),
+            priority_fee_percent: config::default_priority_fee_percent(),
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: vec![],
@@ -1272,10 +1272,18 @@ async fn build_block_from_mempool() {
         .await
         .unwrap();
 
-    let result = sequencer.build_block_from_mempool(Some(&[])).await;
+    let result = sequencer
+        .build_block_from_mempool(Some(&empty_committee()))
+        .await;
     assert!(result.is_ok());
     // Building itself does not advance the head; only apply-after-publish does.
     assert_eq!(sequencer.chain_height().await, genesis_height);
+}
+
+/// The live committee the mock publisher reports: no keys, at the config entry
+/// [`mock::checkpoint_at`] calls finalized.
+fn empty_committee() -> LiveCommittee {
+    LiveCommittee::at(Vec::new(), MsgId::root())
 }
 
 #[tokio::test]
@@ -1285,7 +1293,7 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
 
     assert!(
         sequencer
-            .build_block_from_mempool(Some(&[]))
+            .build_block_from_mempool(Some(&empty_committee()))
             .await
             .unwrap()
             .committee_update
@@ -1311,14 +1319,14 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
     .await;
 
     let wanted = sequencer
-        .build_block_from_mempool(Some(&[]))
+        .build_block_from_mempool(Some(&empty_committee()))
         .await
         .unwrap()
         .committee_update
         .expect("the stake is irreversible now, so the committee should follow it");
     assert!(
         sequencer
-            .build_block_from_mempool(Some(&wanted))
+            .build_block_from_mempool(Some(&LiveCommittee::at(wanted, MsgId::root())))
             .await
             .unwrap()
             .committee_update
@@ -1330,7 +1338,6 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
 #[test]
 fn the_committee_gate_holds_back_neither_ordinary_txs_nor_unknown_accounts() {
     let state = V03State::new();
-    let absence = crate::committee_discovery::CommitteeAbsence::default();
     let finalize_unstake = build_finalize_unstake_tx(
         AccountId::new([1; 32]),
         sequencer_stake_core::PendingUnstake {
@@ -1344,13 +1351,11 @@ fn the_committee_gate_holds_back_neither_ordinary_txs_nor_unknown_accounts() {
     assert!(finalize_unstake_is_includable(
         &state,
         &finalize_unstake,
-        &absence,
         None
     ));
     assert!(finalize_unstake_is_includable(
         &state,
         &common::test_utils::produce_dummy_empty_transaction(),
-        &absence,
         None
     ));
 }
@@ -2654,6 +2659,33 @@ async fn the_pin_stays_on_a_finalized_entry_through_its_pruning_report() {
         .expect("the next block must pin on the finalized tip");
 }
 
+/// A pin on an entry we published ourselves at startup must still produce,
+/// even while the channel read is too old to show it.
+#[tokio::test]
+async fn the_pin_the_bootstrap_publishes_leave_survives_a_lagging_channel_read() {
+    let mut config = setup_sequencer_config();
+    // No channel yet, so startup creates it and publishes our stored blocks.
+    config.bedrock_config.channel_id = ChannelId::from(crate::mock::ABSENT_CHANNEL_ID);
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+
+    let pin = sequencer.chain().lock().await.pin_parent();
+    assert!(pin.is_some(), "the bootstrap publishes leave a pin");
+
+    // The read does not show our genesis yet.
+    sequencer
+        .block_publisher()
+        .set_stale_tip_read(MsgId::from([42_u8; 32]));
+
+    assert!(
+        sequencer.pin_behind_channel_tip().await.is_none(),
+        "a pin on our own bootstrap inscription must not be read as behind"
+    );
+    sequencer
+        .run_production_turn()
+        .await
+        .expect("the first turn must produce, pinned on what the bootstrap published");
+}
+
 /// zone-sdk does not resubmit an orphan, so an orphan report that re-adopts
 /// nothing frees the height for the next turn. A re-adopted block keeps it.
 #[tokio::test]
@@ -3360,6 +3392,62 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
         .expect("orphaned user tx should be requeued");
     assert!(matches!(origin, TransactionOrigin::User));
     assert_eq!(requeued, tx);
+}
+
+/// An orphan the same update puts back is on the head with its transactions
+/// applied, so requeueing them would duplicate work the block already carries.
+#[tokio::test]
+async fn a_readopted_orphan_does_not_requeue_its_transactions() {
+    let config = setup_sequencer_config();
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let tx = common::test_utils::create_transaction_native_token_transfer(
+        acc1,
+        0,
+        acc2,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, tx))
+        .await
+        .unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
+    assert!(
+        sequencer.mempool.pop().is_none(),
+        "production must have drained the transaction into the block"
+    );
+
+    // The channel drops the block and puts the very same one back.
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            orphaned: vec![block2.clone()],
+            adopted: vec![block2.clone()],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    let head_tip = sequencer
+        .chain()
+        .lock()
+        .await
+        .head_tip()
+        .expect("head tip set");
+    assert_eq!(
+        head_tip.hash, block2.header.hash,
+        "the re-adopted block is back on the head"
+    );
+    assert!(
+        sequencer.mempool.pop().is_none(),
+        "a re-adopted block must not requeue its transactions"
+    );
 }
 
 #[tokio::test]

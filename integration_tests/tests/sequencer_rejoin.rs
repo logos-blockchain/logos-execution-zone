@@ -57,7 +57,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         node_url: config::addr_to_url(config::UrlProtocol::Http, ctx.bedrock_addr())?,
         funding_key: config::bedrock_funding_key(),
         auth: None,
-        priority_fee: sequencer_core::config::default_priority_fee(),
+        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
     };
 
     // B's genesis stake sits on an account only this key can sign for.

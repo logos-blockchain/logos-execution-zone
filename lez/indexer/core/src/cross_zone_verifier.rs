@@ -10,6 +10,7 @@ use std::{
 };
 
 use anyhow::anyhow;
+use chain_state::zone_indexer::ZoneIndexer;
 use common::{
     HashType,
     block::{Block, PeerChainTip},
@@ -30,7 +31,6 @@ use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage,
     adapter::{Node as _, NodeHttpClient},
-    indexer::ZoneIndexer,
 };
 use tokio::{sync::RwLock, time::Instant};
 

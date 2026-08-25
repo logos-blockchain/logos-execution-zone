@@ -152,7 +152,6 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
     ) -> Self::Reply {
         // Only produce on our turn.
         if !self.sequencer.is_our_turn() {
-            self.sequencer.update_committee_absence().await;
             info!("Not our turn to produce a block, skipping");
             return Ok(());
         }
@@ -160,7 +159,6 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
         // Never inscribe a second block at a height we already published: the
         // channel would carry two chains from there and nothing resolves that.
         if let Some(high_water) = self.sequencer.rewound_below_published().await {
-            self.sequencer.update_committee_absence().await;
             warn!(
                 "Skipping turn: head rewound to {} but block {high_water} is already inscribed; \
                  waiting for the channel to restore it",
@@ -171,7 +169,6 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
 
         // The channel moved past our pin, so every publish this turn would be refused.
         if let Some(tip) = self.sequencer.pin_behind_channel_tip().await {
-            self.sequencer.update_committee_absence().await;
             info!("Skipping turn: channel tip {tip:?} moved past our pin; catching up first");
             return Ok(());
         }

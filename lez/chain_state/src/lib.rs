@@ -15,3 +15,4 @@ pub mod chain;
 pub mod consistency;
 pub mod ingest_error;
 pub mod stall_reason;
+pub mod zone_indexer;

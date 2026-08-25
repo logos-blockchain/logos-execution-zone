@@ -141,8 +141,6 @@ pub struct SequencerCore<
     watchers: TaskGroup,
     /// Channel tip slot as of the last committee-config submission.
     last_committee_submission_slot: Option<Slot>,
-    /// Gates `FinalizeUnstake` on the committee removal being final.
-    committee_absence: committee_discovery::CommitteeAbsence,
     /// Offending inscriptions, attributed and not.
     slash_record: slashing::SlashRecord,
     /// Signs this node's approval of a slash.
@@ -379,6 +377,9 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 .expect("Failed to seed published high water mark");
         }
 
+        // The newest entry we published, if we published any.
+        let mut own_tip_msg = None;
+
         // Publish our blocks only when we are bootstrapping a channel that does
         // not exist yet (no channel tip). If the channel already exists (another
         // sequencer created it), we adopted its blocks during reconstruction
@@ -428,6 +429,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                     .lock()
                     .await
                     .set_channel_cursor(outcome.checkpoint.last_msg_id);
+                own_tip_msg = Some(outcome.checkpoint.last_msg_id);
                 last_checkpoint = Some(outcome.checkpoint);
                 store
                     .raise_published_high_water(block.header.block_id)
@@ -454,10 +456,9 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             block_publisher,
             watchers,
             last_committee_submission_slot: None,
-            committee_absence: committee_discovery::CommitteeAbsence::default(),
             slash_record,
             bedrock_signing_key,
-            own_tip_msg: None,
+            own_tip_msg,
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
@@ -735,41 +736,11 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         })
     }
 
-    /// Updates the absence record from a fresh read of the live committee, and
-    /// returns that committee. `None` if the read failed, which is not the same
-    /// as an empty committee.
-    ///
-    /// Worth calling off-turn: a key seen back in the committee resets its clock.
-    pub async fn update_committee_absence(
-        &mut self,
-    ) -> Option<Vec<sequencer_stake_core::SequencerKey>> {
-        let snapshot = self.live_accredited_sequencer_keys().await;
-        if let Some((live, tip_slot)) = snapshot.as_ref() {
-            let leaving = self
-                .with_state(committee_discovery::keys_leaving_the_committee)
-                .await;
-            self.committee_absence
-                .observe(live, &leaving, tip_slot.into_inner());
-        }
-        snapshot.map(|(keys, _)| keys)
-    }
-
     /// Runs everything this sequencer owes its turn: builds a block from
     /// mempool transactions, publishes it via zone-sdk, and submits any
     /// committee-config update the new state calls for.
     pub async fn run_production_turn(&mut self) -> Result<u64> {
-        let live_accredited_keys = self.update_committee_absence().await;
-
-        // Never fatal: the next turn retries.
-        if let Err(err) = slashing::attribute_offences(
-            &self.block_publisher,
-            &self.slash_record,
-            self.store.storage_ref(),
-        )
-        .await
-        {
-            warn!("Offence scan failed, retrying next turn: {err:#}");
-        }
+        let live_committee = self.live_accredited_sequencer_keys().await;
 
         let BlockWithMeta {
             block,
@@ -777,7 +748,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             committee_update,
             parent,
         } = self
-            .build_block_from_mempool(live_accredited_keys.as_deref())
+            .build_block_from_mempool(live_committee.as_ref())
             .await
             .context("Failed to build block from mempool transactions")?;
 
@@ -827,14 +798,12 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     }
 
     /// Live committee snapshot for gating `FinalizeUnstake` inclusion and
-    /// committee updates, with the channel tip slot it was read at. `None` if
-    /// the channel is missing or unreadable.
-    async fn live_accredited_sequencer_keys(
-        &self,
-    ) -> Option<(Vec<sequencer_stake_core::SequencerKey>, Slot)> {
+    /// committee updates. `None` if the channel is missing or unreadable.
+    async fn live_accredited_sequencer_keys(&self) -> Option<LiveCommittee> {
         match self.block_publisher.accredited_keys().await {
-            Ok(Some((keys, tip_slot))) => Some((
-                keys.iter()
+            Ok(Some((keys, config_tip))) => Some(LiveCommittee {
+                keys: keys
+                    .iter()
                     .filter_map(|key| {
                         sequencer_stake_core::SequencerKey::new(key.to_bytes()).or_else(|| {
                             warn!(
@@ -845,8 +814,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                         })
                     })
                     .collect(),
-                tip_slot,
-            )),
+                config_tip,
+            }),
             Ok(None) => {
                 warn!(
                     "No channel to read a live committee from; skipping FinalizeUnstake inclusion \
@@ -1045,7 +1014,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     )]
     async fn build_block_from_mempool(
         &mut self,
-        live_accredited_keys: Option<&[sequencer_stake_core::SequencerKey]>,
+        live_committee: Option<&LiveCommittee>,
     ) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
@@ -1124,8 +1093,9 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             }
 
             // Committee membership follows finalized state only.
-            let committee_update = live_accredited_keys
-                .and_then(|keys| committee_discovery::committee_update(chain.final_state(), keys));
+            let committee_update = live_committee.and_then(|committee| {
+                committee_discovery::committee_update(chain.final_state(), &committee.keys)
+            });
 
             (
                 prev,
@@ -1143,15 +1113,19 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             )
         };
 
-        // The last irreversible bedrock slot.
-        let finalized_slot = self
+        // The live committee is the finalized one only while no config is in
+        // flight: its config entry is the one the checkpoint reports finalized.
+        let finalized_config = self
             .store
             .get_zone_checkpoint()
             .await
             .inspect_err(|err| warn!("Failed to read the zone checkpoint: {err:#}"))
             .ok()
             .flatten()
-            .map(|checkpoint| checkpoint.lib_slot.into_inner());
+            .map(|checkpoint| checkpoint.finalized_config);
+        let finalized_committee = live_committee
+            .filter(|committee| finalized_config == Some(committee.config_tip))
+            .map(|committee| committee.keys.as_slice());
 
         if !settled.is_empty() {
             if let Err(err) = self
@@ -1292,12 +1266,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             // met (mempool: whoever wants it finalized resubmits;
             // discovery-sourced: reconstructed fresh next block), so it
             // doesn't need requeuing here.
-            if !finalize_unstake_is_includable(
-                &working_state,
-                &tx,
-                &self.committee_absence,
-                finalized_slot,
-            ) {
+            if !finalize_unstake_is_includable(&working_state, &tx, finalized_committee) {
                 continue;
             }
 
@@ -1573,7 +1542,9 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             Ok(Some(tip)) if tip != pin => Some(tip),
             Ok(_) => None,
             Err(err) => {
-                warn!("Failed to read the channel tip, leaving the refusal to the publish: {err:#}");
+                warn!(
+                    "Failed to read the channel tip, leaving the refusal to the publish: {err:#}"
+                );
                 None
             }
         }
@@ -1594,6 +1565,25 @@ struct BlockWithMeta {
     /// The channel tip the cursor sat on when this block was built, read under
     /// the same lock as its height.
     parent: Option<MsgId>,
+}
+
+/// The channel's live accredited keys, with the config entry they come from.
+///
+/// The config entry is what decides whether these keys are the finalized ones:
+/// it matches the checkpoint's `finalized_config` exactly when no later config
+/// is in flight.
+pub struct LiveCommittee {
+    keys: Vec<sequencer_stake_core::SequencerKey>,
+    config_tip: MsgId,
+}
+
+impl LiveCommittee {
+    /// A committee reported as sitting at `config_tip`.
+    #[cfg(test)]
+    #[must_use]
+    const fn at(keys: Vec<sequencer_stake_core::SequencerKey>, config_tip: MsgId) -> Self {
+        Self { keys, config_tip }
+    }
 }
 
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — its receipt
@@ -1767,7 +1757,15 @@ async fn apply_follow_update<S: StorageActorTrait>(
                 // payload and the tier does not move, but it is irreversible all
                 // the same, so it still settles its deposits.
                 AcceptOutcome::AlreadyApplied => irreversible.push(block),
-                AcceptOutcome::Parked(_) | AcceptOutcome::RetryableFailure(_) => {}
+                // The final tier stops here until this block applies, and
+                // nothing else reports it.
+                AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
+                    warn!(
+                        "Finalized block {} did not apply, the final tier stays at {:?}: {err}",
+                        block.header.block_id,
+                        chain.final_tip().map(|tip| tip.block_id),
+                    );
+                }
             }
         }
 
@@ -1784,10 +1782,19 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // ours is orphaned a poll or two after it finalizes. Those transactions
         // are irreversibly included, and returning them to the mempool puts
         // them back in every block we produce from then on.
+        //
+        // A block this same update re-adopted is back on the head with its
+        // transactions applied, so only the ones the channel actually dropped
+        // are resubmitted. Matched by hash, like `none_back_on_channel` below.
         let final_height = chain.final_tip().map(|tip| tip.block_id);
         let resubmit_txs: Vec<LeeTransaction> = orphaned
             .iter()
             .filter(|block| final_height.is_none_or(|id| block.header.block_id > id))
+            .filter(|block| {
+                !adopted
+                    .iter()
+                    .any(|readopted| readopted.header.hash == block.header.hash)
+            })
             .flat_map(resubmittable_txs)
             .collect();
 
@@ -2312,18 +2319,12 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
 fn finalize_unstake_is_includable(
     state: &lee::V03State,
     tx: &LeeTransaction,
-    committee_absence: &committee_discovery::CommitteeAbsence,
-    finalized_slot: Option<u64>,
+    finalized_committee: Option<&[sequencer_stake_core::SequencerKey]>,
 ) -> bool {
     let Some(ownership_id) = finalize_unstake_ownership_account(tx) else {
         return true;
     };
-    committee_discovery::finalize_unstake_is_valid(
-        state,
-        ownership_id,
-        committee_absence,
-        finalized_slot,
-    )
+    committee_discovery::finalize_unstake_is_valid(state, ownership_id, finalized_committee)
 }
 
 /// The ownership account a `FinalizeUnstake` call targets, or `None` if `tx`

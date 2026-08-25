@@ -39,7 +39,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
             node_url: "http://not-used".parse().expect("Failed to parse URL"),
             auth: None,
             funding_key: BigUint::default().into(),
-            priority_fee: sequencer_core::config::default_priority_fee(),
+            priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
         },
         genesis: Vec::new(),
         cross_zone: None,

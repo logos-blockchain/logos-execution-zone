@@ -108,10 +108,10 @@ pub enum Instruction {
 }
 
 /// One accredited sequencer's signature over [`slash_approval_message`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct SlashApproval {
     pub signer: SequencerKey,
-    /// Ed25519 signature. A `Vec` because serde has no impl for 64 byte arrays.
+    /// Ed25519 signature bytes.
     pub signature: Vec<u8>,
 }
 
