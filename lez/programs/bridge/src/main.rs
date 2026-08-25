@@ -1,17 +1,8 @@
 use bridge_core::Instruction;
-use lee_core::{
-    account::Account,
-    program::{AccountPostState, ChainedCall, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
-};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
-fn unchanged_post_states(
-    pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountPostState> {
-    pre_states
-        .iter()
-        .map(|pre_state| AccountPostState::new(pre_state.account.clone()))
-        .collect()
-}
+/// Keeps the receipt's own slot non-empty so it survives pruning; its value is never read.
+const RECEIPT_MARKER: u8 = 1;
 
 fn main() {
     let (
@@ -29,17 +20,14 @@ fn main() {
         "Bridge cannot be invoked through chain calls"
     );
 
-    let pre_states_clone = pre_states.clone();
-
-    let (post_states, chained_calls) = match instruction {
+    let post_states = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
-            vault_program_id,
+            native_program,
             recipient_id,
             amount,
         } => {
-            let [bridge, recipient_vault, receipt] = pre_states
-                .try_into()
+            let [bridge, recipient, receipt] = <[_; 3]>::try_from(pre_states.clone())
                 .expect("Deposit requires exactly 3 accounts");
 
             assert_eq!(
@@ -49,9 +37,8 @@ fn main() {
             );
 
             assert_eq!(
-                recipient_vault.account_id,
-                vault_core::compute_vault_account_id(vault_program_id, recipient_id),
-                "Second account must be recipient vault PDA"
+                recipient.account_id, recipient_id,
+                "Second account must be the recipient"
             );
 
             assert_eq!(
@@ -60,47 +47,41 @@ fn main() {
                 "Third account must be the deposit-receipt PDA"
             );
 
-            // Replay protection: the receipt PDA exists iff this op id was
-            // already minted. On replay it is non-default and the whole
+            // Replay protection: the receipt PDA holds a bridge slot iff this op
+            // id was already minted. On replay the slot is present and the whole
             // instruction is a no-op.
             //
             // Observability note: a no-op replay and a real first mint are both
             // successful txs, so an indexer cannot tell "credited here" from
             // "already credited by a peer" without deriving the receipt id and
-            // checking whether it existed before this block — the receipt claim
-            // is the only on-chain signal. Relevant once the explorer surfaces
-            // deposits.
-            if receipt.account != Account::default() {
-                (unchanged_post_states(&pre_states_clone), vec![])
+            // checking whether its bridge slot existed before this block — that
+            // slot is the only on-chain signal. Relevant once the explorer
+            // surfaces deposits.
+            if receipt.account.slot(self_program_id).is_some() {
+                pre_states.iter().map(|pre| pre.account.clone()).collect()
             } else {
-                // First mint: claim the receipt — its existence is the record,
-                // the account's contents are never read — and chain the vault
-                // transfer.
-                let receipt_post = AccountPostState::new_claimed_if_default(
-                    receipt.account,
-                    Claim::Pda(bridge_core::deposit_receipt_seed(l1_deposit_op_id)),
-                );
+                let mut receipt_post = receipt.account;
+                receipt_post.slot_mut(self_program_id).data = vec![RECEIPT_MARKER]
+                    .try_into()
+                    .expect("marker fits in account data");
 
-                let post_states = vec![
-                    AccountPostState::new(bridge.account.clone()),
-                    AccountPostState::new(recipient_vault.account.clone()),
-                    receipt_post,
-                ];
+                let mut bridge_post = bridge.account;
+                let bridge_slot = bridge_post.slot_mut(self_program_id);
+                bridge_slot.balance = bridge_slot
+                    .balance
+                    .checked_sub(u128::from(amount))
+                    .expect("Bridge has insufficient balance");
+                bridge_post.prune();
 
-                let mut bridge_for_vault = bridge;
-                bridge_for_vault.is_authorized = true;
-                let chained_calls = vec![
-                    ChainedCall::new(
-                        vault_program_id,
-                        vec![bridge_for_vault, recipient_vault],
-                        &vault_core::Instruction::Transfer {
-                            recipient_id,
-                            amount: u128::from(amount),
-                        },
-                    )
-                    .with_pda_seeds(vec![bridge_core::compute_bridge_seed()]),
-                ];
-                (post_states, chained_calls)
+                let mut recipient_post = recipient.account;
+                let recipient_slot = recipient_post.slot_mut(native_program);
+                recipient_slot.balance = recipient_slot
+                    .balance
+                    .checked_add(u128::from(amount))
+                    .expect("Recipient balance overflow");
+                recipient_post.prune();
+
+                vec![bridge_post, recipient_post, receipt_post]
             }
         }
         Instruction::Withdraw {
@@ -108,31 +89,6 @@ fn main() {
             bedrock_account_pk: _,
         } => {
             panic!("Withdraws are disabled in the current version of LEZ");
-
-            // let [sender, bridge] = pre_states
-            //     .try_into()
-            //     .expect("Withdraw requires exactly 2 accounts");
-
-            // assert_eq!(
-            //     bridge.account_id,
-            //     bridge_core::compute_bridge_account_id(self_program_id),
-            //     "Second account must be bridge PDA"
-            // );
-
-            // let auth_transfer_program_id = bridge.account.program_owner;
-            // assert_eq!(
-            //     sender.account.program_owner, auth_transfer_program_id,
-            //     "Sender account must be owned by the authenticated transfer program"
-            // );
-
-            // let chained_calls = vec![ChainedCall::new(
-            //     auth_transfer_program_id,
-            //     vec![sender, bridge],
-            //     &authenticated_transfer_core::Instruction::Transfer {
-            //         amount: u128::from(amount),
-            //     },
-            // )];
-            // (unchanged_post_states(&pre_states_clone), chained_calls)
         }
     };
 
@@ -140,9 +96,8 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        pre_states_clone,
+        pre_states,
         post_states,
     )
-    .with_chained_calls(chained_calls)
     .write();
 }

@@ -1,14 +1,10 @@
 use bridge_lock_core::{
-    Instruction, config_account_id, config_bytes, config_seed, escrow_account_id, escrow_seed,
-    read_config,
+    Instruction, config_account_id, config_bytes, escrow_account_id, read_config,
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    account::AccountWithMetadata,
+    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
 
@@ -89,7 +85,7 @@ fn lock(
         config_account_id(self_program_id),
         "first account must be the bridge-lock config PDA"
     );
-    let (outbox_program_id, pinned_target) = read_config(&config.account.data)
+    let (outbox_program_id, pinned_target) = read_config(config.account.data(self_program_id))
         .expect("config account holds an outbox and a mint target");
 
     // Value conservation: the forwarded payload must mint exactly what is locked.
@@ -126,43 +122,30 @@ fn lock(
     );
 
     assert!(holder.is_authorized, "holder must authorize the lock");
-    // The holder holding is bridge_lock-owned, so bridge_lock may debit its native
-    // balance directly (state-machine rule 5). This also pins the transfer to a
-    // genuine holding: a caller cannot substitute an account owned by some other
-    // program to emit the mint without an actual lock.
-    assert_eq!(
-        holder.account.program_owner,
-        self_program_id.into(),
-        "holder account must be a bridge_lock holding"
-    );
     assert_eq!(
         escrow.account_id,
         escrow_account_id(self_program_id),
         "third account must be the escrow PDA"
     );
 
-    // Move the real native balance holder -> escrow. bridge_lock owns both accounts,
-    // so it debits the holder and credits the escrow directly; conservation holds
-    // because the same amount moves between them.
-    let holder_new = holder
-        .account
+    // Move the real native balance holder -> escrow. Both sides are bridge_lock's own
+    // slot, so it debits one and credits the other directly; conservation holds because
+    // the same amount moves between them.
+    let mut holder_post = holder.account.clone();
+    let holder_slot = holder_post.slot_mut(self_program_id);
+    holder_slot.balance = holder_slot
         .balance
         .checked_sub(amount)
         .expect("insufficient balance to lock");
-    let escrow_new = escrow
-        .account
+    holder_post.prune();
+
+    let mut escrow_post = escrow.account.clone();
+    let escrow_slot = escrow_post.slot_mut(self_program_id);
+    escrow_slot.balance = escrow_slot
         .balance
         .checked_add(amount)
         .expect("escrow balance overflow");
-
-    let mut holder_account = holder.account.clone();
-    holder_account.balance = holder_new;
-    let holder_post = AccountPostState::new(holder_account);
-
-    let mut escrow_account = escrow.account.clone();
-    escrow_account.balance = escrow_new;
-    let escrow_post =
-        AccountPostState::new_claimed_if_default(escrow_account, Claim::Pda(escrow_seed()));
+    escrow_post.prune();
 
     let call = ChainedCall::new(
         outbox_program_id,
@@ -176,19 +159,14 @@ fn lock(
         },
     );
 
-    let config_post = AccountPostState::new(config.account.clone());
+    let config_post = config.account.clone();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![config, holder, escrow, outbox.clone()],
-        vec![
-            config_post,
-            holder_post,
-            escrow_post,
-            AccountPostState::new(outbox.account),
-        ],
+        vec![config_post, holder_post, escrow_post, outbox.account],
     )
     .with_chained_calls(vec![call])
     .write();
@@ -212,30 +190,22 @@ fn init_config(
         config_account_id(self_program_id),
         "account must be the bridge-lock config PDA"
     );
-    // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned one must already pin exactly these programs, since
+    // Init-once, idempotent under genesis replay: an absent bridge-lock slot is a
+    // first init; an existing one must already pin exactly these programs, since
     // genesis is replayed onto seeded state during multi-sequencer reconstruction.
-    // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
-    if config.account != Account::default() {
+    if let Some(slot) = config.account.slot(self_program_id) {
         assert_eq!(
-            config.account.program_owner,
-            self_program_id.into(),
-            "bridge-lock config PDA is owned by another program"
-        );
-        assert_eq!(
-            *config.account.data,
+            *slot.data,
             config_bytes(outbox_program_id, target_program_id),
             "bridge-lock config already pins a different outbox or mint target"
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = config_bytes(outbox_program_id, target_program_id)
+    let mut config_post = config.account.clone();
+    config_post.slot_mut(self_program_id).data = config_bytes(outbox_program_id, target_program_id)
         .to_vec()
         .try_into()
         .expect("pinned ids fit in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
 
     ProgramOutput::new(
         self_program_id,
