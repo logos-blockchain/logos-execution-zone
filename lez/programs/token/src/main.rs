@@ -97,6 +97,12 @@ fn main() {
                 .expect("PrintNft instruction requires exactly two accounts");
             token_program::print_nft::print_nft(master_account, printed_account, self_program_id)
         }
+        Instruction::CloseHolding => {
+            let [holding_account] = pre_states
+                .try_into()
+                .expect("CloseHolding instruction requires exactly one account");
+            token_program::close::close_holding(holding_account, self_program_id)
+        }
     };
 
     ProgramOutput::new(

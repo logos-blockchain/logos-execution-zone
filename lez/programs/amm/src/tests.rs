@@ -2379,7 +2379,6 @@ fn call_new_definition_with_zero_balance_1() {
         AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(0).expect("Balances must be nonzero"),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
-        AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
         AMM_PROGRAM_ID,
     );
@@ -2398,7 +2397,6 @@ fn call_new_definition_with_zero_balance_2() {
         AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(0).expect("Balances must be nonzero"),
-        AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
         AMM_PROGRAM_ID,
     );
@@ -2417,7 +2415,6 @@ fn call_new_definition_same_token_definition() {
         AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
-        AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
         AMM_PROGRAM_ID,
     );
@@ -2436,7 +2433,6 @@ fn call_new_definition_wrong_liquidity_id() {
         AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
-        AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
         AMM_PROGRAM_ID,
     );
@@ -2455,7 +2451,6 @@ fn call_new_definition_wrong_pool_id() {
         AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
-        AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
         AMM_PROGRAM_ID,
     );
@@ -2474,7 +2469,6 @@ fn call_new_definition_wrong_vault_id_1() {
         AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
-        AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
         AMM_PROGRAM_ID,
     );
@@ -2493,7 +2487,6 @@ fn call_new_definition_wrong_vault_id_2() {
         AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
-        AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
         AMM_PROGRAM_ID,
     );
@@ -2512,7 +2505,6 @@ fn call_new_definition_cannot_initialize_active_pool() {
         AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
-        AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
         AMM_PROGRAM_ID,
     );
@@ -2531,7 +2523,6 @@ fn call_new_definition_chained_call_successful() {
         AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
-        AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
         AMM_PROGRAM_ID,
     );
@@ -3023,7 +3014,6 @@ fn new_definition_lp_asymmetric_amounts() {
         AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
-        AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
         AMM_PROGRAM_ID,
     );
@@ -3058,7 +3048,6 @@ fn new_definition_lp_symmetric_amounts() {
         AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(token_a_amount).unwrap(),
         NonZero::new(token_b_amount).unwrap(),
-        AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
         AMM_PROGRAM_ID,
     );
@@ -3237,7 +3226,6 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
     let instruction = amm_core::Instruction::NewDefinition {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
-        amm_program_id: programs::amm().id(),
         token_program_id: programs::token().id(),
     };
 
@@ -3323,7 +3311,6 @@ fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
     let instruction = amm_core::Instruction::NewDefinition {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
-        amm_program_id: programs::amm().id(),
         token_program_id: programs::token().id(),
     };
 
@@ -3396,7 +3383,6 @@ fn simple_amm_new_definition_uninitialized_pool() {
     let instruction = amm_core::Instruction::NewDefinition {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
-        amm_program_id: programs::amm().id(),
         token_program_id: programs::token().id(),
     };
 

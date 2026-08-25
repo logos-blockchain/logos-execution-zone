@@ -15,6 +15,7 @@ use token_core::{
 
 use crate::{
     burn::burn,
+    close::close_holding,
     initialize::initialize_account,
     mint::mint,
     new_definition::{new_definition_with_metadata, new_fungible_definition},
@@ -988,4 +989,88 @@ fn print_nft_success() {
         AccountForTests::holding_account_master_nft_after_print()
     );
     assert_eq!(post_printed, AccountForTests::holding_account_printed_nft());
+}
+
+/// An empty holding is closeable by its holder, and the slot goes with it so the
+/// address reads as untouched again.
+#[test]
+fn close_holding_success() {
+    let holding = AccountWithMetadata {
+        account: token_account(Data::from(&TokenHolding::Fungible {
+            definition_id: IdForTests::pool_definition_id(),
+            balance: 0,
+        })),
+        is_authorized: true,
+        account_id: IdForTests::holding_id_2(),
+    };
+
+    let [post] = <[_; 1]>::try_from(close_holding(holding, TOKEN_PROGRAM_ID)).unwrap();
+
+    assert_eq!(post, Account::default());
+}
+
+/// The squat this exists for: an address a stranger pinned to another definition is
+/// cleared, then initializes against the definition its holder wanted.
+#[test]
+fn a_holding_pinned_to_a_foreign_definition_can_be_cleared_and_reused() {
+    let squatted = AccountWithMetadata {
+        account: token_account(Data::from(&TokenHolding::Fungible {
+            definition_id: AccountId::new([99; 32]),
+            balance: 0,
+        })),
+        is_authorized: true,
+        account_id: IdForTests::holding_id_2(),
+    };
+
+    let [cleared] = <[_; 1]>::try_from(close_holding(squatted, TOKEN_PROGRAM_ID)).unwrap();
+    assert!(cleared.slot(TOKEN_PROGRAM_ID).is_none());
+
+    let reused = AccountWithMetadata {
+        account: cleared,
+        is_authorized: false,
+        account_id: IdForTests::holding_id_2(),
+    };
+    let post_states = initialize_account(
+        AccountForTests::definition_account_auth(),
+        reused,
+        TOKEN_PROGRAM_ID,
+    );
+    let [_, post_holding] = <[_; 2]>::try_from(post_states).unwrap();
+
+    assert_eq!(
+        TokenHolding::try_from(post_holding.data(TOKEN_PROGRAM_ID))
+            .unwrap()
+            .definition_id(),
+        AccountForTests::definition_account_auth().account_id
+    );
+}
+
+#[should_panic(expected = "Holding authorization is missing")]
+#[test]
+fn close_holding_without_authorization_should_fail() {
+    let holding = AccountWithMetadata {
+        account: token_account(Data::from(&TokenHolding::Fungible {
+            definition_id: IdForTests::pool_definition_id(),
+            balance: 0,
+        })),
+        is_authorized: false,
+        account_id: IdForTests::holding_id_2(),
+    };
+
+    let _post_states = close_holding(holding, TOKEN_PROGRAM_ID);
+}
+
+#[should_panic(expected = "Only an empty holding can be closed")]
+#[test]
+fn close_holding_holding_value_should_fail() {
+    let holding = AccountWithMetadata {
+        account: token_account(Data::from(&TokenHolding::Fungible {
+            definition_id: IdForTests::pool_definition_id(),
+            balance: 1,
+        })),
+        is_authorized: true,
+        account_id: IdForTests::holding_id_2(),
+    };
+
+    let _post_states = close_holding(holding, TOKEN_PROGRAM_ID);
 }

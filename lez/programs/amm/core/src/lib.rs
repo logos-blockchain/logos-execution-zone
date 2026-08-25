@@ -22,7 +22,6 @@ pub enum Instruction {
     NewDefinition {
         token_a_amount: u128,
         token_b_amount: u128,
-        amm_program_id: ProgramId,
         /// Pinned into the [`PoolDefinition`]; every later chained call uses that pinned id
         /// rather than one read off a user-supplied account.
         token_program_id: ProgramId,

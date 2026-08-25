@@ -50,7 +50,6 @@ impl Amm<'_> {
         let instruction = amm_core::Instruction::NewDefinition {
             token_a_amount: balance_a,
             token_b_amount: balance_b,
-            amm_program_id,
             token_program_id,
         };
         let instruction_data =

@@ -39,6 +39,18 @@ pub enum Instruction {
         token_program_id: ProgramId,
         amount: u128,
     },
+
+    /// Close the empty holding at the ATA for (owner, definition).
+    /// Passes the ATA's seed to the chained `Token::CloseHolding` call to authorize it.
+    ///
+    /// The seed comes from the definition passed here, not from whatever the holding
+    /// names, so an address a stranger pinned to another definition is still clearable.
+    ///
+    /// Required accounts (3):
+    /// - Owner account (authorized)
+    /// - Owner's ATA (the holding to close)
+    /// - Token definition account the ATA is derived from
+    Close { token_program_id: ProgramId },
 }
 
 pub fn compute_ata_seed(owner_id: AccountId, definition_id: AccountId) -> PdaSeed {

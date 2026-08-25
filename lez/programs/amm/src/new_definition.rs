@@ -2,7 +2,7 @@ use std::num::NonZeroU128;
 
 use amm_core::{
     PoolDefinition, compute_liquidity_token_pda, compute_liquidity_token_pda_seed,
-    compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
+    compute_pool_pda, compute_vault_pda,
 };
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
@@ -21,7 +21,6 @@ pub fn new_definition(
     user_holding_lp: AccountWithMetadata,
     token_a_amount: NonZeroU128,
     token_b_amount: NonZeroU128,
-    amm_program_id: ProgramId,
     token_program_id: ProgramId,
     self_program_id: ProgramId,
 ) -> (Vec<Account>, Vec<ChainedCall>) {
@@ -41,22 +40,26 @@ pub fn new_definition(
     );
     assert_eq!(
         pool.account_id,
-        compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id),
+        compute_pool_pda(
+            self_program_id,
+            definition_token_a_id,
+            definition_token_b_id
+        ),
         "Pool Definition Account ID does not match PDA"
     );
     assert_eq!(
         vault_a.account_id,
-        compute_vault_pda(amm_program_id, pool.account_id, definition_token_a_id),
+        compute_vault_pda(self_program_id, pool.account_id, definition_token_a_id),
         "Vault ID does not match PDA"
     );
     assert_eq!(
         vault_b.account_id,
-        compute_vault_pda(amm_program_id, pool.account_id, definition_token_b_id),
+        compute_vault_pda(self_program_id, pool.account_id, definition_token_b_id),
         "Vault ID does not match PDA"
     );
     assert_eq!(
         pool_definition_lp.account_id,
-        compute_liquidity_token_pda(amm_program_id, pool.account_id),
+        compute_liquidity_token_pda(self_program_id, pool.account_id),
         "Liquidity pool Token Definition Account ID does not match PDA"
     );
 
@@ -108,46 +111,45 @@ pub fn new_definition(
 
     pool_post.slot_mut(self_program_id).data = Data::from(&pool_post_definition);
 
-    // Chain call for Token A (user_holding_a -> Vault_A)
-    let vault_a_seed = compute_vault_pda_seed(pool.account_id, definition_token_a_id);
-    let vault_a_authorized = AccountWithMetadata {
-        is_authorized: true,
-        ..vault_a.clone()
-    };
+    // The vaults are the recipients here, and `token::transfer` authorizes only the
+    // sender. Granting them a seed would hand the callee — whose program id the caller
+    // chooses — authority over the vaults for the rest of its subtree.
     let call_token_a = ChainedCall::new(
         token_program_id,
-        vec![user_holding_a.clone(), vault_a_authorized],
+        vec![user_holding_a.clone(), vault_a.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_a_amount.into(),
         },
-    )
-    .with_pda_seeds(vec![vault_a_seed]);
+    );
 
-    // Chain call for Token B (user_holding_b -> Vault_B)
-    let vault_b_seed = compute_vault_pda_seed(pool.account_id, definition_token_b_id);
-    let vault_b_authorized = AccountWithMetadata {
-        is_authorized: true,
-        ..vault_b.clone()
-    };
     let call_token_b = ChainedCall::new(
         token_program_id,
-        vec![user_holding_b.clone(), vault_b_authorized],
+        vec![user_holding_b.clone(), vault_b.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_b_amount.into(),
         },
-    )
-    .with_pda_seeds(vec![vault_b_seed]);
+    );
 
-    let pool_lp_authorized = AccountWithMetadata {
-        is_authorized: true,
-        ..pool_definition_lp.clone()
+    // Only `mint` requires the definition to be authorized; `new_fungible_definition`
+    // writes into fresh accounts and asks for nothing.
+    let call_token_lp = if is_fresh_pool {
+        ChainedCall::new(
+            token_program_id,
+            vec![pool_definition_lp.clone(), user_holding_lp.clone()],
+            &instruction,
+        )
+    } else {
+        let pool_lp_authorized = AccountWithMetadata {
+            is_authorized: true,
+            ..pool_definition_lp.clone()
+        };
+        ChainedCall::new(
+            token_program_id,
+            vec![pool_lp_authorized, user_holding_lp.clone()],
+            &instruction,
+        )
+        .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)])
     };
-    let call_token_lp = ChainedCall::new(
-        token_program_id,
-        vec![pool_lp_authorized, user_holding_lp.clone()],
-        &instruction,
-    )
-    .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]);
 
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 

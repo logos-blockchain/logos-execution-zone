@@ -170,3 +170,79 @@ fn get_associated_token_account_id_differs_by_definition() {
         get_associated_token_account_id(&ATA_PROGRAM_ID, &compute_ata_seed(owner_id(), other_def));
     assert_ne!(id1, id2);
 }
+
+/// An ATA cannot sign, so closing it goes through this program's seed. The seed comes
+/// from the definition the ATA is derived from, not from the holding sitting there —
+/// which is what makes a stranger's mismatched holding clearable.
+#[test]
+fn close_delegates_the_ata_seed_for_a_foreign_definition() {
+    let squatted = AccountWithMetadata {
+        account: Account::single(
+            TOKEN_PROGRAM_ID,
+            0,
+            Data::from(&TokenHolding::Fungible {
+                definition_id: AccountId::new([0xEEu8; 32]),
+                balance: 0,
+            }),
+            Nonce(0),
+        ),
+        is_authorized: false,
+        account_id: ata_id(),
+    };
+
+    let (_post_states, chained_calls) = crate::close::close_associated_token_account(
+        owner_account(),
+        squatted,
+        definition_account(),
+        ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
+    );
+
+    let [call] = <[_; 1]>::try_from(chained_calls).unwrap();
+    assert_eq!(
+        call.pda_seeds,
+        vec![compute_ata_seed(owner_id(), definition_id())]
+    );
+    assert!(call.pre_states[0].is_authorized);
+    assert_eq!(call.pre_states[0].account_id, ata_id());
+}
+
+#[should_panic(expected = "Owner authorization is missing")]
+#[test]
+fn close_without_owner_authorization_should_fail() {
+    let owner = AccountWithMetadata {
+        is_authorized: false,
+        ..owner_account()
+    };
+    let ata = AccountWithMetadata {
+        account: Account::default(),
+        is_authorized: false,
+        account_id: ata_id(),
+    };
+
+    let _ = crate::close::close_associated_token_account(
+        owner,
+        ata,
+        definition_account(),
+        ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
+    );
+}
+
+#[should_panic(expected = "ATA account ID does not match expected derivation")]
+#[test]
+fn close_at_a_non_ata_address_should_fail() {
+    let not_an_ata = AccountWithMetadata {
+        account: Account::default(),
+        is_authorized: false,
+        account_id: AccountId::new([0x77u8; 32]),
+    };
+
+    let _ = crate::close::close_associated_token_account(
+        owner_account(),
+        not_an_ata,
+        definition_account(),
+        ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
+    );
+}

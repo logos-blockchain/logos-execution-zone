@@ -60,6 +60,16 @@ pub enum Instruction {
     /// - NFT Master Token Holding account (authorized),
     /// - NFT Printed Copy Token Holding account (uninitialized).
     PrintNft,
+
+    /// Drop an empty holding, freeing the address to hold a different definition.
+    ///
+    /// A holding is pinned to one definition and anyone may create it by sending,
+    /// so without this an address a stranger wrote first is unusable for good.
+    /// Only the holder may close, and only while nothing is held.
+    ///
+    /// Required accounts:
+    /// - Token Holding account (initialized, authorized).
+    CloseHolding,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -127,6 +137,17 @@ pub enum TokenHolding {
 }
 
 impl TokenHolding {
+    /// Whether the holding carries nothing — the state `zeroized_*` produces.
+    /// A holding is only closeable while this holds, so closing never discards value.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        match self {
+            Self::Fungible { balance, .. } => *balance == 0,
+            Self::NftMaster { print_balance, .. } => *print_balance == 0,
+            Self::NftPrintedCopy { owned, .. } => !*owned,
+        }
+    }
+
     #[must_use]
     pub const fn zeroized_clone_from(other: &Self) -> Self {
         match other {

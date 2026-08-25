@@ -59,6 +59,18 @@ fn main() {
                 amount,
             )
         }
+        Instruction::Close { token_program_id } => {
+            let [owner, ata_account, token_definition] = pre_states
+                .try_into()
+                .expect("Close instruction requires exactly three accounts");
+            associated_token_account_program::close::close_associated_token_account(
+                owner,
+                ata_account,
+                token_definition,
+                self_program_id,
+                token_program_id,
+            )
+        }
     };
 
     ProgramOutput::new(
