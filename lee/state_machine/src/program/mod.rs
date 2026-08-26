@@ -88,7 +88,7 @@ impl Program {
     }
 
     /// Writes a `CallKind::Execute` frame followed by the guest's [`ProgramInput`] as a single
-    /// length-prefixed borsh frame, the form `read_lee_call`/`read_lee_inputs` expects.
+    /// length-prefixed borsh frame, the form `read_lee_call` expects.
     pub fn write_inputs(
         &self,
         caller_program_id: Option<ProgramId>,

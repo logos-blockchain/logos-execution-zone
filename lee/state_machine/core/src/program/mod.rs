@@ -698,44 +698,36 @@ pub fn read_input_frame() -> Vec<u8> {
 
 /// Reads a single LEE guest invocation, dispatching on [`CallKind`].
 ///
-/// Replaces [`read_lee_inputs`] as the entrypoint read — every guest `main` should match on the
-/// returned [`ProgramCall`] rather than assume it was invoked to execute. Each of `CallKind` and
-/// the invocation's own payload is read as its own length-prefixed borsh frame (see
-/// [`read_input_frame`]), one after the other.
+/// Every guest `main` should match on the returned [`ProgramCall`] rather than assume it was
+/// invoked to execute. Each of `CallKind` and the invocation's own payload is read as its own
+/// length-prefixed borsh frame (see [`read_input_frame`]), one after the other; the payload frame
+/// decodes as `ProgramInput<InstructionData>`, with `T` a second decode of the instruction bytes.
 #[must_use]
 pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
     let call_kind: CallKind =
         borsh::from_slice(&read_input_frame()).expect("call kind must decode from borsh");
     match call_kind {
         CallKind::Execute => {
-            let (program_input, instruction_words) = read_lee_inputs();
-            ProgramCall::Execute(program_input, instruction_words)
+            let ProgramInput {
+                self_program_id,
+                caller_program_id,
+                pre_states,
+                instruction: instruction_data,
+            } = borsh::from_slice::<ProgramInput<InstructionData>>(&read_input_frame())
+                .expect("guest input must be valid borsh");
+            let instruction =
+                borsh::from_slice(&instruction_data).expect("instruction must decode from borsh");
+            ProgramCall::Execute(
+                ProgramInput {
+                    self_program_id,
+                    caller_program_id,
+                    pre_states,
+                    instruction,
+                },
+                instruction_data,
+            )
         }
     }
-}
-
-/// Reads the LEE inputs from the guest environment. The frame decodes as
-/// `ProgramInput<InstructionData>`; `T` is a second decode of the instruction bytes.
-#[must_use]
-pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionData) {
-    let ProgramInput {
-        self_program_id,
-        caller_program_id,
-        pre_states,
-        instruction: instruction_data,
-    } = borsh::from_slice::<ProgramInput<InstructionData>>(&read_input_frame())
-        .expect("guest input must be valid borsh");
-    let instruction =
-        borsh::from_slice(&instruction_data).expect("instruction must decode from borsh");
-    (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    )
 }
 
 /// Validates well-behaved program execution.
