@@ -6,7 +6,7 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Cycles},
     program::{
         CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
         validate_execution,
@@ -58,7 +58,7 @@ impl ValidatedStateDiff {
 /// across every call in the chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionOutcome {
-    pub cycles: u64,
+    pub cycles: Cycles,
 }
 
 impl ExecutionOutcome {
@@ -93,7 +93,7 @@ impl ValidatedStateDiff {
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-        cycle_budget: u64,
+        cycle_budget: Cycles,
     ) -> Result<(Self, ExecutionOutcome), LeeError> {
         let signer_account_ids = authenticate_public_transaction_signers(tx, state)?;
         let message = tx.message();
@@ -139,7 +139,7 @@ impl ValidatedStateDiff {
         let mut chained_calls =
             VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
         let mut chain_calls_counter = 0;
-        let mut cycles_used: u64 = 0;
+        let mut cycles_used: Cycles = 0;
 
         while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
             ensure!(

@@ -1,7 +1,7 @@
 use std::io;
 
 use lee_core::{
-    account::{Account, AccountId},
+    account::{Account, AccountId, Cycles},
     program::ProgramId,
 };
 use thiserror::Error;
@@ -21,7 +21,7 @@ pub enum LeeError {
     InvalidInput(String),
 
     #[error("Execution exceeded its cycle budget of {budget} cycles")]
-    OutOfGas { budget: u64 },
+    OutOfGas { budget: Cycles },
 
     #[error("Program violated execution rules")]
     InvalidProgramBehavior(#[from] InvalidProgramBehaviorError),

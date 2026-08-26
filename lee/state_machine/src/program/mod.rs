@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::AccountWithMetadata,
+    account::{AccountWithMetadata, Cycles},
     from_frame,
     program::{InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_frame,
@@ -14,7 +14,7 @@ use crate::error::LeeError;
 /// The cycle budget applied to public execution paths that do not yet carry
 /// a transaction-specific budget. Enforcement of the fee spec's per-block cap
 /// replaces this in the charging transition.
-pub const DEFAULT_PUBLIC_CYCLE_BUDGET: u64 = 1024 * 1024 * 32; // 32M cycles
+pub const DEFAULT_PUBLIC_CYCLE_BUDGET: Cycles = 1024 * 1024 * 32; // 32M cycles
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Program {
@@ -60,8 +60,8 @@ impl Program {
         caller_program_id: Option<ProgramId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &InstructionData,
-        cycle_budget: u64,
-    ) -> Result<(ProgramOutput, u64), LeeError> {
+        cycle_budget: Cycles,
+    ) -> Result<(ProgramOutput, Cycles), LeeError> {
         // Write inputs to the program
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(cycle_budget));
@@ -95,7 +95,7 @@ impl Program {
     fn execute_session(
         env: ExecutorEnv<'_>,
         elf: &[u8],
-        cycle_budget: u64,
+        cycle_budget: Cycles,
     ) -> Result<risc0_zkvm::SessionInfo, LeeError> {
         default_executor().execute(env, elf).map_err(|e| {
             // check for "Guest panicked" to prevent spoofing
