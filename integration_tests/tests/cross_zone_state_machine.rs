@@ -275,8 +275,12 @@ fn signed_tx(
     instruction_data: Vec<u8>,
     key: &PrivateKey,
 ) -> PublicTransaction {
-    let message =
-        Message::new_preserialized(program.into(), accounts, vec![nonce.into()], instruction_data);
+    let message = Message::new_preserialized(
+        program.into(),
+        accounts,
+        vec![nonce.into()],
+        instruction_data,
+    );
     let witness = WitnessSet::for_message(&message, &[key]);
     PublicTransaction::new(message, witness)
 }
