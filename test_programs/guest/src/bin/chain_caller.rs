@@ -23,11 +23,8 @@ fn main() {
         return;
     };
 
-    let call_instruction_data = to_vec(&AuthTransferInstruction::Transfer {
-        amount: balance,
-        recipient_program: None,
-    })
-    .unwrap();
+    let call_instruction_data =
+        to_vec(&AuthTransferInstruction::Transfer { amount: balance }).unwrap();
 
     let mut running_recipient_pre = recipient_pre.clone();
     let mut running_sender_pre = sender_pre.clone();
@@ -42,19 +39,19 @@ fn main() {
         };
         chained_calls.push(new_chained_call);
 
-        let sender_slot = running_sender_pre.account.slot_mut(auth_transfer_id);
+        let mut sender_slot = running_sender_pre.slot_of(auth_transfer_id).clone();
         sender_slot.balance = match sender_slot.balance.checked_sub(balance) {
             Some(new_balance) => new_balance,
             None => return,
         };
-        running_sender_pre.account.prune();
+        running_sender_pre = running_sender_pre.with_slot(auth_transfer_id, sender_slot);
 
-        let recipient_slot = running_recipient_pre.account.slot_mut(auth_transfer_id);
+        let mut recipient_slot = running_recipient_pre.slot_of(auth_transfer_id).clone();
         recipient_slot.balance = match recipient_slot.balance.checked_add(balance) {
             Some(new_balance) => new_balance,
             None => return,
         };
-        running_recipient_pre.account.prune();
+        running_recipient_pre = running_recipient_pre.with_slot(auth_transfer_id, recipient_slot);
     }
 
     ProgramOutput::new(
@@ -62,7 +59,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![sender_pre.clone(), recipient_pre.clone()],
-        vec![sender_pre.account, recipient_pre.account],
+        vec![sender_pre.unchanged(), recipient_pre.unchanged()],
     )
     .with_chained_calls(chained_calls)
     .write();

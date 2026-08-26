@@ -6,7 +6,7 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention,
     utils::{account_balance, new_account, send, send_claiming_new_account},
 };
-use lee::{PublicKey, public_transaction};
+use lee::{PublicKey, SlotRef, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -295,12 +295,12 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
         programs::authenticated_transfer().id(),
-        vec![faucet_account_id, recipient],
+        vec![
+            SlotRef::new(faucet_account_id, programs::authenticated_transfer().id()),
+            SlotRef::new(recipient, programs::authenticated_transfer().id()),
+        ],
         vec![],
-        authenticated_transfer_core::Instruction::Transfer {
-            amount,
-            recipient_program: None,
-        },
+        authenticated_transfer_core::Instruction::Transfer { amount },
     )?;
     let tx = lee::PublicTransaction::new(
         message,
@@ -338,12 +338,12 @@ async fn cannot_execute_faucet_program() -> Result<()> {
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
         programs::faucet().id(),
-        vec![faucet_account_id, recipient],
+        vec![
+            SlotRef::new(faucet_account_id, programs::faucet().id()),
+            SlotRef::new(recipient, programs::authenticated_transfer().id()),
+        ],
         vec![],
-        faucet_core::Instruction::GenesisTransferDirect {
-            recipient_program: programs::authenticated_transfer().id(),
-            amount,
-        },
+        faucet_core::Instruction::GenesisTransferDirect { amount },
     )?;
     let tx = lee::PublicTransaction::new(
         message,
@@ -389,9 +389,12 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
 
     let message = public_transaction::Message::try_new(
         faucet_chain_caller.id(),
-        vec![faucet_account_id, attacker],
+        vec![
+            SlotRef::new(faucet_account_id, faucet_program_id),
+            SlotRef::new(attacker, native_program),
+        ],
         vec![],
-        (faucet_program_id, native_program, amount),
+        (faucet_program_id, amount),
     )?;
     let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         message,

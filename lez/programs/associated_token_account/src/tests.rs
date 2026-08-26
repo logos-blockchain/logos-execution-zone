@@ -1,11 +1,17 @@
 #![cfg(test)]
 
 use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
-use lee_core::account::{Account, AccountId, AccountWithMetadata, Data, Nonce};
+use lee_core::account::{AccountId, Data, Input, Slot};
 use token_core::{TokenDefinition, TokenHolding};
 
 const ATA_PROGRAM_ID: lee_core::program::ProgramId = [1u32; 8];
 const TOKEN_PROGRAM_ID: lee_core::program::ProgramId = [2u32; 8];
+
+/// A position naming the token program's namespace, which is the only slot the ATA
+/// program ever reads.
+fn named(slot: Slot) -> Option<(AccountId, Slot)> {
+    Some((TOKEN_PROGRAM_ID.into(), slot))
+}
 
 fn owner_id() -> AccountId {
     AccountId::new([0x01u8; 32])
@@ -22,50 +28,46 @@ fn ata_id() -> AccountId {
     )
 }
 
-fn owner_account() -> AccountWithMetadata {
-    AccountWithMetadata {
-        account: Account::default(),
+fn owner_account() -> Input {
+    Input {
+        slot: named(Slot::default()),
         is_authorized: true,
         account_id: owner_id(),
     }
 }
 
-fn definition_account() -> AccountWithMetadata {
-    AccountWithMetadata {
-        account: Account::single(
-            TOKEN_PROGRAM_ID,
-            0,
-            Data::from(&TokenDefinition::Fungible {
+fn definition_account() -> Input {
+    Input {
+        slot: named(Slot {
+            balance: 0,
+            data: Data::from(&TokenDefinition::Fungible {
                 name: "TEST".to_string(),
                 total_supply: 1000,
                 metadata_id: None,
             }),
-            Nonce(0),
-        ),
+        }),
         is_authorized: false,
         account_id: definition_id(),
     }
 }
 
-fn uninitialized_ata_account() -> AccountWithMetadata {
-    AccountWithMetadata {
-        account: Account::default(),
+fn uninitialized_ata_account() -> Input {
+    Input {
+        slot: named(Slot::default()),
         is_authorized: false,
         account_id: ata_id(),
     }
 }
 
-fn initialized_ata_account() -> AccountWithMetadata {
-    AccountWithMetadata {
-        account: Account::single(
-            TOKEN_PROGRAM_ID,
-            0,
-            Data::from(&TokenHolding::Fungible {
+fn initialized_ata_account() -> Input {
+    Input {
+        slot: named(Slot {
+            balance: 0,
+            data: Data::from(&TokenHolding::Fungible {
                 definition_id: definition_id(),
                 balance: 100,
             }),
-            Nonce(0),
-        ),
+        }),
         is_authorized: false,
         account_id: ata_id(),
     }
@@ -106,8 +108,8 @@ fn create_is_idempotent_for_initialized_ata() {
 #[test]
 #[should_panic(expected = "ATA account ID does not match expected derivation")]
 fn create_panics_on_wrong_ata_address() {
-    let wrong_ata = AccountWithMetadata {
-        account: Account::default(),
+    let wrong_ata = Input {
+        slot: named(Slot::default()),
         is_authorized: false,
         account_id: AccountId::new([0xFFu8; 32]),
     };
@@ -119,22 +121,6 @@ fn create_panics_on_wrong_ata_address() {
         ATA_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
     );
-}
-
-#[test]
-fn create_ignores_slots_of_other_programs_on_the_ata() {
-    let mut ata = uninitialized_ata_account();
-    ata.account.slot_mut([9u32; 8]).balance = 7;
-
-    let (_post_states, chained_calls) = crate::create::create_associated_token_account(
-        owner_account(),
-        definition_account(),
-        ata,
-        ATA_PROGRAM_ID,
-        TOKEN_PROGRAM_ID,
-    );
-
-    assert_eq!(chained_calls.len(), 1);
 }
 
 #[test]
@@ -176,16 +162,14 @@ fn get_associated_token_account_id_differs_by_definition() {
 /// which is what makes a stranger's mismatched holding clearable.
 #[test]
 fn close_delegates_the_ata_seed_for_a_foreign_definition() {
-    let squatted = AccountWithMetadata {
-        account: Account::single(
-            TOKEN_PROGRAM_ID,
-            0,
-            Data::from(&TokenHolding::Fungible {
+    let squatted = Input {
+        slot: named(Slot {
+            balance: 0,
+            data: Data::from(&TokenHolding::Fungible {
                 definition_id: AccountId::new([0xEEu8; 32]),
                 balance: 0,
             }),
-            Nonce(0),
-        ),
+        }),
         is_authorized: false,
         account_id: ata_id(),
     };
@@ -210,12 +194,12 @@ fn close_delegates_the_ata_seed_for_a_foreign_definition() {
 #[should_panic(expected = "Owner authorization is missing")]
 #[test]
 fn close_without_owner_authorization_should_fail() {
-    let owner = AccountWithMetadata {
+    let owner = Input {
         is_authorized: false,
         ..owner_account()
     };
-    let ata = AccountWithMetadata {
-        account: Account::default(),
+    let ata = Input {
+        slot: named(Slot::default()),
         is_authorized: false,
         account_id: ata_id(),
     };
@@ -232,8 +216,8 @@ fn close_without_owner_authorization_should_fail() {
 #[should_panic(expected = "ATA account ID does not match expected derivation")]
 #[test]
 fn close_at_a_non_ata_address_should_fail() {
-    let not_an_ata = AccountWithMetadata {
-        account: Account::default(),
+    let not_an_ata = Input {
+        slot: named(Slot::default()),
         is_authorized: false,
         account_id: AccountId::new([0x77u8; 32]),
     };
@@ -251,11 +235,11 @@ fn close_at_a_non_ata_address_should_fail() {
 /// chain `InitializeAccount` rather than treating the address as already in use.
 #[test]
 fn create_is_not_suppressed_by_a_bare_credit() {
-    let mut squatted = Account::default();
-    squatted.slot_mut(TOKEN_PROGRAM_ID).balance = 1;
-
-    let ata = AccountWithMetadata {
-        account: squatted,
+    let ata = Input {
+        slot: named(Slot {
+            balance: 1,
+            data: Data::empty(),
+        }),
         is_authorized: false,
         account_id: ata_id(),
     };
@@ -275,11 +259,11 @@ fn create_is_not_suppressed_by_a_bare_credit() {
 /// carries no data.
 #[test]
 fn close_clears_a_bare_credit() {
-    let mut squatted = Account::default();
-    squatted.slot_mut(TOKEN_PROGRAM_ID).balance = 1;
-
-    let ata = AccountWithMetadata {
-        account: squatted,
+    let ata = Input {
+        slot: named(Slot {
+            balance: 1,
+            data: Data::empty(),
+        }),
         is_authorized: false,
         account_id: ata_id(),
     };

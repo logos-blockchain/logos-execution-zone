@@ -1,16 +1,16 @@
-use lee_core::program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
-type Instruction = ProgramId;
+type Instruction = ();
 
-/// Writes data into a slot belonging to the program named in the instruction. Rule 4 must
-/// reject the post: a program rewrites only its own slot.
+/// Writes data into whichever slot its position names. When that is not this program's own
+/// namespace, rule 4 must reject the post.
 fn main() {
     let (
         ProgramInput {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: foreign_program_id,
+            instruction: (),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -19,8 +19,8 @@ fn main() {
         return;
     };
 
-    let mut account_post = pre.account.clone();
-    account_post.slot_mut(foreign_program_id).data = vec![0xBE_u8]
+    let mut slot_post = pre.clone().into_caller_named_slot();
+    slot_post.data = vec![0xBE_u8]
         .try_into()
         .expect("one byte fits into data limit");
 
@@ -29,7 +29,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pre],
-        vec![account_post],
+        vec![Some(slot_post)],
     )
     .write();
 }

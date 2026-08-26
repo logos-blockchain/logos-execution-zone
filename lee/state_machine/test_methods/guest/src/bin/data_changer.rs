@@ -18,19 +18,17 @@ fn main() {
         return;
     };
 
-    let account_pre = &pre.account;
-    let mut account_post = account_pre.clone();
-    account_post.slot_mut(self_program_id).data = data
+    let mut slot_post = pre.slot_of(self_program_id).clone();
+    slot_post.data = data
         .try_into()
         .expect("provided data should fit into data limit");
-    account_post.prune();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![pre],
-        vec![account_post],
+        vec![Some(slot_post)],
     )
     .write();
 }

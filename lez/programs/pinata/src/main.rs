@@ -1,11 +1,11 @@
-use lee_core::program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 
 const PRIZE: u128 = 150;
 
-/// A solution plus the slot credited at the winner. The winner builds the transaction, so
-/// naming a slot they cannot spend from only strands their own prize.
-type Instruction = (u128, ProgramId);
+/// A candidate solution. The winner builds the transaction and so names the slot credited to
+/// them; naming one they cannot spend from only strands their own prize.
+type Instruction = u128;
 
 struct Challenge {
     difficulty: u8,
@@ -51,7 +51,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: (solution, native_program),
+            instruction: solution,
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -60,28 +60,25 @@ fn main() {
         return;
     };
 
-    let data = Challenge::new(pinata.account.data(self_program_id));
+    let data = Challenge::new(pinata.data(self_program_id));
 
     if !data.validate_solution(solution) {
         return;
     }
 
-    let mut pinata_post = pinata.account.clone();
-    let pinata_slot = pinata_post.slot_mut(self_program_id);
-    pinata_slot.balance = pinata_slot
+    let mut pinata_post = pinata.slot_of(self_program_id).clone();
+    pinata_post.balance = pinata_post
         .balance
         .checked_sub(PRIZE)
         .expect("Not enough balance in the pinata");
-    pinata_slot.data = data
+    pinata_post.data = data
         .next_data()
         .to_vec()
         .try_into()
         .expect("33 bytes should fit into Data");
-    pinata_post.prune();
 
-    let mut winner_post = winner.account.clone();
-    let winner_slot = winner_post.slot_mut(native_program);
-    winner_slot.balance = winner_slot
+    let mut winner_post = winner.clone().into_caller_named_slot();
+    winner_post.balance = winner_post
         .balance
         .checked_add(PRIZE)
         .expect("Overflow when adding prize to winner");
@@ -91,7 +88,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pinata, winner],
-        vec![pinata_post, winner_post],
+        vec![Some(pinata_post), Some(winner_post)],
     )
     .write();
 }

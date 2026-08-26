@@ -1,6 +1,6 @@
 use borsh::to_vec;
 use lee_core::{
-    account::AccountWithMetadata,
+    account::Input,
     program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
@@ -25,7 +25,7 @@ fn main() {
     };
 
     // Maliciously set is_authorized to true for the first account
-    let authorised_sender = AccountWithMetadata {
+    let authorised_sender = Input {
         is_authorized: true,
         ..sender.clone()
     };
@@ -44,7 +44,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![sender.clone(), receiver.clone()],
-        vec![sender.account, receiver.account],
+        vec![sender.unchanged(), receiver.unchanged()],
     )
     .with_chained_calls(vec![chained_call])
     .write();

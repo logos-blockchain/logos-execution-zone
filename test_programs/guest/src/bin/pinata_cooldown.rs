@@ -15,9 +15,9 @@
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
 use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
-/// `(clock_program_id, native_program)` — the slot holding the clock's data and the
-/// slot credited at the winner.
-type Instruction = (lee_core::program::ProgramId, lee_core::program::ProgramId);
+/// The namespace holding the clock's data. The winner is credited in whichever slot the
+/// transaction named at them.
+type Instruction = lee_core::program::ProgramId;
 
 struct PinataState {
     prize: u128,
@@ -53,7 +53,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: (clock_program_id, native_program),
+            instruction: clock_program_id,
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -65,10 +65,10 @@ fn main() {
     // Check the clock account is the system clock account
     assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
-    let clock_data = ClockAccountData::from_bytes(clock_pre.account.data(clock_program_id));
+    let clock_data = ClockAccountData::from_bytes(clock_pre.data(clock_program_id));
     let current_timestamp = clock_data.timestamp;
 
-    let pinata_state = PinataState::from_bytes(pinata.account.data(self_program_id));
+    let pinata_state = PinataState::from_bytes(pinata.data(self_program_id));
 
     // Enforce cooldown: the elapsed time since the last claim must exceed the cooldown period.
     let elapsed = current_timestamp.saturating_sub(pinata_state.last_claim_timestamp);
@@ -78,42 +78,33 @@ fn main() {
         pinata_state.cooldown_ms,
     );
 
-    let mut pinata_post = pinata.account.clone();
-    let mut winner_post = winner.account.clone();
-
-    let pinata_slot = pinata_post.slot_mut(self_program_id);
-    pinata_slot.balance = pinata_slot
+    let mut pinata_post = pinata.slot_of(self_program_id).clone();
+    pinata_post.balance = pinata_post
         .balance
         .checked_sub(pinata_state.prize)
         .expect("Not enough balance in the pinata");
+    // Update the last claim timestamp.
+    pinata_post.data = PinataState {
+        last_claim_timestamp: current_timestamp,
+        ..pinata_state
+    }
+    .to_bytes()
+    .try_into()
+    .expect("Pinata state should fit in account data");
 
-    let winner_slot = winner_post.slot_mut(native_program);
-    winner_slot.balance = winner_slot
+    let mut winner_post = winner.clone().into_caller_named_slot();
+    winner_post.balance = winner_post
         .balance
         .checked_add(pinata_state.prize)
         .expect("Overflow when adding prize to winner");
-    winner_post.prune();
-
-    // Update the last claim timestamp.
-    let updated_state = PinataState {
-        last_claim_timestamp: current_timestamp,
-        ..pinata_state
-    };
-    pinata_post.slot_mut(self_program_id).data = updated_state
-        .to_bytes()
-        .try_into()
-        .expect("Pinata state should fit in account data");
-    pinata_post.prune();
-
-    // Clock account is read-only.
-    let clock_post = clock_pre.account.clone();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![pinata, winner, clock_pre],
-        vec![pinata_post, winner_post, clock_post],
+        vec![pinata, winner, clock_pre.clone()],
+        // The clock is read-only.
+        vec![Some(pinata_post), Some(winner_post), clock_pre.unchanged()],
     )
     .write();
 }

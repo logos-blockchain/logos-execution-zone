@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee::{AccountId, V03State, ValidatedStateDiff};
-use lee_core::{BlockId, Timestamp};
+use lee_core::{BlockId, Timestamp, account::SlotRef};
 use log::warn;
 use serde::{Deserialize, Serialize};
 
@@ -246,7 +246,10 @@ pub enum TransactionMalformationError {
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
         programs::clock().id(),
-        clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
+        clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
+            .iter()
+            .map(|account_id| SlotRef::new(*account_id, programs::clock().id()))
+            .collect(),
         vec![],
         timestamp,
     )

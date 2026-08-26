@@ -18,10 +18,7 @@ fn main() {
     );
 
     let post_states = match instruction {
-        Instruction::GenesisTransferDirect {
-            recipient_program,
-            amount,
-        } => {
+        Instruction::GenesisTransferDirect { amount } => {
             let [faucet, recipient] = <[_; 2]>::try_from(pre_states.clone())
                 .expect("TransferDirect requires exactly 2 accounts");
 
@@ -31,23 +28,19 @@ fn main() {
                 "First account must be faucet PDA"
             );
 
-            let mut faucet_post = faucet.account;
-            let faucet_slot = faucet_post.slot_mut(self_program_id);
-            faucet_slot.balance = faucet_slot
+            let mut faucet_post = faucet.into_slot_of(self_program_id);
+            faucet_post.balance = faucet_post
                 .balance
                 .checked_sub(amount)
                 .expect("Faucet has insufficient balance");
-            faucet_post.prune();
 
-            let mut recipient_post = recipient.account;
-            let recipient_slot = recipient_post.slot_mut(recipient_program);
-            recipient_slot.balance = recipient_slot
+            let mut recipient_post = recipient.into_caller_named_slot();
+            recipient_post.balance = recipient_post
                 .balance
                 .checked_add(amount)
                 .expect("Recipient balance overflow");
-            recipient_post.prune();
 
-            vec![faucet_post, recipient_post]
+            vec![Some(faucet_post), Some(recipient_post)]
         }
     };
 

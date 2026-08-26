@@ -1,5 +1,8 @@
 use bridge_core::Instruction;
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::Input,
+    program::{ProgramInput, ProgramOutput, read_lee_inputs},
+};
 
 /// Keeps the receipt's own slot non-empty so it survives pruning; its value is never read.
 const RECEIPT_MARKER: u8 = 1;
@@ -23,7 +26,6 @@ fn main() {
     let post_states = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
-            native_program,
             recipient_id,
             amount,
         } => {
@@ -47,6 +49,18 @@ fn main() {
                 "Third account must be the deposit-receipt PDA"
             );
 
+            // Positions need only name distinct slots, so the recipient may otherwise alias a
+            // bridge-owned account: the credit would then land in a slot this program cannot
+            // debit, stranding reserves against the L1 lock that backs them.
+            assert_ne!(
+                recipient.account_id, bridge.account_id,
+                "Recipient must not be the bridge PDA"
+            );
+            assert_ne!(
+                recipient.account_id, receipt.account_id,
+                "Recipient must not be the deposit-receipt PDA"
+            );
+
             // Replay protection: the receipt PDA holds this program's marker iff
             // this op id was already minted. The marker is the signal, not the
             // slot: rule 4 lets anyone credit a foreign slot into existence, but
@@ -58,31 +72,27 @@ fn main() {
             // checking whether its marker existed before this block — that
             // marker is the only on-chain signal. Relevant once the explorer
             // surfaces deposits.
-            if receipt.account.data(self_program_id).is_empty() {
-                let mut receipt_post = receipt.account;
-                receipt_post.slot_mut(self_program_id).data = vec![RECEIPT_MARKER]
+            if receipt.data(self_program_id).is_empty() {
+                let mut receipt_post = receipt.into_slot_of(self_program_id);
+                receipt_post.data = vec![RECEIPT_MARKER]
                     .try_into()
                     .expect("marker fits in account data");
 
-                let mut bridge_post = bridge.account;
-                let bridge_slot = bridge_post.slot_mut(self_program_id);
-                bridge_slot.balance = bridge_slot
+                let mut bridge_post = bridge.into_slot_of(self_program_id);
+                bridge_post.balance = bridge_post
                     .balance
                     .checked_sub(u128::from(amount))
                     .expect("Bridge has insufficient balance");
-                bridge_post.prune();
 
-                let mut recipient_post = recipient.account;
-                let recipient_slot = recipient_post.slot_mut(native_program);
-                recipient_slot.balance = recipient_slot
+                let mut recipient_post = recipient.into_caller_named_slot();
+                recipient_post.balance = recipient_post
                     .balance
                     .checked_add(u128::from(amount))
                     .expect("Recipient balance overflow");
-                recipient_post.prune();
 
-                vec![bridge_post, recipient_post, receipt_post]
+                vec![Some(bridge_post), Some(recipient_post), Some(receipt_post)]
             } else {
-                pre_states.iter().map(|pre| pre.account.clone()).collect()
+                pre_states.iter().map(Input::unchanged).collect()
             }
         }
         Instruction::Withdraw {

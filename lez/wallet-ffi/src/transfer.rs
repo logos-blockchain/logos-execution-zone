@@ -8,7 +8,7 @@ use std::{
 use lee::AccountId;
 use wallet::{
     account::AccountIdWithPrivacy, cli::CliAccountMention,
-    program_facades::native_token_transfer::NativeTokenTransfer, AccountIdentity,
+    program_facades::native_token_transfer::NativeTokenTransfer, Identity,
 };
 
 use crate::{
@@ -87,8 +87,8 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_public_transfer(
-        AccountIdentity::Public(from_id),
-        AccountIdentity::Public(to_id),
+        Identity::Public(from_id),
+        Identity::Public(to_id),
         amount,
     )) {
         Ok(tx_hash) => {

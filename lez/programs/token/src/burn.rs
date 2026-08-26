@@ -1,25 +1,24 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
+    account::{Data, Input, Slot},
     program::ProgramId,
 };
 use token_core::{TokenDefinition, TokenHolding};
 
 #[must_use]
 pub fn burn(
-    definition_account: AccountWithMetadata,
-    user_holding_account: AccountWithMetadata,
+    definition_account: Input,
+    user_holding_account: Input,
     amount_to_burn: u128,
     self_program_id: ProgramId,
-) -> Vec<Account> {
+) -> Vec<Option<Slot>> {
     assert!(
         user_holding_account.is_authorized,
         "Authorization is missing"
     );
 
-    let mut definition =
-        TokenDefinition::try_from(definition_account.account.data(self_program_id))
-            .expect("Token Definition account must be valid");
-    let mut holding = TokenHolding::try_from(user_holding_account.account.data(self_program_id))
+    let mut definition = TokenDefinition::try_from(definition_account.data(self_program_id))
+        .expect("Token Definition account must be valid");
+    let mut holding = TokenHolding::try_from(user_holding_account.data(self_program_id))
         .expect("Token Holding account must be valid");
 
     assert_eq!(
@@ -94,11 +93,11 @@ pub fn burn(
         _ => panic!("Mismatched Token Definition and Token Holding types"),
     }
 
-    let mut definition_post = definition_account.account;
-    definition_post.slot_mut(self_program_id).data = Data::from(&definition);
+    let mut definition_post = definition_account.into_slot_of(self_program_id);
+    definition_post.data = Data::from(&definition);
 
-    let mut holding_post = user_holding_account.account;
-    holding_post.slot_mut(self_program_id).data = Data::from(&holding);
+    let mut holding_post = user_holding_account.into_slot_of(self_program_id);
+    holding_post.data = Data::from(&holding);
 
-    vec![definition_post, holding_post]
+    vec![Some(definition_post), Some(holding_post)]
 }

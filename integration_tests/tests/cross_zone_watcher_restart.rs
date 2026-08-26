@@ -23,7 +23,7 @@ use integration_tests::{
     config::{self, SequencerPartialConfig},
     setup::{SequencerSetup, sequencer_client, setup_bedrock_node},
 };
-use lee::{AccountId, PublicTransaction, public_transaction::Message};
+use lee::{AccountId, PublicTransaction, SlotRef, public_transaction::Message};
 use lee_core::program::ProgramId;
 use ping_core::{
     ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
@@ -197,8 +197,8 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
         target_zone,
         target_program_id: receiver_id,
         target_accounts: vec![
-            receiver_config_account_id(receiver_id).into_value(),
-            ping_record_pda(receiver_id).into_value(),
+            SlotRef::new(receiver_config_account_id(receiver_id), receiver_id),
+            SlotRef::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
         ordinal,
@@ -208,7 +208,10 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
     let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
     let message = Message::try_new(
         sender_id,
-        vec![sender_config_account_id(sender_id), outbox_account],
+        vec![
+            SlotRef::new(sender_config_account_id(sender_id), sender_id),
+            SlotRef::new(outbox_account, outbox_id),
+        ],
         vec![],
         send,
     )

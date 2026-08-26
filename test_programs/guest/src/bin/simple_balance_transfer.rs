@@ -14,14 +14,12 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
-        let account_post = account_pre.account;
-
         ProgramOutput::new(
             self_program_id,
             caller_program_id,
             instruction_data,
             pre_states,
-            vec![account_post],
+            vec![account_pre.unchanged()],
         )
         .write();
         return;
@@ -31,28 +29,30 @@ fn main() {
         return;
     };
 
-    let mut sender_post = sender_pre.account.clone();
-    let mut receiver_post = receiver_pre.account.clone();
-    let sender_slot = sender_post.slot_mut(self_program_id);
-    sender_slot.balance = sender_slot
-        .balance
-        .checked_sub(balance)
-        .expect("Not enough balance to transfer");
-    sender_post.prune();
+    // No joint branch: two positions naming the same slot are rejected as duplicates before
+    // a program ever runs, and two naming different slots are just two ordinary positions.
+    let post_states = {
+        let mut sender_post = sender_pre.slot_of(self_program_id).clone();
+        sender_post.balance = sender_post
+            .balance
+            .checked_sub(balance)
+            .expect("Not enough balance to transfer");
 
-    let receiver_slot = receiver_post.slot_mut(self_program_id);
-    receiver_slot.balance = receiver_slot
-        .balance
-        .checked_add(balance)
-        .expect("Overflow when adding balance");
-    receiver_post.prune();
+        let mut receiver_post = receiver_pre.slot_of(self_program_id).clone();
+        receiver_post.balance = receiver_post
+            .balance
+            .checked_add(balance)
+            .expect("Overflow when adding balance");
+
+        vec![Some(sender_post), Some(receiver_post)]
+    };
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![sender_pre, receiver_pre],
-        vec![sender_post, receiver_post],
+        post_states,
     )
     .write();
 }

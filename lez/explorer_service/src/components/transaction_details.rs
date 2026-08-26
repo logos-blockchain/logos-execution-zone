@@ -16,7 +16,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
     } = tx;
     let PublicMessage {
         program_id,
-        account_ids,
+        slots,
         nonces,
         instruction_data,
     } = message;
@@ -25,6 +25,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         proof,
     } = witness_set;
 
+    let account_ids: Vec<_> = slots.into_iter().map(|slot| slot.account_id).collect();
     let program_id_str = program_id.to_string();
     let proof_len = proof.map_or(0, |p| p.0.len());
     let signatures_count = signatures_and_public_keys.len();
@@ -77,7 +78,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     let private_action_count = private_actions.len();
     let public_account_ids: Vec<_> = public_actions
         .into_iter()
-        .map(|action| action.account_id)
+        .map(|action| action.slot.account_id)
         .collect();
     let public_account_count = public_account_ids.len();
     let WitnessSet {

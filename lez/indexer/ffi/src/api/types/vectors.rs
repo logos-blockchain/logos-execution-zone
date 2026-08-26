@@ -21,6 +21,7 @@ pub type FfiProof = FfiVecU8;
 pub type FfiProgramDeploymentMessage = FfiVecU8;
 
 pub type FfiPublicActionList = FfiVec<FfiPublicAction>;
+pub type FfiSlotRefList = FfiVec<super::transaction::FfiSlotRef>;
 
 pub type FfiPrivateActionList = FfiVec<FfiPrivateAction>;
 

@@ -4,7 +4,7 @@ use lee::AccountId;
 
 use crate::{
     AccDecodeData::Decode,
-    AccountIdentity, WalletCore,
+    Identity, WalletCore,
     account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::native_token_transfer::NativeTokenTransfer,
@@ -186,9 +186,9 @@ pub enum NativeTokenTransferProgramSubcommand {
     /// Public operation.
     Public {
         #[arg(skip)]
-        from: Option<AccountIdentity>,
+        from: Option<Identity>,
         #[arg(skip)]
-        to: Option<AccountIdentity>,
+        to: Option<Identity>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -225,7 +225,7 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
     ShieldedOwned {
         /// from - valid 32 byte hex string.
         #[arg(skip)]
-        from: Option<AccountIdentity>,
+        from: Option<Identity>,
         /// to - valid 32 byte hex string.
         #[arg(long)]
         to: AccountId,
@@ -238,7 +238,7 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
     /// Shielded operation.
     ShieldedForeign {
         #[arg(skip)]
-        from: Option<AccountIdentity>,
+        from: Option<Identity>,
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: String,
@@ -371,7 +371,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
 
 impl NativeTokenTransferProgramSubcommandShielded {
     async fn handle_shielded_owned(
-        from: Option<AccountIdentity>,
+        from: Option<Identity>,
         to: AccountId,
         amount: u128,
         wallet_core: &mut WalletCore,
@@ -386,7 +386,7 @@ impl NativeTokenTransferProgramSubcommandShielded {
     }
 
     async fn handle_shielded_foreign(
-        from: Option<AccountIdentity>,
+        from: Option<Identity>,
         to_npk: String,
         to_vpk: String,
         to_identifier: Option<u128>,
@@ -460,8 +460,8 @@ impl NativeTokenTransferProgramSubcommand {
     }
 
     async fn handle_public(
-        from: Option<AccountIdentity>,
-        to: Option<AccountIdentity>,
+        from: Option<Identity>,
+        to: Option<Identity>,
         amount: u128,
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {

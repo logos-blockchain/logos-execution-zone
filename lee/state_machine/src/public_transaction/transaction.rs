@@ -45,7 +45,7 @@ impl PublicTransaction {
             .signer_account_ids()
             .into_iter()
             .collect::<HashSet<_>>();
-        acc_set.extend(&self.message.account_ids);
+        acc_set.extend(self.message.slots.iter().map(|slot| slot.account_id));
 
         acc_set.into_iter().collect()
     }
@@ -61,6 +61,7 @@ impl PublicTransaction {
 
 #[cfg(test)]
 pub mod tests {
+    use lee_core::account::SlotRef;
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
@@ -93,9 +94,13 @@ pub mod tests {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
+        let program_id = crate::test_methods::simple_balance_transfer().id();
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id(),
-            vec![addr1, addr2],
+            program_id,
+            vec![
+                SlotRef::new(addr1, program_id),
+                SlotRef::new(addr2, program_id),
+            ],
             nonces,
             instruction,
         )
@@ -171,9 +176,13 @@ pub mod tests {
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
+        let program_id = crate::test_methods::simple_balance_transfer().id();
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id(),
-            vec![addr1, addr1],
+            program_id,
+            vec![
+                SlotRef::new(addr1, program_id),
+                SlotRef::new(addr1, program_id),
+            ],
             nonces,
             instruction,
         )
@@ -191,9 +200,13 @@ pub mod tests {
         let state = state_for_tests();
         let nonces = vec![0_u128.into()];
         let instruction = 1337;
+        let program_id = crate::test_methods::simple_balance_transfer().id();
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id(),
-            vec![addr1, addr2],
+            program_id,
+            vec![
+                SlotRef::new(addr1, program_id),
+                SlotRef::new(addr2, program_id),
+            ],
             nonces,
             instruction,
         )
@@ -211,9 +224,13 @@ pub mod tests {
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
+        let program_id = crate::test_methods::simple_balance_transfer().id();
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id(),
-            vec![addr1, addr2],
+            program_id,
+            vec![
+                SlotRef::new(addr1, program_id),
+                SlotRef::new(addr2, program_id),
+            ],
             nonces,
             instruction,
         )
@@ -232,9 +249,13 @@ pub mod tests {
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 1_u128.into()];
         let instruction = 1337;
+        let program_id = crate::test_methods::simple_balance_transfer().id();
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id(),
-            vec![addr1, addr2],
+            program_id,
+            vec![
+                SlotRef::new(addr1, program_id),
+                SlotRef::new(addr2, program_id),
+            ],
             nonces,
             instruction,
         )
@@ -268,8 +289,16 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let unknown_program_id = [0xdead_beef; 8];
-        let message =
-            Message::try_new(unknown_program_id, vec![addr1, addr2], nonces, instruction).unwrap();
+        let message = Message::try_new(
+            unknown_program_id,
+            vec![
+                SlotRef::new(addr1, unknown_program_id),
+                SlotRef::new(addr2, unknown_program_id),
+            ],
+            nonces,
+            instruction,
+        )
+        .unwrap();
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);

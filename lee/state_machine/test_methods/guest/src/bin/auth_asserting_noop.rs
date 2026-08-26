@@ -1,4 +1,7 @@
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::Input,
+    program::{ProgramInput, ProgramOutput, read_lee_inputs},
+};
 
 /// A variant of `noop` that asserts every `pre_state.is_authorized == true` before echoing
 /// the `post_states`. Any unauthorized `pre_state` panics the guest, failing the whole
@@ -25,10 +28,7 @@ fn main() {
         );
     }
 
-    let post_states = pre_states
-        .iter()
-        .map(|account| account.account.clone())
-        .collect();
+    let post_states = pre_states.iter().map(Input::unchanged).collect();
     ProgramOutput::new(
         self_program_id,
         caller_program_id,

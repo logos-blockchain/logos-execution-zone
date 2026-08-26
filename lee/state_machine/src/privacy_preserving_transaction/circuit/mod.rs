@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
-    account::AccountWithMetadata,
+    account::Input,
     from_frame,
     program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
     to_frame,
@@ -68,7 +68,7 @@ impl From<Program> for ProgramWithDependencies {
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
 /// circuit.
 pub fn execute_and_prove(
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: InstructionData,
     account_identities: Vec<InputAccountIdentity>,
     program_with_dependencies: &ProgramWithDependencies,
@@ -83,7 +83,7 @@ pub fn execute_and_prove(
 }
 
 pub fn execute_and_prove_with_padded_inputs(
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: InstructionData,
     account_identities: Vec<InputAccountIdentity>,
     dummy_inputs: Vec<DummyInput>,
@@ -178,7 +178,7 @@ pub fn execute_and_prove_with_padded_inputs(
 fn execute_and_prove_program(
     program: &Program,
     caller_program_id: Option<ProgramId>,
-    pre_states: &[AccountWithMetadata],
+    pre_states: &[Input],
     instruction_data: &InstructionData,
 ) -> Result<Receipt, LeeError> {
     // Write inputs to the program

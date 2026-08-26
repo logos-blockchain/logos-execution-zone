@@ -5,7 +5,7 @@ use std::{
 
 use lee_core::{
     Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{AccountId, Input, Slot},
     encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, CallerData, ChainedCall, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId,
@@ -16,8 +16,9 @@ use risc0_zkvm::guest::env;
 
 /// State of the involved accounts before and after program execution.
 pub struct ExecutionState {
-    pre_states: Vec<AccountWithMetadata>,
-    post_states: HashMap<AccountId, Account>,
+    pre_states: Vec<Input>,
+    /// Keyed by the position, not the account: a slot's effect is its own.
+    post_states: HashMap<(AccountId, AccountId), Slot>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     /// Accounts declared authorized at their first sight, anywhere in the call tree.
@@ -190,21 +191,18 @@ impl ExecutionState {
         account_identities: &[InputAccountIdentity],
         caller: CallerData,
         caller_pda_seeds: &[PdaSeed],
-        output_pre_states: Vec<AccountWithMetadata>,
-        output_post_states: Vec<Account>,
+        output_pre_states: Vec<Input>,
+        output_post_states: Vec<Option<Slot>>,
     ) -> HashSet<AccountId> {
         let mut authorized_output_accounts = Vec::new();
         // Two passes, mirroring the public path: every pre state is checked against the
-        // state as of the PREVIOUS frame before any of this frame's posts land. A repeated
-        // position within the frame is skipped — `validate_execution` has already pinned
-        // its pre and post as identical to the first occurrence's.
-        let mut seen_in_frame = HashSet::new();
+        // state as of the PREVIOUS frame before any of this frame's posts land. Every
+        // position is visited — `validate_execution` has already rejected two positions
+        // naming the same slot, and one account may legitimately hold two namespaces.
         for pre in &output_pre_states {
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
-            if !seen_in_frame.insert(pre_account_id) {
-                continue;
-            }
+            let pre_slot = pre.slot.as_ref().map(|(program, slot)| (*program, slot));
             // A caller may delegate its own PDAs to this callee by seed. That is the only way
             // a keyless address can be authorized, in either form.
             let seed_granted =
@@ -225,10 +223,12 @@ impl ExecutionState {
                     })
                 };
 
-            if let Some(known_post) = self.post_states.get(&pre_account_id) {
+            if let Some((program, slot)) = pre_slot
+                && let Some(known_post) = self.post_states.get(&(pre_account_id, program))
+            {
                 // Ensure that new pre state is the same as known post state
                 assert_eq!(
-                    known_post, &pre.account,
+                    known_post, slot,
                     "Inconsistent pre state for account {pre_account_id}",
                 );
 
@@ -329,7 +329,10 @@ impl ExecutionState {
         }
 
         for (pre, post) in output_pre_states.into_iter().zip(output_post_states) {
-            self.post_states.insert(pre.account_id, post);
+            if let (Some((program, _)), Some(post_slot)) = (pre.slot, post) {
+                self.post_states
+                    .insert((pre.account_id, program), post_slot);
+            }
         }
 
         let mut authorized_accounts = caller.authorized_accounts;
@@ -345,15 +348,16 @@ impl ExecutionState {
     ) -> (
         BlockValidityWindow,
         TimestampValidityWindow,
-        impl ExactSizeIterator<Item = (AccountWithMetadata, Account)>,
+        impl ExactSizeIterator<Item = (Input, Option<Slot>)>,
     ) {
         let block_validity_window = self.block_validity_window;
         let timestamp_validity_window = self.timestamp_validity_window;
         let states_iter = self.pre_states.into_iter().map(move |pre| {
-            let post = self
-                .post_states
-                .remove(&pre.account_id)
-                .expect("Account from pre states should exist in state diff");
+            let post = pre.slot.as_ref().map(|(program, _)| {
+                self.post_states
+                    .remove(&(pre.account_id, *program))
+                    .expect("Named slot from pre states should exist in state diff")
+            });
             (pre, post)
         });
         (

@@ -30,7 +30,7 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
                 message,
                 witness_set: _,
             } = tx;
-            format!("{} accounts involved", message.account_ids.len())
+            format!("{} slots involved", message.slots.len())
         }
         Transaction::PrivacyPreserving(tx) => {
             let indexer_service_protocol::PrivacyPreservingTransaction {

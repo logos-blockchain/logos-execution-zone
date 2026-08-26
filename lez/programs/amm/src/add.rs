@@ -2,27 +2,27 @@ use std::num::NonZeroU128;
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed};
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
+    account::{Data, Input, Slot},
     program::{ChainedCall, ProgramId},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn add_liquidity(
-    pool: AccountWithMetadata,
-    vault_a: AccountWithMetadata,
-    vault_b: AccountWithMetadata,
-    pool_definition_lp: AccountWithMetadata,
-    user_holding_a: AccountWithMetadata,
-    user_holding_b: AccountWithMetadata,
-    user_holding_lp: AccountWithMetadata,
+    pool: &Input,
+    vault_a: &Input,
+    vault_b: &Input,
+    pool_definition_lp: &Input,
+    user_holding_a: &Input,
+    user_holding_b: &Input,
+    user_holding_lp: &Input,
     min_amount_liquidity: NonZeroU128,
     max_amount_to_add_token_a: u128,
     max_amount_to_add_token_b: u128,
     self_program_id: ProgramId,
-) -> (Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<Option<Slot>>, Vec<ChainedCall>) {
     // 1. Fetch Pool state
-    let pool_def_data = PoolDefinition::try_from(pool.account.data(self_program_id))
+    let pool_def_data = PoolDefinition::try_from(pool.data(self_program_id))
         .expect("Add liquidity: AMM Program expects valid Pool Definition Account");
 
     assert_eq!(
@@ -47,7 +47,7 @@ pub fn add_liquidity(
 
     // 2. Determine deposit amount
     let vault_b_token_holding =
-        token_core::TokenHolding::try_from(vault_b.account.data(pool_def_data.token_program_id))
+        token_core::TokenHolding::try_from(vault_b.data(pool_def_data.token_program_id))
             .expect("Add liquidity: AMM Program expects valid Token Holding Account for Vault B");
     let token_core::TokenHolding::Fungible {
         definition_id: _,
@@ -60,7 +60,7 @@ pub fn add_liquidity(
     };
 
     let vault_a_token_holding =
-        token_core::TokenHolding::try_from(vault_a.account.data(pool_def_data.token_program_id))
+        token_core::TokenHolding::try_from(vault_a.data(pool_def_data.token_program_id))
             .expect("Add liquidity: AMM Program expects valid Token Holding Account for Vault A");
     let token_core::TokenHolding::Fungible {
         definition_id: _,
@@ -127,7 +127,7 @@ pub fn add_liquidity(
     );
 
     // 5. Update pool account
-    let mut pool_post = pool.account;
+    let mut pool_post = pool.slot_of(self_program_id).clone();
     let pool_post_definition = PoolDefinition {
         liquidity_pool_supply: pool_def_data.liquidity_pool_supply + delta_lp,
         reserve_a: pool_def_data.reserve_a + actual_amount_a,
@@ -135,7 +135,7 @@ pub fn add_liquidity(
         ..pool_def_data
     };
 
-    pool_post.slot_mut(self_program_id).data = Data::from(&pool_post_definition);
+    pool_post.data = Data::from(&pool_post_definition);
     let token_program_id = pool_def_data.token_program_id;
 
     // Chain call for Token A (UserHoldingA -> Vault_A)
@@ -169,13 +169,13 @@ pub fn add_liquidity(
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_states = vec![
-        pool_post,
-        vault_a.account,
-        vault_b.account,
-        pool_definition_lp.account,
-        user_holding_a.account,
-        user_holding_b.account,
-        user_holding_lp.account,
+        Some(pool_post),
+        vault_a.unchanged(),
+        vault_b.unchanged(),
+        pool_definition_lp.unchanged(),
+        user_holding_a.unchanged(),
+        user_holding_b.unchanged(),
+        user_holding_lp.unchanged(),
     ];
 
     (post_states, chained_calls)

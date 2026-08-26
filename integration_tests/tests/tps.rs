@@ -24,7 +24,7 @@ use lee::{
 use lee_core::{
     AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, InputAccountIdentity, MembershipProof,
     NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind,
-    account::{AccountWithMetadata, Nonce, data::Data},
+    account::{Input, Nonce, Slot, SlotRef, data::Data},
     encryption::ViewingPublicKey,
 };
 use sequencer_core::config::GenesisAction;
@@ -81,12 +81,13 @@ impl TpsTestManager {
                 let amount: u128 = 1;
                 let message = putx::Message::try_new(
                     program.id(),
-                    [pair[0].1, pair[1].1].to_vec(),
+                    [
+                        SlotRef::new(pair[0].1, program.id()),
+                        SlotRef::new(pair[1].1, program.id()),
+                    ]
+                    .to_vec(),
                     [Nonce(0_u128)].to_vec(),
-                    authenticated_transfer_core::Instruction::Transfer {
-                        amount,
-                        recipient_program: None,
-                    },
+                    authenticated_transfer_core::Instruction::Transfer { amount },
                 )
                 .unwrap();
                 let witness_set =
@@ -208,20 +209,24 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let sender_nsk = NullifierSecretKey::from(&sender_ask);
     let sender_vpk = ViewingPublicKey::from_seed(&[99_u8; 32], &[100_u8; 32]);
     let sender_npk = NullifierPublicKey::from(&sender_nsk);
-    let sender_pre = AccountWithMetadata::new(
-        Account::single(program.id(), 100, Data::default(), Nonce(0xdead_beef)),
-        true,
-        AccountId::for_regular_private_account(&sender_npk, &sender_vpk, 0),
-    );
+    let sender_account = Account::single(program.id(), 100, Data::default(), Nonce(0xdead_beef));
+    let sender_pre = Input {
+        account_id: AccountId::for_regular_private_account(&sender_npk, &sender_vpk, 0),
+        is_authorized: true,
+        slot: Some((
+            program.id().into(),
+            sender_account.slot_or_empty(program.id()),
+        )),
+    };
     let recipient_ask = AuthorizationSecretKey([2; 32]);
     let recipient_nsk = NullifierSecretKey::from(&recipient_ask);
     let recipient_vpk = ViewingPublicKey::from_seed(&[101_u8; 32], &[102_u8; 32]);
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
-    let recipient_pre = AccountWithMetadata::new(
-        Account::default(),
-        true,
-        AccountId::for_regular_private_account(&recipient_npk, &recipient_vpk, 0),
-    );
+    let recipient_pre = Input {
+        account_id: AccountId::for_regular_private_account(&recipient_npk, &recipient_vpk, 0),
+        is_authorized: true,
+        slot: Some((program.id().into(), Slot::default())),
+    };
 
     let balance_to_move: u128 = 1;
     let proof: MembershipProof = (
@@ -235,11 +240,11 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,
-            recipient_program: None,
         })
         .unwrap(),
         vec![
             InputAccountIdentity::Private(PrivateWitness {
+                account: sender_account,
                 vpk: sender_vpk,
                 random_seed: [0; 32],
                 identifier: 0,
@@ -253,6 +258,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 },
             }),
             InputAccountIdentity::Private(PrivateWitness {
+                account: Account::default(),
                 vpk: recipient_vpk,
                 random_seed: [0; 32],
                 identifier: 0,

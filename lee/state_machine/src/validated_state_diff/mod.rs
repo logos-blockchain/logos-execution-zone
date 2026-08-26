@@ -6,7 +6,7 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, Input},
     program::{CallerData, ChainedCall, compute_public_authorized_pdas, validate_execution},
 };
 use log::debug;
@@ -62,30 +62,46 @@ impl ValidatedStateDiff {
         let message = tx.message();
 
         ensure!(
-            !message.account_ids.is_empty(),
+            !message.slots.is_empty(),
             LeeError::InvalidInput("Public transaction must have at least one account".into())
         );
 
-        // All account_ids must be different
+        // Positions must name distinct slots, so every slot has one well-defined effect. An
+        // account may still appear twice, provided it is for two different namespaces.
         ensure!(
-            message.account_ids.iter().collect::<HashSet<_>>().len() == message.account_ids.len(),
-            LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
+            message
+                .slots
+                .iter()
+                .map(|slot| (slot.account_id, slot.program))
+                .collect::<HashSet<_>>()
+                .len()
+                == message.slots.len(),
+            LeeError::InvalidInput("Duplicate slot found in message".into(),)
         );
 
-        // Build pre_states for execution
+        // Build pre_states for execution, loading only the named slot of each account
         let input_pre_states: Vec<_> = message
-            .account_ids
+            .slots
             .iter()
-            .map(|account_id| {
-                AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
-                    *account_id,
-                )
+            .map(|slot_ref| Input {
+                account_id: slot_ref.account_id,
+                is_authorized: signer_account_ids.contains(&slot_ref.account_id),
+                slot: slot_ref.program.map(|program| {
+                    (
+                        program,
+                        state
+                            .get_account_by_id(slot_ref.account_id)
+                            .slot_or_empty(program),
+                    )
+                }),
             })
             .collect();
 
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
+        // Which declared positions a program actually received. A position naming no slot
+        // produces no diff entry, so presence in the diff cannot stand in for having been
+        // seen — and a marker's whole purpose is to be seen.
+        let mut positions_seen: HashSet<(AccountId, Option<AccountId>)> = HashSet::new();
 
         let initial_call = ChainedCall {
             program_id: message.program_id,
@@ -141,20 +157,24 @@ impl ValidatedStateDiff {
 
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
+                positions_seen.insert((account_id, pre.slot.as_ref().map(|(p, _)| *p)));
                 // Check that the program output pre_states coincide with the values in the public
                 // state or with any modifications to those values during the chain of calls.
                 let expected_pre = state_diff
                     .get(&account_id)
                     .cloned()
                     .unwrap_or_else(|| state.get_account_by_id(account_id));
-                ensure!(
-                    pre.account == expected_pre,
-                    InvalidProgramBehaviorError::InconsistentAccountPreState {
-                        account_id,
-                        expected: Box::new(expected_pre),
-                        actual: Box::new(pre.account.clone())
-                    }
-                );
+                if let Some((namespace, slot)) = &pre.slot {
+                    let expected_slot = expected_pre.slot_or_empty(*namespace);
+                    ensure!(
+                        *slot == expected_slot,
+                        InvalidProgramBehaviorError::InconsistentAccountPreState {
+                            account_id,
+                            expected: Box::new(expected_slot),
+                            actual: Box::new(slot.clone())
+                        }
+                    );
+                }
 
                 // Check that the program output pre_states marked as authorized are indeed
                 // authorized, and vice-versa.
@@ -207,13 +227,20 @@ impl ValidatedStateDiff {
                 LeeError::OutOfValidityWindow
             );
 
-            // Update the state diff
+            // Update the state diff. A program writes one slot, so splice it into the account
+            // rather than replacing the account: slots no position named must survive untouched.
             for (pre, post) in program_output
                 .pre_states
                 .iter()
                 .zip(program_output.post_states.iter())
             {
-                state_diff.insert(pre.account_id, post.clone());
+                let (Some((namespace, _)), Some(post_slot)) = (&pre.slot, post) else {
+                    continue;
+                };
+                state_diff
+                    .entry(pre.account_id)
+                    .or_insert_with(|| state.get_account_by_id(pre.account_id))
+                    .set_slot(*namespace, post_slot.clone());
             }
 
             // Source from `program_output.pre_states`, not `chained_call.pre_states`:
@@ -247,13 +274,13 @@ impl ValidatedStateDiff {
                 .expect("we check the max depth at the beginning of the loop");
         }
 
-        // Every account the caller declared as part of the transaction must appear in the final
-        // diff.
-        for account_id in &message.account_ids {
+        // Every position the caller declared must have reached a program. Checking that
+        // rather than the diff covers address-only positions, which never produce one.
+        for slot in &message.slots {
             ensure!(
-                state_diff.contains_key(account_id),
+                positions_seen.contains(&(slot.account_id, slot.program)),
                 InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput {
-                    account_id: *account_id
+                    account_id: slot.account_id
                 }
             );
         }
@@ -277,7 +304,7 @@ impl ValidatedStateDiff {
         let witness_set = &tx.witness_set;
         let commitments = message.commitments();
         let nullifiers = message.nullifiers();
-        let public_account_ids = message.public_account_ids();
+        let public_slots = message.public_slots();
 
         // 1. Commitments or nullifiers are non empty
         ensure!(
@@ -287,9 +314,14 @@ impl ValidatedStateDiff {
             )
         );
 
-        // 2. Check there are no duplicate account_ids in the public_account_ids list.
+        // 2. Positions must name distinct slots, as on the public path.
         ensure!(
-            n_unique(&public_account_ids) == public_account_ids.len(),
+            n_unique(
+                &public_slots
+                    .iter()
+                    .map(|slot| (slot.account_id, slot.program))
+                    .collect::<Vec<_>>()
+            ) == public_slots.len(),
             LeeError::InvalidInput("Duplicate account_ids found in message".into())
         );
 
@@ -338,14 +370,19 @@ impl ValidatedStateDiff {
         );
 
         // Build pre_states for proof verification
-        let public_pre_states: Vec<_> = public_account_ids
+        let public_pre_states: Vec<_> = public_slots
             .iter()
-            .map(|account_id| {
-                AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
-                    *account_id,
-                )
+            .map(|slot_ref| Input {
+                account_id: slot_ref.account_id,
+                is_authorized: signer_account_ids.contains(&slot_ref.account_id),
+                slot: slot_ref.program.map(|program| {
+                    (
+                        program,
+                        state
+                            .get_account_by_id(slot_ref.account_id)
+                            .slot_or_empty(program),
+                    )
+                }),
             })
             .collect();
 
@@ -362,11 +399,20 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        let public_diff = message
-            .public_actions
-            .iter()
-            .map(|action| (action.account_id, action.post_state.clone()))
-            .collect();
+        // Splice each named slot into its account: slots this transaction never named are
+        // untouched, so they must survive the diff.
+        let mut public_diff: HashMap<AccountId, Account> = HashMap::new();
+        for action in &message.public_actions {
+            let (Some(program), Some(post_slot)) =
+                (action.slot.program, action.post_state.as_ref())
+            else {
+                continue;
+            };
+            public_diff
+                .entry(action.slot.account_id)
+                .or_insert_with(|| state.get_account_by_id(action.slot.account_id))
+                .set_slot(program, post_slot.clone());
+        }
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {
@@ -443,7 +489,7 @@ fn authenticate_public_transaction_signers(
 
 fn check_privacy_preserving_circuit_proof_is_valid(
     proof: &Proof,
-    public_pre_states: &[AccountWithMetadata],
+    public_pre_states: &[Input],
     message: &Message,
 ) -> Result<(), LeeError> {
     let output = PrivacyPreservingCircuitOutput {

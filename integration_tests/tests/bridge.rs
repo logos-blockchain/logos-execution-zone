@@ -14,7 +14,10 @@ use integration_tests::{
 use lee::{
     execute_and_prove, privacy_preserving_transaction, program::Program, public_transaction,
 };
-use lee_core::{InputAccountIdentity, account::AccountWithMetadata};
+use lee_core::{
+    InputAccountIdentity,
+    account::{Input, SlotRef},
+};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 // const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
@@ -39,11 +42,14 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     let message = public_transaction::Message::try_new(
         programs::bridge().id(),
-        vec![bridge_account_id, recipient_id, receipt_id],
+        vec![
+            SlotRef::new(bridge_account_id, programs::bridge().id()),
+            SlotRef::new(recipient_id, programs::authenticated_transfer().id()),
+            SlotRef::new(receipt_id, programs::bridge().id()),
+        ],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
-            native_program: programs::authenticated_transfer().id(),
             recipient_id,
             amount: 1,
         },
@@ -86,11 +92,14 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
 
     let message = public_transaction::Message::try_new(
         programs::bridge().id(),
-        vec![bridge_account_id, recipient_id, receipt_id],
+        vec![
+            SlotRef::new(bridge_account_id, programs::bridge().id()),
+            SlotRef::new(recipient_id, programs::authenticated_transfer().id()),
+            SlotRef::new(receipt_id, programs::bridge().id()),
+        ],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
-            native_program: programs::authenticated_transfer().id(),
             recipient_id,
             amount: 0,
         },
@@ -133,15 +142,26 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     // Get pre-state of the bridge and recipient accounts; the receipt is unminted (a
     // default account), so the program would create it on a first mint.
-    let bridge_pre = AccountWithMetadata::new(
-        get_account(&ctx, bridge_account_id).await?,
-        false,
-        bridge_account_id,
-    );
-    let recipient_pre =
-        AccountWithMetadata::new(get_account(&ctx, recipient_id).await?, false, recipient_id);
-    let receipt_pre =
-        AccountWithMetadata::new(lee_core::account::Account::default(), false, receipt_id);
+    let bridge_account = get_account(&ctx, bridge_account_id).await?;
+    let recipient_account = get_account(&ctx, recipient_id).await?;
+    let bridge_id = programs::bridge().id();
+    let native_id = programs::authenticated_transfer().id();
+
+    let bridge_pre = Input {
+        account_id: bridge_account_id,
+        is_authorized: false,
+        slot: Some((bridge_id.into(), bridge_account.slot_or_empty(bridge_id))),
+    };
+    let recipient_pre = Input {
+        account_id: recipient_id,
+        is_authorized: false,
+        slot: Some((native_id.into(), recipient_account.slot_or_empty(native_id))),
+    };
+    let receipt_pre = Input {
+        account_id: receipt_id,
+        is_authorized: false,
+        slot: Some((bridge_id.into(), lee_core::account::Slot::default())),
+    };
 
     // The bridge issues no chained calls, so it has no program dependencies.
     let program_with_deps =
@@ -153,7 +173,6 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     // Serialize the bridge deposit instruction
     let instruction = Program::serialize_instruction(bridge_core::Instruction::Deposit {
         l1_deposit_op_id: [0_u8; 32],
-        native_program: programs::authenticated_transfer().id(),
         recipient_id,
         amount: 1,
     })
@@ -179,9 +198,9 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     // Create privacy-preserving transaction from circuit output
     let message = privacy_preserving_transaction::Message::from_circuit_output(
         vec![
-            bridge_pre.account.nonce,
-            recipient_pre.account.nonce,
-            receipt_pre.account.nonce,
+            bridge_account.nonce,
+            recipient_account.nonce,
+            lee_core::account::Account::default().nonce,
         ],
         output,
     );

@@ -1,7 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::PdaSeed;
 use lee_core::{
-    account::{AccountId, AccountWithMetadata},
+    account::{AccountId, Input},
     program::ProgramId,
 };
 
@@ -76,8 +76,8 @@ pub fn get_associated_token_account_id(ata_program_id: &ProgramId, seed: &PdaSee
 /// the [`PdaSeed`] for use in chained calls.
 #[must_use]
 pub fn verify_ata_and_get_seed(
-    ata_account: &AccountWithMetadata,
-    owner: &AccountWithMetadata,
+    ata_account: &Input,
+    owner: &Input,
     definition_id: AccountId,
     ata_program_id: ProgramId,
 ) -> PdaSeed {

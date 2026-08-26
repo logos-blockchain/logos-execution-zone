@@ -4,7 +4,7 @@ use lee::AccountId;
 
 use crate::{
     AccDecodeData::Decode,
-    AccountIdentity, WalletCore,
+    Identity, WalletCore,
     account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::token::Token,
@@ -699,7 +699,7 @@ pub enum TokenProgramSubcommandShielded {
     // Transfer tokens using the token program
     TransferTokenShieldedOwned {
         #[arg(skip)]
-        sender: Option<AccountIdentity>,
+        sender: Option<Identity>,
         #[arg(short, long)]
         recipient_account_id: AccountId,
         #[arg(short, long)]
@@ -708,7 +708,7 @@ pub enum TokenProgramSubcommandShielded {
     // Transfer tokens using the token program
     TransferTokenShieldedForeign {
         #[arg(skip)]
-        sender: Option<AccountIdentity>,
+        sender: Option<Identity>,
         /// `recipient_npk` - valid 32 byte hex string.
         #[arg(long)]
         recipient_npk: String,
@@ -1267,7 +1267,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
 
 impl TokenProgramSubcommandShielded {
     async fn handle_transfer_token_shielded_foreign(
-        sender: Option<AccountIdentity>,
+        sender: Option<Identity>,
         recipient_npk: String,
         recipient_vpk: String,
         recipient_identifier: Option<u128>,
@@ -1293,7 +1293,7 @@ impl TokenProgramSubcommandShielded {
     }
 
     async fn handle_transfer_token_shielded_owned(
-        sender: Option<AccountIdentity>,
+        sender: Option<Identity>,
         recipient_account_id: AccountId,
         balance_to_move: u128,
         wallet_core: &mut WalletCore,

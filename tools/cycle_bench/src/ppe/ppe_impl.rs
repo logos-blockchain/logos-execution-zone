@@ -12,10 +12,25 @@ use lee::{
 };
 use lee_core::{
     InputAccountIdentity, PrivacyPreservingCircuitOutput,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{AccountId, Input, Slot},
 };
 
 use super::PpeBenchResult;
+
+/// An authorized position at `account_id` naming `program`'s slot, funded with `balance`.
+fn position(account_id: AccountId, program: lee_core::program::ProgramId, balance: u128) -> Input {
+    Input {
+        account_id,
+        is_authorized: true,
+        slot: Some((
+            program.into(),
+            Slot {
+                balance,
+                data: lee::Data::default(),
+            },
+        )),
+    }
+}
 
 pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
     let label = "auth_transfer Transfer in PPE".to_owned();
@@ -46,29 +61,12 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
     let auth_transfer_id = auth_transfer.id();
     let pwd = ProgramWithDependencies::from(auth_transfer);
 
-    // The sender's balance lives in auth_transfer's slot, which is the only slot
-    // that program may debit. The recipient starts with no slots at all.
-    let sender = AccountWithMetadata {
-        account: Account::single(
-            auth_transfer_id,
-            1_000_000,
-            lee::Data::default(),
-            lee::Nonce::default(),
-        ),
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
-    };
-    let recipient = AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: true,
-        account_id: AccountId::new([2; 32]),
-    };
+    // Both positions name auth_transfer's slot: the one it debits, and the one it credits.
+    let sender = position(AccountId::new([1; 32]), auth_transfer_id, 1_000_000);
+    let recipient = position(AccountId::new([2; 32]), auth_transfer_id, 0);
     let pre_states = vec![sender, recipient];
 
-    let instruction = authenticated_transfer_core::Instruction::Transfer {
-        amount: 5_000,
-        recipient_program: None,
-    };
+    let instruction = authenticated_transfer_core::Instruction::Transfer { amount: 5_000 };
     let instruction_data = to_vec(&instruction)?;
 
     let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
@@ -118,26 +116,8 @@ fn prove_chain_caller(
     // Both accounts already hold an auth_transfer slot: chain_caller computes the
     // intermediate states itself, so a recipient that only materializes its slot on
     // the first credit would mismatch on the subsequent chained calls.
-    let recipient_pre = AccountWithMetadata {
-        account: Account::single(
-            auth_transfer_id,
-            1,
-            lee::Data::default(),
-            lee::Nonce::default(),
-        ),
-        is_authorized: true,
-        account_id: AccountId::new([2; 32]),
-    };
-    let sender_pre = AccountWithMetadata {
-        account: Account::single(
-            auth_transfer_id,
-            1_000_000,
-            lee::Data::default(),
-            lee::Nonce::default(),
-        ),
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
-    };
+    let recipient_pre = position(AccountId::new([2; 32]), auth_transfer_id, 1);
+    let sender_pre = position(AccountId::new([1; 32]), auth_transfer_id, 1_000_000);
     // chain_caller expects pre_states = [recipient, sender].
     let pre_states = vec![recipient_pre, sender_pre];
 

@@ -9,7 +9,7 @@ use common::{
 };
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
-    AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
+    AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, SlotRef, V03State,
     public_transaction::{Message, WitnessSet},
 };
 use mockall::predicate::{always, eq, function};
@@ -58,9 +58,13 @@ fn test_transaction() -> LeeTransaction {
 
     let nonces = vec![0_u128.into(), 0_u128.into()];
     let instruction = 1337;
+    let program_id = test_programs::simple_balance_transfer().id();
     let message = Message::try_new(
-        test_programs::simple_balance_transfer().id(),
-        vec![acc1, acc2],
+        program_id,
+        vec![
+            SlotRef::new(acc1, program_id),
+            SlotRef::new(acc2, program_id),
+        ],
         nonces,
         instruction,
     )

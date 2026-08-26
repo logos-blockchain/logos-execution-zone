@@ -4,7 +4,7 @@ use lee::{
     AccountId, ProgramId, privacy_preserving_transaction::circuit::ProgramWithDependencies,
     program::Program,
 };
-use wallet::{AccountIdentity, WalletCore};
+use wallet::{Identity, WalletCore};
 
 // Before running this example, compile the `simple_tail_call.rs` guest program with:
 //
@@ -47,11 +47,13 @@ async fn main() {
     let simple_tail_call = Program::new(simple_tail_call_bytecode.into()).unwrap();
     let hello_world_bytecode: Vec<u8> = std::fs::read(hello_world_path).unwrap();
     let hello_world = Program::new(hello_world_bytecode.into()).unwrap();
+    let hello_world_id = hello_world.id();
     let dependencies: HashMap<ProgramId, Program> =
         std::iter::once((hello_world.id(), hello_world)).collect();
     let program_with_dependencies = ProgramWithDependencies::new(simple_tail_call, dependencies);
 
-    let accounts = vec![AccountIdentity::PrivateOwned(account_id)];
+    // The tail call ends in hello_world, which writes its own slot.
+    let accounts = vec![Identity::PrivateOwned(account_id).in_namespace(hello_world_id)];
 
     // Construct and submit the privacy-preserving transaction
     let instruction = ();

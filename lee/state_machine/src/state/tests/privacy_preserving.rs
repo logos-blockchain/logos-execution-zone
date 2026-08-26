@@ -253,10 +253,12 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
 #[test]
 fn burner_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::burner();
-    let public_account = AccountWithMetadata::new(
-        Account::single(program.id(), 100, Data::default(), Nonce::default()),
+    let public_account_acc = Account::single(program.id(), 100, Data::default(), Nonce::default());
+    let public_account = input_of(
+        &public_account_acc,
         true,
         AccountId::new([0; 32]),
+        program.id(),
     );
 
     let result = execute_and_prove(
@@ -272,8 +274,12 @@ fn burner_program_should_fail_in_privacy_preserving_circuit() {
 #[test]
 fn minter_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::minter();
-    let public_account =
-        AccountWithMetadata::new(Account::default(), true, AccountId::new([0; 32]));
+    let public_account = input_of(
+        &Account::default(),
+        true,
+        AccountId::new([0; 32]),
+        program.id(),
+    );
 
     let result = execute_and_prove(
         vec![public_account],
@@ -286,26 +292,14 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
 }
 
 #[test]
-fn nonce_changer_program_should_fail_in_privacy_preserving_circuit() {
-    let program = crate::test_methods::nonce_changer();
-    let public_account =
-        AccountWithMetadata::new(Account::default(), true, AccountId::new([0; 32]));
-
-    let result = execute_and_prove(
-        vec![public_account],
-        Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::Public],
-        &program.into(),
-    );
-
-    assert_circuit_proving_failure(&result, "Unallowed modification of nonce");
-}
-
-#[test]
 fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_circuit() {
     let program = crate::test_methods::data_changer();
-    let public_account =
-        AccountWithMetadata::new(Account::default(), true, AccountId::new([0; 32]));
+    let public_account = input_of(
+        &Account::default(),
+        true,
+        AccountId::new([0; 32]),
+        program.id(),
+    );
 
     let large_data: Vec<u8> =
         vec![
@@ -328,8 +322,12 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
 #[test]
 fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::extra_output();
-    let public_account =
-        AccountWithMetadata::new(Account::default(), true, AccountId::new([0; 32]));
+    let public_account = input_of(
+        &Account::default(),
+        true,
+        AccountId::new([0; 32]),
+        program.id(),
+    );
 
     let result = execute_and_prove(
         vec![public_account],
@@ -347,10 +345,18 @@ fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
 #[test]
 fn missing_output_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::missing_output();
-    let public_account_1 =
-        AccountWithMetadata::new(Account::default(), true, AccountId::new([0; 32]));
-    let public_account_2 =
-        AccountWithMetadata::new(Account::default(), true, AccountId::new([1; 32]));
+    let public_account_1 = input_of(
+        &Account::default(),
+        true,
+        AccountId::new([0; 32]),
+        program.id(),
+    );
+    let public_account_2 = input_of(
+        &Account::default(),
+        true,
+        AccountId::new([1; 32]),
+        program.id(),
+    );
 
     let result = execute_and_prove(
         vec![public_account_1, public_account_2],
@@ -370,18 +376,24 @@ fn transfer_from_a_foreign_slot_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::simple_balance_transfer();
     // The balance sits in another program's slot, which `simple_balance_transfer` may not
     // debit: it only ever touches `slots[self]`, which is empty here.
-    let public_account_1 = AccountWithMetadata::new(
-        Account::single(
-            [0, 1, 2, 3, 4, 5, 6, 7],
-            100,
-            Data::default(),
-            Nonce::default(),
-        ),
+    let public_account_1_acc = Account::single(
+        [0, 1, 2, 3, 4, 5, 6, 7],
+        100,
+        Data::default(),
+        Nonce::default(),
+    );
+    let public_account_1 = input_of(
+        &public_account_1_acc,
         true,
         AccountId::new([0; 32]),
+        program.id(),
     );
-    let public_account_2 =
-        AccountWithMetadata::new(Account::default(), true, AccountId::new([1; 32]));
+    let public_account_2 = input_of(
+        &Account::default(),
+        true,
+        AccountId::new([1; 32]),
+        program.id(),
+    );
 
     let result = execute_and_prove(
         vec![public_account_1, public_account_2],
@@ -401,30 +413,36 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
     let sender_keys = test_public_account_keys_1();
     let recipient_keys = test_private_account_keys_1();
 
-    let sender_account = AccountWithMetadata::new(
-        Account::single(
-            simple_transfers.id(),
-            100,
-            Data::default(),
-            Nonce::default(),
-        ),
+    let sender_account_acc = Account::single(
+        simple_transfers.id(),
+        100,
+        Data::default(),
+        Nonce::default(),
+    );
+    // The balance lives in the transfer program's namespace, and that is the program the
+    // chained call hands these positions to — the changer only orchestrates.
+    let sender_account = input_of(
+        &sender_account_acc,
         false,
         sender_keys.account_id(),
+        simple_transfers.id(),
     );
-    let recipient_account = AccountWithMetadata::new(
-        Account::default(),
+    let recipient_account_acc = Account::default();
+    let recipient_account = input_of(
+        &recipient_account_acc,
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+        simple_transfers.id(),
     );
 
     let recipient_account_id =
         AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
-    let recipient_commitment = Commitment::new(&recipient_account_id, &recipient_account.account);
+    let recipient_commitment = Commitment::new(&recipient_account_id, &recipient_account_acc);
     let recipient_init_nullifier = Nullifier::for_account_initialization(&recipient_account_id);
     let state = V03State::new()
         .with_public_accounts(public_state_from_balances(&[(
             sender_account.account_id,
-            sender_account.account.balance(simple_transfers.id()),
+            sender_account.balance(simple_transfers.id()),
         )]))
         .with_private_accounts([(recipient_commitment, recipient_init_nullifier)])
         .with_test_programs();
@@ -443,6 +461,7 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
         vec![
             InputAccountIdentity::Public,
             InputAccountIdentity::Private(PrivateWitness {
+                account: Account::default(),
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -471,15 +490,18 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
 fn writing_a_foreign_slot_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::foreign_slot_writer();
     let foreign_program_id: lee_core::program::ProgramId = [0, 1, 2, 3, 4, 5, 6, 7];
-    let account = AccountWithMetadata::new(
-        Account::single(foreign_program_id, 100, Data::default(), Nonce::default()),
+    let account_acc = Account::single(foreign_program_id, 100, Data::default(), Nonce::default());
+    // The position names the foreign namespace, which is the slot the writer then reaches for.
+    let account = input_of(
+        &account_acc,
         true,
         AccountId::new([0; 32]),
+        foreign_program_id,
     );
 
     let result = execute_and_prove(
         vec![account],
-        Program::serialize_instruction(foreign_program_id).unwrap(),
+        Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Public],
         &program.into(),
     );
@@ -494,16 +516,16 @@ fn writing_a_foreign_slot_should_fail_in_privacy_preserving_circuit() {
 fn draining_a_foreign_slot_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::foreign_slot_drainer();
     let foreign_program_id: lee_core::program::ProgramId = [0, 1, 2, 3, 4, 5, 6, 7];
-    let account = AccountWithMetadata::new(
-        Account::single(foreign_program_id, 100, Data::default(), Nonce::default()),
-        true,
-        AccountId::new([0; 32]),
-    );
+    let account_id = AccountId::new([0; 32]);
+    let account_acc = Account::single(foreign_program_id, 100, Data::default(), Nonce::default());
+    // `[the foreign slot it drains, its own slot it drains into]`, both at one account.
+    let foreign = input_of(&account_acc, true, account_id, foreign_program_id);
+    let own = input_of(&account_acc, true, account_id, program.id());
 
     let result = execute_and_prove(
-        vec![account],
-        Program::serialize_instruction(foreign_program_id).unwrap(),
-        vec![InputAccountIdentity::Public],
+        vec![foreign, own],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
         &program.into(),
     );
 

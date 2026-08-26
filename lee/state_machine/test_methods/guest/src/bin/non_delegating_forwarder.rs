@@ -1,5 +1,8 @@
-use lee_core::program::{
-    ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::Input,
+    program::{
+        ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    },
 };
 
 type Instruction = (ProgramId, InstructionData, bool);
@@ -16,10 +19,7 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     let (output_pre_states, output_post_states) = if declare_pre_states {
-        let post_states = pre_states
-            .iter()
-            .map(|account| account.account.clone())
-            .collect();
+        let post_states = pre_states.iter().map(Input::unchanged).collect();
         (pre_states.clone(), post_states)
     } else {
         (Vec::new(), Vec::new())

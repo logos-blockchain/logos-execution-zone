@@ -91,39 +91,34 @@ fn main() {
             };
 
             // Capture initial vault balance, the invariant check will verify it is restored.
-            let min_vault_balance = vault_pre.account.balance(token_program_id);
+            let min_vault_balance = vault_pre.balance(token_program_id);
 
-            // Compute intermediate account states from pre_states and amount_out.
-            let mut vault_after_transfer = vault_pre.clone();
-            vault_after_transfer
-                .account
-                .slot_mut(token_program_id)
-                .balance = min_vault_balance
+            // Compute the pre-state each chained call will see, one slot at a time.
+            let mut vault_slot = vault_pre.slot_of(token_program_id).clone();
+            vault_slot.balance = min_vault_balance
                 .checked_sub(amount_out)
                 .expect("vault has insufficient balance for flash swap");
-            vault_after_transfer.account.prune();
+            let vault_after_transfer = vault_pre
+                .clone()
+                .with_slot(token_program_id, vault_slot.clone());
 
-            let mut receiver_after_transfer = receiver_pre.clone();
-            receiver_after_transfer
-                .account
-                .slot_mut(token_program_id)
-                .balance = receiver_pre
-                .account
+            let mut receiver_slot = receiver_pre.slot_of(token_program_id).clone();
+            receiver_slot.balance = receiver_pre
                 .balance(token_program_id)
                 .checked_add(amount_out)
                 .expect("receiver balance overflow");
-            receiver_after_transfer.account.prune();
+            let receiver_after_transfer = receiver_pre
+                .clone()
+                .with_slot(token_program_id, receiver_slot);
 
-            let mut vault_after_callback = vault_after_transfer.clone();
-            vault_after_callback
-                .account
-                .slot_mut(token_program_id)
-                .balance = vault_after_transfer
-                .account
-                .balance(token_program_id)
+            let mut vault_slot_after_callback = vault_slot;
+            vault_slot_after_callback.balance = vault_slot_after_callback
+                .balance
                 .checked_add(amount_out)
                 .expect("vault balance overflow after callback");
-            vault_after_callback.account.prune();
+            let vault_after_callback = vault_after_transfer
+                .clone()
+                .with_slot(token_program_id, vault_slot_after_callback);
 
             // Chained call 1: Token transfer (vault → receiver).
             let transfer_instruction =
@@ -170,7 +165,7 @@ fn main() {
                 caller_program_id,
                 instruction_data,
                 vec![vault_pre.clone(), receiver_pre.clone()],
-                vec![vault_pre.account, receiver_pre.account],
+                vec![vault_pre.unchanged(), receiver_pre.unchanged()],
             )
             .with_chained_calls(vec![call_1, call_2, call_3])
             .write();
@@ -200,9 +195,9 @@ fn main() {
             // If the callback returned funds, this passes. If not, this panics and
             // the entire transaction (including the prior token transfer) rolls back.
             assert!(
-                vault.account.balance(token_program_id) >= min_vault_balance,
+                vault.balance(token_program_id) >= min_vault_balance,
                 "Flash swap invariant violated: vault balance {} < minimum {}",
-                vault.account.balance(token_program_id),
+                vault.balance(token_program_id),
                 min_vault_balance
             );
 
@@ -212,7 +207,7 @@ fn main() {
                 caller_program_id,
                 instruction_data,
                 vec![vault.clone()],
-                vec![vault.account],
+                vec![vault.unchanged()],
             )
             .write();
         }

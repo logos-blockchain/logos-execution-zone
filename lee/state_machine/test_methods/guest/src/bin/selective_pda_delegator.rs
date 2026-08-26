@@ -67,7 +67,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pda.clone()],
-        vec![pda.account.clone()],
+        vec![pda.unchanged()],
     )
     .with_chained_calls(chained_calls)
     .write();

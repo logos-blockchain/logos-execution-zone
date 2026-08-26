@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::AccountId,
+    account::{AccountId, SlotRef},
     program::{PdaSeed, ProgramId},
 };
 
@@ -27,10 +27,11 @@ pub enum Instruction {
     Emit {
         target_zone: ZoneId,
         target_program_id: ProgramId,
-        /// Accounts the destination inbox must hand to the target program's
-        /// chained call. The emitter specifies them; the watcher forwards them
-        /// verbatim so the inbox stays target-agnostic.
-        target_accounts: Vec<[u8; 32]>,
+        /// Slots the destination inbox must hand to the target program's chained call.
+        /// The emitter names both the account and the namespace, since only it knows what
+        /// the target reads; the watcher forwards them verbatim so the inbox stays
+        /// target-agnostic.
+        target_accounts: Vec<SlotRef>,
         payload: Vec<u8>,
         ordinal: u32,
     },
@@ -52,7 +53,7 @@ pub struct OutboxRecord {
     pub target_zone: ZoneId,
     pub ordinal: u32,
     pub target_program_id: ProgramId,
-    pub target_accounts: Vec<[u8; 32]>,
+    pub target_accounts: Vec<SlotRef>,
     pub payload: Vec<u8>,
 }
 
@@ -151,7 +152,7 @@ mod tests {
             target_zone: [1; 32],
             ordinal: 7,
             target_program_id: [6; 8],
-            target_accounts: vec![[9; 32]],
+            target_accounts: vec![SlotRef::new(AccountId::new([9; 32]), [6; 8])],
             payload: b"payload".to_vec(),
         };
 

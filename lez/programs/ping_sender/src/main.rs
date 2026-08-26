@@ -1,6 +1,6 @@
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::AccountWithMetadata,
+    account::{Input, SlotRef},
     program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use ping_core::{SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id};
@@ -56,18 +56,18 @@ fn main() {
 fn send(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     target_zone: [u8; 32],
     target_program_id: ProgramId,
-    target_accounts: Vec<[u8; 32]>,
+    target_accounts: Vec<SlotRef>,
     payload: Vec<u8>,
     ordinal: u32,
 ) {
     // pre_states: [config PDA, outbox PDA]. The outbox writes its own slot, so
     // ping_sender forwards it unchanged.
-    let [config, outbox] = <[AccountWithMetadata; 2]>::try_from(pre_states)
-        .expect("Send requires the config and outbox accounts");
+    let [config, outbox] =
+        <[Input; 2]>::try_from(pre_states).expect("Send requires the config and outbox accounts");
 
     // Pinned rather than caller-named: chaining elsewhere would let an emission
     // skip the real outbox and leave no record of itself.
@@ -76,7 +76,7 @@ fn send(
         sender_config_account_id(self_program_id),
         "first account must be the ping-sender config PDA"
     );
-    let outbox_program_id = read_outbox(config.account.data(self_program_id))
+    let outbox_program_id = read_outbox(config.data(self_program_id))
         .expect("config account holds an outbox program id");
 
     let call = ChainedCall::new(
@@ -91,14 +91,14 @@ fn send(
         },
     );
 
-    let config_post = config.account.clone();
+    let config_post = config.unchanged();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![config, outbox.clone()],
-        vec![config_post, outbox.account],
+        vec![config_post, outbox.unchanged()],
     )
     .with_chained_calls(vec![call])
     .write();
@@ -108,13 +108,13 @@ fn send(
 fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     outbox_program_id: ProgramId,
 ) {
     // pre_states: [config PDA].
-    let [config] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitConfig requires the config account");
+    let [config] =
+        <[Input; 1]>::try_from(pre_states).expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
         sender_config_account_id(self_program_id),
@@ -124,16 +124,17 @@ fn init_config(
     // written is a first init; an already-written one must already pin exactly
     // this outbox, since genesis is replayed onto seeded state during
     // multi-sequencer reconstruction.
-    if let Some(slot) = config.account.slot(self_program_id) {
+    let existing = config.slot_of(self_program_id);
+    if !existing.data.is_empty() {
         assert_eq!(
-            *slot.data,
+            *existing.data,
             outbox_bytes(outbox_program_id),
             "ping-sender config already pins a different outbox"
         );
     }
 
-    let mut config_post = config.account.clone();
-    config_post.slot_mut(self_program_id).data = outbox_bytes(outbox_program_id)
+    let mut config_post = existing.clone();
+    config_post.data = outbox_bytes(outbox_program_id)
         .to_vec()
         .try_into()
         .expect("outbox id fits in account data");
@@ -143,7 +144,7 @@ fn init_config(
         caller_program_id,
         instruction_data,
         vec![config],
-        vec![config_post],
+        vec![Some(config_post)],
     )
     .write();
 }

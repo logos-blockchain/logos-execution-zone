@@ -3,7 +3,7 @@
 use std::{ffi::CString, ptr};
 
 use lee::{AccountId, PublicKey};
-use wallet::AccountIdentity;
+use wallet::Identity;
 
 use crate::{
     error::{print_error, WalletFfiError},
@@ -277,9 +277,9 @@ pub unsafe extern "C" fn wallet_ffi_resolve_public_account(
     }
 
     let resolved_account = if needs_sign {
-        AccountIdentity::Public(account_id.into())
+        Identity::Public(account_id.into())
     } else {
-        AccountIdentity::PublicNoSign(account_id.into())
+        Identity::PublicNoSign(account_id.into())
     };
 
     unsafe {
@@ -389,13 +389,13 @@ pub unsafe extern "C" fn wallet_ffi_free_account_identity(
 #[cfg(test)]
 mod tests {
     use lee::AccountId;
-    use wallet::AccountIdentity;
+    use wallet::Identity;
 
     use crate::{keys::wallet_ffi_free_account_identity, FfiAccountIdentity};
 
     #[test]
     fn acc_identity_correct_free() {
-        let acc_identity = AccountIdentity::Public(AccountId::new([42; 32]));
+        let acc_identity = Identity::Public(AccountId::new([42; 32]));
         let mut ffi_acc_identity: FfiAccountIdentity = acc_identity.into();
 
         unsafe {

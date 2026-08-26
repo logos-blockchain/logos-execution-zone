@@ -5,7 +5,7 @@
 
 pub use lee_core::{
     GENESIS_BLOCK_ID, SharedSecretKey,
-    account::{Account, AccountId, Balance, Data, Nonce, Slot},
+    account::{Account, AccountId, Balance, Data, Input, Nonce, Slot, SlotRef},
     encryption::EphemeralPublicKey,
     program::ProgramId,
 };
@@ -48,30 +48,6 @@ mod test_methods {
     use crate::program::Program;
 
     #[must_use]
-    pub const fn simple_balance_transfer() -> Program {
-        Program::new_unchecked(
-            test_methods::SIMPLE_BALANCE_TRANSFER_ID,
-            Cow::Borrowed(test_methods::SIMPLE_BALANCE_TRANSFER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn malformed_journal() -> Program {
-        Program::new_unchecked(
-            test_methods::MALFORMED_JOURNAL_ID,
-            Cow::Borrowed(test_methods::MALFORMED_JOURNAL_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn nonce_changer() -> Program {
-        Program::new_unchecked(
-            test_methods::NONCE_CHANGER_ID,
-            Cow::Borrowed(test_methods::NONCE_CHANGER_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn extra_output() -> Program {
         Program::new_unchecked(
             test_methods::EXTRA_OUTPUT_ID,
@@ -84,6 +60,22 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::MISSING_OUTPUT_ID,
             Cow::Borrowed(test_methods::MISSING_OUTPUT_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn simple_balance_transfer() -> Program {
+        Program::new_unchecked(
+            test_methods::SIMPLE_BALANCE_TRANSFER_ID,
+            Cow::Borrowed(test_methods::SIMPLE_BALANCE_TRANSFER_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn malformed_journal() -> Program {
+        Program::new_unchecked(
+            test_methods::MALFORMED_JOURNAL_ID,
+            Cow::Borrowed(test_methods::MALFORMED_JOURNAL_ELF),
         )
     }
 

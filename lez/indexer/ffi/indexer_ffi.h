@@ -134,13 +134,27 @@ typedef struct FfiProgramId {
 
 typedef struct FfiBytes32 FfiAccountId;
 
-typedef struct FfiVec_FfiAccountId {
-  FfiAccountId *entries;
+typedef struct FfiOption_FfiProgramId {
+  struct FfiProgramId *value;
+  bool is_some;
+} FfiOption_FfiProgramId;
+
+/**
+ * One `(account, namespace)` a transaction names. `program` is absent for a position that
+ * carries only an address.
+ */
+typedef struct FfiSlotRef {
+  FfiAccountId account_id;
+  struct FfiOption_FfiProgramId program;
+} FfiSlotRef;
+
+typedef struct FfiVec_FfiSlotRef {
+  struct FfiSlotRef *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiAccountId;
+} FfiVec_FfiSlotRef;
 
-typedef struct FfiVec_FfiAccountId FfiAccountIdList;
+typedef struct FfiVec_FfiSlotRef FfiSlotRefList;
 
 /**
  * U128 - 16 bytes little endian.
@@ -169,7 +183,7 @@ typedef struct FfiVec_u8 FfiInstructionDataList;
 
 typedef struct FfiPublicMessage {
   struct FfiProgramId program_id;
-  FfiAccountIdList account_ids;
+  FfiSlotRefList slots;
   FfiNonceList nonces;
   FfiInstructionDataList instruction_data;
 } FfiPublicMessage;
@@ -221,34 +235,17 @@ typedef struct FfiAccountSlot {
   uintptr_t data_cap;
 } FfiAccountSlot;
 
-typedef struct FfiVec_FfiAccountSlot {
-  struct FfiAccountSlot *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiAccountSlot;
-
-typedef struct FfiVec_FfiAccountSlot FfiSlotList;
-
-/**
- * Account data structure - C-compatible version of lee Account.
- *
- * Note: `nonce` is a u128 value represented as a little-endian byte array
- * since C doesn't have native u128 support.
- */
-typedef struct FfiAccount {
-  /**
-   * The account's occupied slots, one entry per program.
-   */
-  FfiSlotList slots;
-  /**
-   * Nonce as little-endian [u8; 16].
-   */
-  struct FfiU128 nonce;
-} FfiAccount;
+typedef struct FfiOption_FfiAccountSlot {
+  struct FfiAccountSlot *value;
+  bool is_some;
+} FfiOption_FfiAccountSlot;
 
 typedef struct FfiPublicAction {
-  FfiAccountId account_id;
-  struct FfiAccount post_state;
+  struct FfiSlotRef slot;
+  /**
+   * Absent for a position that named no slot; nothing was written there.
+   */
+  struct FfiOption_FfiAccountSlot post_state;
 } FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction {
@@ -348,6 +345,31 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
   FfiBlockOpt *value;
   enum OperationStatus error;
 } PointerResult_FfiBlockOpt__OperationStatus;
+
+typedef struct FfiVec_FfiAccountSlot {
+  struct FfiAccountSlot *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiAccountSlot;
+
+typedef struct FfiVec_FfiAccountSlot FfiSlotList;
+
+/**
+ * Account data structure - C-compatible version of lee Account.
+ *
+ * Note: `nonce` is a u128 value represented as a little-endian byte array
+ * since C doesn't have native u128 support.
+ */
+typedef struct FfiAccount {
+  /**
+   * The account's occupied slots, one entry per program.
+   */
+  FfiSlotList slots;
+  /**
+   * Nonce as little-endian [u8; 16].
+   */
+  struct FfiU128 nonce;
+} FfiAccount;
 
 /**
  * Simple wrapper around a pointer to a value or an error.

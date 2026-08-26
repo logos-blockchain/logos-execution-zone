@@ -1495,7 +1495,6 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount,
-            recipient_program: None,
         })
         .unwrap();
     let instruction_data_size = instruction_data.len();
@@ -1599,7 +1598,6 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
     let instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount,
-            recipient_program: None,
         })
         .unwrap();
     let instruction_data_size = instruction_data.len();

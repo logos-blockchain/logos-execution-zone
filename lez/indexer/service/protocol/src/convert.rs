@@ -8,8 +8,8 @@ use crate::{
     HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID,
-    PublicKey, PublicMessage, PublicTransaction, Signature, Slot, StallReason, Transaction,
-    ValidityWindow, WitnessSet,
+    PublicKey, PublicMessage, PublicTransaction, Signature, Slot, SlotRef, StallReason,
+    Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -85,6 +85,26 @@ impl TryFrom<Account> for lee_core::account::Account {
                     ))
                 })
                 .collect::<Result<_, Self::Error>>()?,
+        })
+    }
+}
+
+impl From<lee_core::account::Slot> for Slot {
+    fn from(value: lee_core::account::Slot) -> Self {
+        Self {
+            balance: value.balance,
+            data: value.data.into(),
+        }
+    }
+}
+
+impl TryFrom<Slot> for lee_core::account::Slot {
+    type Error = lee_core::account::data::DataTooBigError;
+
+    fn try_from(value: Slot) -> Result<Self, Self::Error> {
+        Ok(Self {
+            balance: value.balance,
+            data: value.data.try_into()?,
         })
     }
 }
@@ -255,13 +275,19 @@ impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::public_transaction::Message {
             program_id,
-            account_ids,
+            slots,
             nonces,
             instruction_data,
         } = value;
         Self {
             program_id: program_id.into(),
-            account_ids: account_ids.into_iter().map(Into::into).collect(),
+            slots: slots
+                .into_iter()
+                .map(|slot| SlotRef {
+                    account_id: slot.account_id.into(),
+                    program: slot.program.map(Into::into),
+                })
+                .collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
         }
@@ -272,13 +298,19 @@ impl From<PublicMessage> for lee::public_transaction::Message {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
             program_id,
-            account_ids,
+            slots,
             nonces,
             instruction_data,
         } = value;
         Self::new_preserialized(
             program_id.into(),
-            account_ids.into_iter().map(Into::into).collect(),
+            slots
+                .into_iter()
+                .map(|slot| lee::SlotRef {
+                    account_id: slot.account_id.into(),
+                    program: slot.program.map(Into::into),
+                })
+                .collect(),
             nonces
                 .iter()
                 .map(|x| lee_core::account::Nonce(*x))
@@ -291,8 +323,11 @@ impl From<PublicMessage> for lee::public_transaction::Message {
 impl From<lee::privacy_preserving_transaction::message::PublicActionWithID> for PublicActionWithID {
     fn from(value: lee::privacy_preserving_transaction::message::PublicActionWithID) -> Self {
         Self {
-            account_id: value.account_id.into(),
-            post_state: value.post_state.into(),
+            slot: SlotRef {
+                account_id: value.slot.account_id.into(),
+                program: value.slot.program.map(Into::into),
+            },
+            post_state: value.post_state.map(Into::into),
         }
     }
 }
@@ -334,10 +369,14 @@ impl TryFrom<PublicActionWithID>
 
     fn try_from(value: PublicActionWithID) -> Result<Self, Self::Error> {
         Ok(Self {
-            account_id: value.account_id.into(),
+            slot: lee::SlotRef {
+                account_id: value.slot.account_id.into(),
+                program: value.slot.program.map(Into::into),
+            },
             post_state: value
                 .post_state
-                .try_into()
+                .map(TryInto::try_into)
+                .transpose()
                 .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
         })
     }

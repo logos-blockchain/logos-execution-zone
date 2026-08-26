@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
+    account::{Data, Input, Slot},
     program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
@@ -12,56 +12,36 @@ use lee_core::{
 // - `move_data`: moves all bytes from one account to another. The source account is cleared and the
 //   destination account receives the appended bytes.
 //
-// Execution succeeds only if:
-// - the accounts involved are either uninitialized, or
-// - already owned by this program.
-//
-// In case an input account is uninitialized, the program will claim it when
-// producing the post-state.
+// Every position hands this program its own slot at that account, so the moved bytes never leave
+// this program's namespace.
 
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
 
 type Instruction = (u8, Vec<u8>);
 
-fn write(pre_state: AccountWithMetadata, greeting: &[u8], self_program_id: ProgramId) -> Account {
-    // Construct the post state account values
-    {
-        let mut this = pre_state.account;
-        let mut bytes = this.data(self_program_id).clone().into_inner();
-        bytes.extend_from_slice(greeting);
-        this.slot_mut(self_program_id).data = bytes
-            .try_into()
-            .expect("Data should fit within the allowed limits");
-        this
-    }
+fn write(pre_state: &Input, greeting: &[u8], self_program_id: ProgramId) -> Slot {
+    let mut this = pre_state.slot_of(self_program_id).clone();
+    let mut bytes = this.data.clone().into_inner();
+    bytes.extend_from_slice(greeting);
+    this.data = bytes
+        .try_into()
+        .expect("Data should fit within the allowed limits");
+    this
 }
 
-fn move_data(
-    from_pre: AccountWithMetadata,
-    to_pre: AccountWithMetadata,
-    self_program_id: ProgramId,
-) -> Vec<Account> {
-    // Construct the post state account values
-    let from_data: Vec<u8> = from_pre.account.data(self_program_id).clone().into();
+fn move_data(from_pre: &Input, to_pre: &Input, self_program_id: ProgramId) -> Vec<Option<Slot>> {
+    let from_data: Vec<u8> = from_pre.data(self_program_id).clone().into();
 
     let from_post = {
-        let mut this = from_pre.account;
-        this.slot_mut(self_program_id).data = Data::default();
+        let mut this = from_pre.slot_of(self_program_id).clone();
+        this.data = Data::default();
         this
     };
 
-    let to_post = {
-        let mut this = to_pre.account;
-        let mut bytes = this.data(self_program_id).clone().into_inner();
-        bytes.extend_from_slice(&from_data);
-        this.slot_mut(self_program_id).data = bytes
-            .try_into()
-            .expect("Data should fit within the allowed limits");
-        this
-    };
+    let to_post = write(to_pre, &from_data, self_program_id);
 
-    vec![from_post, to_post]
+    vec![Some(from_post), Some(to_post)]
 }
 
 fn main() {
@@ -78,14 +58,11 @@ fn main() {
 
     let post_states = match (pre_states.as_slice(), function_id, data.len()) {
         ([account_pre], WRITE_FUNCTION_ID, _) => {
-            let post = write(account_pre.clone(), &data, self_program_id);
-            vec![post]
+            vec![Some(write(account_pre, &data, self_program_id))]
         }
-        ([account_from_pre, account_to_pre], MOVE_DATA_FUNCTION_ID, 0) => move_data(
-            account_from_pre.clone(),
-            account_to_pre.clone(),
-            self_program_id,
-        ),
+        ([account_from_pre, account_to_pre], MOVE_DATA_FUNCTION_ID, 0) => {
+            move_data(account_from_pre, account_to_pre, self_program_id)
+        }
         _ => panic!("invalid params"),
     };
 

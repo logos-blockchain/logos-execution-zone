@@ -17,7 +17,7 @@ use cross_zone_inbox_core::{
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
 use lee::{
-    AccountId, PrivateKey, PublicKey, PublicTransaction, V03State, ValidatedStateDiff,
+    AccountId, PrivateKey, PublicKey, PublicTransaction, SlotRef, V03State, ValidatedStateDiff,
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::account::{Account, Data};
@@ -189,15 +189,23 @@ fn seed_bridge_lock_config(state: &mut V03State) {
 fn dispatch_accounts(
     inbox_id: lee_core::program::ProgramId,
     msg: &CrossZoneMessage,
-    targets: Vec<AccountId>,
-) -> Vec<AccountId> {
-    let mut ids = vec![
-        inbox_config_account_id(inbox_id),
-        inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
-        inbox_source_marker_account_id(inbox_id, &msg.src_zone, msg.src_program_id),
+    targets: Vec<SlotRef>,
+) -> Vec<SlotRef> {
+    let mut slots = vec![
+        SlotRef::new(inbox_config_account_id(inbox_id), inbox_id),
+        SlotRef::new(
+            inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
+            inbox_id,
+        ),
+        // Address only: nothing writes a marker's data.
+        SlotRef::address_only(inbox_source_marker_account_id(
+            inbox_id,
+            &msg.src_zone,
+            msg.src_program_id,
+        )),
     ];
-    ids.extend(targets);
-    ids
+    slots.extend(targets);
+    slots
 }
 
 /// Asserts the transaction fails at `block` with an error mentioning `expected`,
@@ -216,7 +224,7 @@ fn rejects_at(state: &V03State, tx: &PublicTransaction, block: u64, expected: &s
 /// signed by `key` at `nonce`.
 fn signed_tx(
     program: lee_core::program::ProgramId,
-    accounts: Vec<AccountId>,
+    accounts: Vec<SlotRef>,
     nonce: u128,
     instruction_data: Vec<u8>,
     key: &PrivateKey,
@@ -239,7 +247,10 @@ fn via_proxy(
 ) -> PublicTransaction {
     let message = Message::try_new(
         proxy_id,
-        vec![config, authority],
+        vec![
+            SlotRef::new(config, proxy_id),
+            SlotRef::address_only(authority),
+        ],
         vec![],
         (target, instruction_data, delegated),
     )
@@ -268,7 +279,14 @@ fn chained_via_inbox(
     };
     let message = Message::try_new(
         inbox_id,
-        dispatch_accounts(inbox_id, &msg, vec![config_id, authority]),
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                SlotRef::new(config_id, target),
+                SlotRef::address_only(authority),
+            ],
+        ),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -278,7 +296,7 @@ fn chained_via_inbox(
 
 /// A `ping_sender::Send` carrying `payload` to `target_zone`, over the accounts
 /// given rather than the correct ones, so tests can vary them.
-fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
+fn send_tx(accounts: Vec<SlotRef>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
     let receiver_id = programs::ping_receiver().id();
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"ping".to_vec(),
@@ -288,8 +306,8 @@ fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> Pub
         target_zone,
         target_program_id: receiver_id,
         target_accounts: vec![
-            receiver_config_account_id(receiver_id).into_value(),
-            ping_record_pda(receiver_id).into_value(),
+            SlotRef::new(receiver_config_account_id(receiver_id), receiver_id),
+            SlotRef::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
         ordinal,
@@ -342,8 +360,14 @@ fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeErro
             inbox_id,
             &msg,
             vec![
-                wrapped_token_core::config_account_id(wrapped_token_id),
-                wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+                SlotRef::new(
+                    wrapped_token_core::config_account_id(wrapped_token_id),
+                    wrapped_token_id,
+                ),
+                SlotRef::new(
+                    wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+                    wrapped_token_id,
+                ),
             ],
         ),
         vec![],
@@ -418,7 +442,10 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
         dispatch_accounts(
             inbox_id,
             &msg,
-            vec![receiver_config_account_id(receiver_id), record_id],
+            vec![
+                SlotRef::new(receiver_config_account_id(receiver_id), receiver_id),
+                SlotRef::new(record_id, receiver_id),
+            ],
         ),
         vec![],
         InboxInstruction::Dispatch(msg),
@@ -523,10 +550,17 @@ fn lock_tx(
 
 /// The mint's own account list: the wrapped-token config, then the recipient's
 /// holding. What `wrapped_token::Mint` requires on the destination zone.
-fn mint_target_accounts(wrapped_token_id: lee_core::program::ProgramId) -> Vec<[u8; 32]> {
+fn mint_target_accounts(wrapped_token_id: lee_core::program::ProgramId) -> Vec<SlotRef> {
+    // The wrapped token reads both in its own namespace.
     vec![
-        wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
-        wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT).into_value(),
+        SlotRef::new(
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            wrapped_token_id,
+        ),
+        SlotRef::new(
+            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+            wrapped_token_id,
+        ),
     ]
 }
 
@@ -539,7 +573,7 @@ fn lock_tx_to(
     ordinal: u32,
     nonce: u128,
     target_program_id: lee_core::program::ProgramId,
-    target_accounts: Vec<[u8; 32]>,
+    target_accounts: Vec<SlotRef>,
 ) -> PublicTransaction {
     let bridge_lock_id = programs::bridge_lock().id();
     let outbox_id = programs::cross_zone_outbox().id();
@@ -555,10 +589,19 @@ fn lock_tx_to(
     let message = Message::try_new(
         bridge_lock_id,
         vec![
-            bridge_lock_core::config_account_id(bridge_lock_id),
-            holder_id,
-            bridge_lock_core::escrow_account_id(bridge_lock_id),
-            outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
+            SlotRef::new(
+                bridge_lock_core::config_account_id(bridge_lock_id),
+                bridge_lock_id,
+            ),
+            SlotRef::new(holder_id, bridge_lock_id),
+            SlotRef::new(
+                bridge_lock_core::escrow_account_id(bridge_lock_id),
+                bridge_lock_id,
+            ),
+            SlotRef::new(
+                outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
+                outbox_id,
+            ),
         ],
         vec![nonce.into()],
         lock,
@@ -653,7 +696,10 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     state.apply_state_diff(diff);
 
     let send = send_tx(
-        vec![sender_config_account_id(sender_id), send_slot],
+        vec![
+            SlotRef::new(sender_config_account_id(sender_id), sender_id),
+            SlotRef::new(send_slot, outbox_id),
+        ],
         zone_b,
         ordinal,
     );
@@ -693,7 +739,10 @@ fn a_send_into_a_foreign_outbox_slot_is_rejected() {
     // pass to reach it.
     let foreign_slot = outbox_pda([3; 8], sender_id, &zone_b, ordinal);
     let send = send_tx(
-        vec![sender_config_account_id(sender_id), foreign_slot],
+        vec![
+            SlotRef::new(sender_config_account_id(sender_id), sender_id),
+            SlotRef::new(foreign_slot, programs::cross_zone_outbox().id()),
+        ],
         zone_b,
         ordinal,
     );
@@ -781,8 +830,10 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
 
     // A holding under someone other than the payload's recipient: a mint the
     // destination would credit to the wrong account if it credited it at all.
-    let other_holding =
-        wrapped_token_core::holding_account_id(wrapped_token_id, &[4; 32]).into_value();
+    let other_holding = SlotRef::new(
+        wrapped_token_core::holding_account_id(wrapped_token_id, &[4; 32]),
+        wrapped_token_id,
+    );
     let lock = lock_tx_to(
         &holder_key,
         holder_id,
@@ -791,7 +842,10 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
         0,
         wrapped_token_id,
         vec![
-            wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
+            SlotRef::new(
+                wrapped_token_core::config_account_id(wrapped_token_id),
+                wrapped_token_id,
+            ),
             other_holding,
         ],
     );
@@ -865,10 +919,16 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
     let message = Message::try_new(
         bridge_lock_id,
         vec![
-            decoy_id,
-            holder_id,
-            bridge_lock_core::escrow_account_id(bridge_lock_id),
-            outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
+            SlotRef::new(decoy_id, bridge_lock_id),
+            SlotRef::new(holder_id, bridge_lock_id),
+            SlotRef::new(
+                bridge_lock_core::escrow_account_id(bridge_lock_id),
+                bridge_lock_id,
+            ),
+            SlotRef::new(
+                outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
+                outbox_id,
+            ),
         ],
         vec![0_u128.into()],
         lock,
@@ -929,7 +989,7 @@ fn the_bridge_pins_are_written_once_and_replayable() {
     let init = |outbox: lee_core::program::ProgramId, target: lee_core::program::ProgramId| {
         let message = Message::try_new(
             bridge_lock_id,
-            vec![config_id],
+            vec![SlotRef::new(config_id, bridge_lock_id)],
             vec![],
             bridge_lock_core::Instruction::InitConfig {
                 outbox_program_id: outbox,
@@ -993,7 +1053,10 @@ fn a_send_before_the_pin_is_set_is_rejected() {
     let state = base_state();
     let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
     let send = send_tx(
-        vec![sender_config_account_id(sender_id), slot],
+        vec![
+            SlotRef::new(sender_config_account_id(sender_id), sender_id),
+            SlotRef::new(slot, outbox_id),
+        ],
         zone_b,
         ordinal,
     );
@@ -1020,7 +1083,14 @@ fn a_send_with_a_substituted_config_account_is_rejected() {
     seed_ping_sender_config(&mut state);
 
     let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
-    let send = send_tx(vec![ping_record_pda(sender_id), slot], zone_b, ordinal);
+    let send = send_tx(
+        vec![
+            SlotRef::new(ping_record_pda(sender_id), sender_id),
+            SlotRef::new(slot, outbox_id),
+        ],
+        zone_b,
+        ordinal,
+    );
 
     let Err(err) = ValidatedStateDiff::from_public_transaction(&send, &state, 1, 0) else {
         panic!("a send over a substituted config account must not execute");
@@ -1043,7 +1113,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     let init = |outbox: lee_core::program::ProgramId| {
         let message = Message::try_new(
             sender_id,
-            vec![config_id],
+            vec![SlotRef::new(config_id, sender_id)],
             vec![],
             ping_core::SenderInstruction::InitConfig {
                 outbox_program_id: outbox,
@@ -1102,7 +1172,10 @@ fn the_token_authority_path_holds() {
                   sources: Vec<([u8; 32], lee_core::program::ProgramId)>| {
         signed_tx(
             wrapped_token_id,
-            vec![config_id, account],
+            vec![
+                SlotRef::new(config_id, wrapped_token_id),
+                SlotRef::address_only(account),
+            ],
             nonce,
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
             signer,
@@ -1111,7 +1184,10 @@ fn the_token_authority_path_holds() {
     let renounce = |account: AccountId, signer: &PrivateKey, nonce: u128| {
         signed_tx(
             wrapped_token_id,
-            vec![config_id, account],
+            vec![
+                SlotRef::new(config_id, wrapped_token_id),
+                SlotRef::address_only(account),
+            ],
             nonce,
             bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
             signer,
@@ -1169,7 +1245,10 @@ fn the_token_authority_path_holds() {
     let substituted = |instruction_data: Vec<u8>| {
         signed_tx(
             wrapped_token_id,
-            vec![ping_record_pda(wrapped_token_id), authority],
+            vec![
+                SlotRef::new(ping_record_pda(wrapped_token_id), wrapped_token_id),
+                SlotRef::address_only(authority),
+            ],
             0,
             instruction_data,
             &key,
@@ -1309,8 +1388,8 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
             inbox_id,
             &msg,
             vec![
-                receiver_config_account_id(receiver_id),
-                ping_record_pda(receiver_id),
+                SlotRef::new(receiver_config_account_id(receiver_id), receiver_id),
+                SlotRef::new(ping_record_pda(receiver_id), receiver_id),
             ],
         ),
         vec![],
@@ -1363,11 +1442,18 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
     let message = Message::try_new(
         inbox_id,
         vec![
-            inbox_config_account_id(inbox_id),
-            inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
-            inbox_source_marker_account_id(inbox_id, &src_zone, programs::bridge_lock().id()),
-            receiver_config_account_id(receiver_id),
-            ping_record_pda(receiver_id),
+            SlotRef::new(inbox_config_account_id(inbox_id), inbox_id),
+            SlotRef::new(
+                inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
+                inbox_id,
+            ),
+            SlotRef::address_only(inbox_source_marker_account_id(
+                inbox_id,
+                &src_zone,
+                programs::bridge_lock().id(),
+            )),
+            SlotRef::new(receiver_config_account_id(receiver_id), receiver_id),
+            SlotRef::new(ping_record_pda(receiver_id), receiver_id),
         ],
         vec![],
         InboxInstruction::Dispatch(msg),
@@ -1401,7 +1487,10 @@ fn the_receiver_authority_path_holds() {
     let update = |account: AccountId, signer: &PrivateKey, nonce: u128| {
         signed_tx(
             receiver_id,
-            vec![config_id, account],
+            vec![
+                SlotRef::new(config_id, receiver_id),
+                SlotRef::address_only(account),
+            ],
             nonce,
             bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
                 sources: vec![(src_zone, sender_id)],
@@ -1412,7 +1501,10 @@ fn the_receiver_authority_path_holds() {
     let renounce = |account: AccountId, signer: &PrivateKey, nonce: u128| {
         signed_tx(
             receiver_id,
-            vec![config_id, account],
+            vec![
+                SlotRef::new(config_id, receiver_id),
+                SlotRef::address_only(account),
+            ],
             nonce,
             bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
             signer,
@@ -1881,7 +1973,10 @@ fn the_remaining_authority_guards_hold() {
             &state,
             &signed_tx(
                 receiver_id,
-                vec![ping_record_pda(receiver_id), authority],
+                vec![
+                    SlotRef::new(ping_record_pda(receiver_id), receiver_id),
+                    SlotRef::address_only(authority),
+                ],
                 0,
                 instruction_data,
                 &key,
@@ -1956,8 +2051,14 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
             inbox_id,
             &msg,
             vec![
-                wrapped_token_core::config_account_id(wrapped_token_id),
-                wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+                SlotRef::new(
+                    wrapped_token_core::config_account_id(wrapped_token_id),
+                    wrapped_token_id,
+                ),
+                SlotRef::new(
+                    wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+                    wrapped_token_id,
+                ),
             ],
         ),
         vec![],
@@ -1992,9 +2093,15 @@ fn a_top_level_mint_is_refused() {
     let message = Message::try_new(
         wrapped_token_id,
         vec![
-            marker_id,
-            wrapped_token_core::config_account_id(wrapped_token_id),
-            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+            SlotRef::address_only(marker_id),
+            SlotRef::new(
+                wrapped_token_core::config_account_id(wrapped_token_id),
+                wrapped_token_id,
+            ),
+            SlotRef::new(
+                wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+                wrapped_token_id,
+            ),
         ],
         vec![],
         wrapped_token_core::Instruction::Mint {
@@ -2070,7 +2177,14 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
 
     let message = Message::try_new(
         inbox_id,
-        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                SlotRef::new(wrapped_config_id, wrapped_token_id),
+                SlotRef::new(holding_id, wrapped_token_id),
+            ],
+        ),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -2123,7 +2237,14 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
 
     let message = Message::try_new(
         inbox_id,
-        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                SlotRef::new(wrapped_config_id, wrapped_token_id),
+                SlotRef::new(holding_id, wrapped_token_id),
+            ],
+        ),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -2191,7 +2312,14 @@ fn mint_replay_rejected() {
 
     let message = Message::try_new(
         inbox_id,
-        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                SlotRef::new(wrapped_config_id, wrapped_token_id),
+                SlotRef::new(holding_id, wrapped_token_id),
+            ],
+        ),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -2276,7 +2404,10 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         dispatch_accounts(
             inbox_id,
             &msg,
-            vec![receiver_config_account_id(receiver_id), record_id],
+            vec![
+                SlotRef::new(receiver_config_account_id(receiver_id), receiver_id),
+                SlotRef::new(record_id, receiver_id),
+            ],
         ),
         vec![],
         InboxInstruction::Dispatch(msg),
@@ -2310,7 +2441,10 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         dispatch_accounts(
             inbox_id,
             &control_msg,
-            vec![receiver_config_account_id(receiver_id), record_id],
+            vec![
+                SlotRef::new(receiver_config_account_id(receiver_id), receiver_id),
+                SlotRef::new(record_id, receiver_id),
+            ],
         ),
         vec![],
         InboxInstruction::Dispatch(control_msg),

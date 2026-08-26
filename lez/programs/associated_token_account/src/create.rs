@@ -1,15 +1,15 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Input, Slot},
     program::{ChainedCall, ProgramId},
 };
 
 pub fn create_associated_token_account(
-    owner: AccountWithMetadata,
-    token_definition: AccountWithMetadata,
-    ata_account: AccountWithMetadata,
+    owner: Input,
+    token_definition: Input,
+    ata_account: Input,
     ata_program_id: ProgramId,
     token_program_id: ProgramId,
-) -> (Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<Option<Slot>>, Vec<ChainedCall>) {
     // No authorization check needed: create is idempotent, so anyone can call it safely.
     // Only the address check is wanted here; the chained call carries no PDA seeds.
     let _ = associated_token_account_core::verify_ata_and_get_seed(
@@ -20,13 +20,13 @@ pub fn create_associated_token_account(
     );
 
     let post_states = vec![
-        owner.account.clone(),
-        token_definition.account.clone(),
-        ata_account.account.clone(),
+        owner.unchanged(),
+        token_definition.unchanged(),
+        ata_account.unchanged(),
     ];
 
     // Idempotent: already initialized → no-op
-    if !ata_account.account.data(token_program_id).is_empty() {
+    if !ata_account.data(token_program_id).is_empty() {
         return (post_states, vec![]);
     }
 

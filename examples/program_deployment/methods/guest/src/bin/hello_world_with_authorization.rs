@@ -40,17 +40,15 @@ fn main() {
     // ####
 
     // Construct the post state account values
-    let post_account = {
-        let mut this = pre_state.account.clone();
-        let mut bytes = this.data(self_program_id).clone().into_inner();
+    let post_state = {
+        let mut this = pre_state.slot_of(self_program_id).clone();
+        let mut bytes = this.data.clone().into_inner();
         bytes.extend_from_slice(&greeting);
-        this.slot_mut(self_program_id).data = bytes
+        this.data = bytes
             .try_into()
             .expect("Data should fit within the allowed limits");
-        this
+        Some(this)
     };
-
-    let post_state = post_account;
 
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms

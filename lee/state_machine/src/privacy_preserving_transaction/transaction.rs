@@ -57,7 +57,7 @@ impl PrivacyPreservingTransaction {
             self.message
                 .public_actions
                 .iter()
-                .map(|action| action.account_id),
+                .map(|action| action.slot.account_id),
         );
 
         acc_set.into_iter().collect()

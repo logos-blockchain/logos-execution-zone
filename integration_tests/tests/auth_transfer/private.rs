@@ -18,7 +18,7 @@ use lee::{
 use lee_core::{
     DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierWitness,
     PrivateWitness, WitnessKind,
-    account::{Account, AccountWithMetadata},
+    account::{Account, Input},
     encryption::ViewingPublicKey,
 };
 use sequencer_service_rpc::RpcClient as _;
@@ -537,20 +537,32 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let attacker_id = AccountId::for_regular_private_account(&npk, &vpk, 1337);
     let amount: u128 = 1;
 
-    let faucet_pre = AccountWithMetadata::new(
-        get_account(&ctx, faucet_account_id).await?,
-        false,
-        faucet_account_id,
-    );
-    let attacker_pre =
-        AccountWithMetadata::new(get_account(&ctx, attacker_id).await?, false, attacker_id);
+    let faucet_account = get_account(&ctx, faucet_account_id).await?;
+    let faucet_pre = Input {
+        account_id: faucet_account_id,
+        is_authorized: false,
+        slot: Some((
+            faucet_program_id.into(),
+            faucet_account.slot_or_empty(faucet_program_id),
+        )),
+    };
+    let attacker_pre = Input {
+        account_id: attacker_id,
+        is_authorized: false,
+        slot: Some((
+            native_program.into(),
+            get_account(&ctx, attacker_id)
+                .await?
+                .slot_or_empty(native_program),
+        )),
+    };
 
     let program_with_deps = ProgramWithDependencies::new(
         faucet_chain_caller,
         [(faucet_program_id, programs::faucet())].into(),
     );
 
-    let instruction = Program::serialize_instruction((faucet_program_id, native_program, amount))?;
+    let instruction = Program::serialize_instruction((faucet_program_id, amount))?;
 
     let res = execute_and_prove(
         vec![faucet_pre, attacker_pre],
@@ -558,6 +570,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         vec![
             InputAccountIdentity::Public,
             InputAccountIdentity::Private(PrivateWitness {
+                account: Account::default(),
                 vpk,
                 random_seed: [0; 32],
                 identifier: 1337,
@@ -582,28 +595,36 @@ async fn prove_init_with_commitment_root(
 ) -> Result<lee_core::PrivacyPreservingCircuitOutput> {
     let program = programs::authenticated_transfer();
     let sender_id = ctx.existing_public_accounts()[0];
-    let sender_pre = AccountWithMetadata::new(
-        ctx.sequencer_client().get_account(sender_id).await?,
-        true,
-        sender_id,
-    );
+    let sender_account = ctx.sequencer_client().get_account(sender_id).await?;
+    let sender_pre = Input {
+        account_id: sender_id,
+        is_authorized: true,
+        slot: Some((
+            program.id().into(),
+            sender_account.slot_or_empty(program.id()),
+        )),
+    };
 
     let ask = lee_core::AuthorizationSecretKey([7; 32]);
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
-    let recipient = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
+    let recipient = Input {
+        account_id: recipient_account_id,
+        is_authorized: true,
+        slot: Some((program.id().into(), lee_core::account::Slot::default())),
+    };
 
     let (output, _) = execute_and_prove(
         vec![sender_pre, recipient],
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: 1,
-            recipient_program: None,
         })?,
         vec![
             InputAccountIdentity::Public,
             InputAccountIdentity::Private(PrivateWitness {
+                account: Account::default(),
                 vpk,
                 random_seed: [0; 32],
                 identifier: 0,

@@ -24,8 +24,8 @@ fn main() {
         return;
     };
 
-    let first_post = first.account.clone();
-    let second_post = second.account.clone();
+    let first_post = first.unchanged();
+    let second_post = second.unchanged();
 
     let mut first_for_callee = first.clone();
     first_for_callee.is_authorized = true;

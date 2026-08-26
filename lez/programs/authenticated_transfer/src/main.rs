@@ -1,53 +1,32 @@
 use authenticated_transfer_core::Instruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Input, Slot},
     program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
-/// Transfers `amount` native balance from `sender`'s native slot to `recipient_slot` at the
-/// recipient. One address may play both roles; the posts then agree by construction.
+/// Moves `amount` from the sender's native slot to whichever slot the transaction named at the
+/// recipient. The two positions name distinct slots, so one address may hold both roles.
 fn transfer(
-    sender: AccountWithMetadata,
-    recipient: AccountWithMetadata,
+    sender: Input,
+    recipient: Input,
     amount: u128,
     native_program_id: ProgramId,
-    recipient_slot: ProgramId,
-) -> Vec<Account> {
-    // Continue only if the sender has authorized this operation.
+) -> Vec<Option<Slot>> {
     assert!(sender.is_authorized, "Sender must be authorized");
 
-    let debit = |account: &mut Account| {
-        let slot = account.slot_mut(native_program_id);
-        slot.balance = slot
-            .balance
-            .checked_sub(amount)
-            .expect("Sender has insufficient balance");
-    };
-    let credit = |account: &mut Account| {
-        let slot = account.slot_mut(recipient_slot);
-        slot.balance = slot
-            .balance
-            .checked_add(amount)
-            .expect("Recipient balance overflow");
-    };
+    let mut sender_post = sender.into_slot_of(native_program_id);
+    sender_post.balance = sender_post
+        .balance
+        .checked_sub(amount)
+        .expect("Sender has insufficient balance");
 
-    if sender.account_id == recipient.account_id {
-        let mut joint = sender.account;
-        debit(&mut joint);
-        credit(&mut joint);
-        joint.prune();
-        return vec![joint.clone(), joint];
-    }
+    let mut recipient_post = recipient.into_caller_named_slot();
+    recipient_post.balance = recipient_post
+        .balance
+        .checked_add(amount)
+        .expect("Recipient balance overflow");
 
-    let mut sender_post = sender.account;
-    debit(&mut sender_post);
-    sender_post.prune();
-
-    let mut recipient_post = recipient.account;
-    credit(&mut recipient_post);
-    recipient_post.prune();
-
-    vec![sender_post, recipient_post]
+    vec![Some(sender_post), Some(recipient_post)]
 }
 
 /// A transfer of balance program.
@@ -65,14 +44,10 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     let post_states = match instruction {
-        Instruction::Transfer {
-            amount,
-            recipient_program,
-        } => {
+        Instruction::Transfer { amount } => {
             let [sender, recipient] = <[_; 2]>::try_from(pre_states.clone())
                 .expect("Transfer requires exactly 2 accounts");
-            let recipient_slot = recipient_program.unwrap_or(self_program_id);
-            transfer(sender, recipient, amount, self_program_id, recipient_slot)
+            transfer(sender, recipient, amount, self_program_id)
         }
     };
 
@@ -88,57 +63,58 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::{AccountId, Data, Nonce};
+    use lee_core::account::{AccountId, Data};
 
     use super::*;
 
     const NATIVE: ProgramId = [1; 8];
     const OTHER: ProgramId = [2; 8];
 
-    fn holder(balance: u128) -> AccountWithMetadata {
-        AccountWithMetadata {
-            account: Account::single(NATIVE, balance, Data::empty(), Nonce(0)),
-            is_authorized: true,
+    fn holder(program: ProgramId, balance: u128) -> Input {
+        Input {
             account_id: AccountId::new([0; 32]),
+            is_authorized: true,
+            slot: Some((
+                program.into(),
+                Slot {
+                    balance,
+                    data: Data::empty(),
+                },
+            )),
         }
     }
 
     #[test]
-    fn self_transfer_within_one_slot_is_a_no_op() {
-        let holder = holder(100);
+    fn transfer_moves_balance_between_the_two_named_slots() {
+        let posts = transfer(holder(NATIVE, 100), holder(OTHER, 0), 30, NATIVE);
 
-        let posts = transfer(holder.clone(), holder, 30, NATIVE, NATIVE);
-
-        assert_eq!(
-            posts[0], posts[1],
-            "both roles must agree on the one account"
-        );
-        assert_eq!(posts[0].balance(NATIVE), 100);
+        assert_eq!(posts[0].as_ref().unwrap().balance, 70);
+        assert_eq!(posts[1].as_ref().unwrap().balance, 30);
     }
 
     #[test]
-    fn self_transfer_across_slots_leaves_two_slots_on_one_account() {
-        let holder = holder(100);
+    fn transfer_empties_a_slot_it_drains() {
+        let posts = transfer(holder(NATIVE, 100), holder(OTHER, 0), 100, NATIVE);
 
-        let posts = transfer(holder.clone(), holder, 30, NATIVE, OTHER);
-
-        assert_eq!(posts[0], posts[1]);
-        assert_eq!(posts[0].balance(NATIVE), 70);
-        assert_eq!(posts[0].balance(OTHER), 30);
-        assert_eq!(posts[0].slots.len(), 2);
+        assert!(posts[0].as_ref().unwrap().is_empty());
     }
 
     #[test]
-    fn self_transfer_of_the_whole_balance_prunes_the_source_slot() {
-        let holder = holder(100);
+    #[should_panic(expected = "Position names another namespace")]
+    fn transfer_refuses_a_sender_slot_that_is_not_native() {
+        let posts = transfer(holder(OTHER, 100), holder(OTHER, 0), 30, NATIVE);
 
-        let posts = transfer(holder.clone(), holder, 100, NATIVE, OTHER);
+        unreachable!("debiting a non-native sender slot must panic, got {posts:?}");
+    }
 
-        assert_eq!(posts[0].balance(OTHER), 100);
-        assert_eq!(
-            posts[0].slots.len(),
-            1,
-            "the emptied source slot must not be stored"
-        );
+    #[test]
+    #[should_panic(expected = "Sender must be authorized")]
+    fn transfer_refuses_an_unauthorized_sender() {
+        let mut sender = holder(NATIVE, 100);
+        sender.is_authorized = false;
+
+        let posts = transfer(sender, holder(OTHER, 0), 30, NATIVE);
+
+        unreachable!("an unauthorized sender must panic, got {posts:?}");
     }
 }

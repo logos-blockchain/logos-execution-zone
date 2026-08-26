@@ -20,7 +20,12 @@ fn validity_window_works_in_public_transactions(
     let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_public_account_keys_1();
-    let pre = AccountWithMetadata::new(Account::default(), false, account_keys.account_id());
+    let pre = input_of(
+        &Account::default(),
+        false,
+        account_keys.account_id(),
+        validity_window_program.id(),
+    );
     let mut state = V03State::new().with_test_programs();
     let tx = {
         let account_ids = vec![pre.account_id];
@@ -30,9 +35,13 @@ fn validity_window_works_in_public_transactions(
             block_validity_window,
             TimestampValidityWindow::new_unbounded(),
         );
-        let message =
-            public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
-                .unwrap();
+        let message = public_transaction::Message::try_new(
+            program_id,
+            slots_of(program_id, &account_ids),
+            nonces,
+            instruction,
+        )
+        .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         PublicTransaction::new(message, witness_set)
     };
@@ -71,7 +80,12 @@ fn timestamp_validity_window_works_in_public_transactions(
     let timestamp_validity_window: TimestampValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_public_account_keys_1();
-    let pre = AccountWithMetadata::new(Account::default(), false, account_keys.account_id());
+    let pre = input_of(
+        &Account::default(),
+        false,
+        account_keys.account_id(),
+        validity_window_program.id(),
+    );
     let mut state = V03State::new().with_test_programs();
     let tx = {
         let account_ids = vec![pre.account_id];
@@ -81,9 +95,13 @@ fn timestamp_validity_window_works_in_public_transactions(
             BlockValidityWindow::new_unbounded(),
             timestamp_validity_window,
         );
-        let message =
-            public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
-                .unwrap();
+        let message = public_transaction::Message::try_new(
+            program_id,
+            slots_of(program_id, &account_ids),
+            nonces,
+            instruction,
+        )
+        .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         PublicTransaction::new(message, witness_set)
     };
@@ -124,10 +142,11 @@ fn validity_window_works_in_privacy_preserving_transactions(
     let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_private_account_keys_1();
-    let pre = AccountWithMetadata::new(
-        Account::default(),
+    let pre = input_of(
+        &Account::default(),
         true,
-        (&account_keys.npk(), &account_keys.vpk(), 0),
+        (&account_keys.npk(), &account_keys.vpk(), 0).into(),
+        validity_window_program.id(),
     );
     let mut state = V03State::new().with_test_programs();
     let tx = {
@@ -139,6 +158,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::Private(PrivateWitness {
+                account: Account::default(),
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -194,10 +214,11 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
     let timestamp_validity_window: TimestampValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_private_account_keys_1();
-    let pre = AccountWithMetadata::new(
-        Account::default(),
+    let pre = input_of(
+        &Account::default(),
         true,
-        (&account_keys.npk(), &account_keys.vpk(), 0),
+        (&account_keys.npk(), &account_keys.vpk(), 0).into(),
+        validity_window_program.id(),
     );
     let mut state = V03State::new().with_test_programs();
     let tx = {
@@ -209,6 +230,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::Private(PrivateWitness {
+                account: Account::default(),
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,

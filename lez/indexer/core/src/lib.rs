@@ -588,6 +588,7 @@ mod tests {
     use std::{num::NonZeroU32, time::Duration};
 
     use common::{HashType, block::HashableBlockData};
+    use lee::SlotRef;
     use logos_blockchain_zone_sdk::Slot;
 
     use super::*;
@@ -774,8 +775,11 @@ mod tests {
             },
             receiver_id,
             &[
-                ping_core::receiver_config_account_id(receiver_id).into_value(),
-                ping_core::ping_record_pda(receiver_id).into_value(),
+                SlotRef::new(
+                    ping_core::receiver_config_account_id(receiver_id),
+                    receiver_id,
+                ),
+                SlotRef::new(ping_core::ping_record_pda(receiver_id), receiver_id),
             ],
             b"hi".to_vec(),
         ))

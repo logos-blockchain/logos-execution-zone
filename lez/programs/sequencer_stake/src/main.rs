@@ -1,7 +1,7 @@
 use std::collections::btree_map::Entry;
 
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{AccountId, Input, Slot},
     program::{
         ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
@@ -92,10 +92,7 @@ fn main() {
     .write();
 }
 
-fn decode_config(
-    config_account: &AccountWithMetadata,
-    self_program_id: ProgramId,
-) -> SequencerStakeConfig {
+fn decode_config(config_account: &Input, self_program_id: ProgramId) -> SequencerStakeConfig {
     // By id: every ownership account carries a slot of this program too, and its data is
     // caller-influenced.
     assert_eq!(
@@ -103,22 +100,20 @@ fn decode_config(
         sequencer_stake_config_account_id(self_program_id),
         "not the sequencer_stake config account"
     );
-    SequencerStakeConfig::from_bytes(config_account.account.data(self_program_id))
+    SequencerStakeConfig::from_bytes(config_account.data(self_program_id))
         .expect("config account data should decode as SequencerStakeConfig")
 }
 
 fn stake(
     self_program_id: ProgramId,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     sequencer_key: SequencerKey,
     amount: u128,
     mover_program_id: ProgramId,
     mover_instruction_data: InstructionData,
-) -> (Vec<Account>, Vec<ChainedCall>) {
-    let [funding_account, ownership_account, config_account] =
-        <[AccountWithMetadata; 3]>::try_from(pre_states).expect(
-            "Stake requires a funding account, an ownership account, and the config account",
-        );
+) -> (Vec<Option<Slot>>, Vec<ChainedCall>) {
+    let [funding_account, ownership_account, config_account] = <[Input; 3]>::try_from(pre_states)
+        .expect("Stake requires a funding account, an ownership account, and the config account");
 
     assert!(
         ownership_account.is_authorized,
@@ -129,7 +124,6 @@ fn stake(
     let minimum_sequencer_stake = config.minimum_sequencer_stake;
 
     let expected_balance_after = ownership_account
-        .account
         .balance(self_program_id)
         .checked_add(amount)
         .expect("stake amount overflow");
@@ -137,7 +131,7 @@ fn stake(
     // An ownership account keeps its record after a full exit, so what a call is
     // doing follows from the config entry, not from the record. Read against the
     // data, not the slot: anyone can credit the slot into existence.
-    let stake_data = ownership_account.account.data(self_program_id);
+    let stake_data = ownership_account.data(self_program_id);
     let is_staked = !stake_data.is_empty();
     if is_staked {
         let record = StakeRecord::from_bytes(stake_data)
@@ -184,10 +178,10 @@ fn stake(
     }
 
     // pass-through: propagates authorization into the nested mover call
-    let funding_account_post = funding_account.account.clone();
+    let funding_account_post = funding_account.unchanged();
 
-    let mut ownership_account_post = ownership_account.account.clone();
-    ownership_account_post.slot_mut(self_program_id).data = StakeRecord {
+    let mut ownership_account_post = ownership_account.slot_of(self_program_id).clone();
+    ownership_account_post.data = StakeRecord {
         sequencer_key,
         pending_unstake: None,
     }
@@ -195,15 +189,15 @@ fn stake(
     .try_into()
     .expect("StakeRecord should fit in account data");
 
-    let mut config_account_post = config_account.account;
-    config_account_post.slot_mut(self_program_id).data = config
+    let mut config_account_post = config_account.into_slot_of(self_program_id);
+    config_account_post.data = config
         .to_bytes()
         .try_into()
         .expect("SequencerStakeConfig should fit in account data");
 
     // chained-call pre-states reflect state as of when each call runs
-    let mut ownership_account_recorded = ownership_account;
-    ownership_account_recorded.account = ownership_account_post.clone();
+    let ownership_account_recorded =
+        ownership_account.with_slot(self_program_id, ownership_account_post.clone());
 
     let mover_call = ChainedCall {
         program_id: mover_program_id,
@@ -213,11 +207,10 @@ fn stake(
     };
 
     // expected balance after the mover call
-    let mut ownership_account_after_mover = ownership_account_recorded;
-    ownership_account_after_mover
-        .account
-        .slot_mut(self_program_id)
-        .balance = expected_balance_after;
+    let mut after_mover_slot = ownership_account_post.clone();
+    after_mover_slot.balance = expected_balance_after;
+    let ownership_account_after_mover =
+        ownership_account_recorded.with_slot(self_program_id, after_mover_slot);
 
     let confirm_call = ChainedCall::new(
         self_program_id,
@@ -230,8 +223,8 @@ fn stake(
     (
         vec![
             funding_account_post,
-            ownership_account_post,
-            config_account_post,
+            Some(ownership_account_post),
+            Some(config_account_post),
         ],
         vec![mover_call, confirm_call],
     )
@@ -239,29 +232,29 @@ fn stake(
 
 fn confirm_stake(
     self_program_id: ProgramId,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     expected_balance_after: u128,
-) -> Vec<Account> {
-    let [ownership_account] = <[AccountWithMetadata; 1]>::try_from(pre_states)
+) -> Vec<Option<Slot>> {
+    let [ownership_account] = <[Input; 1]>::try_from(pre_states)
         .expect("ConfirmStake requires exactly the ownership account");
 
     assert_eq!(
-        ownership_account.account.balance(self_program_id),
+        ownership_account.balance(self_program_id),
         expected_balance_after,
         "mover call did not deposit the expected amount into the ownership account"
     );
 
-    vec![ownership_account.account]
+    vec![ownership_account.unchanged()]
 }
 
 fn unstake_request(
     self_program_id: ProgramId,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     amount: u128,
     destination: AccountId,
     native_program: ProgramId,
-) -> Vec<Account> {
-    let [ownership_account, config_account] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+) -> Vec<Option<Slot>> {
+    let [ownership_account, config_account] = <[Input; 2]>::try_from(pre_states)
         .expect("UnstakeRequest requires the ownership account and the config account");
 
     assert!(
@@ -269,7 +262,7 @@ fn unstake_request(
         "must sign for the ownership account"
     );
 
-    let mut record = StakeRecord::from_bytes(ownership_account.account.data(self_program_id))
+    let mut record = StakeRecord::from_bytes(ownership_account.data(self_program_id))
         .expect("ownership account should decode as StakeRecord");
     assert!(
         record.pending_unstake.is_none(),
@@ -306,31 +299,28 @@ fn unstake_request(
         .expect("total pending unstake overflow");
 
     // only data changes here; transfer happens in FinalizeUnstake
-    let mut ownership_account_post = ownership_account.account;
-    ownership_account_post.slot_mut(self_program_id).data = record
+    let mut ownership_account_post = ownership_account.into_slot_of(self_program_id);
+    ownership_account_post.data = record
         .to_bytes()
         .try_into()
         .expect("StakeRecord should fit in account data");
 
-    let mut config_account_post = config_account.account;
-    config_account_post.slot_mut(self_program_id).data = config
+    let mut config_account_post = config_account.into_slot_of(self_program_id);
+    config_account_post.data = config
         .to_bytes()
         .try_into()
         .expect("SequencerStakeConfig should fit in account data");
 
-    vec![ownership_account_post, config_account_post]
+    vec![Some(ownership_account_post), Some(config_account_post)]
 }
 
-fn finalize_unstake(
-    self_program_id: ProgramId,
-    pre_states: Vec<AccountWithMetadata>,
-) -> Vec<Account> {
+fn finalize_unstake(self_program_id: ProgramId, pre_states: Vec<Input>) -> Vec<Option<Slot>> {
     let [ownership_account, destination_account, config_account] =
-        <[AccountWithMetadata; 3]>::try_from(pre_states).expect(
+        <[Input; 3]>::try_from(pre_states).expect(
             "FinalizeUnstake requires the ownership account, a destination account, and the config account",
         );
 
-    let mut record = StakeRecord::from_bytes(ownership_account.account.data(self_program_id))
+    let mut record = StakeRecord::from_bytes(ownership_account.data(self_program_id))
         .expect("ownership account should decode as StakeRecord");
     let pending = record
         .pending_unstake
@@ -342,8 +332,8 @@ fn finalize_unstake(
     );
 
     // no signature check: already authorized back in UnstakeRequest
-    let mut ownership_account_post = ownership_account.account.clone();
-    let ownership_slot = ownership_account_post.slot_mut(self_program_id);
+    let mut ownership_account_post = ownership_account.slot_of(self_program_id).clone();
+    let ownership_slot = &mut ownership_account_post;
     ownership_slot.balance = ownership_slot
         .balance
         .checked_sub(pending.amount)
@@ -352,15 +342,15 @@ fn finalize_unstake(
         .to_bytes()
         .try_into()
         .expect("StakeRecord should fit in account data");
-    ownership_account_post.prune();
 
-    let mut destination_post = destination_account.account;
-    let destination_slot = destination_post.slot_mut(pending.native_program);
-    destination_slot.balance = destination_slot
+    // The staker chose this namespace under signature at UnstakeRequest; `FinalizeUnstake`
+    // carries none, so a caller-named slot could route the release into one no program can
+    // ever debit.
+    let mut destination_post = destination_account.into_slot_of(pending.native_program);
+    destination_post.balance = destination_post
         .balance
         .checked_add(pending.amount)
         .expect("finalize unstake amount overflow");
-    destination_post.prune();
 
     let mut config = decode_config(&config_account, self_program_id);
     let entry = config
@@ -384,15 +374,15 @@ fn finalize_unstake(
         config.entries.remove(&record.sequencer_key);
     }
 
-    let mut config_account_post = config_account.account;
-    config_account_post.slot_mut(self_program_id).data = config
+    let mut config_account_post = config_account.into_slot_of(self_program_id);
+    config_account_post.data = config
         .to_bytes()
         .try_into()
         .expect("SequencerStakeConfig should fit in account data");
 
     vec![
-        ownership_account_post,
-        destination_post,
-        config_account_post,
+        Some(ownership_account_post),
+        Some(destination_post),
+        Some(config_account_post),
     ]
 }

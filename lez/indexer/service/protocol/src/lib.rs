@@ -233,17 +233,25 @@ pub struct PrivacyPreservingTransaction {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
     pub program_id: ProgramId,
-    pub account_ids: Vec<AccountId>,
+    pub slots: Vec<SlotRef>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
+}
+
+/// One `(account, namespace)` a transaction names. `program` is absent for a position that
+/// carries only an address.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct SlotRef {
+    pub account_id: AccountId,
+    pub program: Option<AccountId>,
 }
 
 pub type InstructionData = Vec<u8>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicActionWithID {
-    pub account_id: AccountId,
-    pub post_state: Account,
+    pub slot: SlotRef,
+    pub post_state: Option<Slot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

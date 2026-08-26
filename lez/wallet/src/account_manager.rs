@@ -7,7 +7,7 @@ use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, DummyInput, Identifier,
     InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
     NullifierWitness, PrivateAccountKind, PrivateWitness, SharedSecretKey, WitnessKind,
-    account::{Account, AccountWithMetadata, Data, Nonce},
+    account::{Account, Data, Input, Nonce},
     compute_digest_for_path,
     encryption::{
         Ciphertext, EncryptedAccountData, MlKem768EncapsulationKey, ViewTag, ViewingPublicKey,
@@ -18,8 +18,33 @@ use rand::{RngCore as _, rngs::OsRng};
 
 use crate::{ExecutionFailureKind, WalletCore};
 
+/// The account a transaction position names, paired with the namespace it reads there.
+/// `program` is `None` for a position that carries only an address.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AccountIdentity {
+    pub identity: Identity,
+    pub program: Option<AccountId>,
+}
+
+impl AccountIdentity {
+    #[must_use]
+    pub const fn is_private(&self) -> bool {
+        self.identity.is_private()
+    }
+
+    #[must_use]
+    pub const fn is_public(&self) -> bool {
+        self.identity.is_public()
+    }
+
+    #[must_use]
+    pub const fn public_account_id(&self) -> Option<lee::AccountId> {
+        self.identity.public_account_id()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
-pub enum AccountIdentity {
+pub enum Identity {
     Public(AccountId),
     /// A public account without signing. Would not try to sign, even if account is owned.
     PublicNoSign(AccountId),
@@ -66,7 +91,7 @@ pub enum AccountIdentity {
     },
 }
 
-impl fmt::Debug for AccountIdentity {
+impl fmt::Debug for Identity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Public(id) => f.debug_tuple("Public").field(id).finish(),
@@ -127,7 +152,25 @@ impl fmt::Debug for AccountIdentity {
     }
 }
 
-impl AccountIdentity {
+impl Identity {
+    /// This account, read through `program`'s namespace.
+    #[must_use]
+    pub fn in_namespace(self, program: impl Into<AccountId>) -> AccountIdentity {
+        AccountIdentity {
+            identity: self,
+            program: Some(program.into()),
+        }
+    }
+
+    /// This account as an address only: a marker, an authority, a derivation input.
+    #[must_use]
+    pub const fn address_only(self) -> AccountIdentity {
+        AccountIdentity {
+            identity: self,
+            program: None,
+        }
+    }
+
     #[must_use]
     /// Note: `PublicNoSign` still counts as public, the variant just suppresses the signing-key
     /// lookup.
@@ -174,11 +217,15 @@ pub struct PrivateAccountKeys {
 
 enum State {
     Public {
-        account: AccountWithMetadata,
+        account: Input,
+        /// The nonce is not part of an `Input` — a program can neither see nor change it —
+        /// but the wallet still needs it to build the message it signs.
+        nonce: Nonce,
         sk: Option<PrivateKey>,
     },
     PublicKeycard {
-        account: AccountWithMetadata,
+        account: Input,
+        nonce: Nonce,
         key_path: String,
     },
     Private(Box<AccountPreparedData>),
@@ -206,31 +253,39 @@ impl AccountManager {
         let mut states = Vec::with_capacity(accounts.len());
         let mut pin = None;
 
-        for account in accounts {
-            let state = match account {
-                AccountIdentity::Public(account_id) => {
+        for AccountIdentity { identity, program } in accounts {
+            let state = match identity {
+                Identity::Public(account_id) => {
                     let acc = wallet
                         .get_account_public(account_id)
                         .await
                         .map_err(ExecutionFailureKind::SequencerError)?;
 
                     let sk = wallet.get_account_public_signing_key(account_id).cloned();
-                    let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);
+                    let account = public_input(&acc, sk.is_some(), account_id, program);
 
-                    State::Public { account, sk }
+                    State::Public {
+                        account,
+                        nonce: acc.nonce,
+                        sk,
+                    }
                 }
-                AccountIdentity::PublicNoSign(account_id) => {
+                Identity::PublicNoSign(account_id) => {
                     let acc = wallet
                         .get_account_public(account_id)
                         .await
                         .map_err(ExecutionFailureKind::SequencerError)?;
 
                     let sk = None;
-                    let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);
+                    let account = public_input(&acc, sk.is_some(), account_id, program);
 
-                    State::Public { account, sk }
+                    State::Public {
+                        account,
+                        nonce: acc.nonce,
+                        sk,
+                    }
                 }
-                AccountIdentity::PublicKeycard {
+                Identity::PublicKeycard {
                     account_id,
                     key_path,
                 } => {
@@ -239,7 +294,7 @@ impl AccountManager {
                         .await
                         .map_err(ExecutionFailureKind::SequencerError)?;
 
-                    let account = AccountWithMetadata::new(acc.clone(), true, account_id);
+                    let account = public_input(&acc, true, account_id, program);
 
                     if pin.is_none() {
                         pin = Some(
@@ -250,22 +305,25 @@ impl AccountManager {
                         );
                     }
 
-                    State::PublicKeycard { account, key_path }
+                    State::PublicKeycard {
+                        account,
+                        nonce: acc.nonce,
+                        key_path,
+                    }
                 }
-                AccountIdentity::PrivateOwned(account_id)
-                | AccountIdentity::PrivatePdaOwned(account_id) => {
-                    let pre = private_key_tree_acc_preparation(wallet, account_id)?;
+                Identity::PrivateOwned(account_id) | Identity::PrivatePdaOwned(account_id) => {
+                    let pre = private_key_tree_acc_preparation(wallet, account_id, program)?;
 
                     State::Private(Box::new(pre))
                 }
-                AccountIdentity::PrivateForeign {
+                Identity::PrivateForeign {
                     npk,
                     vpk,
                     identifier,
                 } => State::Private(Box::new(private_foreign_acc_preparation(
-                    npk, vpk, identifier, None,
+                    npk, vpk, identifier, None, program,
                 ))),
-                AccountIdentity::PrivatePdaForeign {
+                Identity::PrivatePdaForeign {
                     binding,
                     npk,
                     vpk,
@@ -275,8 +333,9 @@ impl AccountManager {
                     vpk,
                     identifier,
                     Some(binding),
+                    program,
                 ))),
-                AccountIdentity::PrivateShared {
+                Identity::PrivateShared {
                     ask,
                     vpk,
                     identifier,
@@ -289,11 +348,12 @@ impl AccountManager {
                         identifier,
                         Some(ask),
                         None,
+                        program,
                     );
 
                     State::Private(Box::new(pre))
                 }
-                AccountIdentity::PrivatePdaShared {
+                Identity::PrivatePdaShared {
                     binding,
                     nsk,
                     vpk,
@@ -306,6 +366,7 @@ impl AccountManager {
                         identifier,
                         None,
                         Some(binding),
+                        program,
                     );
 
                     State::Private(Box::new(pre))
@@ -324,7 +385,7 @@ impl AccountManager {
         })
     }
 
-    pub fn pre_states(&self) -> Vec<AccountWithMetadata> {
+    pub fn pre_states(&self) -> Vec<Input> {
         self.states
             .iter()
             .map(|state| match state {
@@ -340,26 +401,38 @@ impl AccountManager {
         // Must match the signature order produced by sign_message(): local accounts first,
         // keycard accounts second.
         let local = self.states.iter().filter_map(|state| match state {
-            State::Public { account, sk } => sk.as_ref().map(|_| account.account.nonce),
+            State::Public { nonce, sk, .. } => sk.as_ref().map(|_| *nonce),
             State::PublicKeycard { .. } | State::Private(_) => None,
         });
         let keycard = self.states.iter().filter_map(|state| match state {
-            State::PublicKeycard { account, .. } => Some(account.account.nonce),
+            State::PublicKeycard { nonce, .. } => Some(*nonce),
             State::Public { .. } | State::Private(_) => None,
         });
         local.chain(keycard).collect()
     }
 
     pub fn private_account_keys(&self) -> Vec<PrivateAccountKeys> {
+        // One secret per note, and the circuit emits one note per account however many of its
+        // namespaces a transaction touches — so dedupe by address, in first-appearance order,
+        // to stay aligned with `private_actions`.
+        let mut seen = Vec::new();
         self.states
             .iter()
             .filter_map(|state| match state {
                 State::Private(pre) => Some(pre),
                 State::Public { .. } | State::PublicKeycard { .. } => None,
             })
+            .filter(|pre| {
+                let account_id = pre.pre_state.account_id;
+                let fresh = !seen.contains(&account_id);
+                if fresh {
+                    seen.push(account_id);
+                }
+                fresh
+            })
             .map(|pre| {
                 let nonce = if pre.proof.is_some() {
-                    pre.pre_state.account.nonce.private_account_nonce_increment(
+                    pre.account.nonce.private_account_nonce_increment(
                         pre.nsk.as_ref().expect("update variant must have nsk"),
                     )
                 } else {
@@ -419,6 +492,7 @@ impl AccountManager {
             .map(|state| match state {
                 State::Public { .. } | State::PublicKeycard { .. } => InputAccountIdentity::Public,
                 State::Private(pre) => InputAccountIdentity::Private(PrivateWitness {
+                    account: pre.account.clone(),
                     vpk: pre.vpk.clone(),
                     random_seed: pre.random_seed,
                     identifier: pre.identifier,
@@ -450,12 +524,15 @@ impl AccountManager {
             .collect()
     }
 
-    pub fn public_account_ids(&self) -> Vec<AccountId> {
+    pub fn public_slots(&self) -> Vec<lee::SlotRef> {
         self.states
             .iter()
             .filter_map(|state| match state {
                 State::Public { account, .. } | State::PublicKeycard { account, .. } => {
-                    Some(account.account_id)
+                    Some(lee::SlotRef {
+                        account_id: account.account_id,
+                        program: account.slot.as_ref().map(|(program, _)| *program),
+                    })
                 }
                 State::Private(_) => None,
             })
@@ -511,7 +588,9 @@ struct AccountPreparedData {
     npk: NullifierPublicKey,
     identifier: Identifier,
     vpk: ViewingPublicKey,
-    pre_state: AccountWithMetadata,
+    /// The account's full pre-state, which the circuit needs for the commitment.
+    account: Account,
+    pre_state: Input,
     proof: Option<MembershipProof>,
     random_seed: [u8; 32],
     /// The authority program and seed when this account is a private PDA. Used by
@@ -541,6 +620,7 @@ fn derive_account_id(
 fn private_key_tree_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
+    program: Option<AccountId>,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
     let Some(from_acc) = wallet.storage.key_chain().private_account(account_id) else {
         return Err(ExecutionFailureKind::KeyNotFoundError);
@@ -566,12 +646,14 @@ fn private_key_tree_acc_preparation(
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), ask.is_some(), account_id);
+    let account = from_acc.account.clone();
+    let sender_pre = public_input(&account, ask.is_some(), account_id, program);
 
     let random_seed = random_bytes();
 
     Ok(AccountPreparedData {
         ask,
+        account,
         nsk: Some(nsk),
         npk: from_npk,
         identifier: from_identifier,
@@ -589,9 +671,11 @@ fn private_foreign_acc_preparation(
     vpk: ViewingPublicKey,
     identifier: Identifier,
     pda_binding: Option<(ProgramId, PdaSeed)>,
+    program: Option<AccountId>,
 ) -> AccountPreparedData {
     let account_id = derive_account_id(&npk, &vpk, identifier, pda_binding);
     AccountPreparedData {
+        account: Account::default(),
         // The wallet holds no key for a recipient, so it can neither spend the account nor
         // consent on its behalf. The program still claims it: a private claim never requires
         // authorization.
@@ -600,7 +684,7 @@ fn private_foreign_acc_preparation(
         npk,
         identifier,
         vpk,
-        pre_state: AccountWithMetadata::new(Account::default(), false, account_id),
+        pre_state: public_input(&Account::default(), false, account_id, program),
         proof: None,
         random_seed: random_bytes(),
         pda_binding,
@@ -614,6 +698,7 @@ fn private_shared_acc_preparation(
     identifier: Identifier,
     ask: Option<AuthorizationSecretKey>,
     pda_binding: Option<(ProgramId, PdaSeed)>,
+    program: Option<AccountId>,
 ) -> AccountPreparedData {
     let npk = NullifierPublicKey::from(&nsk);
     let account_id = derive_account_id(&npk, &vpk, identifier, pda_binding);
@@ -624,12 +709,13 @@ fn private_shared_acc_preparation(
         .map(|e| e.account.clone())
         .unwrap_or_default();
 
-    let pre_state = AccountWithMetadata::new(acc, ask.is_some(), account_id);
+    let pre_state = public_input(&acc, ask.is_some(), account_id, program);
 
     let random_seed = random_bytes();
 
     AccountPreparedData {
         ask,
+        account: acc,
         nsk: Some(nsk),
         npk,
         identifier,
@@ -734,13 +820,27 @@ fn random_dummy_note() -> EncryptedAccountData {
     }
 }
 
+/// Narrows a fetched account to the one namespace this position names.
+fn public_input(
+    account: &Account,
+    is_authorized: bool,
+    account_id: AccountId,
+    program: Option<AccountId>,
+) -> Input {
+    Input {
+        account_id,
+        is_authorized,
+        slot: program.map(|program| (program, account.slot_or_empty(program))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn private_shared_is_private() {
-        let acc = AccountIdentity::PrivateShared {
+        let acc = Identity::PrivateShared {
             ask: AuthorizationSecretKey([0; 32]),
             vpk: ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]),
             identifier: 42,
@@ -752,9 +852,17 @@ mod tests {
     fn private_state() -> State {
         let npk = NullifierPublicKey([0; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let pre_state = AccountWithMetadata::new(Account::default(), false, (&npk, &vpk, 0));
+        let pre_state = public_input(
+            &Account::default(),
+            false,
+            (&npk, &vpk, 0).into(),
+            Some(lee::AccountId::from(
+                programs::authenticated_transfer().id(),
+            )),
+        );
         State::Private(Box::new(AccountPreparedData {
             ask: None,
+            account: Account::default(),
             nsk: None,
             npk,
             identifier: 0,
@@ -769,8 +877,19 @@ mod tests {
     fn public_state() -> State {
         let npk = NullifierPublicKey([0; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let account = AccountWithMetadata::new(Account::default(), false, (&npk, &vpk, 0));
-        State::Public { account, sk: None }
+        let account = public_input(
+            &Account::default(),
+            false,
+            (&npk, &vpk, 0).into(),
+            Some(lee::AccountId::from(
+                programs::authenticated_transfer().id(),
+            )),
+        );
+        State::Public {
+            account,
+            nonce: Nonce::default(),
+            sk: None,
+        }
     }
 
     fn manager(states: Vec<State>) -> AccountManager {
@@ -786,7 +905,15 @@ mod tests {
         let npk = NullifierPublicKey([7; 32]);
         let vpk = ViewingPublicKey::from_seed(&[8; 32], &[9; 32]);
         let account_id = lee::AccountId::from((&npk, &vpk, 0));
-        let pre = private_foreign_acc_preparation(npk, vpk, 0, None);
+        let pre = private_foreign_acc_preparation(
+            npk,
+            vpk,
+            0,
+            None,
+            Some(lee::AccountId::from(
+                programs::authenticated_transfer().id(),
+            )),
+        );
         assert_eq!(pre.pre_state.account_id, account_id);
 
         assert!(pre.ask.is_none());

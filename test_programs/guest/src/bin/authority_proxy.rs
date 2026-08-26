@@ -1,5 +1,5 @@
 use lee_core::{
-    account::AccountId,
+    account::{AccountId, Input},
     program::{
         ChainedCall, InstructionData, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
         read_lee_inputs,
@@ -40,7 +40,7 @@ fn main() {
         pda_seeds: pda_seed.into_iter().collect(),
     };
 
-    let post_states = pre_states.iter().map(|pre| pre.account.clone()).collect();
+    let post_states = pre_states.iter().map(Input::unchanged).collect();
 
     ProgramOutput::new(
         self_program_id,

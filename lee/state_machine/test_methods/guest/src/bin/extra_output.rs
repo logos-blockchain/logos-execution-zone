@@ -1,5 +1,5 @@
 use lee_core::{
-    account::Account,
+    account::Slot,
     program::{ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
@@ -20,14 +20,14 @@ fn main() {
         return;
     };
 
-    let account_pre = pre.account.clone();
+    let post = pre.unchanged();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![pre],
-        vec![account_pre, Account::default()],
+        vec![post, Some(Slot::default())],
     )
     .write();
 }

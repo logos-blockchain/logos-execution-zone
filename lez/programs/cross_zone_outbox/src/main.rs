@@ -1,6 +1,6 @@
 use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda};
 use lee_core::{
-    account::AccountWithMetadata,
+    account::Input,
     program::{ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
@@ -40,8 +40,7 @@ fn main() {
         ),
     };
 
-    let [outbox] =
-        <[AccountWithMetadata; 1]>::try_from(pre_states).expect("Emit requires exactly 1 account");
+    let [outbox] = <[Input; 1]>::try_from(pre_states).expect("Emit requires exactly 1 account");
 
     assert_eq!(
         outbox.account_id,
@@ -61,12 +60,12 @@ fn main() {
     // must pick an ordinal the chain does not already hold rather than counting
     // from zero.
     assert!(
-        outbox.account.data(self_program_id).is_empty(),
+        outbox.data(self_program_id).is_empty(),
         "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
     );
 
-    let mut post = outbox.account.clone();
-    post.slot_mut(self_program_id).data = OutboxRecord {
+    let mut post = outbox.slot_of(self_program_id).clone();
+    post.data = OutboxRecord {
         emitter,
         target_zone,
         ordinal,
@@ -83,7 +82,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![outbox],
-        vec![post],
+        vec![Some(post)],
     )
     .write();
 }

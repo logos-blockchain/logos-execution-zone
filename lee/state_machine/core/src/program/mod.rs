@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::guest::env;
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata, Slot},
+    account::{AccountId, Input, Slot},
     encryption::ViewingPublicKey,
 };
 
@@ -62,7 +62,7 @@ pub type InstructionData = Vec<u8>;
 pub struct ProgramInput<T> {
     pub self_program_id: ProgramId,
     pub caller_program_id: Option<ProgramId>,
-    pub pre_states: Vec<AccountWithMetadata>,
+    pub pre_states: Vec<Input>,
     pub instruction: T,
 }
 
@@ -252,7 +252,7 @@ pub struct CallerData {
 pub struct ChainedCall {
     /// The program ID of the program to execute.
     pub program_id: ProgramId,
-    pub pre_states: Vec<AccountWithMetadata>,
+    pub pre_states: Vec<Input>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
     /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
@@ -265,7 +265,7 @@ impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
     pub fn new<I: BorshSerialize>(
         program_id: ProgramId,
-        pre_states: Vec<AccountWithMetadata>,
+        pre_states: Vec<Input>,
         instruction: &I,
     ) -> Self {
         Self {
@@ -395,10 +395,11 @@ pub struct ProgramOutput {
     pub caller_program_id: Option<ProgramId>,
     /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
-    /// The account pre states the program received to produce this output.
-    pub pre_states: Vec<AccountWithMetadata>,
-    /// The account post states the program execution produced.
-    pub post_states: Vec<Account>,
+    /// The slots the program received to produce this output.
+    pub pre_states: Vec<Input>,
+    /// The slot each position was left in, positionally paired with `pre_states`. `None`
+    /// exactly where the position named no slot.
+    pub post_states: Vec<Option<Slot>>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
     /// The block ID window where the program output is valid.
@@ -412,8 +413,8 @@ impl ProgramOutput {
         self_program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
         instruction_data: InstructionData,
-        pre_states: Vec<AccountWithMetadata>,
-        post_states: Vec<Account>,
+        pre_states: Vec<Input>,
+        post_states: Vec<Option<Slot>>,
     ) -> Self {
         Self {
             self_program_id,
@@ -531,10 +532,14 @@ impl From<u128> for WrappedBalanceSum {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExecutionValidationError {
-    #[error(
-        "Account {account_id} appears at several positions with disagreeing pre or post states"
-    )]
-    DisagreeingDuplicateAccount { account_id: AccountId },
+    #[error("Slot {slot_key} of account {account_id} is named by more than one position")]
+    DuplicateSlotPosition {
+        account_id: AccountId,
+        slot_key: AccountId,
+    },
+
+    #[error("Position for account {account_id} names a slot in exactly one of pre and post")]
+    SlotPresenceMismatch { account_id: AccountId },
 
     #[error(
         "Pre-state and post-state lengths do not match: pre-state length {pre_state_length}, post-state length {post_state_length}"
@@ -544,9 +549,6 @@ pub enum ExecutionValidationError {
         post_state_length: usize,
     },
 
-    #[error("Unallowed modification of nonce for account {account_id}")]
-    ModifiedNonce { account_id: AccountId },
-
     #[error(
         "Program {executing_program_id:?} modified data or decreased balance of a foreign slot in account {account_id}"
     )]
@@ -554,9 +556,6 @@ pub enum ExecutionValidationError {
         account_id: AccountId,
         executing_program_id: ProgramId,
     },
-
-    #[error("Post-state for account {account_id} stores an empty slot; encoding must be canonical")]
-    NonCanonicalEmptySlot { account_id: AccountId },
 
     #[error("Total balance across accounts overflowed 2^256 - 1")]
     BalanceSumOverflow,
@@ -633,8 +632,8 @@ pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionDa
 /// - `post_states`: The list of resulting accounts after executing the program logic.
 /// - `executing_program_id`: The identifier of the program that was executed.
 pub fn validate_execution(
-    pre_states: &[AccountWithMetadata],
-    post_states: &[Account],
+    pre_states: &[Input],
+    post_states: &[Option<Slot>],
     executing_program_id: ProgramId,
 ) -> Result<(), ExecutionValidationError> {
     // 1. Lengths must match
@@ -648,71 +647,55 @@ pub fn validate_execution(
     }
 
     let executing_account_id = AccountId::from(executing_program_id);
-
-    // 2. One account may fill several positions (one address playing several roles of an
-    //    instruction), but every appearance must agree: identical pre states, identical post
-    //    states. The agreed post is the account's single effect, so the id-keyed state diff stays
-    //    well-defined, and conservation counts each account once.
-    let mut distinct = HashMap::new();
-    for (pre, post) in pre_states.iter().zip(post_states) {
-        if let Some(seen) = distinct.insert(pre.account_id, (pre, post))
-            && seen != (pre, post)
-        {
-            return Err(ExecutionValidationError::DisagreeingDuplicateAccount {
-                account_id: pre.account_id,
-            });
-        }
-    }
+    let mut named = HashSet::new();
 
     for (pre, post) in pre_states.iter().zip(post_states) {
-        // 3. Nonce must remain unchanged
-        if pre.account.nonce != post.nonce {
-            return Err(ExecutionValidationError::ModifiedNonce {
-                account_id: pre.account_id,
-            });
-        }
-
-        // 4. A program may debit only its own slot: every foreign slot keeps its data and may only
-        //    gain balance. This mirrors the account-level law (credits are permissionless, debits
-        //    need the custodian), transposed to slots.
-        let empty_slot = Slot::default();
-        for slot_key in pre.account.slots.keys().chain(post.slots.keys()) {
-            if *slot_key == executing_account_id {
+        // 2. A position carrying only an address has nothing to write back; one naming a slot must
+        //    say what it left there.
+        let (Some((slot_key, pre_slot)), Some(post_slot)) = (pre.slot.as_ref(), post.as_ref())
+        else {
+            if pre.slot.is_none() && post.is_none() {
                 continue;
             }
-            let pre_slot = pre.account.slots.get(slot_key).unwrap_or(&empty_slot);
-            let post_slot = post.slots.get(slot_key).unwrap_or(&empty_slot);
-            if post_slot.data != pre_slot.data || post_slot.balance < pre_slot.balance {
-                return Err(ExecutionValidationError::ForeignSlotModified {
-                    account_id: pre.account_id,
-                    executing_program_id,
-                });
-            }
+            return Err(ExecutionValidationError::SlotPresenceMismatch {
+                account_id: pre.account_id,
+            });
+        };
+
+        // 3. Positions name distinct slots, so every slot has one well-defined effect and the
+        //    conservation check below counts it once.
+        if !named.insert((pre.account_id, *slot_key)) {
+            return Err(ExecutionValidationError::DuplicateSlotPosition {
+                account_id: pre.account_id,
+                slot_key: *slot_key,
+            });
         }
 
-        // 5. An empty slot is never stored, so equal accounts always encode identically.
-        if post.slots.values().any(Slot::is_empty) {
-            return Err(ExecutionValidationError::NonCanonicalEmptySlot {
+        // 4. A program may debit only its own slot: a foreign slot keeps its data and may only gain
+        //    balance. This mirrors the account-level law, transposed to slots.
+        if *slot_key != executing_account_id
+            && (post_slot.data != pre_slot.data || post_slot.balance < pre_slot.balance)
+        {
+            return Err(ExecutionValidationError::ForeignSlotModified {
                 account_id: pre.account_id,
+                executing_program_id,
             });
         }
     }
 
-    // 6. Balance is conserved globally, across all slots of all touched accounts: a debit from the
-    //    executing slot must land as a credit somewhere, and rule 4 admits no other decrease.
+    // 5. Balance is conserved across the named slots. A slot no position names is not reachable
+    //    from here, so no balance can have moved through it.
     let Some(total_balance_pre_states) = WrappedBalanceSum::from_balances(
-        distinct
-            .values()
-            .flat_map(|(pre, _)| pre.account.slots.values().map(|slot| slot.balance)),
+        pre_states
+            .iter()
+            .filter_map(|pre| pre.slot.as_ref().map(|(_, slot)| slot.balance)),
     ) else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
-    let Some(total_balance_post_states) = WrappedBalanceSum::from_balances(
-        distinct
-            .values()
-            .flat_map(|(_, post)| post.slots.values().map(|slot| slot.balance)),
-    ) else {
+    let Some(total_balance_post_states) =
+        WrappedBalanceSum::from_balances(post_states.iter().flatten().map(|slot| slot.balance))
+    else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 

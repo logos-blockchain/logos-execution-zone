@@ -34,7 +34,7 @@ fn main() {
     assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
     // Read the current timestamp from the clock account.
-    let clock_data = ClockAccountData::from_bytes(clock_pre.account.data(clock_program_id));
+    let clock_data = ClockAccountData::from_bytes(clock_pre.data(clock_program_id));
 
     assert!(
         clock_data.timestamp >= deadline,
@@ -42,32 +42,29 @@ fn main() {
         clock_data.timestamp,
     );
 
-    let mut sender_post = sender_pre.account.clone();
-    let mut receiver_post = receiver_pre.account.clone();
-
-    let sender_slot = sender_post.slot_mut(self_program_id);
-    sender_slot.balance = sender_slot
+    let mut sender_post = sender_pre.slot_of(self_program_id).clone();
+    sender_post.balance = sender_post
         .balance
         .checked_sub(amount)
         .expect("Insufficient balance");
-    sender_post.prune();
 
-    let receiver_slot = receiver_post.slot_mut(self_program_id);
-    receiver_slot.balance = receiver_slot
+    let mut receiver_post = receiver_pre.slot_of(self_program_id).clone();
+    receiver_post.balance = receiver_post
         .balance
         .checked_add(amount)
         .expect("Balance overflow");
-    receiver_post.prune();
-
-    // Clock account is read-only: post state equals pre state.
-    let clock_post = clock_pre.account.clone();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![sender_pre, receiver_pre, clock_pre],
-        vec![sender_post, receiver_post, clock_post],
+        vec![sender_pre, receiver_pre, clock_pre.clone()],
+        // The clock is read-only.
+        vec![
+            Some(sender_post),
+            Some(receiver_post),
+            clock_pre.unchanged(),
+        ],
     )
     .write();
 }

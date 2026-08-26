@@ -30,6 +30,11 @@ pub fn compute_circuit_output(
         "Invalid account_identities length"
     );
 
+    // A commitment covers a whole account, so an account gets exactly one nullifier-commitment
+    // pair however many of its namespaces this transaction touches. Positions are checked one
+    // by one; their writes are then coalesced per account before emission.
+    let mut private_accounts: Vec<(AccountId, &PrivateWitness, Account)> = Vec::new();
+
     for (account_identity, (pre_state, post_state)) in account_identities.iter().zip(states_iter) {
         match account_identity {
             InputAccountIdentity::Public => {
@@ -38,13 +43,16 @@ pub fn compute_circuit_output(
                     post: post_state,
                 });
             }
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk,
-                random_seed,
-                identifier,
-                kind,
-                nullifier,
-            }) => {
+            InputAccountIdentity::Private(witness) => {
+                let PrivateWitness {
+                    account,
+                    vpk,
+                    identifier,
+                    kind,
+                    nullifier,
+                    ..
+                } = witness;
+
                 let account_id = match kind {
                     WitnessKind::Regular { .. } => {
                         let derived = AccountId::for_regular_private_account(
@@ -61,6 +69,18 @@ pub fn compute_circuit_output(
                     // `pre_state.account_id` directly for nullifier and commitment derivation.
                     WitnessKind::Pda { .. } => pre_state.account_id,
                 };
+
+                // The witness supplies the whole account because a commitment covers all of
+                // it, while the program was handed one slot. Bind the two: without this the
+                // commitment could be computed over an honest account while the program spent
+                // a slot the prover invented, which mints balance from nothing.
+                if let Some((program, slot)) = &pre_state.slot {
+                    assert_eq!(
+                        *slot,
+                        account.slot_or_empty(*program),
+                        "Witness account does not carry the slot the program executed on"
+                    );
+                }
 
                 if let WitnessKind::Regular { ask } = kind {
                     if let Some(ask) = ask {
@@ -86,66 +106,103 @@ pub fn compute_circuit_output(
                     );
                 }
 
-                let (new_nullifier, new_nonce, view_tag) = match nullifier {
-                    NullifierWitness::Init {
-                        npk,
-                        commitment_root,
-                    } => {
-                        assert_eq!(
-                            pre_state.account,
-                            Account::default(),
-                            "Private account init requires a default pre-state"
-                        );
-
-                        (
-                            (
-                                Nullifier::for_account_initialization(&account_id),
-                                *commitment_root,
-                            ),
-                            Nonce::private_account_nonce_init(&account_id),
-                            EncryptedAccountData::compute_view_tag(npk, vpk),
-                        )
+                let write = |post_account: &mut Account| {
+                    if let (Some((program, _)), Some(post_slot)) = (&pre_state.slot, post_state) {
+                        post_account.set_slot(*program, post_slot);
                     }
-                    NullifierWitness::Update {
-                        view_tag,
-                        nsk,
-                        membership_proof,
-                    } => (
-                        compute_update_nullifier_and_set_digest(
-                            membership_proof,
-                            &pre_state.account,
-                            &account_id,
-                            nsk,
-                        ),
-                        pre_state.account.nonce.private_account_nonce_increment(nsk),
-                        *view_tag,
-                    ),
                 };
 
-                let account_kind = match kind {
-                    WitnessKind::Regular { .. } => PrivateAccountKind::Regular(*identifier),
-                    WitnessKind::Pda {
-                        binding: (program_id, seed),
-                    } => PrivateAccountKind::Pda {
-                        program_id: *program_id,
-                        seed: *seed,
-                        identifier: *identifier,
-                    },
-                };
-
-                emit_private_output(
-                    &mut output,
-                    post_state,
-                    &account_id,
-                    &account_kind,
-                    view_tag,
-                    vpk,
-                    random_seed,
-                    new_nullifier,
-                    new_nonce,
-                );
+                if let Some(index) = private_accounts
+                    .iter()
+                    .position(|(id, ..)| *id == account_id)
+                {
+                    let (_, first, post_account) = &mut private_accounts[index];
+                    // One account, one witness. Without this a prover could describe the
+                    // same account two ways and have the commitment take the flattering
+                    // one while each position's slot was bound to the other.
+                    assert_eq!(
+                        borsh::to_vec(*first).expect("borsh serialization is infallible"),
+                        borsh::to_vec(witness).expect("borsh serialization is infallible"),
+                        "Positions of one private account carry disagreeing witnesses"
+                    );
+                    write(post_account);
+                } else {
+                    let mut post_account = account.clone();
+                    write(&mut post_account);
+                    private_accounts.push((account_id, witness, post_account));
+                }
             }
         }
+    }
+
+    for (account_id, witness, post_account) in private_accounts {
+        let PrivateWitness {
+            account,
+            vpk,
+            random_seed,
+            identifier,
+            kind,
+            nullifier,
+        } = witness;
+
+        let (new_nullifier, new_nonce, view_tag) = match nullifier {
+            NullifierWitness::Init {
+                npk,
+                commitment_root,
+            } => {
+                assert_eq!(
+                    *account,
+                    Account::default(),
+                    "Private account init requires a default pre-state"
+                );
+
+                (
+                    (
+                        Nullifier::for_account_initialization(&account_id),
+                        *commitment_root,
+                    ),
+                    Nonce::private_account_nonce_init(&account_id),
+                    EncryptedAccountData::compute_view_tag(npk, vpk),
+                )
+            }
+            NullifierWitness::Update {
+                view_tag,
+                nsk,
+                membership_proof,
+            } => (
+                compute_update_nullifier_and_set_digest(
+                    membership_proof,
+                    account,
+                    &account_id,
+                    nsk,
+                ),
+                account.nonce.private_account_nonce_increment(nsk),
+                *view_tag,
+            ),
+        };
+
+        let account_kind = match kind {
+            WitnessKind::Regular { .. } => PrivateAccountKind::Regular(*identifier),
+            WitnessKind::Pda {
+                binding: (program_id, seed),
+            } => PrivateAccountKind::Pda {
+                program_id: *program_id,
+                seed: *seed,
+                identifier: *identifier,
+            },
+        };
+
+        emit_private_output(
+            &mut output,
+            post_account,
+            &account_id,
+            &account_kind,
+            view_tag,
+            vpk,
+            random_seed,
+            new_nullifier,
+            new_nonce,
+        );
     }
 
     for dummy in dummy_inputs {

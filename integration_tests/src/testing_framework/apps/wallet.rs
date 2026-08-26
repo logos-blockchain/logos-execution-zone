@@ -14,7 +14,7 @@ use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
 use testing_framework_core::scenario::DynError;
 use tokio::sync::{mpsc, oneshot};
 use wallet::{
-    AccountIdentity, WalletCore,
+    Identity, WalletCore,
     account::{AccountIdWithPrivacy, Label},
     cli::{
         CliAccountMention, Command, SubcommandReturnValue, account::AccountSubcommand,
@@ -292,8 +292,8 @@ impl WalletActor {
                                 let result = async {
                                     let tx_hash = NativeTokenTransfer(&components.wallet)
                                         .send_public_transfer(
-                                            AccountIdentity::Public(from),
-                                            AccountIdentity::Public(to),
+                                            Identity::Public(from),
+                                            Identity::Public(to),
                                             amount,
                                         )
                                         .await

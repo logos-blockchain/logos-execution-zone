@@ -23,13 +23,13 @@ use lee::{
 use lee_core::{
     DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey, NullifierWitness,
     PrivateWitness, WitnessKind,
-    account::{Account, AccountWithMetadata},
+    account::{Account, Input, Slot},
     encryption::ViewingPublicKey,
     program::PdaSeed,
 };
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-use wallet::{AccountIdentity, WalletCore};
+use wallet::{Identity, WalletCore};
 
 /// Funds a private PDA by calling `auth_transfer` directly.
 #[expect(
@@ -44,6 +44,7 @@ async fn fund_private_pda(
     identifier: u128,
     seed: PdaSeed,
     authority_program_id: ProgramId,
+    native_program_id: ProgramId,
     amount: u128,
     auth_transfer: &ProgramWithDependencies,
 ) -> Result<()> {
@@ -57,18 +58,29 @@ async fn fund_private_pda(
         .get_account_public_signing_key(sender)
         .context("sender signing key not found")?;
 
-    let sender_pre = AccountWithMetadata::new(sender_account.clone(), true, sender);
-    let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_account_id);
+    // Both positions name the native namespace: the sender's own slot, and the one the PDA is
+    // credited into.
+    let sender_pre = Input {
+        account_id: sender,
+        is_authorized: true,
+        slot: Some((
+            native_program_id.into(),
+            sender_account.slot_or_empty(native_program_id),
+        )),
+    };
+    let pda_pre = Input {
+        account_id: pda_account_id,
+        is_authorized: false,
+        slot: Some((native_program_id.into(), Slot::default())),
+    };
 
-    let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer {
-        amount,
-        recipient_program: None,
-    })
-    .context("failed to serialize auth_transfer instruction")?;
+    let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
+        .context("failed to serialize auth_transfer instruction")?;
 
     let account_identities = vec![
         InputAccountIdentity::Public,
         InputAccountIdentity::Private(PrivateWitness {
+            account: Account::default(),
             vpk,
             random_seed: [0; 32],
             identifier,
@@ -124,12 +136,13 @@ async fn spend_private_pda(
     wallet
         .send_privacy_preserving_tx(
             vec![
-                AccountIdentity::PrivatePdaOwned(pda_account_id),
-                AccountIdentity::PrivateForeign {
+                Identity::PrivatePdaOwned(pda_account_id).in_namespace(auth_transfer_id),
+                Identity::PrivateForeign {
                     npk: recipient_npk,
                     vpk: recipient_vpk,
                     identifier: 0,
-                },
+                }
+                .in_namespace(auth_transfer_id),
             ],
             Program::serialize_instruction((seed, amount, auth_transfer_id))
                 .context("failed to serialize pda_spend_proxy instruction")?,
@@ -192,6 +205,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         0,
         seed,
         proxy_id,
+        auth_transfer_id,
         amount,
         &auth_transfer_program,
     )
@@ -206,6 +220,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         1,
         seed,
         proxy_id,
+        auth_transfer_id,
         amount,
         &auth_transfer_program,
     )

@@ -1,5 +1,5 @@
 use super::*;
-use crate::account::{Balance, Nonce};
+use crate::account::Balance;
 
 const P: ProgramId = [1; 8];
 const Q: ProgramId = [2; 8];
@@ -341,194 +341,147 @@ fn program_id_account_id_conversion_round_trips() {
 
 // ---- validate_execution: the namespaced rulebook ----
 
-fn account(slots: &[(ProgramId, Balance, &[u8])]) -> Account {
-    let mut account = Account::default();
-    for (program_id, balance, data) in slots {
-        *account.slot_mut(*program_id) = Slot {
-            balance: *balance,
-            data: crate::account::data::Data::try_from(data.to_vec()).unwrap(),
-        };
+fn slot(balance: Balance, data: &[u8]) -> Slot {
+    Slot {
+        balance,
+        data: crate::account::data::Data::try_from(data.to_vec()).unwrap(),
     }
-    account
 }
 
-fn pre(account: Account, id: u8) -> AccountWithMetadata {
-    AccountWithMetadata {
-        account,
-        is_authorized: false,
+/// A position naming `program`'s slot at account `id`.
+fn at(id: u8, program: ProgramId, slot: Slot) -> Input {
+    Input {
         account_id: AccountId::new([id; 32]),
+        is_authorized: false,
+        slot: Some((program.into(), slot)),
+    }
+}
+
+/// A position carrying only an address.
+fn address_only(id: u8) -> Input {
+    Input {
+        account_id: AccountId::new([id; 32]),
+        is_authorized: false,
+        slot: None,
     }
 }
 
 #[test]
 fn program_may_write_its_own_slot() {
-    let before = account(&[(P, 10, b"old"), (Q, 5, b"untouched")]);
-    let after = account(&[(P, 10, b"new"), (Q, 5, b"untouched")]);
+    let pre = at(1, P, slot(10, b"old"));
 
-    assert!(validate_execution(&[pre(before, 1)], &[after], P).is_ok());
+    assert!(validate_execution(&[pre], &[Some(slot(10, b"new"))], P).is_ok());
 }
 
 #[test]
 fn program_may_not_write_a_foreign_slot() {
-    let before = account(&[(P, 10, b"mine"), (Q, 5, b"theirs")]);
-    let after = account(&[(P, 10, b"mine"), (Q, 5, b"tampered")]);
+    let pre = at(1, Q, slot(5, b"theirs"));
 
     assert!(matches!(
-        validate_execution(&[pre(before, 1)], &[after], P),
+        validate_execution(&[pre], &[Some(slot(5, b"tampered"))], P),
         Err(ExecutionValidationError::ForeignSlotModified { .. })
     ));
 }
 
 #[test]
-fn program_may_not_create_a_foreign_data_slot() {
-    let before = account(&[(P, 10, b"mine")]);
-    let after = account(&[(P, 10, b"mine"), (Q, 0, b"squatted")]);
+fn program_may_not_put_data_in_a_foreign_slot() {
+    let pre = at(1, Q, slot(0, b""));
 
     assert!(matches!(
-        validate_execution(&[pre(before, 1)], &[after], P),
+        validate_execution(&[pre], &[Some(slot(0, b"squatted"))], P),
         Err(ExecutionValidationError::ForeignSlotModified { .. })
-    ));
-}
-
-#[test]
-fn an_account_may_fill_several_roles() {
-    let before = account(&[(P, 100, b"")]);
-    let after = account(&[(P, 60, b""), (Q, 40, b"")]);
-
-    assert!(
-        validate_execution(
-            &[pre(before.clone(), 1), pre(before, 1)],
-            &[after.clone(), after],
-            P,
-        )
-        .is_ok()
-    );
-}
-
-#[test]
-fn duplicate_roles_must_agree_on_the_post_state() {
-    let before = account(&[(P, 100, b"")]);
-
-    assert!(matches!(
-        validate_execution(
-            &[pre(before.clone(), 1), pre(before.clone(), 1)],
-            &[before, account(&[(P, 60, b""), (Q, 40, b"")])],
-            P,
-        ),
-        Err(ExecutionValidationError::DisagreeingDuplicateAccount { .. })
-    ));
-}
-
-#[test]
-fn duplicate_roles_must_agree_on_the_pre_state() {
-    let after = account(&[(P, 75, b"")]);
-
-    assert!(matches!(
-        validate_execution(
-            &[
-                pre(account(&[(P, 100, b"")]), 1),
-                pre(account(&[(P, 50, b"")]), 1)
-            ],
-            &[after.clone(), after],
-            P,
-        ),
-        Err(ExecutionValidationError::DisagreeingDuplicateAccount { .. })
-    ));
-}
-
-#[test]
-fn duplicate_positions_count_once_for_conservation() {
-    let recipient = account(&[(P, 0, b"x")]);
-    let sender = account(&[(P, 100, b"")]);
-    let recipient_after = account(&[(P, 50, b"x")]);
-
-    assert!(
-        validate_execution(
-            &[pre(recipient.clone(), 1), pre(recipient, 1), pre(sender, 2)],
-            &[
-                recipient_after.clone(),
-                recipient_after,
-                account(&[(P, 50, b"")]),
-            ],
-            P,
-        )
-        .is_ok()
-    );
-}
-
-#[test]
-fn duplicate_positions_cannot_mint() {
-    let before = account(&[(P, 100, b"")]);
-    let after = account(&[(P, 200, b"")]);
-
-    assert!(matches!(
-        validate_execution(
-            &[pre(before.clone(), 1), pre(before, 1)],
-            &[after.clone(), after],
-            P,
-        ),
-        Err(ExecutionValidationError::MismatchedTotalBalance { .. })
-    ));
-}
-
-#[test]
-fn program_may_credit_a_foreign_slot() {
-    let sender = account(&[(P, 100, b"")]);
-    let recipient = Account::default();
-
-    assert!(
-        validate_execution(
-            &[pre(sender, 1), pre(recipient, 2)],
-            &[account(&[(P, 60, b"")]), account(&[(Q, 40, b"")])],
-            P,
-        )
-        .is_ok()
-    );
-}
-
-#[test]
-fn program_may_not_mint_via_a_foreign_credit() {
-    let before = account(&[(P, 100, b"")]);
-    let after = account(&[(P, 100, b""), (Q, 50, b"")]);
-
-    assert!(matches!(
-        validate_execution(&[pre(before, 1)], &[after], P),
-        Err(ExecutionValidationError::MismatchedTotalBalance { .. })
     ));
 }
 
 #[test]
 fn program_may_not_drain_a_foreign_slot() {
-    let before = account(&[(P, 0, b""), (Q, 100, b"")]);
-    let after = account(&[(P, 100, b""), (Q, 0, b"")]);
+    let own = at(1, P, slot(0, b""));
+    let theirs = at(1, Q, slot(100, b""));
 
     assert!(matches!(
-        validate_execution(&[pre(before, 1)], &[after], P),
+        validate_execution(
+            &[own, theirs],
+            &[Some(slot(100, b"")), Some(slot(0, b""))],
+            P,
+        ),
         Err(ExecutionValidationError::ForeignSlotModified { .. })
     ));
 }
 
 #[test]
-fn an_empty_slot_is_not_canonical() {
-    let before = account(&[(P, 1, b"x")]);
-    let mut after = Account::default();
-    after.slots.insert(AccountId::from(P), Slot::default());
+fn program_may_credit_a_foreign_slot() {
+    let sender = at(1, P, slot(100, b""));
+    let recipient = at(2, Q, slot(0, b""));
+
+    assert!(
+        validate_execution(
+            &[sender, recipient],
+            &[Some(slot(60, b"")), Some(slot(40, b""))],
+            P,
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn one_account_may_hold_two_namespaces() {
+    let own = at(1, P, slot(100, b""));
+    let other = at(1, Q, slot(0, b""));
+
+    assert!(
+        validate_execution(
+            &[own, other],
+            &[Some(slot(60, b"")), Some(slot(40, b""))],
+            P
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn positions_may_not_name_the_same_slot_twice() {
+    let once = at(1, P, slot(100, b""));
 
     assert!(matches!(
-        validate_execution(&[pre(before, 1)], &[after], P),
-        Err(ExecutionValidationError::NonCanonicalEmptySlot { .. })
+        validate_execution(
+            &[once.clone(), once],
+            &[Some(slot(100, b"")), Some(slot(100, b""))],
+            P,
+        ),
+        Err(ExecutionValidationError::DuplicateSlotPosition { .. })
     ));
 }
 
 #[test]
+fn a_position_naming_no_slot_has_no_post() {
+    assert!(matches!(
+        validate_execution(&[address_only(1)], &[Some(slot(1, b""))], P),
+        Err(ExecutionValidationError::SlotPresenceMismatch { .. })
+    ));
+}
+
+#[test]
+fn a_position_naming_a_slot_must_say_what_it_left() {
+    assert!(matches!(
+        validate_execution(&[at(1, P, slot(1, b""))], &[None], P),
+        Err(ExecutionValidationError::SlotPresenceMismatch { .. })
+    ));
+}
+
+#[test]
+fn an_address_only_position_passes_through() {
+    assert!(validate_execution(&[address_only(1)], &[None], P).is_ok());
+}
+
+#[test]
 fn balance_moves_freely_within_the_executing_slot() {
-    let sender = account(&[(P, 100, b"")]);
-    let recipient = account(&[(P, 1, b"")]);
+    let sender = at(1, P, slot(100, b""));
+    let recipient = at(2, P, slot(1, b""));
 
     assert!(
         validate_execution(
-            &[pre(sender, 1), pre(recipient, 2)],
-            &[account(&[(P, 40, b"")]), account(&[(P, 61, b"")])],
+            &[sender, recipient],
+            &[Some(slot(40, b"")), Some(slot(61, b""))],
             P,
         )
         .is_ok()
@@ -537,13 +490,13 @@ fn balance_moves_freely_within_the_executing_slot() {
 
 #[test]
 fn balance_may_not_be_minted_in_the_executing_slot() {
-    let sender = account(&[(P, 100, b"")]);
-    let recipient = account(&[(P, 1, b"")]);
+    let sender = at(1, P, slot(100, b""));
+    let recipient = at(2, P, slot(1, b""));
 
     assert!(matches!(
         validate_execution(
-            &[pre(sender, 1), pre(recipient, 2)],
-            &[account(&[(P, 100, b"")]), account(&[(P, 2, b"")])],
+            &[sender, recipient],
+            &[Some(slot(100, b"")), Some(slot(2, b""))],
             P,
         ),
         Err(ExecutionValidationError::MismatchedTotalBalance { .. })
@@ -551,13 +504,16 @@ fn balance_may_not_be_minted_in_the_executing_slot() {
 }
 
 #[test]
-fn nonce_is_immutable() {
-    let before = account(&[(P, 1, b"")]);
-    let mut after = account(&[(P, 1, b"")]);
-    after.nonce = Nonce(7);
+fn program_may_not_mint_via_a_foreign_credit() {
+    let own = at(1, P, slot(100, b""));
+    let foreign = at(1, Q, slot(0, b""));
 
     assert!(matches!(
-        validate_execution(&[pre(before, 1)], &[after], P),
-        Err(ExecutionValidationError::ModifiedNonce { .. })
+        validate_execution(
+            &[own, foreign],
+            &[Some(slot(100, b"")), Some(slot(50, b""))],
+            P,
+        ),
+        Err(ExecutionValidationError::MismatchedTotalBalance { .. })
     ));
 }

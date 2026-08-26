@@ -9,7 +9,7 @@
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use lee::{AccountId, program::Program};
-use wallet::{AccountIdentity, WalletCore};
+use wallet::{Identity, WalletCore};
 
 #[derive(Debug, Parser)]
 #[clap(version)]
@@ -83,10 +83,7 @@ async fn main() -> Result<()> {
         } => {
             let sequencer_key = parse_sequencer_key(&sequencer_key)?;
             let mover_instruction_data = Program::serialize_instruction(
-                authenticated_transfer_core::Instruction::Transfer {
-                    amount,
-                    recipient_program: Some(programs::sequencer_stake().id()),
-                },
+                authenticated_transfer_core::Instruction::Transfer { amount },
             )
             .context("Failed to serialize mover instruction")?;
             let instruction_data =
@@ -101,9 +98,14 @@ async fn main() -> Result<()> {
             wallet
                 .send_pub_tx(
                     vec![
-                        AccountIdentity::Public(funding_account),
-                        AccountIdentity::Public(ownership_account),
-                        AccountIdentity::PublicNoSign(config_id),
+                        // The mover debits the funder's native slot and credits the stake
+                        // namespace at the ownership account.
+                        Identity::Public(funding_account)
+                            .in_namespace(programs::authenticated_transfer().id()),
+                        Identity::Public(ownership_account)
+                            .in_namespace(programs::sequencer_stake().id()),
+                        Identity::PublicNoSign(config_id)
+                            .in_namespace(programs::sequencer_stake().id()),
                     ],
                     instruction_data,
                     programs::sequencer_stake().id(),
@@ -127,8 +129,10 @@ async fn main() -> Result<()> {
             wallet
                 .send_pub_tx(
                     vec![
-                        AccountIdentity::Public(ownership_account),
-                        AccountIdentity::PublicNoSign(config_id),
+                        Identity::Public(ownership_account)
+                            .in_namespace(programs::sequencer_stake().id()),
+                        Identity::PublicNoSign(config_id)
+                            .in_namespace(programs::sequencer_stake().id()),
                     ],
                     instruction_data,
                     programs::sequencer_stake().id(),

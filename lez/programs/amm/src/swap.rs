@@ -1,17 +1,17 @@
 pub use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data},
+    account::{AccountId, Data, Input, Slot},
     program::{ChainedCall, ProgramId},
 };
 
 /// Validates swap setup: checks pool is active, vaults match, and reserves are sufficient.
 fn validate_swap_setup(
-    pool: &AccountWithMetadata,
-    vault_a: &AccountWithMetadata,
-    vault_b: &AccountWithMetadata,
+    pool: &Input,
+    vault_a: &Input,
+    vault_b: &Input,
     self_program_id: ProgramId,
 ) -> PoolDefinition {
-    let pool_def_data = PoolDefinition::try_from(pool.account.data(self_program_id))
+    let pool_def_data = PoolDefinition::try_from(pool.data(self_program_id))
         .expect("AMM Program expects a valid Pool Definition Account");
 
     assert!(pool_def_data.active, "Pool is inactive");
@@ -25,7 +25,7 @@ fn validate_swap_setup(
     );
 
     let vault_a_token_holding =
-        token_core::TokenHolding::try_from(vault_a.account.data(pool_def_data.token_program_id))
+        token_core::TokenHolding::try_from(vault_a.data(pool_def_data.token_program_id))
             .expect("AMM Program expects a valid Token Holding Account for Vault A");
     let token_core::TokenHolding::Fungible {
         definition_id: _,
@@ -41,7 +41,7 @@ fn validate_swap_setup(
     );
 
     let vault_b_token_holding =
-        token_core::TokenHolding::try_from(vault_b.account.data(pool_def_data.token_program_id))
+        token_core::TokenHolding::try_from(vault_b.data(pool_def_data.token_program_id))
             .expect("AMM Program expects a valid Token Holding Account for Vault B");
     let token_core::TokenHolding::Fungible {
         definition_id: _,
@@ -66,49 +66,49 @@ fn validate_swap_setup(
     reason = "consistent with codebase style"
 )]
 fn create_swap_post_states(
-    pool: AccountWithMetadata,
+    pool: Input,
     pool_def_data: PoolDefinition,
-    vault_a: AccountWithMetadata,
-    vault_b: AccountWithMetadata,
-    user_holding_a: AccountWithMetadata,
-    user_holding_b: AccountWithMetadata,
+    vault_a: Input,
+    vault_b: Input,
+    user_holding_a: Input,
+    user_holding_b: Input,
     deposit_a: u128,
     withdraw_a: u128,
     deposit_b: u128,
     withdraw_b: u128,
     self_program_id: ProgramId,
-) -> Vec<Account> {
-    let mut pool_post = pool.account;
+) -> Vec<Option<Slot>> {
+    let mut pool_post = pool.into_slot_of(self_program_id);
     let pool_post_definition = PoolDefinition {
         reserve_a: pool_def_data.reserve_a + deposit_a - withdraw_a,
         reserve_b: pool_def_data.reserve_b + deposit_b - withdraw_b,
         ..pool_def_data
     };
 
-    pool_post.slot_mut(self_program_id).data = Data::from(&pool_post_definition);
+    pool_post.data = Data::from(&pool_post_definition);
 
     vec![
-        pool_post,
-        vault_a.account,
-        vault_b.account,
-        user_holding_a.account,
-        user_holding_b.account,
+        Some(pool_post),
+        vault_a.unchanged(),
+        vault_b.unchanged(),
+        user_holding_a.unchanged(),
+        user_holding_b.unchanged(),
     ]
 }
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn swap_exact_input(
-    pool: AccountWithMetadata,
-    vault_a: AccountWithMetadata,
-    vault_b: AccountWithMetadata,
-    user_holding_a: AccountWithMetadata,
-    user_holding_b: AccountWithMetadata,
+    pool: Input,
+    vault_a: Input,
+    vault_b: Input,
+    user_holding_a: Input,
+    user_holding_b: Input,
     swap_amount_in: u128,
     min_amount_out: u128,
     token_in_id: AccountId,
     self_program_id: ProgramId,
-) -> (Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<Option<Slot>>, Vec<ChainedCall>) {
     let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b, self_program_id);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
@@ -165,10 +165,10 @@ pub fn swap_exact_input(
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 fn swap_logic(
-    user_deposit: AccountWithMetadata,
-    vault_deposit: AccountWithMetadata,
-    vault_withdraw: AccountWithMetadata,
-    user_withdraw: AccountWithMetadata,
+    user_deposit: Input,
+    vault_deposit: Input,
+    vault_withdraw: Input,
+    user_withdraw: Input,
     swap_amount_in: u128,
     min_amount_out: u128,
     reserve_deposit_vault_amount: u128,
@@ -196,7 +196,7 @@ fn swap_logic(
 
     let pda_seed = compute_vault_pda_seed(
         pool_id,
-        token_core::TokenHolding::try_from(vault_withdraw.account.data(token_program_id))
+        token_core::TokenHolding::try_from(vault_withdraw.data(token_program_id))
             .expect("Swap Logic: AMM Program expects valid token data")
             .definition_id(),
     );
@@ -225,16 +225,16 @@ fn swap_logic(
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn swap_exact_output(
-    pool: AccountWithMetadata,
-    vault_a: AccountWithMetadata,
-    vault_b: AccountWithMetadata,
-    user_holding_a: AccountWithMetadata,
-    user_holding_b: AccountWithMetadata,
+    pool: Input,
+    vault_a: Input,
+    vault_b: Input,
+    user_holding_a: Input,
+    user_holding_b: Input,
     exact_amount_out: u128,
     max_amount_in: u128,
     token_in_id: AccountId,
     self_program_id: ProgramId,
-) -> (Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<Option<Slot>>, Vec<ChainedCall>) {
     let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b, self_program_id);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
@@ -291,10 +291,10 @@ pub fn swap_exact_output(
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 fn exact_output_swap_logic(
-    user_deposit: AccountWithMetadata,
-    vault_deposit: AccountWithMetadata,
-    vault_withdraw: AccountWithMetadata,
-    user_withdraw: AccountWithMetadata,
+    user_deposit: Input,
+    vault_deposit: Input,
+    vault_withdraw: Input,
+    user_withdraw: Input,
     exact_amount_out: u128,
     max_amount_in: u128,
     reserve_deposit_vault_amount: u128,
@@ -329,7 +329,7 @@ fn exact_output_swap_logic(
 
     let pda_seed = compute_vault_pda_seed(
         pool_id,
-        token_core::TokenHolding::try_from(vault_withdraw.account.data(token_program_id))
+        token_core::TokenHolding::try_from(vault_withdraw.data(token_program_id))
             .expect("Exact Output Swap Logic: AMM Program expects valid token data")
             .definition_id(),
     );

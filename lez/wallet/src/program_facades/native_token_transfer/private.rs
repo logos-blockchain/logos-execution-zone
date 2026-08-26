@@ -5,7 +5,7 @@ use lee::AccountId;
 use lee_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
-use crate::{AccountIdentity, ExecutionFailureKind};
+use crate::{ExecutionFailureKind, Identity};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_private_transfer_to_outer_account(
@@ -23,12 +23,14 @@ impl NativeTokenTransfer<'_> {
                 vec![
                     self.0
                         .resolve_private_account(from)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::PrivateForeign {
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::authenticated_transfer().id()),
+                    Identity::PrivateForeign {
                         npk: to_npk,
                         vpk: to_vpk,
                         identifier: to_identifier,
-                    },
+                    }
+                    .in_namespace(programs::authenticated_transfer().id()),
                 ],
                 instruction_data,
                 &program.into(),
@@ -62,7 +64,10 @@ impl NativeTokenTransfer<'_> {
 
         self.0
             .send_privacy_preserving_tx_with_pre_check(
-                vec![from_account, to_account],
+                vec![
+                    from_account.in_namespace(programs::authenticated_transfer().id()),
+                    to_account.in_namespace(programs::authenticated_transfer().id()),
+                ],
                 instruction_data,
                 &program.into(),
                 tx_pre_check,

@@ -1,28 +1,27 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
+    account::{Data, Input, Slot},
     program::ProgramId,
 };
 use token_core::TokenHolding;
 
 #[must_use]
 pub fn print_nft(
-    master_account: AccountWithMetadata,
-    printed_account: AccountWithMetadata,
+    master_account: Input,
+    printed_account: Input,
     self_program_id: ProgramId,
-) -> Vec<Account> {
+) -> Vec<Option<Slot>> {
     assert!(
         master_account.is_authorized,
         "Master NFT Account must be authorized"
     );
 
     assert!(
-        printed_account.account.data(self_program_id).is_empty(),
+        printed_account.data(self_program_id).is_empty(),
         "Printed Account must be uninitialized"
     );
 
-    let mut master_account_data =
-        TokenHolding::try_from(master_account.account.data(self_program_id))
-            .expect("Invalid Token Holding data");
+    let mut master_account_data = TokenHolding::try_from(master_account.data(self_program_id))
+        .expect("Invalid Token Holding data");
 
     let TokenHolding::NftMaster {
         definition_id,
@@ -40,15 +39,14 @@ pub fn print_nft(
     );
     *print_balance = print_balance.checked_sub(1).expect("Checked above");
 
-    let mut master_account_post = master_account.account;
-    master_account_post.slot_mut(self_program_id).data = Data::from(&master_account_data);
+    let mut master_account_post = master_account.into_slot_of(self_program_id);
+    master_account_post.data = Data::from(&master_account_data);
 
-    let mut printed_account_post = printed_account.account;
-    printed_account_post.slot_mut(self_program_id).data =
-        Data::from(&TokenHolding::NftPrintedCopy {
-            definition_id,
-            owned: true,
-        });
+    let mut printed_account_post = printed_account.into_slot_of(self_program_id);
+    printed_account_post.data = Data::from(&TokenHolding::NftPrintedCopy {
+        definition_id,
+        owned: true,
+    });
 
-    vec![master_account_post, printed_account_post]
+    vec![Some(master_account_post), Some(printed_account_post)]
 }

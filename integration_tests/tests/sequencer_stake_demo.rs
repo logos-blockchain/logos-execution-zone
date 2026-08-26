@@ -28,7 +28,7 @@ use test_fixtures::{
     setup::{SequencerSetup, sequencer_client},
 };
 use tokio::test;
-use wallet::AccountIdentity;
+use wallet::Identity;
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
 const FUNDING_BALANCE: u128 = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
@@ -87,7 +87,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let mover_instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: FUNDING_BALANCE,
-            recipient_program: Some(programs::sequencer_stake().id()),
         })
         .context("Failed to serialize mover instruction")?;
     let stake_instruction_data =
@@ -107,9 +106,11 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     ctx.wallet()
         .send_pub_tx(
             vec![
-                AccountIdentity::Public(funding_id),
-                AccountIdentity::Public(ownership_id),
-                AccountIdentity::PublicNoSign(config_id),
+                // The mover debits the funding account's native slot and credits the
+                // ownership account's stake slot.
+                Identity::Public(funding_id).in_namespace(programs::authenticated_transfer().id()),
+                Identity::Public(ownership_id).in_namespace(programs::sequencer_stake().id()),
+                Identity::PublicNoSign(config_id).in_namespace(programs::sequencer_stake().id()),
             ],
             stake_instruction_data,
             programs::sequencer_stake().id(),
@@ -255,8 +256,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     ctx.wallet()
         .send_pub_tx(
             vec![
-                AccountIdentity::Public(ownership_id),
-                AccountIdentity::PublicNoSign(config_id),
+                Identity::Public(ownership_id).in_namespace(programs::sequencer_stake().id()),
+                Identity::PublicNoSign(config_id).in_namespace(programs::sequencer_stake().id()),
             ],
             unstake_request_data,
             programs::sequencer_stake().id(),

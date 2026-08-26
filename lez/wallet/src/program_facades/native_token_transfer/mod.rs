@@ -1,4 +1,4 @@
-use lee::{Account, program::Program};
+use lee::program::Program;
 use lee_core::program::InstructionData;
 
 use crate::{ExecutionFailureKind, WalletCore};
@@ -19,17 +19,16 @@ fn auth_transfer_preparation(
 ) -> (
     InstructionData,
     Program,
-    impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
+    impl FnOnce(&[&lee::Input]) -> Result<(), ExecutionFailureKind>,
 ) {
     let instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,
-            recipient_program: None,
         })
         .unwrap();
 
     // TODO: handle large Err-variant properly
-    let tx_pre_check = move |accounts: &[&Account]| {
+    let tx_pre_check = move |accounts: &[&lee::Input]| {
         let from = accounts[0];
         if from.balance(programs::authenticated_transfer().id()) >= balance_to_move {
             Ok(())

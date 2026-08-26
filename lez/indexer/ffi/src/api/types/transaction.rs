@@ -3,17 +3,16 @@ use indexer_service_protocol::{
     EphemeralPublicKey, HashType, Nullifier, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
     ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
-    PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    PublicTransaction, Signature, SlotRef, Transaction, ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature,
     FfiVec,
-    account::FfiAccount,
+    account::FfiAccountSlot,
     vectors::{
-        FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList,
-        FfiProgramDeploymentMessage, FfiProof, FfiPublicActionList, FfiSignaturePubKeyList,
-        FfiVecU8,
+        FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProgramDeploymentMessage,
+        FfiProof, FfiPublicActionList, FfiSignaturePubKeyList, FfiSlotRefList, FfiVecU8,
     },
 };
 
@@ -51,12 +50,17 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
             hash: HashType(value.hash.data),
             message: PublicMessage {
                 program_id: ProgramId(value.message.program_id.data),
-                account_ids: {
-                    let std_vec: Vec<_> = value.message.account_ids.into();
+                slots: {
+                    let std_vec: Vec<_> = value.message.slots.into();
                     std_vec
                         .into_iter()
-                        .map(|ffi_val| AccountId {
-                            value: ffi_val.data,
+                        .map(|ffi_val| SlotRef {
+                            account_id: AccountId {
+                                value: ffi_val.account_id.data,
+                            },
+                            program: ffi_val.program.into_option().map(|p| AccountId {
+                                value: lee::AccountId::from(p.data).into_value(),
+                            }),
                         })
                         .collect()
                 },
@@ -85,10 +89,27 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
     }
 }
 
+/// One `(account, namespace)` a transaction names. `program` is absent for a position that
+/// carries only an address.
+#[repr(C)]
+pub struct FfiSlotRef {
+    pub account_id: FfiAccountId,
+    pub program: FfiOption<FfiProgramId>,
+}
+
+impl From<SlotRef> for FfiSlotRef {
+    fn from(value: SlotRef) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            program: ffi_program(value.program),
+        }
+    }
+}
+
 #[repr(C)]
 pub struct FfiPublicMessage {
     pub program_id: FfiProgramId,
-    pub account_ids: FfiAccountIdList,
+    pub slots: FfiSlotRefList,
     pub nonces: FfiNonceList,
     pub instruction_data: FfiInstructionDataList,
 }
@@ -97,16 +118,16 @@ impl From<PublicMessage> for FfiPublicMessage {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
             program_id,
-            account_ids,
+            slots,
             nonces,
             instruction_data,
         } = value;
 
         Self {
             program_id: program_id.into(),
-            account_ids: account_ids
+            slots: slots
                 .into_iter()
-                .map(Into::into)
+                .map(FfiSlotRef::from)
                 .collect::<Vec<_>>()
                 .into(),
             nonces: nonces
@@ -162,11 +183,27 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                     let std_vec: Vec<_> = value.message.public_actions.into();
                     std_vec
                         .into_iter()
-                        .map(|ffi_val| PublicActionWithID {
-                            account_id: AccountId {
-                                value: ffi_val.account_id.data,
-                            },
-                            post_state: ffi_val.post_state.into(),
+                        .map(|ffi_val| {
+                            let program = ffi_val.slot.program.into_option().map(|p| AccountId {
+                                value: lee::AccountId::from(p.data).into_value(),
+                            });
+                            PublicActionWithID {
+                                slot: SlotRef {
+                                    account_id: AccountId {
+                                        value: ffi_val.slot.account_id.data,
+                                    },
+                                    program,
+                                },
+                                post_state: ffi_val.post_state.into_option().map(|slot| {
+                                    let data = unsafe {
+                                        Vec::from_raw_parts(slot.data, slot.data_len, slot.data_cap)
+                                    };
+                                    indexer_service_protocol::Slot {
+                                        balance: slot.balance.into(),
+                                        data: indexer_service_protocol::Data(data),
+                                    }
+                                }),
+                            }
                         })
                         .collect()
                 },
@@ -220,19 +257,36 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 
 #[repr(C)]
 pub struct FfiPublicAction {
-    pub account_id: FfiAccountId,
-    pub post_state: FfiAccount,
+    pub slot: FfiSlotRef,
+    /// Absent for a position that named no slot; nothing was written there.
+    pub post_state: FfiOption<FfiAccountSlot>,
 }
 
 impl From<PublicActionWithID> for FfiPublicAction {
     fn from(value: PublicActionWithID) -> Self {
-        let post_state: lee::Account = value
-            .post_state
-            .try_into()
-            .expect("Source is in blocks, must fit");
+        let program = value.slot.program;
         Self {
-            account_id: value.account_id.into(),
-            post_state: post_state.into(),
+            slot: FfiSlotRef {
+                account_id: value.slot.account_id.into(),
+                program: ffi_program(program),
+            },
+            post_state: match (value.post_state, program) {
+                (Some(slot), Some(program)) => {
+                    let data: lee::Data =
+                        slot.data.try_into().expect("Source is in blocks, must fit");
+                    let (data, data_len, data_cap) = data.into_inner().into_raw_parts();
+                    FfiOption::from_value(FfiAccountSlot {
+                        program_id: FfiProgramId {
+                            data: lee::ProgramId::from(lee::AccountId::new(program.value)),
+                        },
+                        balance: slot.balance.into(),
+                        data,
+                        data_len,
+                        data_cap,
+                    })
+                }
+                _ => FfiOption::from_none(),
+            },
         }
     }
 }
@@ -554,4 +608,13 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
     };
 
     ValidityWindow((left, right))
+}
+
+/// A namespace is an account id on the wire; the FFI surfaces it as the program id it is.
+fn ffi_program(program: Option<AccountId>) -> FfiOption<FfiProgramId> {
+    program.map_or_else(FfiOption::from_none, |program| {
+        FfiOption::from_value(FfiProgramId {
+            data: lee::ProgramId::from(lee::AccountId::new(program.value)),
+        })
+    })
 }

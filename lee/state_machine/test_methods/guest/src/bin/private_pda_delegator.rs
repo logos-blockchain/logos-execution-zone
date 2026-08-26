@@ -24,7 +24,7 @@ fn main() {
         return;
     };
 
-    let unchanged = pre.account.clone();
+    let unchanged = pre.unchanged();
 
     let mut pre_for_callee = pre.clone();
     pre_for_callee.is_authorized = true;

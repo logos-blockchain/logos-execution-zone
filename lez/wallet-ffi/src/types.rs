@@ -13,7 +13,7 @@ use lee_core::{
     encryption::MlKem768EncapsulationKey, program::PdaSeed, AuthorizationSecretKey,
     NullifierPublicKey, NullifierSecretKey,
 };
-use wallet::{account::AccountIdWithPrivacy, AccountIdentity};
+use wallet::{account::AccountIdWithPrivacy, Identity};
 
 use crate::error::WalletFfiError;
 
@@ -430,20 +430,20 @@ impl TryFrom<&FfiPublicAccountKey> for lee::PublicKey {
     }
 }
 
-impl From<AccountIdentity> for FfiAccountIdentity {
-    fn from(value: AccountIdentity) -> Self {
+impl From<Identity> for FfiAccountIdentity {
+    fn from(value: Identity) -> Self {
         match value {
-            AccountIdentity::Public(account_id) => Self {
+            Identity::Public(account_id) => Self {
                 kind: FfiAccountIdentityKind::Public,
                 account_id: account_id.into(),
                 ..Default::default()
             },
-            AccountIdentity::PublicNoSign(account_id) => Self {
+            Identity::PublicNoSign(account_id) => Self {
                 kind: FfiAccountIdentityKind::PublicNoSign,
                 account_id: account_id.into(),
                 ..Default::default()
             },
-            AccountIdentity::PublicKeycard {
+            Identity::PublicKeycard {
                 account_id,
                 key_path,
             } => Self {
@@ -454,12 +454,12 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 ),
                 ..Default::default()
             },
-            AccountIdentity::PrivateOwned(account_id) => Self {
+            Identity::PrivateOwned(account_id) => Self {
                 kind: FfiAccountIdentityKind::PrivateOwned,
                 account_id: account_id.into(),
                 ..Default::default()
             },
-            AccountIdentity::PrivateForeign {
+            Identity::PrivateForeign {
                 npk,
                 vpk,
                 identifier,
@@ -482,12 +482,12 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     ..Default::default()
                 }
             }
-            AccountIdentity::PrivatePdaOwned(account_id) => Self {
+            Identity::PrivatePdaOwned(account_id) => Self {
                 kind: FfiAccountIdentityKind::PrivatePdaOwned,
                 account_id: account_id.into(),
                 ..Default::default()
             },
-            AccountIdentity::PrivatePdaForeign {
+            Identity::PrivatePdaForeign {
                 binding,
                 npk,
                 vpk,
@@ -519,7 +519,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     ..Default::default()
                 }
             }
-            AccountIdentity::PrivateShared {
+            Identity::PrivateShared {
                 ask,
                 vpk,
                 identifier,
@@ -546,7 +546,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     ..Default::default()
                 }
             }
-            AccountIdentity::PrivatePdaShared {
+            Identity::PrivatePdaShared {
                 binding,
                 nsk,
                 vpk,
@@ -583,7 +583,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
     }
 }
 
-impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
+impl TryFrom<&FfiAccountIdentity> for Identity {
     type Error = WalletFfiError;
 
     #[expect(
@@ -763,7 +763,7 @@ mod tests {
         encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, NullifierSecretKey,
         PrivateAccountKind,
     };
-    use wallet::AccountIdentity;
+    use wallet::Identity;
 
     use crate::{error::WalletFfiError, FfiAccountIdentity, FfiAccountIdentityKind, FfiBytes32};
 
@@ -791,33 +791,33 @@ mod tests {
             },
         );
 
-        let acc_identity_1 = AccountIdentity::Public(pub_acc_id);
-        let acc_identity_2 = AccountIdentity::PublicNoSign(pub_acc_id);
+        let acc_identity_1 = Identity::Public(pub_acc_id);
+        let acc_identity_2 = Identity::PublicNoSign(pub_acc_id);
 
-        let acc_identity_2_5 = AccountIdentity::PublicKeycard {
+        let acc_identity_2_5 = Identity::PublicKeycard {
             account_id: pub_acc_id,
             key_path: "path/to/key".to_owned(),
         };
 
-        let acc_identity_3 = AccountIdentity::PrivateOwned(private_reg_acc_id);
-        let acc_identity_4 = AccountIdentity::PrivateForeign {
+        let acc_identity_3 = Identity::PrivateOwned(private_reg_acc_id);
+        let acc_identity_4 = Identity::PrivateForeign {
             npk,
             vpk: vpk.clone(),
             identifier,
         };
-        let acc_identity_5 = AccountIdentity::PrivatePdaOwned(private_pda_acc_id);
-        let acc_identity_6 = AccountIdentity::PrivatePdaForeign {
+        let acc_identity_5 = Identity::PrivatePdaOwned(private_pda_acc_id);
+        let acc_identity_6 = Identity::PrivatePdaForeign {
             binding: ([0_u32; 8], lee_core::program::PdaSeed::new([9; 32])),
             npk,
             vpk: vpk.clone(),
             identifier,
         };
-        let acc_identity_7 = AccountIdentity::PrivateShared {
+        let acc_identity_7 = Identity::PrivateShared {
             ask,
             vpk: vpk.clone(),
             identifier,
         };
-        let acc_identity_8 = AccountIdentity::PrivatePdaShared {
+        let acc_identity_8 = Identity::PrivatePdaShared {
             binding: ([0_u32; 8], lee_core::program::PdaSeed::new([9; 32])),
             nsk,
             vpk,
@@ -872,15 +872,15 @@ mod tests {
         assert_eq!(ffi_acc_identity_7.nullifier_public_key.data, npk.0);
         assert_eq!(ffi_acc_identity_8.nullifier_public_key.data, npk.0);
 
-        let acc_identity_res_1: AccountIdentity = (&ffi_acc_identity_1).try_into().unwrap();
-        let acc_identity_res_2: AccountIdentity = (&ffi_acc_identity_2).try_into().unwrap();
-        let acc_identity_res_2_5: AccountIdentity = (&ffi_acc_identity_2_5).try_into().unwrap();
-        let acc_identity_res_3: AccountIdentity = (&ffi_acc_identity_3).try_into().unwrap();
-        let acc_identity_res_4: AccountIdentity = (&ffi_acc_identity_4).try_into().unwrap();
-        let acc_identity_res_5: AccountIdentity = (&ffi_acc_identity_5).try_into().unwrap();
-        let acc_identity_res_6: AccountIdentity = (&ffi_acc_identity_6).try_into().unwrap();
-        let acc_identity_res_7: AccountIdentity = (&ffi_acc_identity_7).try_into().unwrap();
-        let acc_identity_res_8: AccountIdentity = (&ffi_acc_identity_8).try_into().unwrap();
+        let acc_identity_res_1: Identity = (&ffi_acc_identity_1).try_into().unwrap();
+        let acc_identity_res_2: Identity = (&ffi_acc_identity_2).try_into().unwrap();
+        let acc_identity_res_2_5: Identity = (&ffi_acc_identity_2_5).try_into().unwrap();
+        let acc_identity_res_3: Identity = (&ffi_acc_identity_3).try_into().unwrap();
+        let acc_identity_res_4: Identity = (&ffi_acc_identity_4).try_into().unwrap();
+        let acc_identity_res_5: Identity = (&ffi_acc_identity_5).try_into().unwrap();
+        let acc_identity_res_6: Identity = (&ffi_acc_identity_6).try_into().unwrap();
+        let acc_identity_res_7: Identity = (&ffi_acc_identity_7).try_into().unwrap();
+        let acc_identity_res_8: Identity = (&ffi_acc_identity_8).try_into().unwrap();
 
         assert_eq!(acc_identity_res_1, acc_identity_1);
         assert_eq!(acc_identity_res_2, acc_identity_2);
@@ -900,12 +900,12 @@ mod tests {
         let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
         let identifier = u128::from_le_bytes([45; 16]);
 
-        let shared = AccountIdentity::PrivateShared {
+        let shared = Identity::PrivateShared {
             ask,
             vpk: vpk.clone(),
             identifier,
         };
-        let pda_shared = AccountIdentity::PrivatePdaShared {
+        let pda_shared = Identity::PrivatePdaShared {
             binding: ([0_u32; 8], lee_core::program::PdaSeed::new([9; 32])),
             nsk,
             vpk,
@@ -932,7 +932,7 @@ mod tests {
             &zeroed_pda,
         ] {
             assert_eq!(
-                AccountIdentity::try_from(inconsistent).unwrap_err(),
+                Identity::try_from(inconsistent).unwrap_err(),
                 WalletFfiError::InvalidKeyValue
             );
         }

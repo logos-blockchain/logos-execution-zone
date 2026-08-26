@@ -76,7 +76,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![vault_pre.clone(), receiver_pre.clone()],
-        vec![vault_pre.account, receiver_pre.account],
+        vec![vault_pre.unchanged(), receiver_pre.unchanged()],
     )
     .with_chained_calls(chained_calls)
     .write();

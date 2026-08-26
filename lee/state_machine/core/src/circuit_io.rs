@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountWithMetadata},
+    account::{Account, Input, Slot},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
@@ -36,6 +36,10 @@ pub enum InputAccountIdentity {
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct PrivateWitness {
+    /// The account's full pre-state. A program is handed only the one slot it names, but a
+    /// commitment covers the whole account, so the private side carries it here rather than
+    /// through anything the program can see.
+    pub account: Account,
     pub vpk: ViewingPublicKey,
     pub random_seed: [u8; 32],
     pub identifier: Identifier,
@@ -151,8 +155,8 @@ pub struct PrivateAction {
 #[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct PublicAction {
-    pub pre: AccountWithMetadata,
-    pub post: Account,
+    pub pre: Input,
+    pub post: Option<Slot>,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -198,7 +202,7 @@ mod tests {
     use super::*;
     use crate::{
         Commitment, Nullifier,
-        account::{Account, AccountId, AccountWithMetadata, Nonce},
+        account::{Account, AccountId, Data, Input, Slot},
         encryption::{Ciphertext, EphemeralPublicKey},
     };
 
@@ -207,40 +211,38 @@ mod tests {
         let output = PrivacyPreservingCircuitOutput {
             public_actions: vec![
                 PublicAction {
-                    pre: AccountWithMetadata::new(
-                        Account::single(
-                            [1, 2, 3, 4, 5, 6, 7, 8],
-                            12_345_678_901_234_567_890,
-                            b"test data".to_vec().try_into().unwrap(),
-                            Nonce(0xFFFF_FFFF_FFFF_FFFE),
-                        ),
-                        true,
-                        AccountId::new([0; 32]),
-                    ),
-                    post: Account::single(
-                        [1, 2, 3, 4, 5, 6, 7, 8],
-                        100,
-                        b"post state data".to_vec().try_into().unwrap(),
-                        Nonce(0xFFFF_FFFF_FFFF_FFFF),
-                    ),
+                    pre: Input {
+                        account_id: AccountId::new([0; 32]),
+                        is_authorized: true,
+                        slot: Some((
+                            AccountId::from([1, 2, 3, 4, 5, 6, 7, 8]),
+                            Slot {
+                                balance: 12_345_678_901_234_567_890,
+                                data: Data::try_from(b"test data".to_vec()).unwrap(),
+                            },
+                        )),
+                    },
+                    post: Some(Slot {
+                        balance: 100,
+                        data: Data::try_from(b"post state data".to_vec()).unwrap(),
+                    }),
                 },
                 PublicAction {
-                    pre: AccountWithMetadata::new(
-                        Account::single(
-                            [9, 9, 9, 8, 8, 8, 7, 7],
-                            123_123_123_456_456_567_112,
-                            b"test data".to_vec().try_into().unwrap(),
-                            Nonce(9_999_999_999_999_999_999_999),
-                        ),
-                        false,
-                        AccountId::new([1; 32]),
-                    ),
-                    post: Account::single(
-                        [2, 3, 4, 5, 6, 7, 8, 9],
-                        200,
-                        b"post state data 2".to_vec().try_into().unwrap(),
-                        Nonce(0xFFFF_FFFF_FFFF_FFFD),
-                    ),
+                    pre: Input {
+                        account_id: AccountId::new([1; 32]),
+                        is_authorized: false,
+                        slot: Some((
+                            AccountId::from([9, 9, 9, 8, 8, 8, 7, 7]),
+                            Slot {
+                                balance: 123_123_123_456_456_567_112,
+                                data: Data::try_from(b"test data".to_vec()).unwrap(),
+                            },
+                        )),
+                    },
+                    post: Some(Slot {
+                        balance: 200,
+                        data: Data::try_from(b"post state data 2".to_vec()).unwrap(),
+                    }),
                 },
             ],
             private_actions: vec![PrivateAction {

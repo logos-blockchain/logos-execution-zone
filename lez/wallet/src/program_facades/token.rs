@@ -3,15 +3,15 @@ use lee::{AccountId, program::Program};
 use lee_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 use token_core::Instruction;
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{ExecutionFailureKind, Identity, WalletCore};
 
 pub struct Token<'wallet>(pub &'wallet WalletCore);
 
 impl Token<'_> {
     pub async fn send_new_definition(
         &self,
-        definition: AccountIdentity,
-        supply: AccountIdentity,
+        definition: Identity,
+        supply: Identity,
         name: String,
         total_supply: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -21,7 +21,10 @@ impl Token<'_> {
 
         self.0
             .send_pub_tx(
-                vec![definition, supply],
+                vec![
+                    definition.in_namespace(programs::token().id()),
+                    supply.in_namespace(programs::token().id()),
+                ],
                 instruction_data,
                 programs::token().id(),
             )
@@ -42,10 +45,11 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(definition_account_id),
+                    Identity::Public(definition_account_id).in_namespace(programs::token().id()),
                     self.0
                         .resolve_private_account(supply_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -76,8 +80,9 @@ impl Token<'_> {
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::Public(supply_account_id),
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
+                    Identity::Public(supply_account_id).in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -108,10 +113,12 @@ impl Token<'_> {
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                     self.0
                         .resolve_private_account(supply_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -127,8 +134,8 @@ impl Token<'_> {
 
     pub async fn send_transfer_transaction(
         &self,
-        sender: AccountIdentity,
-        recipient: AccountIdentity,
+        sender: Identity,
+        recipient: Identity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
@@ -139,7 +146,10 @@ impl Token<'_> {
 
         self.0
             .send_pub_tx(
-                vec![sender, recipient],
+                vec![
+                    sender.in_namespace(programs::token().id()),
+                    recipient.in_namespace(programs::token().id()),
+                ],
                 instruction_data,
                 programs::token().id(),
             )
@@ -163,10 +173,12 @@ impl Token<'_> {
                 vec![
                     self.0
                         .resolve_private_account(sender_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                     self.0
                         .resolve_private_account(recipient_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -199,12 +211,14 @@ impl Token<'_> {
                 vec![
                     self.0
                         .resolve_private_account(sender_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::PrivateForeign {
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
+                    Identity::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
                         identifier: recipient_identifier,
-                    },
+                    }
+                    .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -235,8 +249,9 @@ impl Token<'_> {
                 vec![
                     self.0
                         .resolve_private_account(sender_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::Public(recipient_account_id),
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
+                    Identity::Public(recipient_account_id).in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -253,7 +268,7 @@ impl Token<'_> {
 
     pub async fn send_transfer_transaction_shielded_owned_account(
         &self,
-        sender: AccountIdentity,
+        sender: Identity,
         recipient_account_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
@@ -265,10 +280,11 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    sender,
+                    sender.in_namespace(programs::token().id()),
                     self.0
                         .resolve_private_account(recipient_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -285,7 +301,7 @@ impl Token<'_> {
 
     pub async fn send_transfer_transaction_shielded_foreign_account(
         &self,
-        sender: AccountIdentity,
+        sender: Identity,
         recipient_npk: NullifierPublicKey,
         recipient_vpk: ViewingPublicKey,
         recipient_identifier: Identifier,
@@ -299,12 +315,13 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    sender,
-                    AccountIdentity::PrivateForeign {
+                    sender.in_namespace(programs::token().id()),
+                    Identity::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
                         identifier: recipient_identifier,
-                    },
+                    }
+                    .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -322,7 +339,7 @@ impl Token<'_> {
     pub async fn send_burn_transaction(
         &self,
         definition_account_id: AccountId,
-        holder: AccountIdentity,
+        holder: Identity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = Instruction::Burn {
@@ -333,7 +350,11 @@ impl Token<'_> {
 
         self.0
             .send_pub_tx(
-                vec![AccountIdentity::PublicNoSign(definition_account_id), holder],
+                vec![
+                    Identity::PublicNoSign(definition_account_id)
+                        .in_namespace(programs::token().id()),
+                    holder.in_namespace(programs::token().id()),
+                ],
                 instruction_data,
                 programs::token().id(),
             )
@@ -357,10 +378,12 @@ impl Token<'_> {
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                     self.0
                         .resolve_private_account(holder_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -391,8 +414,9 @@ impl Token<'_> {
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::Public(holder_account_id),
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
+                    Identity::Public(holder_account_id).in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -422,10 +446,11 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(definition_account_id),
+                    Identity::Public(definition_account_id).in_namespace(programs::token().id()),
                     self.0
                         .resolve_private_account(holder_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -442,8 +467,8 @@ impl Token<'_> {
 
     pub async fn send_mint_transaction(
         &self,
-        definition: AccountIdentity,
-        holder: AccountIdentity,
+        definition: Identity,
+        holder: Identity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = Instruction::Mint {
@@ -454,7 +479,10 @@ impl Token<'_> {
 
         self.0
             .send_pub_tx(
-                vec![definition, holder],
+                vec![
+                    definition.in_namespace(programs::token().id()),
+                    holder.in_namespace(programs::token().id()),
+                ],
                 instruction_data,
                 programs::token().id(),
             )
@@ -478,10 +506,12 @@ impl Token<'_> {
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                     self.0
                         .resolve_private_account(holder_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -514,12 +544,14 @@ impl Token<'_> {
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::PrivateForeign {
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
+                    Identity::PrivateForeign {
                         npk: holder_npk,
                         vpk: holder_vpk,
                         identifier: holder_identifier,
-                    },
+                    }
+                    .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -550,8 +582,9 @@ impl Token<'_> {
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::Public(holder_account_id),
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
+                    Identity::Public(holder_account_id).in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -581,10 +614,11 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(definition_account_id),
+                    Identity::Public(definition_account_id).in_namespace(programs::token().id()),
                     self.0
                         .resolve_private_account(holder_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -616,12 +650,13 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(definition_account_id),
-                    AccountIdentity::PrivateForeign {
+                    Identity::Public(definition_account_id).in_namespace(programs::token().id()),
+                    Identity::PrivateForeign {
                         npk: holder_npk,
                         vpk: holder_vpk,
                         identifier: holder_identifier,
-                    },
+                    }
+                    .in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 &programs::token().into(),

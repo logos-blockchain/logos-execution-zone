@@ -210,6 +210,26 @@ pub struct SlotRef {
     pub program: Option<AccountId>,
 }
 
+impl SlotRef {
+    /// A position naming `program`'s namespace at `account_id`.
+    #[must_use]
+    pub fn new(account_id: AccountId, program: impl Into<AccountId>) -> Self {
+        Self {
+            account_id,
+            program: Some(program.into()),
+        }
+    }
+
+    /// A position carrying only an address: a marker, an authority, a derivation input.
+    #[must_use]
+    pub const fn address_only(account_id: AccountId) -> Self {
+        Self {
+            account_id,
+            program: None,
+        }
+    }
+}
+
 /// One namespace at one account, as handed to a program. An account needing two namespaces
 /// occupies two positions; no two positions may name the same pair.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -227,6 +247,28 @@ impl Input {
         let (named, slot) = self.slot.as_ref().expect("Position names no slot");
         assert_eq!(*named, program.into(), "Position names another namespace");
         slot
+    }
+
+    /// The same position carrying a different slot, for building the pre-state a chained call
+    /// will see once the calls before it have run.
+    #[must_use]
+    pub fn with_slot(mut self, program: impl Into<AccountId>, slot: Slot) -> Self {
+        self.slot = Some((program.into(), slot));
+        self
+    }
+
+    /// The post state of a position the program leaves alone.
+    #[must_use]
+    pub fn unchanged(&self) -> Option<Slot> {
+        self.slot.as_ref().map(|(_, slot)| slot.clone())
+    }
+
+    /// The named slot by value, whichever namespace it is. Only for a program crediting a
+    /// namespace its caller chose; anywhere the program knows what it expects, name it and let
+    /// [`Self::into_slot_of`] check.
+    #[must_use]
+    pub fn into_caller_named_slot(self) -> Slot {
+        self.slot.expect("Position names no slot").1
     }
 
     /// The named slot by value, for a program building its post state.
@@ -438,6 +480,22 @@ mod tests {
         let balance = address_only.balance(DEFAULT_PROGRAM_ID);
 
         unreachable!("reading an address-only position must panic, got {balance}");
+    }
+
+    #[test]
+    fn set_slot_leaves_other_slots_alone() {
+        let mut account = Account::single(DEFAULT_PROGRAM_ID, 7, Data::empty(), Nonce(0));
+
+        account.set_slot(
+            OTHER_PROGRAM_ID,
+            Slot {
+                balance: 1,
+                data: Data::empty(),
+            },
+        );
+
+        assert_eq!(account.balance(DEFAULT_PROGRAM_ID), 7);
+        assert_eq!(account.balance(OTHER_PROGRAM_ID), 1);
     }
 
     #[test]

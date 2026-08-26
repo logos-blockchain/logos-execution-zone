@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::AccountWithMetadata,
+    account::Input,
     from_frame,
     program::{InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_frame,
@@ -57,7 +57,7 @@ impl Program {
     pub(crate) fn execute(
         &self,
         caller_program_id: Option<ProgramId>,
-        pre_states: &[AccountWithMetadata],
+        pre_states: &[Input],
         instruction_data: &InstructionData,
     ) -> Result<ProgramOutput, LeeError> {
         // Write inputs to the program
@@ -92,7 +92,7 @@ impl Program {
     pub fn write_inputs(
         &self,
         caller_program_id: Option<ProgramId>,
-        pre_states: &[AccountWithMetadata],
+        pre_states: &[Input],
         instruction_data: &[u8],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {

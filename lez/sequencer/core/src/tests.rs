@@ -10,7 +10,8 @@ use common::{
 };
 use kameo::actor::Spawn as _;
 use lee::{
-    Account, AccountId, Data, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
+    Account, AccountId, Data, PrivateKey, PublicKey, PublicTransaction, SlotRef, V03State,
+    program::Program,
 };
 use lee_core::account::Nonce;
 use logos_blockchain_core::{
@@ -175,6 +176,14 @@ fn committee_cooldown_needs_the_channel_to_advance() {
     ));
 }
 
+/// The three clock accounts, each read through `program`'s namespace.
+fn clock_slots(program: lee_core::program::ProgramId) -> Vec<SlotRef> {
+    system_accounts::clock_account_ids()
+        .into_iter()
+        .map(|account_id| SlotRef::new(account_id, program))
+        .collect()
+}
+
 fn create_signing_key_for_account1() -> lee::PrivateKey {
     initial_pub_accounts_private_keys()[0].pub_sign_key.clone()
 }
@@ -284,8 +293,8 @@ fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
         },
         receiver_id,
         &[
-            receiver_config_account_id(receiver_id).into_value(),
-            ping_record_pda(receiver_id).into_value(),
+            SlotRef::new(receiver_config_account_id(receiver_id), receiver_id),
+            SlotRef::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
     ))
@@ -1651,7 +1660,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
     let crafted_clock_tx = {
         let message = lee::public_transaction::Message::try_new(
             programs::clock().id(),
-            system_accounts::clock_account_ids().to_vec(),
+            clock_slots(programs::clock().id()),
             vec![],
             42_u64,
         )
@@ -1714,7 +1723,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
 
     let message = lee::public_transaction::Message::try_new(
         clock_chain_caller_id,
-        system_accounts::clock_account_ids().to_vec(),
+        clock_slots(clock_program_id),
         vec![], // no signers
         (clock_program_id, timestamp),
     )
@@ -1893,7 +1902,11 @@ fn time_locked_transfer_transaction(
     let program_id = test_programs::time_locked_transfer().id();
     let message = lee::public_transaction::Message::try_new(
         program_id,
-        vec![from, to, clock_account_id],
+        vec![
+            SlotRef::new(from, program_id),
+            SlotRef::new(to, program_id),
+            SlotRef::new(clock_account_id, programs::clock().id()),
+        ],
         vec![Nonce(from_nonce)],
         (amount, deadline, programs::clock().id()),
     )
@@ -2006,12 +2019,13 @@ fn pinata_cooldown_transaction(
     let program_id = test_programs::pinata_cooldown().id();
     let message = lee::public_transaction::Message::try_new(
         program_id,
-        vec![pinata_id, winner_id, clock_account_id],
+        vec![
+            SlotRef::new(pinata_id, program_id),
+            SlotRef::new(winner_id, programs::authenticated_transfer().id()),
+            SlotRef::new(clock_account_id, programs::clock().id()),
+        ],
         vec![],
-        (
-            programs::clock().id(),
-            programs::authenticated_transfer().id(),
-        ),
+        programs::clock().id(),
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
@@ -2134,7 +2148,10 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     let withdraw_tx = {
         let message = lee::public_transaction::Message::try_new(
             programs::bridge().id(),
-            vec![system_accounts::bridge_account_id()],
+            vec![SlotRef::new(
+                system_accounts::bridge_account_id(),
+                programs::bridge().id(),
+            )],
             vec![],
             bridge_core::Instruction::Withdraw {
                 amount: 1,
@@ -3096,13 +3113,16 @@ fn diag_sequencer_stake_claims_ownership_account() {
     let mover_instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount,
-            recipient_program: Some(programs::sequencer_stake().id()),
         })
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
         programs::sequencer_stake().id(),
-        vec![funding_id, ownership_id, config_id],
+        vec![
+            SlotRef::new(funding_id, programs::authenticated_transfer().id()),
+            SlotRef::new(ownership_id, programs::sequencer_stake().id()),
+            SlotRef::new(config_id, programs::sequencer_stake().id()),
+        ],
         vec![Nonce(0), Nonce(0)],
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
@@ -3147,16 +3167,18 @@ fn stake_transaction(
     let mover_instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount,
-            recipient_program: Some(programs::sequencer_stake().id()),
         })
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
         programs::sequencer_stake().id(),
         vec![
-            funding_id,
-            ownership_id,
-            system_accounts::sequencer_stake_config_account_id(),
+            SlotRef::new(funding_id, programs::authenticated_transfer().id()),
+            SlotRef::new(ownership_id, programs::sequencer_stake().id()),
+            SlotRef::new(
+                system_accounts::sequencer_stake_config_account_id(),
+                programs::sequencer_stake().id(),
+            ),
         ],
         vec![
             state.get_account_by_id(funding_id).nonce,
@@ -3228,7 +3250,10 @@ fn unstake_request_transaction(
     let (ownership_id, ownership_key) = ownership;
     let message = lee::public_transaction::Message::try_new(
         programs::sequencer_stake().id(),
-        vec![ownership_id, config_slot],
+        vec![
+            SlotRef::new(ownership_id, programs::sequencer_stake().id()),
+            SlotRef::new(config_slot, programs::sequencer_stake().id()),
+        ],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
             amount,
@@ -3270,12 +3295,13 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
     // ownership of the target.
     let message = lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id(),
-        vec![funding_id, ownership_id],
+        vec![
+            SlotRef::new(funding_id, programs::authenticated_transfer().id()),
+            // The donation lands in the stake slot, which is what the request is sized off.
+            SlotRef::new(ownership_id, programs::sequencer_stake().id()),
+        ],
         vec![state.get_account_by_id(funding_id).nonce],
-        authenticated_transfer_core::Instruction::Transfer {
-            amount: donation,
-            recipient_program: Some(programs::sequencer_stake().id()),
-        },
+        authenticated_transfer_core::Instruction::Transfer { amount: donation },
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&funding_key]);
@@ -3476,8 +3502,11 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     let message = lee::public_transaction::Message::try_new(
         programs::sequencer_stake().id(),
         vec![
-            ownership_id,
-            system_accounts::sequencer_stake_config_account_id(),
+            SlotRef::new(ownership_id, programs::sequencer_stake().id()),
+            SlotRef::new(
+                system_accounts::sequencer_stake_config_account_id(),
+                programs::sequencer_stake().id(),
+            ),
         ],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
@@ -3594,8 +3623,11 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let message = lee::public_transaction::Message::try_new(
         programs::sequencer_stake().id(),
         vec![
-            stake_id,
-            system_accounts::sequencer_stake_config_account_id(),
+            SlotRef::new(stake_id, programs::sequencer_stake().id()),
+            SlotRef::new(
+                system_accounts::sequencer_stake_config_account_id(),
+                programs::sequencer_stake().id(),
+            ),
         ],
         // The genesis Stake transaction already signed once with this account.
         vec![Nonce(1)],

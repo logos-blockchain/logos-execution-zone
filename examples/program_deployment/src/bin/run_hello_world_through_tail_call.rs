@@ -1,6 +1,6 @@
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, PublicTransaction,
+    AccountId, PublicTransaction, SlotRef,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
@@ -48,8 +48,13 @@ async fn main() {
     let instruction_data = ();
     let nonces = vec![];
     let signing_keys = [];
-    let message =
-        Message::try_new(program.id(), vec![account_id], nonces, instruction_data).unwrap();
+    let message = Message::try_new(
+        program.id(),
+        vec![SlotRef::new(account_id, program.id())],
+        nonces,
+        instruction_data,
+    )
+    .unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 

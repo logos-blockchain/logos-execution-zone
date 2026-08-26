@@ -1,7 +1,7 @@
 use common::HashType;
 use lee::{AccountId, program::Program};
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{ExecutionFailureKind, Identity, WalletCore};
 
 pub struct Bridge<'wallet>(pub &'wallet WalletCore);
 
@@ -23,8 +23,9 @@ impl Bridge<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::Public(sender_account_id),
-                    AccountIdentity::PublicNoSign(bridge_account_id),
+                    Identity::Public(sender_account_id)
+                        .in_namespace(programs::authenticated_transfer().id()),
+                    Identity::PublicNoSign(bridge_account_id).in_namespace(programs::bridge().id()),
                 ],
                 instruction_data,
                 programs::bridge().id(),

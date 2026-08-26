@@ -12,7 +12,7 @@ use std::{
     path::PathBuf,
 };
 
-pub use account_manager::AccountIdentity;
+pub use account_manager::{AccountIdentity, Identity};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, block::Block, transaction::LeeTransaction};
@@ -355,10 +355,11 @@ impl WalletCore {
         self.storage.key_chain_mut().set_sealing_secret_key(key);
     }
 
-    /// Resolve an `AccountId` to the appropriate `AccountIdentity` variant.
+    /// Resolve an `AccountId` to the appropriate `Identity` variant. The caller pairs it with
+    /// the namespace it will read, since only the caller knows which program it is invoking.
     /// Checks the key tree first, then shared private accounts.
     #[must_use]
-    pub fn resolve_private_account(&self, account_id: lee::AccountId) -> Option<AccountIdentity> {
+    pub fn resolve_private_account(&self, account_id: lee::AccountId) -> Option<Identity> {
         // Check key tree first
         if self
             .storage
@@ -366,7 +367,7 @@ impl WalletCore {
             .private_account(account_id)
             .is_some()
         {
-            return Some(AccountIdentity::PrivateOwned(account_id));
+            return Some(Identity::PrivateOwned(account_id));
         }
 
         // Check shared private accounts
@@ -379,7 +380,7 @@ impl WalletCore {
         let identifier = entry.identifier;
 
         match (entry.pda_seed, entry.authority_program_id) {
-            (Some(seed), Some(program_id)) => Some(AccountIdentity::PrivatePdaShared {
+            (Some(seed), Some(program_id)) => Some(Identity::PrivatePdaShared {
                 binding: (program_id, seed),
                 nsk: keys.nullifier_secret_key(),
                 vpk,
@@ -387,7 +388,7 @@ impl WalletCore {
             }),
             // A PDA entry without its authority program cannot be addressed.
             (Some(_), None) => None,
-            (None, _) => Some(AccountIdentity::PrivateShared {
+            (None, _) => Some(Identity::PrivateShared {
                 ask: keys.authorization_secret_key,
                 vpk,
                 identifier,
@@ -768,18 +769,13 @@ impl WalletCore {
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
-        tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[&lee::Input]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         let pre_states = acc_manager.pre_states();
 
-        tx_pre_check(
-            &pre_states
-                .iter()
-                .map(|pre| &pre.account)
-                .collect::<Vec<_>>(),
-        )?;
+        tx_pre_check(&pre_states.iter().collect::<Vec<_>>())?;
 
         let private_account_keys = acc_manager.private_account_keys();
         let (output, proof) =
@@ -840,7 +836,7 @@ impl WalletCore {
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program_id: ProgramId,
-        tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[&lee::Input]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
         if accounts.iter().any(AccountIdentity::is_private) {
@@ -854,19 +850,14 @@ impl WalletCore {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         let pre_states = acc_manager.pre_states();
-        tx_pre_check(
-            &pre_states
-                .iter()
-                .map(|pre| &pre.account)
-                .collect::<Vec<_>>(),
-        )?;
+        tx_pre_check(&pre_states.iter().collect::<Vec<_>>())?;
 
-        let account_ids = acc_manager.public_account_ids();
+        let slots = acc_manager.public_slots();
         let nonces = acc_manager.public_account_nonces();
 
         let message = lee::public_transaction::Message::new_preserialized(
             program_id,
-            account_ids,
+            slots,
             nonces,
             instruction_data,
         );

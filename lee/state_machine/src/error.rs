@@ -1,7 +1,7 @@
 use std::io;
 
 use lee_core::{
-    account::{Account, AccountId},
+    account::{AccountId, Slot},
     program::ProgramId,
 };
 use thiserror::Error;
@@ -89,8 +89,8 @@ pub enum InvalidProgramBehaviorError {
     InconsistentAccountPreState {
         account_id: AccountId,
         // Boxed to reduce the size of the error type
-        expected: Box<Account>,
-        actual: Box<Account>,
+        expected: Box<Slot>,
+        actual: Box<Slot>,
     },
 
     #[error("Unauthorized account marked as authorized")]

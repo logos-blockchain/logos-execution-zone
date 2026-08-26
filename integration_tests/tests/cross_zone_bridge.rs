@@ -24,7 +24,7 @@ use integration_tests::{
     indexer_client::IndexerClient,
 };
 use lee::{
-    AccountId, PrivateKey, PublicKey, PublicTransaction,
+    AccountId, PrivateKey, PublicKey, PublicTransaction, SlotRef,
     public_transaction::{Message, WitnessSet},
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
@@ -159,8 +159,14 @@ fn build_lock_tx(
     let payload = borsh::to_vec(&mint).expect("serialize mint");
 
     let target_accounts = vec![
-        wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
-        wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT).into_value(),
+        SlotRef::new(
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            wrapped_token_id,
+        ),
+        SlotRef::new(
+            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+            wrapped_token_id,
+        ),
     ];
     let lock = bridge_lock_core::Instruction::Lock {
         amount: LOCK_AMOUNT,
@@ -172,10 +178,19 @@ fn build_lock_tx(
     };
 
     let accounts = vec![
-        bridge_lock_core::config_account_id(bridge_lock_id),
-        holder_id,
-        bridge_lock_core::escrow_account_id(bridge_lock_id),
-        outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
+        SlotRef::new(
+            bridge_lock_core::config_account_id(bridge_lock_id),
+            bridge_lock_id,
+        ),
+        SlotRef::new(holder_id, bridge_lock_id),
+        SlotRef::new(
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+            bridge_lock_id,
+        ),
+        SlotRef::new(
+            outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
+            outbox_id,
+        ),
     ];
     // One nonce per signature: the holder signs, at its genesis nonce 0.
     let message = Message::try_new(bridge_lock_id, accounts, vec![0_u128.into()], lock)

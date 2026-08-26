@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data, Nonce},
+    account::{AccountId, Data, Input, Slot},
     program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
@@ -37,7 +37,7 @@ fn main() {
                     auth_transfer_id,
                     victim_id_raw,
                     victim_balance,
-                    victim_nonce,
+                    _victim_nonce,
                     victim_slot,
                     recipient_id_raw,
                     amount,
@@ -47,25 +47,32 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     // Echo own pre_states (attacker's account) unchanged.
-    let post_states = pre_states.iter().map(|p| p.account.clone()).collect();
+    let post_states = pre_states.iter().map(Input::unchanged).collect();
 
-    // Construct victim AccountWithMetadata from primitives, stamping is_authorized=true.
-    // Victim has not signed anything — this flag is forged entirely by P1's logic.
-    let victim = AccountWithMetadata {
-        account: Account::single(
-            victim_slot,
-            victim_balance,
-            Data::default(),
-            Nonce(victim_nonce),
-        ),
-        is_authorized: true,
+    // Construct a victim position from primitives, stamping is_authorized=true. The victim
+    // has not signed anything — this flag is forged entirely by P1's logic.
+    let victim = Input {
         account_id: AccountId::new(victim_id_raw),
+        is_authorized: true,
+        slot: Some((
+            victim_slot.into(),
+            Slot {
+                balance: victim_balance,
+                data: Data::default(),
+            },
+        )),
     };
 
-    let recipient = AccountWithMetadata {
-        account: Account::single(auth_transfer_id, 0, Data::default(), Nonce(0)),
-        is_authorized: false,
+    let recipient = Input {
         account_id: AccountId::new(recipient_id_raw),
+        is_authorized: false,
+        slot: Some((
+            auth_transfer_id.into(),
+            Slot {
+                balance: 0,
+                data: Data::default(),
+            },
+        )),
     };
 
     // Forward auth_transfer_id and amount to P2 so it can call authenticated_transfer.

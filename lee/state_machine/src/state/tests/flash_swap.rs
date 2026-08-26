@@ -174,9 +174,13 @@ fn flash_swap_standalone_invariant_check_rejected() {
         min_vault_balance: 1000,
     };
 
-    let message =
-        public_transaction::Message::try_new(initiator.id(), vec![vault_id], vec![], instruction)
-            .unwrap();
+    let message = public_transaction::Message::try_new(
+        initiator.id(),
+        slots_of(token.id(), &[vault_id]),
+        vec![],
+        instruction,
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -196,8 +200,13 @@ fn malicious_self_program_id_rejected_in_public_execution() {
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(acc_id, account);
 
-    let message =
-        public_transaction::Message::try_new(program.id(), vec![acc_id], vec![], ()).unwrap();
+    let message = public_transaction::Message::try_new(
+        program.id(),
+        slots_of(program.id(), &[acc_id]),
+        vec![],
+        (),
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -217,8 +226,13 @@ fn malicious_caller_program_id_rejected_in_public_execution() {
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(acc_id, account);
 
-    let message =
-        public_transaction::Message::try_new(program.id(), vec![acc_id], vec![], ()).unwrap();
+    let message = public_transaction::Message::try_new(
+        program.id(),
+        slots_of(program.id(), &[acc_id]),
+        vec![],
+        (),
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 

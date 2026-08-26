@@ -7,14 +7,14 @@ use lee::{
 };
 use lee_core::SharedSecretKey;
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{ExecutionFailureKind, Identity, WalletCore};
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
 
 impl Ata<'_> {
     pub async fn send_create(
         &self,
-        owner: AccountIdentity,
+        owner: Identity,
         definition_id: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
         let owner_id = owner
@@ -35,9 +35,9 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    owner,
-                    AccountIdentity::PublicNoSign(definition_id),
-                    AccountIdentity::PublicNoSign(ata_id),
+                    owner.address_only(),
+                    Identity::PublicNoSign(definition_id).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(ata_id).in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 ata_program_id,
@@ -47,7 +47,7 @@ impl Ata<'_> {
 
     pub async fn send_transfer(
         &self,
-        owner: AccountIdentity,
+        owner: Identity,
         definition_id: AccountId,
         recipient_id: AccountId,
         amount: u128,
@@ -71,9 +71,9 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    owner,
-                    AccountIdentity::PublicNoSign(sender_ata_id),
-                    AccountIdentity::PublicNoSign(recipient_id),
+                    owner.address_only(),
+                    Identity::PublicNoSign(sender_ata_id).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(recipient_id).in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 ata_program_id,
@@ -83,7 +83,7 @@ impl Ata<'_> {
 
     pub async fn send_burn(
         &self,
-        owner: AccountIdentity,
+        owner: Identity,
         definition_id: AccountId,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -106,9 +106,9 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    owner,
-                    AccountIdentity::PublicNoSign(holder_ata_id),
-                    AccountIdentity::PublicNoSign(definition_id),
+                    owner.address_only(),
+                    Identity::PublicNoSign(holder_ata_id).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(definition_id).in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 ata_program_id,
@@ -136,9 +136,10 @@ impl Ata<'_> {
         let accounts = vec![
             self.0
                 .resolve_private_account(owner_id)
-                .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            AccountIdentity::Public(definition_id),
-            AccountIdentity::Public(ata_id),
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                .in_namespace(programs::token().id()),
+            Identity::Public(definition_id).in_namespace(programs::token().id()),
+            Identity::Public(ata_id).in_namespace(programs::token().id()),
         ];
 
         self.0
@@ -173,9 +174,10 @@ impl Ata<'_> {
         let accounts = vec![
             self.0
                 .resolve_private_account(owner_id)
-                .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            AccountIdentity::Public(sender_ata_id),
-            AccountIdentity::Public(recipient_id),
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                .in_namespace(programs::token().id()),
+            Identity::Public(sender_ata_id).in_namespace(programs::token().id()),
+            Identity::Public(recipient_id).in_namespace(programs::token().id()),
         ];
 
         self.0
@@ -209,9 +211,10 @@ impl Ata<'_> {
         let accounts = vec![
             self.0
                 .resolve_private_account(owner_id)
-                .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            AccountIdentity::Public(holder_ata_id),
-            AccountIdentity::Public(definition_id),
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                .in_namespace(programs::token().id()),
+            Identity::Public(holder_ata_id).in_namespace(programs::token().id()),
+            Identity::Public(definition_id).in_namespace(programs::token().id()),
         ];
 
         self.0

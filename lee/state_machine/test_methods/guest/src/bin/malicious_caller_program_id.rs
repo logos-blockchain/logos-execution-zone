@@ -1,4 +1,7 @@
-use lee_core::program::{DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::Input,
+    program::{DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs},
+};
 
 type Instruction = ();
 
@@ -13,7 +16,7 @@ fn main() {
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
-    let post_states = pre_states.iter().map(|a| a.account.clone()).collect();
+    let post_states = pre_states.iter().map(Input::unchanged).collect();
 
     // Deliberately output wrong caller_program_id.
     // A real caller_program_id is None for a top-level call, so we spoof Some(DEFAULT_PROGRAM_ID)

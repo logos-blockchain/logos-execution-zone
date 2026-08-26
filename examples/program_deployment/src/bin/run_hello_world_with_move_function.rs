@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 use common::transaction::LeeTransaction;
-use lee::{PublicTransaction, program::Program, public_transaction};
+use lee::{PublicTransaction, SlotRef, program::Program, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
-use wallet::{AccountIdentity, WalletCore};
+use wallet::{Identity, WalletCore};
 
 // Before running this example, compile the `hello_world_with_move_function.rs` guest program with:
 //
@@ -78,7 +78,7 @@ async fn main() {
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
                 program.id(),
-                vec![account_id],
+                vec![SlotRef::new(account_id, program.id())],
                 nonces,
                 instruction,
             )
@@ -99,7 +99,7 @@ async fn main() {
         } => {
             let instruction: Instruction = (WRITE_FUNCTION_ID, greeting.into_bytes());
             let account_id = account_id.parse().unwrap();
-            let accounts = vec![AccountIdentity::PrivateOwned(account_id)];
+            let accounts = vec![Identity::PrivateOwned(account_id).in_namespace(program.id())];
 
             wallet_core
                 .send_privacy_preserving_tx(
@@ -117,7 +117,10 @@ async fn main() {
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
                 program.id(),
-                vec![from, to],
+                vec![
+                    SlotRef::new(from, program.id()),
+                    SlotRef::new(to, program.id()),
+                ],
                 nonces,
                 instruction,
             )
@@ -138,8 +141,8 @@ async fn main() {
             let to = to.parse().unwrap();
 
             let accounts = vec![
-                AccountIdentity::Public(from),
-                AccountIdentity::PrivateOwned(to),
+                Identity::Public(from).in_namespace(program.id()),
+                Identity::PrivateOwned(to).in_namespace(program.id()),
             ];
 
             wallet_core

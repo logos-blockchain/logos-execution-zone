@@ -4,13 +4,9 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::Input,
     program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
-
-fn unchanged(pre: &AccountWithMetadata) -> Account {
-    pre.account.clone()
-}
 
 fn main() {
     let (
@@ -62,7 +58,7 @@ fn main() {
 fn dispatch(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     msg: &CrossZoneMessage,
 ) {
@@ -76,7 +72,7 @@ fn dispatch(
     let config = accounts.next().expect("config account required");
     let seen = accounts.next().expect("seen shard account required");
     let marker = accounts.next().expect("source marker account required");
-    let target_accounts: Vec<AccountWithMetadata> = accounts.collect();
+    let target_accounts: Vec<Input> = accounts.collect();
 
     assert_eq!(
         config.account_id,
@@ -97,15 +93,13 @@ fn dispatch(
         "Third account must be the source marker PDA for this message"
     );
 
-    let cfg = InboxConfig::from_bytes(config.account.data(self_program_id))
-        .expect("inbox config decodes");
+    let cfg = InboxConfig::from_bytes(config.data(self_program_id)).expect("inbox config decodes");
 
     assert!(
         msg.src_zone != cfg.self_zone,
         "Source zone must not be this zone"
     );
-    let mut shard =
-        SeenShard::from_bytes(seen.account.data(self_program_id)).expect("seen shard decodes");
+    let mut shard = SeenShard::from_bytes(seen.data(self_program_id)).expect("seen shard decodes");
 
     // One block id, one delivering block. The address binds the zone and block
     // id but not which block claimed them, so an equivocating peer's two blocks
@@ -123,11 +117,11 @@ fn dispatch(
 
     // On replay this is a no-op: the seen shard is untouched and no call is made.
     let (seen_post, chained_calls) = if already_seen {
-        (unchanged(&seen), vec![])
+        (seen.slot_of(self_program_id).clone(), vec![])
     } else {
         shard.insert(msg.src_block_hash, msg.src_tx_index);
-        let mut seen_post = seen.account.clone();
-        seen_post.slot_mut(self_program_id).data = shard
+        let mut seen_post = seen.slot_of(self_program_id).clone();
+        seen_post.data = shard
             .to_bytes()
             .try_into()
             .expect("seen shard fits in account data");
@@ -148,8 +142,8 @@ fn dispatch(
         (seen_post, vec![call])
     };
 
-    let mut post_states = vec![unchanged(&config), seen_post, unchanged(&marker)];
-    post_states.extend(target_accounts.iter().map(unchanged));
+    let mut post_states = vec![config.unchanged(), Some(seen_post), marker.unchanged()];
+    post_states.extend(target_accounts.iter().map(Input::unchanged));
 
     let mut output_pre_states = vec![config, seen, marker];
     output_pre_states.extend(target_accounts);
@@ -169,13 +163,13 @@ fn dispatch(
 fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     config: &InboxConfig,
 ) {
     // pre_states: [config PDA].
-    let [config_meta] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitConfig requires the config account");
+    let [config_meta] =
+        <[Input; 1]>::try_from(pre_states).expect("InitConfig requires the config account");
     assert_eq!(
         config_meta.account_id,
         inbox_config_account_id(self_program_id),
@@ -185,16 +179,17 @@ fn init_config(
     // written is a first init; an already-written one must already hold exactly
     // this, since genesis is replayed onto seeded state during multi-sequencer
     // reconstruction.
-    if let Some(slot) = config_meta.account.slot(self_program_id) {
+    let existing = config_meta.slot_of(self_program_id);
+    if !existing.data.is_empty() {
         assert_eq!(
-            *slot.data,
+            *existing.data,
             config.to_bytes(),
             "inbox config already initialized differently"
         );
     }
 
-    let mut config_post = config_meta.account.clone();
-    config_post.slot_mut(self_program_id).data = config
+    let mut config_post = existing.clone();
+    config_post.data = config
         .to_bytes()
         .try_into()
         .expect("inbox config fits in account data");
@@ -204,7 +199,7 @@ fn init_config(
         caller_program_id,
         instruction_data,
         vec![config_meta],
-        vec![config_post],
+        vec![Some(config_post)],
     )
     .write();
 }

@@ -17,14 +17,14 @@ fn main() {
         return;
     };
 
-    let account_pre1 = pre1.account.clone();
+    let post1 = pre1.unchanged();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![pre1, pre2],
-        vec![account_pre1],
+        vec![post1],
     )
     .write();
 }

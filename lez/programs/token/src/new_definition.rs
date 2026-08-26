@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
+    account::{Data, Input, Slot},
     program::ProgramId,
 };
 use token_core::{
@@ -8,25 +8,19 @@ use token_core::{
 
 #[must_use]
 pub fn new_fungible_definition(
-    definition_target_account: AccountWithMetadata,
-    holding_target_account: AccountWithMetadata,
+    definition_target_account: Input,
+    holding_target_account: Input,
     name: String,
     total_supply: u128,
     self_program_id: ProgramId,
-) -> Vec<Account> {
+) -> Vec<Option<Slot>> {
     assert!(
-        definition_target_account
-            .account
-            .data(self_program_id)
-            .is_empty(),
+        definition_target_account.data(self_program_id).is_empty(),
         "Definition target account must be uninitialized"
     );
 
     assert!(
-        holding_target_account
-            .account
-            .data(self_program_id)
-            .is_empty(),
+        holding_target_account.data(self_program_id).is_empty(),
         "Holding target account must be uninitialized"
     );
 
@@ -40,47 +34,40 @@ pub fn new_fungible_definition(
         balance: total_supply,
     };
 
-    let mut definition_target_account_post = definition_target_account.account;
-    definition_target_account_post
-        .slot_mut(self_program_id)
-        .data = Data::from(&token_definition);
+    let mut definition_target_account_post =
+        definition_target_account.into_slot_of(self_program_id);
+    definition_target_account_post.data = Data::from(&token_definition);
 
-    let mut holding_target_account_post = holding_target_account.account;
-    holding_target_account_post.slot_mut(self_program_id).data = Data::from(&token_holding);
+    let mut holding_target_account_post = holding_target_account.into_slot_of(self_program_id);
+    holding_target_account_post.data = Data::from(&token_holding);
 
-    vec![definition_target_account_post, holding_target_account_post]
+    vec![
+        Some(definition_target_account_post),
+        Some(holding_target_account_post),
+    ]
 }
 
 #[must_use]
 pub fn new_definition_with_metadata(
-    definition_target_account: AccountWithMetadata,
-    holding_target_account: AccountWithMetadata,
-    metadata_target_account: AccountWithMetadata,
+    definition_target_account: Input,
+    holding_target_account: Input,
+    metadata_target_account: Input,
     new_definition: NewTokenDefinition,
     metadata: NewTokenMetadata,
     self_program_id: ProgramId,
-) -> Vec<Account> {
+) -> Vec<Option<Slot>> {
     assert!(
-        definition_target_account
-            .account
-            .data(self_program_id)
-            .is_empty(),
+        definition_target_account.data(self_program_id).is_empty(),
         "Definition target account must be uninitialized"
     );
 
     assert!(
-        holding_target_account
-            .account
-            .data(self_program_id)
-            .is_empty(),
+        holding_target_account.data(self_program_id).is_empty(),
         "Holding target account must be uninitialized"
     );
 
     assert!(
-        metadata_target_account
-            .account
-            .data(self_program_id)
-            .is_empty(),
+        metadata_target_account.data(self_program_id).is_empty(),
         "Metadata target account must be uninitialized"
     );
 
@@ -120,20 +107,19 @@ pub fn new_definition_with_metadata(
         primary_sale_date: 0_u64, // TODO #261: future works to implement this
     };
 
-    let mut definition_target_account_post = definition_target_account.account;
-    definition_target_account_post
-        .slot_mut(self_program_id)
-        .data = Data::from(&token_definition);
+    let mut definition_target_account_post =
+        definition_target_account.into_slot_of(self_program_id);
+    definition_target_account_post.data = Data::from(&token_definition);
 
-    let mut holding_target_account_post = holding_target_account.account;
-    holding_target_account_post.slot_mut(self_program_id).data = Data::from(&token_holding);
+    let mut holding_target_account_post = holding_target_account.into_slot_of(self_program_id);
+    holding_target_account_post.data = Data::from(&token_holding);
 
-    let mut metadata_target_account_post = metadata_target_account.account;
-    metadata_target_account_post.slot_mut(self_program_id).data = Data::from(&token_metadata);
+    let mut metadata_target_account_post = metadata_target_account.into_slot_of(self_program_id);
+    metadata_target_account_post.data = Data::from(&token_metadata);
 
     vec![
-        definition_target_account_post,
-        holding_target_account_post,
-        metadata_target_account_post,
+        Some(definition_target_account_post),
+        Some(holding_target_account_post),
+        Some(metadata_target_account_post),
     ]
 }

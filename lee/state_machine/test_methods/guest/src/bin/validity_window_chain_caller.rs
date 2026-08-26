@@ -25,7 +25,7 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     let [pre] = <[_; 1]>::try_from(pre_states.clone()).expect("Expected exactly one pre state");
-    let post = pre.account.clone();
+    let post = pre.unchanged();
 
     let chained_instruction = to_vec(&(
         chained_block_validity_window,

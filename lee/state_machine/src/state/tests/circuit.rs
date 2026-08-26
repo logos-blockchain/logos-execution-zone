@@ -1,3 +1,5 @@
+use lee_core::account::Input;
+
 use super::*;
 
 fn assert_circuit_proving_failure<T>(result: &Result<T, LeeError>, expected: &str) {
@@ -16,7 +18,7 @@ fn bound_private_pda(
     keys: &TestPrivateKeys,
     identifier: Identifier,
     is_authorized: bool,
-) -> (AccountWithMetadata, InputAccountIdentity) {
+) -> (Input, InputAccountIdentity) {
     let (authority_program_id, seed) = binding;
     let account_id = AccountId::for_private_pda(
         &authority_program_id,
@@ -26,7 +28,12 @@ fn bound_private_pda(
         identifier,
     );
     (
-        AccountWithMetadata::new(Account::default(), is_authorized, account_id),
+        input_of(
+            &Account::default(),
+            is_authorized,
+            account_id,
+            authority_program_id,
+        ),
         init_pda_witness(keys, identifier, binding),
     )
 }
@@ -34,13 +41,20 @@ fn bound_private_pda(
 #[test]
 fn circuit_fails_if_visibility_masks_have_incorrect_lenght() {
     let program = crate::test_methods::simple_balance_transfer();
-    let public_account_1 = AccountWithMetadata::new(
-        Account::single(program.id(), 100, Data::default(), Nonce::default()),
+    let public_account_1_acc =
+        Account::single(program.id(), 100, Data::default(), Nonce::default());
+    let public_account_1 = input_of(
+        &public_account_1_acc,
         true,
         AccountId::new([0; 32]),
+        program.id(),
     );
-    let public_account_2 =
-        AccountWithMetadata::new(Account::default(), true, AccountId::new([1; 32]));
+    let public_account_2 = input_of(
+        &Account::default(),
+        true,
+        AccountId::new([1; 32]),
+        program.id(),
+    );
 
     // Single account_identity entry for a circuit execution with two pre_state accounts.
     let result = execute_and_prove(
@@ -58,15 +72,20 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
-    let private_account_1 = AccountWithMetadata::new(
-        Account::single(program.id(), 100, Data::default(), Nonce::default()),
+    let private_account_1_acc =
+        Account::single(program.id(), 100, Data::default(), Nonce::default());
+    let private_account_1 = input_of(
+        &private_account_1_acc,
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+        program.id(),
     );
-    let private_account_2 = AccountWithMetadata::new(
-        Account::default(),
+    let private_account_2_acc = Account::default();
+    let private_account_2 = input_of(
+        &private_account_2_acc,
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+        program.id(),
     );
 
     // Setting the recipient nsk to authorize the sender.
@@ -78,6 +97,7 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
         Program::serialize_instruction(10_u128).unwrap(),
         vec![
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_1_acc,
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -91,6 +111,7 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
                 },
             }),
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_2_acc,
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -114,16 +135,21 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
-    let private_account_1 = AccountWithMetadata::new(
-        Account::single(program.id(), 100, Data::default(), Nonce::default()),
+    let private_account_1_acc =
+        Account::single(program.id(), 100, Data::default(), Nonce::default());
+    let private_account_1 = input_of(
+        &private_account_1_acc,
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+        program.id(),
     );
-    let private_account_2 = AccountWithMetadata::new(
-        // Non default balance
-        Account::single(program.id(), 1, Data::default(), Nonce::default()),
+    let private_account_2_acc = // Non default balance
+        Account::single(program.id(), 1, Data::default(), Nonce::default());
+    let private_account_2 = input_of(
+        &private_account_2_acc,
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+        program.id(),
     );
 
     let result = execute_and_prove(
@@ -131,6 +157,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
         Program::serialize_instruction(10_u128).unwrap(),
         vec![
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_1_acc,
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -144,6 +171,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
                 },
             }),
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_2_acc,
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -167,21 +195,26 @@ fn circuit_should_fail_if_new_private_account_with_a_foreign_slot_is_provided() 
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
-    let private_account_1 = AccountWithMetadata::new(
-        Account::single(program.id(), 100, Data::default(), Nonce::default()),
+    let private_account_1_acc =
+        Account::single(program.id(), 100, Data::default(), Nonce::default());
+    let private_account_1 = input_of(
+        &private_account_1_acc,
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+        program.id(),
     );
-    let private_account_2 = AccountWithMetadata::new(
-        // A slot held by another program: still not a default pre-state
+    let private_account_2_acc = // A slot held by another program: still not a default pre-state
         Account::single(
             [0, 1, 2, 3, 4, 5, 6, 7],
             1,
             Data::default(),
             Nonce::default(),
-        ),
+        );
+    let private_account_2 = input_of(
+        &private_account_2_acc,
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+        program.id(),
     );
 
     let result = execute_and_prove(
@@ -189,6 +222,7 @@ fn circuit_should_fail_if_new_private_account_with_a_foreign_slot_is_provided() 
         Program::serialize_instruction(10_u128).unwrap(),
         vec![
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_1_acc,
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -202,6 +236,7 @@ fn circuit_should_fail_if_new_private_account_with_a_foreign_slot_is_provided() 
                 },
             }),
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_2_acc,
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -225,21 +260,26 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
-    let private_account_1 = AccountWithMetadata::new(
-        Account::single(program.id(), 100, Data::default(), Nonce::default()),
+    let private_account_1_acc =
+        Account::single(program.id(), 100, Data::default(), Nonce::default());
+    let private_account_1 = input_of(
+        &private_account_1_acc,
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+        program.id(),
     );
-    let private_account_2 = AccountWithMetadata::new(
-        // Non default data
+    let private_account_2_acc = // Non default data
         Account::single(
             program.id(),
             0,
             b"hola mundo".to_vec().try_into().unwrap(),
             Nonce::default(),
-        ),
+        );
+    let private_account_2 = input_of(
+        &private_account_2_acc,
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+        program.id(),
     );
 
     let result = execute_and_prove(
@@ -247,6 +287,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
         Program::serialize_instruction(10_u128).unwrap(),
         vec![
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_1_acc,
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -260,6 +301,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
                 },
             }),
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_2_acc,
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -283,19 +325,24 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
-    let private_account_1 = AccountWithMetadata::new(
-        Account::single(program.id(), 100, Data::default(), Nonce::default()),
+    let private_account_1_acc =
+        Account::single(program.id(), 100, Data::default(), Nonce::default());
+    let private_account_1 = input_of(
+        &private_account_1_acc,
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+        program.id(),
     );
-    let private_account_2 = AccountWithMetadata::new(
-        Account {
-            // Non default nonce
-            nonce: Nonce(0xdead_beef),
-            ..Account::default()
-        },
+    let private_account_2_acc = Account {
+        // Non default nonce
+        nonce: Nonce(0xdead_beef),
+        ..Account::default()
+    };
+    let private_account_2 = input_of(
+        &private_account_2_acc,
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+        program.id(),
     );
 
     let result = execute_and_prove(
@@ -303,6 +350,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
         Program::serialize_instruction(10_u128).unwrap(),
         vec![
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_1_acc,
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -316,6 +364,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
                 },
             }),
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_2_acc,
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -340,16 +389,20 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
-    let private_account_1 = AccountWithMetadata::new(
-        Account::single(program.id(), 100, Data::default(), Nonce::default()),
+    let private_account_1_acc =
+        Account::single(program.id(), 100, Data::default(), Nonce::default());
+    let private_account_1 = input_of(
+        &private_account_1_acc,
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+        program.id(),
     );
-    let private_account_2 = AccountWithMetadata::new(
-        Account::default(),
-        // This should be set to true in normal circumstances
+    let private_account_2_acc = Account::default();
+    let private_account_2 = input_of(
+        &private_account_2_acc, // This should be set to true in normal circumstances
         false,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+        program.id(),
     );
 
     let result = execute_and_prove(
@@ -357,6 +410,7 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
         Program::serialize_instruction(10_u128).unwrap(),
         vec![
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_1_acc,
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -370,6 +424,7 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
                 },
             }),
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_2_acc,
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -402,7 +457,8 @@ fn private_pda_with_matching_binding_succeeds() {
     let seed = PdaSeed::new([42; 32]);
 
     let account_id = AccountId::for_private_pda(&authority_id, &seed, &npk, &keys.vpk(), u128::MAX);
-    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+    let pre_state_acc = Account::default();
+    let pre_state = input_of(&pre_state_acc, false, account_id, authority_id);
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -435,7 +491,8 @@ fn private_pda_npk_mismatch_fails() {
     // check in the circuit must reject.
     let account_id =
         AccountId::for_private_pda(&authority_id, &seed, &npk_a, &keys_a.vpk(), u128::MAX);
-    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+    let pre_state_acc = Account::default();
+    let pre_state = input_of(&pre_state_acc, false, account_id, authority_id);
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -597,7 +654,8 @@ fn holder_authorization_survives_across_sibling_calls() {
     let (pre_state, pda_witness) = bound_private_pda((delegator.id(), seed), &pda_keys, 0, false);
     let holder_id =
         AccountId::for_regular_private_account(&holder_keys.npk(), &holder_keys.vpk(), 0);
-    let holder_pre_state = AccountWithMetadata::new(Account::default(), true, holder_id);
+    let holder_pre_state_acc = Account::default();
+    let holder_pre_state = input_of(&holder_pre_state_acc, true, holder_id, delegator.id());
 
     let callee_id = callee.id();
     let sibling_id = sibling.id();
@@ -618,6 +676,7 @@ fn holder_authorization_survives_across_sibling_calls() {
         vec![
             pda_witness,
             InputAccountIdentity::Private(PrivateWitness {
+                account: holder_pre_state_acc,
                 vpk: holder_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -664,18 +723,13 @@ fn inherited_scope_passes_through_intermediate_calls() {
     ))
     .unwrap();
 
-    execute_and_prove(
-        vec![pre_state],
-        Program::serialize_instruction((
+    execute_and_prove(vec![pre_state], Program::serialize_instruction((
             seed,
             forwarder_id,
             forward_through_undeclaring_call,
             no_sibling,
         ))
-        .unwrap(),
-        vec![witness],
-        &program_with_deps,
-    )
+        .unwrap(), vec![witness], &program_with_deps)
     .expect(
         "an account authorized in an ancestor's output stays authorized below a call that never mentions it",
     );
@@ -744,7 +798,8 @@ fn undeclaring_public_delegation(
     let delegator = crate::test_methods::undeclaring_pda_delegator();
     let sibling = crate::test_methods::noop();
 
-    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+    let pre_state_acc = Account::default();
+    let pre_state = input_of(&pre_state_acc, false, account_id, delegator.id());
 
     let callee_id = callee.id();
     let sibling_id = sibling.id();
@@ -961,10 +1016,13 @@ fn private_accounts_can_only_be_initialized_once() {
 fn circuit_should_fail_if_there_are_repeated_ids() {
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
-    let private_account_1 = AccountWithMetadata::new(
-        Account::single(program.id(), 100, Data::default(), Nonce::default()),
+    let private_account_1_acc =
+        Account::single(program.id(), 100, Data::default(), Nonce::default());
+    let private_account_1 = input_of(
+        &private_account_1_acc,
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+        program.id(),
     );
 
     let result = execute_and_prove(
@@ -972,6 +1030,7 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
         Program::serialize_instruction(100_u128).unwrap(),
         vec![
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_1_acc.clone(),
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -985,6 +1044,7 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
                 },
             }),
             InputAccountIdentity::Private(PrivateWitness {
+                account: private_account_1_acc,
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -1012,13 +1072,14 @@ fn private_authorized_uninitialized_account() {
     let private_keys = test_private_account_keys_1();
 
     // Create an authorized private account with default values (new account being initialized)
-    let authorized_account = AccountWithMetadata::new(
-        Account::default(),
-        true,
-        (&private_keys.npk(), &private_keys.vpk(), 0),
-    );
-
+    let authorized_account_acc = Account::default();
     let program = crate::test_methods::simple_balance_transfer();
+    let authorized_account = input_of(
+        &authorized_account_acc,
+        true,
+        (&private_keys.npk(), &private_keys.vpk(), 0).into(),
+        program.id(),
+    );
 
     // Set up parameters for the new account
 
@@ -1029,6 +1090,7 @@ fn private_authorized_uninitialized_account() {
         vec![authorized_account],
         Program::serialize_instruction(instruction).unwrap(),
         vec![InputAccountIdentity::Private(PrivateWitness {
+            account: authorized_account_acc,
             vpk: private_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
@@ -1102,8 +1164,13 @@ fn two_private_pda_family_members_receive_and_spend() {
         let funder_nonce = funder_account.nonce;
         let (output, proof) = execute_and_prove(
             vec![
-                AccountWithMetadata::new(funder_account, true, funder_id),
-                AccountWithMetadata::new(Account::default(), false, alice_pda_0_id),
+                input_of(&funder_account, true, funder_id, simple_transfer_id),
+                input_of(
+                    &Account::default(),
+                    false,
+                    alice_pda_0_id,
+                    simple_transfer_id,
+                ),
             ],
             Program::serialize_instruction(amount).unwrap(),
             vec![
@@ -1130,8 +1197,13 @@ fn two_private_pda_family_members_receive_and_spend() {
         let funder_nonce = funder_account.nonce;
         let (output, proof) = execute_and_prove(
             vec![
-                AccountWithMetadata::new(funder_account, true, funder_id),
-                AccountWithMetadata::new(Account::default(), false, alice_pda_1_id),
+                input_of(&funder_account, true, funder_id, simple_transfer_id),
+                input_of(
+                    &Account::default(),
+                    false,
+                    alice_pda_1_id,
+                    simple_transfer_id,
+                ),
             ],
             Program::serialize_instruction(amount).unwrap(),
             vec![
@@ -1163,12 +1235,18 @@ fn two_private_pda_family_members_receive_and_spend() {
         let recipient_account = state.get_account_by_id(recipient_id);
         let (output, proof) = execute_and_prove(
             vec![
-                AccountWithMetadata::new(alice_pda_0_account, false, alice_pda_0_id),
-                AccountWithMetadata::new(recipient_account, true, recipient_id),
+                input_of(
+                    &alice_pda_0_account,
+                    false,
+                    alice_pda_0_id,
+                    simple_transfer_id,
+                ),
+                input_of(&recipient_account, true, recipient_id, simple_transfer_id),
             ],
             Program::serialize_instruction(amount).unwrap(),
             vec![
                 InputAccountIdentity::Private(PrivateWitness {
+                    account: alice_pda_0_account.clone(),
                     vpk: alice_keys.vpk(),
                     random_seed: [0; 32],
                     identifier: 0,
@@ -1204,12 +1282,18 @@ fn two_private_pda_family_members_receive_and_spend() {
         let recipient_account = state.get_account_by_id(recipient_id);
         let (output, proof) = execute_and_prove(
             vec![
-                AccountWithMetadata::new(alice_pda_1_account.clone(), false, alice_pda_1_id),
-                AccountWithMetadata::new(recipient_account, false, recipient_id),
+                input_of(
+                    &alice_pda_1_account,
+                    false,
+                    alice_pda_1_id,
+                    simple_transfer_id,
+                ),
+                input_of(&recipient_account, false, recipient_id, simple_transfer_id),
             ],
             Program::serialize_instruction(amount).unwrap(),
             vec![
                 InputAccountIdentity::Private(PrivateWitness {
+                    account: alice_pda_1_account.clone(),
                     vpk: alice_keys.vpk(),
                     random_seed: [0; 32],
                     identifier: 1,
@@ -1263,13 +1347,19 @@ fn two_private_pda_family_members_receive_and_spend() {
         let recipient_nonce = recipient_account.nonce;
         let (output, proof) = execute_and_prove(
             vec![
-                AccountWithMetadata::new(recipient_account, true, recipient_id),
-                AccountWithMetadata::new(alice_pda_1_account_after_spend, false, alice_pda_1_id),
+                input_of(&recipient_account, true, recipient_id, simple_transfer_id),
+                input_of(
+                    &alice_pda_1_account_after_spend,
+                    false,
+                    alice_pda_1_id,
+                    simple_transfer_id,
+                ),
             ],
             Program::serialize_instruction(amount).unwrap(),
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::Private(PrivateWitness {
+                    account: alice_pda_1_account_after_spend.clone(),
                     vpk: alice_keys.vpk(),
                     random_seed: [0; 32],
                     identifier: 1,

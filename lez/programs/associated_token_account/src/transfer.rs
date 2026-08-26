@@ -1,19 +1,19 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Input, Slot},
     program::{ChainedCall, ProgramId},
 };
 use token_core::TokenHolding;
 
 pub fn transfer_from_associated_token_account(
-    owner: AccountWithMetadata,
-    sender_ata: AccountWithMetadata,
-    recipient: AccountWithMetadata,
+    owner: Input,
+    sender_ata: Input,
+    recipient: Input,
     ata_program_id: ProgramId,
     token_program_id: ProgramId,
     amount: u128,
-) -> (Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<Option<Slot>>, Vec<ChainedCall>) {
     assert!(owner.is_authorized, "Owner authorization is missing");
-    let definition_id = TokenHolding::try_from(sender_ata.account.data(token_program_id))
+    let definition_id = TokenHolding::try_from(sender_ata.data(token_program_id))
         .expect("Sender ATA must hold a valid token")
         .definition_id();
     let seed = associated_token_account_core::verify_ata_and_get_seed(
@@ -24,9 +24,9 @@ pub fn transfer_from_associated_token_account(
     );
 
     let post_states = vec![
-        owner.account.clone(),
-        sender_ata.account.clone(),
-        recipient.account.clone(),
+        owner.unchanged(),
+        sender_ata.unchanged(),
+        recipient.unchanged(),
     ];
 
     let mut sender_ata_auth = sender_ata;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    account::{Account, AccountId, Nonce, data::Data},
+    account::{Account, AccountId, Nonce, SlotRef, data::Data},
     program::ProgramId,
 };
 
@@ -10,6 +10,7 @@ use crate::{
     error::{InvalidProgramBehaviorError, LeeError},
     program::Program,
     public_transaction::{Message, WitnessSet},
+    state::tests::{input_of, slots_of},
     validated_state_diff::ValidatedStateDiff,
 };
 
@@ -46,8 +47,13 @@ fn public_diff_reflects_a_successful_transfer() {
             crate::test_methods::simple_balance_transfer(),
         ));
     let program_id = crate::test_methods::simple_balance_transfer().id();
-    let message =
-        Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
+    let message = Message::try_new(
+        program_id,
+        slots_of(program_id, &[from, to]),
+        vec![Nonce(0), Nonce(0)],
+        5_u128,
+    )
+    .unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
     let tx = crate::PublicTransaction::new(message, witness_set);
 
@@ -83,7 +89,7 @@ fn public_diff_reflects_a_successful_transfer() {
 fn privacy_malicious_programs_cannot_drain_public_victim() {
     use lee_core::{
         Commitment, InputAccountIdentity, NullifierWitness, PrivateWitness, WitnessKind,
-        account::{Account, AccountWithMetadata},
+        account::Account,
     };
 
     use crate::{
@@ -137,7 +143,13 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         .get_proof_for(&attacker_commitment)
         .expect("attacker commitment must be in the set");
 
-    let attacker_pre = AccountWithMetadata::new(attacker_account, true, attacker_id);
+    let attacker_pre_acc = attacker_account;
+    let attacker_pre = input_of(
+        &attacker_pre_acc,
+        true,
+        attacker_id,
+        crate::test_methods::malicious_injector().id(),
+    );
 
     let victim_account = state.get_account_by_id(victim_id);
     let instruction: InjectorInstruction = (
@@ -165,6 +177,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
     //   [2] recipient — first seen in simple_balance_transfer's program_output.pre_states
     let account_identities = vec![
         InputAccountIdentity::Private(PrivateWitness {
+            account: Account::default(),
             vpk: attacker_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
@@ -236,7 +249,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 fn privacy_malicious_programs_cannot_drain_private_victim() {
     use lee_core::{
         Commitment, InputAccountIdentity, NullifierWitness, PrivateWitness, WitnessKind,
-        account::{Account, AccountWithMetadata},
+        account::Account,
     };
 
     use crate::{
@@ -294,7 +307,13 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
         .get_proof_for(&attacker_commitment)
         .expect("attacker commitment must be in the set");
 
-    let attacker_pre = AccountWithMetadata::new(attacker_account, true, attacker_id);
+    let attacker_pre_acc = attacker_account;
+    let attacker_pre = input_of(
+        &attacker_pre_acc,
+        true,
+        attacker_id,
+        crate::test_methods::malicious_injector().id(),
+    );
 
     // The attacker supplies the victim's account data directly — it cannot be read from
     // public state. The injected balance, parked in simple_balance_transfer's slot, allows
@@ -328,6 +347,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
     // so a regular update is not an option.
     let account_identities = vec![
         InputAccountIdentity::Private(PrivateWitness {
+            account: Account::default(),
             vpk: attacker_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
@@ -442,9 +462,10 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
         victim_balance,
     );
 
+    let injector_id = crate::test_methods::malicious_injector().id();
     let message = Message::try_new(
-        crate::test_methods::malicious_injector().id(),
-        vec![attacker_id],
+        injector_id,
+        vec![SlotRef::new(attacker_id, injector_id)],
         vec![Nonce(0)],
         instruction,
     )

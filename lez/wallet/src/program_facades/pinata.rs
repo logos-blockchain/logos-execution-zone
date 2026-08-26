@@ -2,7 +2,7 @@ use common::HashType;
 use lee::{AccountId, program::Program};
 use lee_core::{MembershipProof, SharedSecretKey};
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{ExecutionFailureKind, Identity, WalletCore};
 
 pub struct Pinata<'wallet>(pub &'wallet WalletCore);
 
@@ -13,15 +13,15 @@ impl Pinata<'_> {
         winner_account_id: AccountId,
         solution: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let instruction = (solution, programs::authenticated_transfer().id());
         let instruction_data =
-            Program::serialize_instruction(instruction).expect("Instruction should serialize");
+            Program::serialize_instruction(solution).expect("Instruction should serialize");
 
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::PublicNoSign(pinata_account_id),
-                    AccountIdentity::PublicNoSign(winner_account_id),
+                    Identity::PublicNoSign(pinata_account_id).in_namespace(programs::pinata().id()),
+                    Identity::PublicNoSign(winner_account_id)
+                        .in_namespace(programs::authenticated_transfer().id()),
                 ],
                 instruction_data,
                 programs::pinata().id(),
@@ -54,16 +54,13 @@ impl Pinata<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(pinata_account_id),
+                    Identity::Public(pinata_account_id).in_namespace(programs::pinata().id()),
                     self.0
                         .resolve_private_account(winner_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::authenticated_transfer().id()),
                 ],
-                lee::program::Program::serialize_instruction((
-                    solution,
-                    programs::authenticated_transfer().id(),
-                ))
-                .unwrap(),
+                lee::program::Program::serialize_instruction(solution).unwrap(),
                 &programs::pinata().into(),
             )
             .await

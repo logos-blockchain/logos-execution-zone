@@ -8,5 +8,4 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-lee_core.workspace = true
 borsh.workspace = true

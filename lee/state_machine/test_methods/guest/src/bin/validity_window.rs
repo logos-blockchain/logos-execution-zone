@@ -19,7 +19,7 @@ fn main() {
         return;
     };
 
-    let post = pre.account.clone();
+    let post = pre.unchanged();
 
     ProgramOutput::new(
         self_program_id,

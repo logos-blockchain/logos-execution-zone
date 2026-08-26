@@ -5,32 +5,32 @@ use amm_core::{
     compute_pool_pda, compute_vault_pda,
 };
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
+    account::{Data, Input, Slot},
     program::{ChainedCall, ProgramId},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn new_definition(
-    pool: AccountWithMetadata,
-    vault_a: AccountWithMetadata,
-    vault_b: AccountWithMetadata,
-    pool_definition_lp: AccountWithMetadata,
-    user_holding_a: AccountWithMetadata,
-    user_holding_b: AccountWithMetadata,
-    user_holding_lp: AccountWithMetadata,
+    pool: &Input,
+    vault_a: &Input,
+    vault_b: &Input,
+    pool_definition_lp: &Input,
+    user_holding_a: &Input,
+    user_holding_b: &Input,
+    user_holding_lp: &Input,
     token_a_amount: NonZeroU128,
     token_b_amount: NonZeroU128,
     token_program_id: ProgramId,
     self_program_id: ProgramId,
-) -> (Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<Option<Slot>>, Vec<ChainedCall>) {
     // Verify token_a and token_b are different
     let definition_token_a_id =
-        token_core::TokenHolding::try_from(user_holding_a.account.data(token_program_id))
+        token_core::TokenHolding::try_from(user_holding_a.data(token_program_id))
             .expect("New definition: AMM Program expects valid Token Holding account for Token A")
             .definition_id();
     let definition_token_b_id =
-        token_core::TokenHolding::try_from(user_holding_b.account.data(token_program_id))
+        token_core::TokenHolding::try_from(user_holding_b.data(token_program_id))
             .expect("New definition: AMM Program expects valid Token Holding account for Token B")
             .definition_id();
 
@@ -65,11 +65,11 @@ pub fn new_definition(
 
     // TODO: return here
     // Verify that Pool Account is not active
-    let is_fresh_pool = pool.account.data(self_program_id).is_empty();
+    let is_fresh_pool = pool.data(self_program_id).is_empty();
     let pool_account_data = if is_fresh_pool {
         PoolDefinition::default()
     } else {
-        PoolDefinition::try_from(pool.account.data(self_program_id))
+        PoolDefinition::try_from(pool.data(self_program_id))
             .expect("AMM program expects a valid Pool account")
     };
 
@@ -94,7 +94,7 @@ pub fn new_definition(
     };
 
     // Update pool account
-    let mut pool_post = pool.account;
+    let mut pool_post = pool.slot_of(self_program_id).clone();
     let pool_post_definition = PoolDefinition {
         token_program_id,
         definition_token_a_id,
@@ -109,7 +109,7 @@ pub fn new_definition(
         active: true,
     };
 
-    pool_post.slot_mut(self_program_id).data = Data::from(&pool_post_definition);
+    pool_post.data = Data::from(&pool_post_definition);
 
     // The vaults are the recipients here, and `token::transfer` authorizes only the
     // sender. Granting them a seed would hand the callee — whose program id the caller
@@ -139,7 +139,7 @@ pub fn new_definition(
             &instruction,
         )
     } else {
-        let pool_lp_authorized = AccountWithMetadata {
+        let pool_lp_authorized = Input {
             is_authorized: true,
             ..pool_definition_lp.clone()
         };
@@ -154,13 +154,13 @@ pub fn new_definition(
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_states = vec![
-        pool_post,
-        vault_a.account,
-        vault_b.account,
-        pool_definition_lp.account,
-        user_holding_a.account,
-        user_holding_b.account,
-        user_holding_lp.account,
+        Some(pool_post),
+        vault_a.unchanged(),
+        vault_b.unchanged(),
+        pool_definition_lp.unchanged(),
+        user_holding_a.unchanged(),
+        user_holding_b.unchanged(),
+        user_holding_lp.unchanged(),
     ];
 
     (post_states, chained_calls)

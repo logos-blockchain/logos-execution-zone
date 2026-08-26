@@ -1,4 +1,7 @@
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::Input,
+    program::{ProgramInput, ProgramOutput, read_lee_inputs},
+};
 
 type Instruction = ();
 
@@ -13,10 +16,7 @@ fn main() {
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
-    let post_states = pre_states
-        .iter()
-        .map(|account| account.account.clone())
-        .collect();
+    let post_states = pre_states.iter().map(Input::unchanged).collect();
     ProgramOutput::new(
         self_program_id,
         caller_program_id,

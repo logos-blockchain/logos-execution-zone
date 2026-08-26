@@ -2,7 +2,7 @@ use common::HashType;
 use lee::AccountId;
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
-use crate::{AccountIdentity, ExecutionFailureKind};
+use crate::{ExecutionFailureKind, Identity};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_deshielded_transfer(
@@ -18,8 +18,10 @@ impl NativeTokenTransfer<'_> {
                 vec![
                     self.0
                         .resolve_private_account(from)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::PublicNoSign(to),
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::authenticated_transfer().id()),
+                    Identity::PublicNoSign(to)
+                        .in_namespace(programs::authenticated_transfer().id()),
                 ],
                 instruction_data,
                 &program.into(),

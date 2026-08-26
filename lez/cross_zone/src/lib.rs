@@ -20,7 +20,7 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountId, Balance},
+    account::{Account, AccountId, Balance, SlotRef},
     program::ProgramId,
 };
 
@@ -33,7 +33,7 @@ pub mod test_utils;
 pub struct Emission {
     pub target_zone: ZoneId,
     pub target_program_id: ProgramId,
-    pub target_accounts: Vec<[u8; 32]>,
+    pub target_accounts: Vec<SlotRef>,
     pub payload: Vec<u8>,
 }
 
@@ -115,28 +115,30 @@ pub fn extract_emission(program_id: ProgramId, instruction_data: &[u8]) -> Optio
 fn build_inbox_dispatch_tx(
     inbox_id: ProgramId,
     msg: &CrossZoneMessage,
-    target_account_ids: Vec<AccountId>,
+    target_slots: Vec<SlotRef>,
 ) -> lee::PublicTransaction {
-    let mut account_ids = Vec::with_capacity(target_account_ids.len().saturating_add(3));
-    account_ids.push(inbox_config_account_id(inbox_id));
-    account_ids.push(inbox_seen_shard_account_id(
+    let mut slots = Vec::with_capacity(target_slots.len().saturating_add(3));
+    slots.push(SlotRef::new(inbox_config_account_id(inbox_id), inbox_id));
+    slots.push(SlotRef::new(
+        inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
         inbox_id,
-        &msg.src_zone,
-        msg.src_block_id,
     ));
     // Declared here rather than derived by the guest, since a guest cannot
     // conjure an account. Both the watcher and the verifier build it through this
     // one function, so they cannot disagree about the source a target will see.
-    account_ids.push(inbox_source_marker_account_id(
+    //
+    // Address only: nothing writes a marker's data, so it names no namespace.
+    slots.push(SlotRef::address_only(inbox_source_marker_account_id(
         inbox_id,
         &msg.src_zone,
         msg.src_program_id,
-    ));
-    account_ids.extend(target_account_ids);
+    )));
+    // The emitter named the namespace each target reads, since only it knows.
+    slots.extend(target_slots);
 
     let message = lee::public_transaction::Message::try_new(
         inbox_id,
-        account_ids,
+        slots,
         vec![],
         Instruction::Dispatch(msg.clone()),
     )
@@ -157,7 +159,7 @@ fn build_inbox_dispatch_tx(
 pub fn build_dispatch_from_emission(
     source: &EmissionSource,
     target_program_id: ProgramId,
-    target_accounts: &[[u8; 32]],
+    target_accounts: &[SlotRef],
     payload: Vec<u8>,
 ) -> lee::PublicTransaction {
     let msg = CrossZoneMessage {
@@ -170,12 +172,11 @@ pub fn build_dispatch_from_emission(
         payload,
         l1_inclusion_witness: None,
     };
-    let target_ids = target_accounts
-        .iter()
-        .copied()
-        .map(AccountId::new)
-        .collect();
-    build_inbox_dispatch_tx(programs::cross_zone_inbox().id(), &msg, target_ids)
+    build_inbox_dispatch_tx(
+        programs::cross_zone_inbox().id(),
+        &msg,
+        target_accounts.to_vec(),
+    )
 }
 
 /// The genesis transaction that initializes this zone's inbox config PDA.
@@ -334,9 +335,13 @@ fn genesis_public_tx<I: borsh::BorshSerialize>(
     account_ids: Vec<AccountId>,
     instruction: I,
 ) -> lee::PublicTransaction {
-    let message =
-        lee::public_transaction::Message::try_new(program_id, account_ids, vec![], instruction)
-            .expect("genesis instruction must serialize");
+    // Genesis initializers write the program's own namespace at each account they name.
+    let slots = account_ids
+        .into_iter()
+        .map(|account_id| SlotRef::new(account_id, program_id))
+        .collect();
+    let message = lee::public_transaction::Message::try_new(program_id, slots, vec![], instruction)
+        .expect("genesis instruction must serialize");
     lee::PublicTransaction::new(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),

@@ -4,35 +4,31 @@
 )]
 
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Input, Slot},
     program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 /// Initializes a default account under the ownership of this program.
 /// This is achieved by a noop.
-fn initialize_account(pre_state: AccountWithMetadata) -> Account {
-    let account_to_claim = pre_state.account;
-    let is_authorized = pre_state.is_authorized;
+fn initialize_account(pre_state: &Input, self_program_id: ProgramId) -> Slot {
+    let slot = pre_state.slot_of(self_program_id).clone();
 
-    // Continue only if the account to claim has default values
-    assert!(
-        account_to_claim == Account::default(),
-        "Account is already initialized"
-    );
+    // Continue only if the slot to claim has default values
+    assert!(slot == Slot::default(), "Account is already initialized");
 
     // Continue only if the owner authorized this operation
-    assert!(is_authorized, "Missing required authorization");
+    assert!(pre_state.is_authorized, "Missing required authorization");
 
-    account_to_claim
+    slot
 }
 
 /// Transfers `balance_to_move` native balance from `sender` to `recipient`.
 fn transfer(
-    sender: AccountWithMetadata,
-    recipient: AccountWithMetadata,
+    sender: Input,
+    recipient: Input,
     balance_to_move: u128,
     self_program_id: ProgramId,
-) -> Vec<Account> {
+) -> Vec<Option<Slot>> {
     // Continue only if the sender has authorized this operation
     assert!(sender.is_authorized, "Missing required authorization");
 
@@ -46,14 +42,14 @@ fn transfer(
     let base: u128 = 2;
     let malicious_offset = base.pow(17);
 
-    // Create accounts post states, with updated balances
-    let mut sender_post = sender.account;
-    let mut recipient_post = recipient.account;
+    // Create the post slots, with deliberately mismatched balances
+    let mut sender_post = sender.into_slot_of(self_program_id);
+    let mut recipient_post = recipient.into_slot_of(self_program_id);
 
-    sender_post.slot_mut(self_program_id).balance -= balance_to_move + malicious_offset;
-    recipient_post.slot_mut(self_program_id).balance += balance_to_move + malicious_offset;
+    sender_post.balance -= balance_to_move + malicious_offset;
+    recipient_post.balance += balance_to_move + malicious_offset;
 
-    vec![sender_post, recipient_post]
+    vec![Some(sender_post), Some(recipient_post)]
 }
 
 /// A transfer of balance program.
@@ -72,8 +68,7 @@ fn main() {
 
     let post_states = match (pre_states.as_slice(), balance_to_move) {
         ([account_to_claim], 0) => {
-            let post = initialize_account(account_to_claim.clone());
-            vec![post]
+            vec![Some(initialize_account(account_to_claim, self_program_id))]
         }
         ([sender, recipient], balance_to_move) => transfer(
             sender.clone(),

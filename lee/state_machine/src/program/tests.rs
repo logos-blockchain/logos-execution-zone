@@ -1,7 +1,24 @@
-use lee_core::account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data};
+use lee_core::{
+    account::{Account, AccountId, Input, Nonce, Slot, data::Data},
+    program::ProgramId,
+};
 use risc0_zkvm::{ExecutorEnv, default_executor};
 
 use crate::program::Program;
+
+/// Narrows an account to the one namespace a position names.
+fn input_of(
+    account: &Account,
+    is_authorized: bool,
+    account_id: AccountId,
+    program: ProgramId,
+) -> Input {
+    Input {
+        account_id,
+        is_authorized,
+        slot: Some((program.into(), account.slot_or_empty(program))),
+    }
+}
 
 #[test]
 fn program_execution() {
@@ -9,21 +26,27 @@ fn program_execution() {
     let balance_to_move: u128 = 11_223_344_556_677;
     let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
     let slot = program.id();
-    let sender = AccountWithMetadata::new(
-        Account::single(slot, 77_665_544_332_211, Data::default(), Nonce::default()),
+    let sender = input_of(
+        &Account::single(slot, 77_665_544_332_211, Data::default(), Nonce::default()),
         true,
         AccountId::new([0; 32]),
+        program.id(),
     );
-    let recipient = AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
+    let recipient = input_of(
+        &Account::default(),
+        false,
+        AccountId::new([1; 32]),
+        program.id(),
+    );
 
-    let expected_sender_post = Account::single(
-        slot,
-        77_665_544_332_211 - balance_to_move,
-        Data::default(),
-        Nonce::default(),
-    );
-    let expected_recipient_post =
-        Account::single(slot, balance_to_move, Data::default(), Nonce::default());
+    let expected_sender_post = Some(Slot {
+        balance: 77_665_544_332_211 - balance_to_move,
+        data: Data::default(),
+    });
+    let expected_recipient_post = Some(Slot {
+        balance: balance_to_move,
+        data: Data::default(),
+    });
     let program_output = program
         .execute(None, &[sender, recipient], &instruction_data)
         .unwrap();
@@ -39,12 +62,18 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
     let program = crate::test_methods::simple_balance_transfer();
     let instruction_data = Program::serialize_instruction(7_u128).unwrap();
     let pre_states = [
-        AccountWithMetadata::new(
-            Account::single(program.id(), 10, Data::default(), Nonce::default()),
+        input_of(
+            &Account::single(program.id(), 10, Data::default(), Nonce::default()),
             true,
             AccountId::new([0; 32]),
+            program.id(),
         ),
-        AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32])),
+        input_of(
+            &Account::default(),
+            false,
+            AccountId::new([1; 32]),
+            program.id(),
+        ),
     ];
 
     let mut env_builder = ExecutorEnv::builder();

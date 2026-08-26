@@ -19,7 +19,7 @@ use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
 use kameo::actor::ActorRef;
-use lee::{AccountId, PublicTransaction, public_transaction::Message};
+use lee::{AccountId, PublicTransaction, SlotRef, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
 use logos_blockchain_core::mantle::ops::channel::Ed25519PublicKey;
@@ -1961,10 +1961,7 @@ fn genesis_stake_message(
 ) -> Message {
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let mover_instruction_data = lee::program::Program::serialize_instruction(
-        authenticated_transfer_core::Instruction::Transfer {
-            amount,
-            recipient_program: Some(programs::sequencer_stake().id()),
-        },
+        authenticated_transfer_core::Instruction::Transfer { amount },
     )
     .expect("Failed to serialize genesis mover instruction");
     // A nonce counts how many times an account has signed. The funding account
@@ -1977,9 +1974,17 @@ fn genesis_stake_message(
     Message::try_new(
         programs::sequencer_stake().id(),
         vec![
-            genesis_stake_funding_account(),
-            ownership_id,
-            system_accounts::sequencer_stake_config_account_id(),
+            // The mover debits the funder's native slot and credits the stake namespace
+            // at the ownership account, so each position names where it acts.
+            SlotRef::new(
+                genesis_stake_funding_account(),
+                programs::authenticated_transfer().id(),
+            ),
+            SlotRef::new(ownership_id, programs::sequencer_stake().id()),
+            SlotRef::new(
+                system_accounts::sequencer_stake_config_account_id(),
+                programs::sequencer_stake().id(),
+            ),
         ],
         vec![
             lee_core::account::Nonce(funding_nonce),
@@ -2026,14 +2031,17 @@ fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTrans
     let fund_message = Message::try_new(
         programs::faucet().id(),
         vec![
-            system_accounts::faucet_account_id(),
-            genesis_stake_funding_account(),
+            SlotRef::new(
+                system_accounts::faucet_account_id(),
+                programs::faucet().id(),
+            ),
+            SlotRef::new(
+                genesis_stake_funding_account(),
+                programs::authenticated_transfer().id(),
+            ),
         ],
         vec![lee_core::account::Nonce(0)],
-        faucet_core::Instruction::GenesisTransferDirect {
-            recipient_program: programs::authenticated_transfer().id(),
-            amount: total,
-        },
+        faucet_core::Instruction::GenesisTransferDirect { amount: total },
     )
     .expect("Failed to build genesis funding message");
     // The funding account signs even though it is only receiving. It is a brand
@@ -2098,12 +2106,15 @@ fn build_faucet_genesis_transaction(
 ) -> PublicTransaction {
     let message = Message::try_new(
         programs::faucet().id(),
-        vec![system_accounts::faucet_account_id(), recipient_id],
+        vec![
+            SlotRef::new(
+                system_accounts::faucet_account_id(),
+                programs::faucet().id(),
+            ),
+            SlotRef::new(recipient_id, recipient_program),
+        ],
         Vec::new(),
-        faucet_core::Instruction::GenesisTransferDirect {
-            recipient_program,
-            amount: balance,
-        },
+        faucet_core::Instruction::GenesisTransferDirect { amount: balance },
     )
     .expect("Failed to serialize genesis transfer instruction");
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
@@ -2133,14 +2144,17 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let message = Message::try_new(
         bridge_program_id,
         vec![
-            system_accounts::bridge_account_id(),
-            metadata.recipient_id,
-            receipt_id,
+            SlotRef::new(system_accounts::bridge_account_id(), bridge_program_id),
+            // The deposit credits the recipient's native slot.
+            SlotRef::new(
+                metadata.recipient_id,
+                programs::authenticated_transfer().id(),
+            ),
+            SlotRef::new(receipt_id, bridge_program_id),
         ],
         Vec::new(),
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
-            native_program: programs::authenticated_transfer().id(),
             recipient_id: metadata.recipient_id,
             amount: event.amount,
         },
@@ -2188,7 +2202,7 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
 
     match borsh::from_slice::<sequencer_stake_core::Instruction>(&message.instruction_data) {
         Ok(sequencer_stake_core::Instruction::FinalizeUnstake) => {
-            message.account_ids.first().copied()
+            message.slots.first().map(|slot| slot.account_id)
         }
         Ok(_) | Err(_) => None,
     }
@@ -2216,9 +2230,13 @@ fn build_finalize_unstake_tx(
     let message = Message::try_new(
         programs::sequencer_stake().id(),
         vec![
-            ownership_id,
-            pending.destination,
-            system_accounts::sequencer_stake_config_account_id(),
+            SlotRef::new(ownership_id, programs::sequencer_stake().id()),
+            // The release lands in the slot the staker chose when they requested it.
+            SlotRef::new(pending.destination, pending.native_program),
+            SlotRef::new(
+                system_accounts::sequencer_stake_config_account_id(),
+                programs::sequencer_stake().id(),
+            ),
         ],
         vec![],
         sequencer_stake_core::Instruction::FinalizeUnstake,

@@ -1,15 +1,15 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Input, Slot},
     program::{ChainedCall, ProgramId},
 };
 
 pub fn close_associated_token_account(
-    owner: AccountWithMetadata,
-    ata_account: AccountWithMetadata,
-    token_definition: AccountWithMetadata,
+    owner: Input,
+    ata_account: Input,
+    token_definition: Input,
     ata_program_id: ProgramId,
     token_program_id: ProgramId,
-) -> (Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<Option<Slot>>, Vec<ChainedCall>) {
     assert!(owner.is_authorized, "Owner authorization is missing");
 
     // Derived from the definition the caller names, never from the holding's own:
@@ -22,9 +22,9 @@ pub fn close_associated_token_account(
     );
 
     let post_states = vec![
-        owner.account.clone(),
-        ata_account.account.clone(),
-        token_definition.account.clone(),
+        owner.unchanged(),
+        ata_account.unchanged(),
+        token_definition.unchanged(),
     ];
 
     let mut ata_authorized = ata_account;

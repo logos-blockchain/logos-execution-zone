@@ -1,6 +1,6 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::AccountWithMetadata,
+    account::Input,
     program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use wrapped_token_core::{
@@ -54,13 +54,13 @@ fn main() {
 fn mint(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     recipient: [u8; 32],
     amount: u128,
 ) {
     // pre_states: [source marker, config PDA, recipient holding PDA].
-    let [marker, config, holding] = <[AccountWithMetadata; 3]>::try_from(pre_states)
+    let [marker, config, holding] = <[Input; 3]>::try_from(pre_states)
         .expect("Mint requires the source marker, config, and recipient holding accounts");
 
     // The config PDA is genesis-seeded with the authorized minter (the cross-zone
@@ -70,7 +70,7 @@ fn mint(
         config_account_id(self_program_id),
         "second account must be the wrapped-token config PDA"
     );
-    let cfg = WrappedTokenConfig::from_bytes(config.account.data(self_program_id))
+    let cfg = WrappedTokenConfig::from_bytes(config.data(self_program_id))
         .expect("config account holds a wrapped-token config");
     assert_eq!(
         caller_program_id,
@@ -100,22 +100,22 @@ fn mint(
         "mint amount exceeds the per-mint cap"
     );
     // The backstop against accumulation, which the per-mint cap does not bound.
-    let new_balance = read_balance(holding.account.data(self_program_id))
+    let new_balance = read_balance(holding.data(self_program_id))
         .checked_add(amount)
         .expect("wrapped-token balance overflow");
-    let mut holding_post = holding.account.clone();
-    holding_post.slot_mut(self_program_id).data = balance_bytes(new_balance)
+    let mut holding_post = holding.slot_of(self_program_id).clone();
+    holding_post.data = balance_bytes(new_balance)
         .to_vec()
         .try_into()
         .expect("balance fits in account data");
-    let config_post = config.account.clone();
+    let config_post = config.unchanged();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![marker.clone(), config, holding],
-        vec![marker.account, config_post, holding_post],
+        vec![marker.unchanged(), config_post, Some(holding_post)],
     )
     .write();
 }
@@ -124,7 +124,7 @@ fn mint(
 fn renounce_authority(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
 ) {
     // The config is read before the account list is validated, so who may call
@@ -137,7 +137,7 @@ fn renounce_authority(
         config_account_id(self_program_id),
         "first account must be the wrapped-token config PDA"
     );
-    let mut cfg = WrappedTokenConfig::from_bytes(config_meta.account.data(self_program_id))
+    let mut cfg = WrappedTokenConfig::from_bytes(config_meta.data(self_program_id))
         .expect("config account holds a wrapped-token config");
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
@@ -146,7 +146,7 @@ fn renounce_authority(
         "the authority acts at top level, or through the configured governance program"
     );
 
-    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+    let [config, authority] = <[Input; 2]>::try_from(pre_states)
         .expect("this instruction requires exactly the config and authority accounts");
 
     let Some(expected) = cfg.authority else {
@@ -162,8 +162,8 @@ fn renounce_authority(
     );
 
     cfg.authority = None;
-    let mut config_post = config.account.clone();
-    config_post.slot_mut(self_program_id).data = cfg
+    let mut config_post = config.slot_of(self_program_id).clone();
+    config_post.data = cfg
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
@@ -173,7 +173,7 @@ fn renounce_authority(
         caller_program_id,
         instruction_data,
         vec![config, authority.clone()],
-        vec![config_post, authority.account],
+        vec![Some(config_post), authority.unchanged()],
     )
     .write();
 }
@@ -183,7 +183,7 @@ fn renounce_authority(
 fn update_sources(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     sources: Vec<([u8; 32], ProgramId)>,
 ) {
@@ -197,7 +197,7 @@ fn update_sources(
         config_account_id(self_program_id),
         "first account must be the wrapped-token config PDA"
     );
-    let mut cfg = WrappedTokenConfig::from_bytes(config_meta.account.data(self_program_id))
+    let mut cfg = WrappedTokenConfig::from_bytes(config_meta.data(self_program_id))
         .expect("config account holds a wrapped-token config");
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
@@ -206,7 +206,7 @@ fn update_sources(
         "the authority acts at top level, or through the configured governance program"
     );
 
-    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+    let [config, authority] = <[Input; 2]>::try_from(pre_states)
         .expect("this instruction requires exactly the config and authority accounts");
 
     let Some(expected) = cfg.authority else {
@@ -222,8 +222,8 @@ fn update_sources(
     );
 
     cfg.sources = sources;
-    let mut config_post = config.account.clone();
-    config_post.slot_mut(self_program_id).data = cfg
+    let mut config_post = config.slot_of(self_program_id).clone();
+    config_post.data = cfg
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
@@ -233,7 +233,7 @@ fn update_sources(
         caller_program_id,
         instruction_data,
         vec![config, authority.clone()],
-        vec![config_post, authority.account],
+        vec![Some(config_post), authority.unchanged()],
     )
     .write();
 }
@@ -243,7 +243,7 @@ fn update_sources(
 fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     config_value: &WrappedTokenConfig,
 ) {
@@ -253,8 +253,8 @@ fn init_config(
     );
 
     // pre_states: [config PDA].
-    let [config] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitConfig requires the config account");
+    let [config] =
+        <[Input; 1]>::try_from(pre_states).expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
         config_account_id(self_program_id),
@@ -265,16 +265,17 @@ fn init_config(
     // this config (the genesis block is replayed onto seeded state during
     // multi-sequencer reconstruction), otherwise reject a post-genesis attempt to
     // set a different minter.
-    if let Some(slot) = config.account.slot(self_program_id) {
+    let existing = config.slot_of(self_program_id);
+    if !existing.data.is_empty() {
         assert_eq!(
-            *slot.data,
+            *existing.data,
             config_value.to_bytes(),
             "wrapped-token config already initialized differently"
         );
     }
 
-    let mut config_post = config.account.clone();
-    config_post.slot_mut(self_program_id).data = config_value
+    let mut config_post = existing.clone();
+    config_post.data = config_value
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
@@ -284,7 +285,7 @@ fn init_config(
         caller_program_id,
         instruction_data,
         vec![config],
-        vec![config_post],
+        vec![Some(config_post)],
     )
     .write();
 }

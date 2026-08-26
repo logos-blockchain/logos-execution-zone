@@ -148,6 +148,12 @@ impl<T> FfiOption<T> {
         }
     }
 
+    /// Takes the value back, freeing the box. Safe only for a value this type produced.
+    #[must_use]
+    pub fn into_option(self) -> Option<T> {
+        self.is_some.then(|| *unsafe { Box::from_raw(self.value) })
+    }
+
     #[must_use]
     pub const fn from_none() -> Self {
         Self {

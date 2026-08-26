@@ -24,19 +24,16 @@ fn main() {
         return;
     };
 
-    let first_post = first.account.clone();
-    let second_post = second.account.clone();
+    let first_post = first.unchanged();
+    let second_post = second.unchanged();
 
     let mut first_for_callee = first.clone();
     first_for_callee.is_authorized = true;
 
     let chained_call = ChainedCall {
         program_id: auth_transfer_id,
-        instruction_data: to_vec(&authenticated_transfer_core::Instruction::Transfer {
-            amount,
-            recipient_program: None,
-        })
-        .unwrap(),
+        instruction_data: to_vec(&authenticated_transfer_core::Instruction::Transfer { amount })
+            .unwrap(),
         pre_states: vec![first_for_callee, second.clone()],
         pda_seeds: vec![seed],
     };

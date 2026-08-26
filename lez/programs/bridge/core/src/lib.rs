@@ -12,7 +12,7 @@ pub enum Instruction {
     ///
     /// Required accounts (3):
     /// - Bridge PDA account
-    /// - Recipient account, credited in `slots[native_program]`
+    /// - Recipient account, credited in whichever slot the transaction named
     /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`. Its `slots[bridge]` records
     ///   that this op id was already minted; a second application of the same op id finds it
     ///   present and transfers nothing.
@@ -20,7 +20,6 @@ pub enum Instruction {
         /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
         /// Deposit Event on L1.
         l1_deposit_op_id: [u8; 32],
-        native_program: ProgramId,
         recipient_id: AccountId,
         amount: u64,
     },

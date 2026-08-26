@@ -21,7 +21,7 @@ use test_fixtures::{
     config::{self, MultiNodeTestContextConfig, SequencerPartialConfig},
 };
 use tokio::test;
-use wallet::AccountIdentity;
+use wallet::{AccountIdentity, Identity};
 
 /// What genesis stakes each founding sequencer.
 const STAKE: u128 = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
@@ -88,8 +88,8 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     send_stake_tx(
         &ctx,
         vec![
-            AccountIdentity::Public(ownership_b),
-            AccountIdentity::PublicNoSign(config_id),
+            Identity::Public(ownership_b).in_namespace(programs::sequencer_stake().id()),
+            Identity::PublicNoSign(config_id).in_namespace(programs::sequencer_stake().id()),
         ],
         &sequencer_stake_core::Instruction::UnstakeRequest {
             amount: STAKE,
@@ -131,15 +131,16 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     let mover_instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: STAKE,
-            recipient_program: Some(programs::sequencer_stake().id()),
         })
         .context("Failed to serialize the mover instruction")?;
     send_stake_tx(
         &ctx,
         vec![
-            AccountIdentity::Public(settlement),
-            AccountIdentity::Public(ownership_b),
-            AccountIdentity::PublicNoSign(config_id),
+            // The mover debits the settlement account's native slot and credits the
+            // ownership account's stake slot.
+            Identity::Public(settlement).in_namespace(programs::authenticated_transfer().id()),
+            Identity::Public(ownership_b).in_namespace(programs::sequencer_stake().id()),
+            Identity::PublicNoSign(config_id).in_namespace(programs::sequencer_stake().id()),
         ],
         &sequencer_stake_core::Instruction::Stake {
             sequencer_key: stake_key_b,

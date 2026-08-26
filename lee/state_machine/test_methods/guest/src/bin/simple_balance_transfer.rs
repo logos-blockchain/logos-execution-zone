@@ -19,7 +19,7 @@ fn main() {
             caller_program_id,
             instruction_data,
             pre_states,
-            vec![account_pre.account],
+            vec![account_pre.unchanged()],
         )
         .write();
         return;
@@ -29,35 +29,22 @@ fn main() {
         return;
     };
 
-    let debit = |account: &mut lee_core::account::Account| {
-        let slot = account.slot_mut(self_program_id);
-        slot.balance = slot
+    // No joint branch: two positions naming the same slot are rejected as duplicates before
+    // a program ever runs, and two naming different slots are just two ordinary positions.
+    let post_states = {
+        let mut sender_post = sender_pre.slot_of(self_program_id).clone();
+        sender_post.balance = sender_post
             .balance
             .checked_sub(balance)
             .expect("Not enough balance to transfer");
-    };
-    let credit = |account: &mut lee_core::account::Account| {
-        let slot = account.slot_mut(self_program_id);
-        slot.balance = slot
+
+        let mut receiver_post = receiver_pre.slot_of(self_program_id).clone();
+        receiver_post.balance = receiver_post
             .balance
             .checked_add(balance)
             .expect("Overflow when adding balance");
-    };
 
-    let post_states = if sender_pre.account_id == receiver_pre.account_id {
-        let mut joint = sender_pre.account.clone();
-        debit(&mut joint);
-        credit(&mut joint);
-        joint.prune();
-        vec![joint.clone(), joint]
-    } else {
-        let mut sender_post = sender_pre.account.clone();
-        debit(&mut sender_post);
-        sender_post.prune();
-        let mut receiver_post = receiver_pre.account.clone();
-        credit(&mut receiver_post);
-        receiver_post.prune();
-        vec![sender_post, receiver_post]
+        vec![Some(sender_post), Some(receiver_post)]
     };
 
     ProgramOutput::new(

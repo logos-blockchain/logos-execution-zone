@@ -17,7 +17,8 @@ use indexer_service_protocol::{
     CommitmentSetDigest, Data, EncryptedAccountData, HashType, IndexerStatus, IndexerSyncState,
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, PublicActionWithID,
-    PublicMessage, PublicTransaction, Signature, Slot, Transaction, ValidityWindow, WitnessSet,
+    PublicMessage, PublicTransaction, Signature, Slot, SlotRef, Transaction, ValidityWindow,
+    WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -26,6 +27,8 @@ use jsonrpsee::{
 use tokio::sync::{RwLock, broadcast};
 
 const MOCK_GENESIS_TIMESTAMP_MS: u64 = 1_704_067_200_000;
+/// The namespace every mock position reads: a namespace is a program's address on the wire.
+const MOCK_PROGRAM_NAMESPACE: AccountId = AccountId { value: [1; 32] };
 const MOCK_BLOCK_INTERVAL_MS: u64 = 30_000;
 
 struct MockState {
@@ -307,12 +310,16 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                 .transactions
                 .values()
                 .filter(|(tx, _)| match tx {
-                    Transaction::Public(pub_tx) => pub_tx.message.account_ids.contains(&account_id),
+                    Transaction::Public(pub_tx) => pub_tx
+                        .message
+                        .slots
+                        .iter()
+                        .any(|slot| slot.account_id == account_id),
                     Transaction::PrivacyPreserving(priv_tx) => priv_tx
                         .message
                         .public_actions
                         .iter()
-                        .any(|action| action.account_id == account_id),
+                        .any(|action| action.slot.account_id == account_id),
                     Transaction::ProgramDeployment(_) => false,
                 })
                 .cloned()
@@ -370,9 +377,9 @@ fn mock_public_tx(
         hash: tx_hash,
         message: PublicMessage {
             program_id: ProgramId([1_u32; 8]),
-            account_ids: vec![
-                account_ids[tx_idx as usize % account_ids.len()],
-                account_ids[(tx_idx as usize + 1) % account_ids.len()],
+            slots: vec![
+                mock_slot_ref(account_ids[tx_idx as usize % account_ids.len()]),
+                mock_slot_ref(account_ids[(tx_idx as usize + 1) % account_ids.len()]),
             ],
             nonces: vec![block_id as u128, (block_id + 1) as u128],
             instruction_data: vec![1, 2, 3, 4],
@@ -382,6 +389,14 @@ fn mock_public_tx(
             proof: None,
         },
     })
+}
+
+/// A position at `account_id` in the mock program's namespace.
+const fn mock_slot_ref(account_id: AccountId) -> SlotRef {
+    SlotRef {
+        account_id,
+        program: Some(MOCK_PROGRAM_NAMESPACE),
+    }
 }
 
 fn mock_privacy_preserving_tx(
@@ -394,17 +409,11 @@ fn mock_privacy_preserving_tx(
         hash: tx_hash,
         message: PrivacyPreservingMessage {
             public_actions: vec![PublicActionWithID {
-                account_id: account_ids[tx_idx as usize % account_ids.len()],
-                post_state: Account {
-                    nonce: block_id as u128,
-                    slots: BTreeMap::from([(
-                        ProgramId([1; 8]),
-                        Slot {
-                            balance: 500,
-                            data: Data(vec![0xdd, 0xee]),
-                        },
-                    )]),
-                },
+                slot: mock_slot_ref(account_ids[tx_idx as usize % account_ids.len()]),
+                post_state: Some(Slot {
+                    balance: 500,
+                    data: Data(vec![0xdd, 0xee]),
+                }),
             }],
             nonces: vec![block_id as u128],
             private_actions: vec![PrivateAction {

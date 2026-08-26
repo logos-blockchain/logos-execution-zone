@@ -1,6 +1,6 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::AccountWithMetadata,
+    account::Input,
     program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use ping_core::{ReceiverConfig, ReceiverInstruction, ping_record_pda, receiver_config_account_id};
@@ -50,12 +50,12 @@ fn main() {
 fn record(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     payload: Vec<u8>,
 ) {
     // pre_states: [source marker, config PDA, record PDA].
-    let [marker, config, record] = <[AccountWithMetadata; 3]>::try_from(pre_states)
+    let [marker, config, record] = <[Input; 3]>::try_from(pre_states)
         .expect("Record requires the source marker, config, and record accounts");
 
     assert_eq!(
@@ -63,7 +63,7 @@ fn record(
         receiver_config_account_id(self_program_id),
         "second account must be the receiver config PDA"
     );
-    let cfg = ReceiverConfig::from_bytes(config.account.data(self_program_id))
+    let cfg = ReceiverConfig::from_bytes(config.data(self_program_id))
         .expect("config account holds a receiver config");
     assert_eq!(
         caller_program_id,
@@ -86,18 +86,15 @@ fn record(
         "third account must be the ping record PDA"
     );
 
-    let mut record_post = record.account.clone();
-    record_post.slot_mut(self_program_id).data =
-        payload.try_into().expect("payload fits in account data");
-    // An empty payload leaves an empty slot, which may not be stored.
-    record_post.prune();
+    let mut record_post = record.slot_of(self_program_id).clone();
+    record_post.data = payload.try_into().expect("payload fits in account data");
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![marker.clone(), config.clone(), record],
-        vec![marker.account, config.account, record_post],
+        vec![marker.unchanged(), config.unchanged(), Some(record_post)],
     )
     .write();
 }
@@ -106,7 +103,7 @@ fn record(
 fn renounce_authority(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
 ) {
     // The config is read before the account list is validated, so who may call
@@ -119,7 +116,7 @@ fn renounce_authority(
         receiver_config_account_id(self_program_id),
         "first account must be the receiver config PDA"
     );
-    let mut cfg = ReceiverConfig::from_bytes(config_meta.account.data(self_program_id))
+    let mut cfg = ReceiverConfig::from_bytes(config_meta.data(self_program_id))
         .expect("config account holds a receiver config");
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
@@ -128,7 +125,7 @@ fn renounce_authority(
         "the authority acts at top level, or through the configured governance program"
     );
 
-    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+    let [config, authority] = <[Input; 2]>::try_from(pre_states)
         .expect("this instruction requires exactly the config and authority accounts");
 
     let Some(expected) = cfg.authority else {
@@ -144,8 +141,8 @@ fn renounce_authority(
     );
 
     cfg.authority = None;
-    let mut config_post = config.account.clone();
-    config_post.slot_mut(self_program_id).data = cfg
+    let mut config_post = config.slot_of(self_program_id).clone();
+    config_post.data = cfg
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
@@ -155,7 +152,7 @@ fn renounce_authority(
         caller_program_id,
         instruction_data,
         vec![config, authority.clone()],
-        vec![config_post, authority.account],
+        vec![Some(config_post), authority.unchanged()],
     )
     .write();
 }
@@ -165,7 +162,7 @@ fn renounce_authority(
 fn update_sources(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     sources: Vec<([u8; 32], ProgramId)>,
 ) {
@@ -179,7 +176,7 @@ fn update_sources(
         receiver_config_account_id(self_program_id),
         "first account must be the receiver config PDA"
     );
-    let mut cfg = ReceiverConfig::from_bytes(config_meta.account.data(self_program_id))
+    let mut cfg = ReceiverConfig::from_bytes(config_meta.data(self_program_id))
         .expect("config account holds a receiver config");
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
@@ -188,7 +185,7 @@ fn update_sources(
         "the authority acts at top level, or through the configured governance program"
     );
 
-    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+    let [config, authority] = <[Input; 2]>::try_from(pre_states)
         .expect("this instruction requires exactly the config and authority accounts");
 
     let Some(expected) = cfg.authority else {
@@ -204,8 +201,8 @@ fn update_sources(
     );
 
     cfg.sources = sources;
-    let mut config_post = config.account.clone();
-    config_post.slot_mut(self_program_id).data = cfg
+    let mut config_post = config.slot_of(self_program_id).clone();
+    config_post.data = cfg
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
@@ -215,7 +212,7 @@ fn update_sources(
         caller_program_id,
         instruction_data,
         vec![config, authority.clone()],
-        vec![config_post, authority.account],
+        vec![Some(config_post), authority.unchanged()],
     )
     .write();
 }
@@ -225,7 +222,7 @@ fn update_sources(
 fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     config_value: &ReceiverConfig,
 ) {
@@ -235,8 +232,8 @@ fn init_config(
     );
 
     // pre_states: [config PDA].
-    let [config] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitConfig requires the config account");
+    let [config] =
+        <[Input; 1]>::try_from(pre_states).expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
         receiver_config_account_id(self_program_id),
@@ -246,16 +243,17 @@ fn init_config(
     // written is a first init; an already-written one must already hold exactly
     // this, since genesis is replayed onto seeded state during multi-sequencer
     // reconstruction.
-    if let Some(slot) = config.account.slot(self_program_id) {
+    let existing = config.slot_of(self_program_id);
+    if !existing.data.is_empty() {
         assert_eq!(
-            *slot.data,
+            *existing.data,
             config_value.to_bytes(),
             "receiver config already initialized differently"
         );
     }
 
-    let mut config_post = config.account.clone();
-    config_post.slot_mut(self_program_id).data = config_value
+    let mut config_post = existing.clone();
+    config_post.data = config_value
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
@@ -265,7 +263,7 @@ fn init_config(
         caller_program_id,
         instruction_data,
         vec![config],
-        vec![config_post],
+        vec![Some(config_post)],
     )
     .write();
 }

@@ -64,7 +64,7 @@ fn main() {
                 .try_into()
                 .expect("InitializeAccount instruction requires exactly two accounts");
             token_program::initialize::initialize_account(
-                definition_account,
+                &definition_account,
                 account_to_initialize,
                 self_program_id,
             )

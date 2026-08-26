@@ -11,7 +11,7 @@ use sequencer_core::{
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, verify_commitment_is_in_state};
 use wallet::{
-    AccountIdentity,
+    Identity,
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
         account::{AccountSubcommand, NewSubcommand},
@@ -139,7 +139,7 @@ pub async fn send(
 /// The wallet CLI's `AuthTransfer::Send` never signs with the recipient's key (by design: the
 /// sender's wallet must not sign on behalf of an account it doesn't own). But claiming a fresh
 /// account is only possible if that account's own key signs the transaction, so this bypasses
-/// the CLI and calls the program facade directly with an explicit `AccountIdentity::Public` for
+/// the CLI and calls the program facade directly with an explicit `Identity::Public` for
 /// the recipient, using the key the test wallet holds for the account it just created.
 ///
 /// Unlike `send`, this doesn't go through the CLI's own poll-until-included step, so it waits
@@ -151,11 +151,7 @@ pub async fn send_claiming_new_account(
     amount: u128,
 ) -> anyhow::Result<()> {
     NativeTokenTransfer(ctx.wallet())
-        .send_public_transfer(
-            AccountIdentity::Public(from),
-            AccountIdentity::Public(to),
-            amount,
-        )
+        .send_public_transfer(Identity::Public(from), Identity::Public(to), amount)
         .await?;
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -213,11 +209,7 @@ pub async fn token_send_claiming_new_account(
     amount: u128,
 ) -> anyhow::Result<()> {
     Token(ctx.wallet())
-        .send_transfer_transaction(
-            AccountIdentity::Public(from),
-            AccountIdentity::Public(to),
-            amount,
-        )
+        .send_transfer_transaction(Identity::Public(from), Identity::Public(to), amount)
         .await?;
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;

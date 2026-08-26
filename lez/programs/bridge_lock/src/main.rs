@@ -3,7 +3,7 @@ use bridge_lock_core::{
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::AccountWithMetadata,
+    account::{AccountId, Input, SlotRef},
     program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
@@ -65,17 +65,17 @@ fn main() {
 fn lock(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     amount: u128,
     target_zone: [u8; 32],
     target_program_id: ProgramId,
-    target_accounts: Vec<[u8; 32]>,
+    target_accounts: Vec<SlotRef>,
     payload: Vec<u8>,
     ordinal: u32,
 ) {
     // pre_states: [config PDA, holder holding (authorized), escrow PDA, outbox PDA].
-    let [config, holder, escrow, outbox] = <[AccountWithMetadata; 4]>::try_from(pre_states)
+    let [config, holder, escrow, outbox] = <[Input; 4]>::try_from(pre_states)
         .expect("Lock requires config, holder, escrow, and outbox accounts");
 
     // Pinned rather than caller-named: chaining elsewhere would debit the escrow
@@ -85,7 +85,7 @@ fn lock(
         config_account_id(self_program_id),
         "first account must be the bridge-lock config PDA"
     );
-    let (outbox_program_id, pinned_target) = read_config(config.account.data(self_program_id))
+    let (outbox_program_id, pinned_target) = read_config(config.data(self_program_id))
         .expect("config account holds an outbox and a mint target");
 
     // Value conservation: the forwarded payload must mint exactly what is locked.
@@ -108,11 +108,20 @@ fn lock(
         target_program_id, pinned_target,
         "bridge_lock only mints through the wrapped token it is pinned to"
     );
+    // Both slots belong to the wrapped token itself: it is the target program, and the
+    // config and holding it reads are its own namespace at those addresses.
+    let target_namespace = AccountId::from(pinned_target);
     assert_eq!(
         target_accounts,
         vec![
-            wrapped_token_core::config_account_id(pinned_target).into_value(),
-            wrapped_token_core::holding_account_id(pinned_target, &recipient).into_value(),
+            SlotRef {
+                account_id: wrapped_token_core::config_account_id(pinned_target),
+                program: Some(target_namespace),
+            },
+            SlotRef {
+                account_id: wrapped_token_core::holding_account_id(pinned_target, &recipient),
+                program: Some(target_namespace),
+            },
         ],
         "target accounts must be the mint's config and the recipient's holding"
     );
@@ -131,21 +140,19 @@ fn lock(
     // Move the real native balance holder -> escrow. Both sides are bridge_lock's own
     // slot, so it debits one and credits the other directly; conservation holds because
     // the same amount moves between them.
-    let mut holder_post = holder.account.clone();
-    let holder_slot = holder_post.slot_mut(self_program_id);
+    let mut holder_post = holder.slot_of(self_program_id).clone();
+    let holder_slot = &mut holder_post;
     holder_slot.balance = holder_slot
         .balance
         .checked_sub(amount)
         .expect("insufficient balance to lock");
-    holder_post.prune();
 
-    let mut escrow_post = escrow.account.clone();
-    let escrow_slot = escrow_post.slot_mut(self_program_id);
+    let mut escrow_post = escrow.slot_of(self_program_id).clone();
+    let escrow_slot = &mut escrow_post;
     escrow_slot.balance = escrow_slot
         .balance
         .checked_add(amount)
         .expect("escrow balance overflow");
-    escrow_post.prune();
 
     let call = ChainedCall::new(
         outbox_program_id,
@@ -159,14 +166,19 @@ fn lock(
         },
     );
 
-    let config_post = config.account.clone();
+    let config_post = config.unchanged();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![config, holder, escrow, outbox.clone()],
-        vec![config_post, holder_post, escrow_post, outbox.account],
+        vec![
+            config_post,
+            Some(holder_post),
+            Some(escrow_post),
+            outbox.unchanged(),
+        ],
     )
     .with_chained_calls(vec![call])
     .write();
@@ -177,14 +189,14 @@ fn lock(
 fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     outbox_program_id: ProgramId,
     target_program_id: ProgramId,
 ) {
     // pre_states: [config PDA].
-    let [config] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitConfig requires the config account");
+    let [config] =
+        <[Input; 1]>::try_from(pre_states).expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
         config_account_id(self_program_id),
@@ -193,16 +205,17 @@ fn init_config(
     // Init-once, idempotent under genesis replay: an absent bridge-lock slot is a
     // first init; an existing one must already pin exactly these programs, since
     // genesis is replayed onto seeded state during multi-sequencer reconstruction.
-    if let Some(slot) = config.account.slot(self_program_id) {
+    let existing = config.slot_of(self_program_id);
+    if !existing.data.is_empty() {
         assert_eq!(
-            *slot.data,
+            *existing.data,
             config_bytes(outbox_program_id, target_program_id),
             "bridge-lock config already pins a different outbox or mint target"
         );
     }
 
-    let mut config_post = config.account.clone();
-    config_post.slot_mut(self_program_id).data = config_bytes(outbox_program_id, target_program_id)
+    let mut config_post = existing.clone();
+    config_post.data = config_bytes(outbox_program_id, target_program_id)
         .to_vec()
         .try_into()
         .expect("pinned ids fit in account data");
@@ -212,7 +225,7 @@ fn init_config(
         caller_program_id,
         instruction_data,
         vec![config],
-        vec![config_post],
+        vec![Some(config_post)],
     )
     .write();
 }

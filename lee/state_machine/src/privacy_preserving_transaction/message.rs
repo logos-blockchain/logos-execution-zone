@@ -1,20 +1,20 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction,
-    account::{Account, Nonce},
+    account::{Nonce, Slot, SlotRef},
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
 pub use lee_core::{EncryptedAccountData, ViewTag};
 use sha2::{Digest as _, Sha256};
 
-use crate::AccountId;
-
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PublicActionWithID {
-    pub account_id: AccountId,
-    pub post_state: Account,
+    pub slot: SlotRef,
+    /// The slot this position was left in — not the whole account. A stranger's slots at the
+    /// same address are neither named nor carried, so they cost this transaction nothing.
+    pub post_state: Option<Slot>,
 }
 
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -63,7 +63,10 @@ impl Message {
             .public_actions
             .into_iter()
             .map(|action| PublicActionWithID {
-                account_id: action.pre.account_id,
+                slot: SlotRef {
+                    account_id: action.pre.account_id,
+                    program: action.pre.slot.as_ref().map(|(program, _)| *program),
+                },
                 post_state: action.post,
             })
             .collect();
@@ -93,10 +96,10 @@ impl Message {
     }
 
     #[must_use]
-    pub fn public_account_ids(&self) -> Vec<AccountId> {
+    pub fn public_slots(&self) -> Vec<SlotRef> {
         self.public_actions
             .iter()
-            .map(|action| action.account_id)
+            .map(|action| action.slot)
             .collect()
     }
 
@@ -121,7 +124,7 @@ pub mod tests {
     use lee_core::{
         Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Nullifier,
         NullifierPublicKey, PrivateAccountKind, PrivateAction, SharedSecretKey,
-        account::{Account, AccountId, Nonce},
+        account::{Account, AccountId, Nonce, Slot, SlotRef},
         encryption::{Ciphertext, ViewingPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
@@ -152,8 +155,8 @@ pub mod tests {
 
         Message {
             public_actions: vec![PublicActionWithID {
-                account_id: AccountId::new([1; 32]),
-                post_state: Account::default(),
+                slot: SlotRef::new(AccountId::new([1; 32]), [0_u32; 8]),
+                post_state: Some(Slot::default()),
             }],
             nonces,
             private_actions: vec![PrivateAction {

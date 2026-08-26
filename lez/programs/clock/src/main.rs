@@ -12,25 +12,25 @@ use clock_core::{
     ClockAccountData, Instruction,
 };
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Input, Slot},
     program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 fn update_if_multiple(
-    pre: AccountWithMetadata,
+    pre: Input,
     self_program_id: ProgramId,
     divisor: u64,
     current_block_id: u64,
     updated_data: &[u8],
-) -> (AccountWithMetadata, Account) {
-    let mut post = pre.account.clone();
+) -> (Input, Option<Slot>) {
+    let mut post = pre.slot_of(self_program_id).clone();
     if current_block_id.is_multiple_of(divisor) {
-        post.slot_mut(self_program_id).data = updated_data
+        post.data = updated_data
             .to_vec()
             .try_into()
             .expect("Clock account data should fit in account data");
     }
-    (pre, post)
+    (pre, Some(post))
 }
 
 fn main() {
@@ -56,7 +56,7 @@ fn main() {
         panic!("Invalid input accounts");
     }
 
-    let prev_data = ClockAccountData::from_bytes(pre_01.account.data(self_program_id));
+    let prev_data = ClockAccountData::from_bytes(pre_01.data(self_program_id));
     let current_block_id = prev_data
         .block_id
         .checked_add(1)

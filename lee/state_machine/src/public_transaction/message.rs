@@ -1,18 +1,18 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::Nonce,
+    account::{Nonce, SlotRef},
     program::{InstructionData, ProgramId},
 };
 use sha2::{Digest as _, Sha256};
 
-use crate::{AccountId, error::LeeError, program::Program};
+use crate::{error::LeeError, program::Program};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x00";
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub program_id: ProgramId,
-    pub account_ids: Vec<AccountId>,
+    pub slots: Vec<SlotRef>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
 }
@@ -27,7 +27,7 @@ impl std::fmt::Debug for Message {
         );
         f.debug_struct("Message")
             .field("program_id", &program_id_hex)
-            .field("account_ids", &self.account_ids)
+            .field("slots", &self.slots)
             .field("nonces", &self.nonces)
             .field("instruction_data", &self.instruction_data)
             .finish()
@@ -37,7 +37,7 @@ impl std::fmt::Debug for Message {
 impl Message {
     pub fn try_new<T: BorshSerialize>(
         program_id: ProgramId,
-        account_ids: Vec<AccountId>,
+        slots: Vec<SlotRef>,
         nonces: Vec<Nonce>,
         instruction: T,
     ) -> Result<Self, LeeError> {
@@ -45,7 +45,7 @@ impl Message {
 
         Ok(Self {
             program_id,
-            account_ids,
+            slots,
             nonces,
             instruction_data,
         })
@@ -54,13 +54,13 @@ impl Message {
     #[must_use]
     pub const fn new_preserialized(
         program_id: ProgramId,
-        account_ids: Vec<AccountId>,
+        slots: Vec<SlotRef>,
         nonces: Vec<Nonce>,
         instruction_data: InstructionData,
     ) -> Self {
         Self {
             program_id,
-            account_ids,
+            slots,
             nonces,
             instruction_data,
         }
@@ -83,7 +83,7 @@ impl Message {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::{AccountId, Nonce};
+    use lee_core::account::{AccountId, Nonce, SlotRef};
     use sha2::{Digest as _, Sha256};
 
     use super::{Message, PREFIX};
@@ -97,7 +97,10 @@ mod tests {
     fn pinned_message(instruction_data: Vec<u8>) -> Message {
         Message::new_preserialized(
             [1_u32; 8],
-            vec![AccountId::new([42; 32])],
+            vec![SlotRef {
+                account_id: AccountId::new([42; 32]),
+                program: Some(AccountId::new([7; 32])),
+            }],
             vec![Nonce(5)],
             instruction_data,
         )
@@ -122,12 +125,14 @@ mod tests {
 
     #[test]
     fn hash_public_pinned() {
-        // account_ids: u32 len=1 then AccountId([42; 32]); nonces: u32 len=1 then LE u128;
-        // instruction_data: u32 len=0.
+        // slots: u32 len=1 then SlotRef(account_id [42; 32], program Some([7; 32]) as tag 1 plus
+        // the id); nonces: u32 len=1 then LE u128; instruction_data: u32 len=0.
         let expected_borsh: Vec<u8> = [
             &PROGRAM_ID_BYTES[..],
             &[1, 0, 0, 0],
             &[42; 32],
+            &[1],
+            &[7; 32],
             &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             &[0, 0, 0, 0],
         ]
@@ -144,11 +149,38 @@ mod tests {
             &PROGRAM_ID_BYTES[..],
             &[1, 0, 0, 0],
             &[42; 32],
+            &[1],
+            &[7; 32],
             &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             &[3, 0, 0, 0, 7, 8, 9],
         ]
         .concat();
 
         assert_borsh_and_hash_pinned(&pinned_message(vec![7, 8, 9]), &expected_borsh);
+    }
+
+    #[test]
+    fn hash_public_pinned_address_only_slot() {
+        // A position that names no slot encodes the `Option` tag as 0 and nothing after it.
+        let message = Message::new_preserialized(
+            [1_u32; 8],
+            vec![SlotRef {
+                account_id: AccountId::new([42; 32]),
+                program: None,
+            }],
+            vec![Nonce(5)],
+            vec![],
+        );
+        let expected_borsh: Vec<u8> = [
+            &PROGRAM_ID_BYTES[..],
+            &[1, 0, 0, 0],
+            &[42; 32],
+            &[0],
+            &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            &[0, 0, 0, 0],
+        ]
+        .concat();
+
+        assert_borsh_and_hash_pinned(&message, &expected_borsh);
     }
 }

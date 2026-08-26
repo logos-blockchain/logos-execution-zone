@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use lee::AccountId;
 #[cfg(test)]
 use lee::{Account, PrivateKey, PublicKey, V03State, ValidatedStateDiff};
+use lee_core::account::SlotRef;
 
 use crate::{
     HashType,
@@ -80,16 +81,13 @@ pub fn produce_dummy_block(
 #[must_use]
 pub fn produce_dummy_empty_transaction() -> LeeTransaction {
     let program_id = programs::authenticated_transfer().id();
-    let account_ids = vec![];
+    let slots = vec![];
     let nonces = vec![];
     let message = lee::public_transaction::Message::try_new(
         program_id,
-        account_ids,
+        slots,
         nonces,
-        authenticated_transfer_core::Instruction::Transfer {
-            amount: 0,
-            recipient_program: None,
-        },
+        authenticated_transfer_core::Instruction::Transfer { amount: 0 },
     )
     .unwrap();
     let private_key = lee::PrivateKey::try_new([1; 32]).unwrap();
@@ -115,16 +113,17 @@ pub fn create_transaction_native_token_transfer(
     balance_to_move: u128,
     signing_key: &lee::PrivateKey,
 ) -> LeeTransaction {
-    let account_ids = vec![from, to];
-    let nonces = vec![nonce.into()];
     let program_id = programs::authenticated_transfer().id();
+    // Both positions name the native namespace: the sender is debited there and the
+    // recipient credited there, which is what a plain transfer means.
+    let slots = vec![SlotRef::new(from, program_id), SlotRef::new(to, program_id)];
+    let nonces = vec![nonce.into()];
     let message = lee::public_transaction::Message::try_new(
         program_id,
-        account_ids,
+        slots,
         nonces,
         authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,
-            recipient_program: None,
         },
     )
     .unwrap();

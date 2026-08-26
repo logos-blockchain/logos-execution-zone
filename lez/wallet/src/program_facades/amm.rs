@@ -3,15 +3,15 @@ use common::HashType;
 use lee::{AccountId, program::Program};
 use token_core::TokenHolding;
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{ExecutionFailureKind, Identity, WalletCore};
 pub struct Amm<'wallet>(pub &'wallet WalletCore);
 
 impl Amm<'_> {
     pub async fn send_new_definition(
         &self,
-        user_holding_a: AccountIdentity,
-        user_holding_b: AccountIdentity,
-        user_holding_lp: AccountIdentity,
+        user_holding_a: Identity,
+        user_holding_b: Identity,
+        user_holding_lp: Identity,
         balance_a: u128,
         balance_b: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -58,13 +58,13 @@ impl Amm<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::PublicNoSign(amm_pool),
-                    AccountIdentity::PublicNoSign(vault_holding_a),
-                    AccountIdentity::PublicNoSign(vault_holding_b),
-                    AccountIdentity::PublicNoSign(pool_lp),
-                    user_holding_a,
-                    user_holding_b,
-                    user_holding_lp,
+                    Identity::PublicNoSign(amm_pool).in_namespace(programs::amm().id()),
+                    Identity::PublicNoSign(vault_holding_a).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(vault_holding_b).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(pool_lp).in_namespace(programs::token().id()),
+                    user_holding_a.in_namespace(programs::token().id()),
+                    user_holding_b.in_namespace(programs::token().id()),
+                    user_holding_lp.in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 amm_program_id,
@@ -74,8 +74,8 @@ impl Amm<'_> {
 
     pub async fn send_swap_exact_input(
         &self,
-        user_holding_a: AccountIdentity,
-        user_holding_b: AccountIdentity,
+        user_holding_a: Identity,
+        user_holding_b: Identity,
         swap_amount_in: u128,
         min_amount_out: u128,
         token_definition_id_in: AccountId,
@@ -128,23 +128,23 @@ impl Amm<'_> {
         }
 
         let user_a_signing_identity = if token_definition_id_in == definition_token_a_id {
-            user_holding_a
+            user_holding_a.in_namespace(programs::token().id())
         } else {
-            AccountIdentity::PublicNoSign(a_id)
+            Identity::PublicNoSign(a_id).in_namespace(programs::token().id())
         };
 
         let user_b_signing_identity = if token_definition_id_in == definition_token_b_id {
-            user_holding_b
+            user_holding_b.in_namespace(programs::token().id())
         } else {
-            AccountIdentity::PublicNoSign(b_id)
+            Identity::PublicNoSign(b_id).in_namespace(programs::token().id())
         };
 
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::PublicNoSign(amm_pool),
-                    AccountIdentity::PublicNoSign(vault_holding_a),
-                    AccountIdentity::PublicNoSign(vault_holding_b),
+                    Identity::PublicNoSign(amm_pool).in_namespace(programs::amm().id()),
+                    Identity::PublicNoSign(vault_holding_a).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(vault_holding_b).in_namespace(programs::token().id()),
                     user_a_signing_identity,
                     user_b_signing_identity,
                 ],
@@ -156,8 +156,8 @@ impl Amm<'_> {
 
     pub async fn send_swap_exact_output(
         &self,
-        user_holding_a: AccountIdentity,
-        user_holding_b: AccountIdentity,
+        user_holding_a: Identity,
+        user_holding_b: Identity,
         exact_amount_out: u128,
         max_amount_in: u128,
         token_definition_id_in: AccountId,
@@ -210,23 +210,23 @@ impl Amm<'_> {
         }
 
         let user_a_signing_identity = if token_definition_id_in == definition_token_a_id {
-            user_holding_a
+            user_holding_a.in_namespace(programs::token().id())
         } else {
-            AccountIdentity::PublicNoSign(a_id)
+            Identity::PublicNoSign(a_id).in_namespace(programs::token().id())
         };
 
         let user_b_signing_identity = if token_definition_id_in == definition_token_b_id {
-            user_holding_b
+            user_holding_b.in_namespace(programs::token().id())
         } else {
-            AccountIdentity::PublicNoSign(b_id)
+            Identity::PublicNoSign(b_id).in_namespace(programs::token().id())
         };
 
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::PublicNoSign(amm_pool),
-                    AccountIdentity::PublicNoSign(vault_holding_a),
-                    AccountIdentity::PublicNoSign(vault_holding_b),
+                    Identity::PublicNoSign(amm_pool).in_namespace(programs::amm().id()),
+                    Identity::PublicNoSign(vault_holding_a).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(vault_holding_b).in_namespace(programs::token().id()),
                     user_a_signing_identity,
                     user_b_signing_identity,
                 ],
@@ -238,9 +238,9 @@ impl Amm<'_> {
 
     pub async fn send_add_liquidity(
         &self,
-        user_holding_a: AccountIdentity,
-        user_holding_b: AccountIdentity,
-        user_holding_lp: AccountIdentity,
+        user_holding_a: Identity,
+        user_holding_b: Identity,
+        user_holding_lp: Identity,
         min_amount_liquidity: u128,
         max_amount_to_add_token_a: u128,
         max_amount_to_add_token_b: u128,
@@ -288,13 +288,13 @@ impl Amm<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::PublicNoSign(amm_pool),
-                    AccountIdentity::PublicNoSign(vault_holding_a),
-                    AccountIdentity::PublicNoSign(vault_holding_b),
-                    AccountIdentity::PublicNoSign(pool_lp),
-                    user_holding_a,
-                    user_holding_b,
-                    user_holding_lp,
+                    Identity::PublicNoSign(amm_pool).in_namespace(programs::amm().id()),
+                    Identity::PublicNoSign(vault_holding_a).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(vault_holding_b).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(pool_lp).in_namespace(programs::token().id()),
+                    user_holding_a.in_namespace(programs::token().id()),
+                    user_holding_b.in_namespace(programs::token().id()),
+                    user_holding_lp.in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 amm_program_id,
@@ -306,7 +306,7 @@ impl Amm<'_> {
         &self,
         user_holding_a: AccountId,
         user_holding_b: AccountId,
-        user_holding_lp: AccountIdentity,
+        user_holding_lp: Identity,
         remove_liquidity_amount: u128,
         min_amount_to_remove_token_a: u128,
         min_amount_to_remove_token_b: u128,
@@ -347,13 +347,13 @@ impl Amm<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::PublicNoSign(amm_pool),
-                    AccountIdentity::PublicNoSign(vault_holding_a),
-                    AccountIdentity::PublicNoSign(vault_holding_b),
-                    AccountIdentity::PublicNoSign(pool_lp),
-                    AccountIdentity::PublicNoSign(user_holding_a),
-                    AccountIdentity::PublicNoSign(user_holding_b),
-                    user_holding_lp,
+                    Identity::PublicNoSign(amm_pool).in_namespace(programs::amm().id()),
+                    Identity::PublicNoSign(vault_holding_a).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(vault_holding_b).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(pool_lp).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(user_holding_a).in_namespace(programs::token().id()),
+                    Identity::PublicNoSign(user_holding_b).in_namespace(programs::token().id()),
+                    user_holding_lp.in_namespace(programs::token().id()),
                 ],
                 instruction_data,
                 amm_program_id,

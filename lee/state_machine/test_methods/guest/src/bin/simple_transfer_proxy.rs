@@ -47,8 +47,8 @@ fn main() {
 
         // Post-states stay unchanged in this program. The actual balance transfer
         // happens in the chained call to simple_transfer.
-        let pda_post = pda_pre.account.clone();
-        let recipient_post = recipient_pre.account.clone();
+        let pda_post = pda_pre.unchanged();
+        let recipient_post = recipient_pre.unchanged();
 
         // Chain to simple_transfer with pda_seeds to authorize the PDA.
         // The circuit's assert_authorization_and_record_bindings establishes the
@@ -77,7 +77,7 @@ fn main() {
             panic!("expected exactly 1 pre_state for init: [pda]");
         };
 
-        let pda_post = pda_pre.account.clone();
+        let pda_post = pda_pre.unchanged();
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
         // to authorize the PDA. simple_transfer will claim it with Claim::Authorized.

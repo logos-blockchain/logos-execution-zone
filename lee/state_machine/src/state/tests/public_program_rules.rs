@@ -5,39 +5,19 @@ fn native() -> ProgramId {
 }
 
 #[test]
-fn program_should_fail_if_modifies_nonces() {
-    let account_id = AccountId::new([1; 32]);
-    let mut state = V03State::new()
-        .with_public_account_balances(native(), [(account_id, 100)])
-        .with_test_programs();
-    let account_ids = vec![account_id];
-    let program_id = crate::test_methods::nonce_changer().id();
-    let message =
-        public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
-
-    assert!(matches!(
-        result,
-        Err(LeeError::InvalidProgramBehavior(
-            InvalidProgramBehaviorError::ExecutionValidationFailed(
-                ExecutionValidationError::ModifiedNonce { account_id: err_account_id }
-            )
-        )) if err_account_id == account_id
-    ));
-}
-
-#[test]
 fn program_should_fail_if_output_accounts_exceed_inputs() {
     let mut state = V03State::new()
         .with_public_account_balances(native(), [(AccountId::new([1; 32]), 0)])
         .with_test_programs();
     let account_ids = vec![AccountId::new([1; 32])];
     let program_id = crate::test_methods::extra_output().id();
-    let message =
-        public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
+    let message = public_transaction::Message::try_new(
+        program_id,
+        slots_of(program_id, &account_ids),
+        vec![],
+        (),
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -63,8 +43,13 @@ fn program_should_fail_with_missing_output_accounts() {
         .with_test_programs();
     let account_ids = vec![AccountId::new([1; 32]), AccountId::new([2; 32])];
     let program_id = crate::test_methods::missing_output().id();
-    let message =
-        public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
+    let message = public_transaction::Message::try_new(
+        program_id,
+        slots_of(program_id, &account_ids),
+        vec![],
+        (),
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -98,8 +83,13 @@ fn program_should_fail_if_it_drops_a_declared_account() {
         .with_test_programs();
     let account_ids = vec![AccountId::new([1; 32]), AccountId::new([2; 32])];
     let program_id = crate::test_methods::dropped_account().id();
-    let message =
-        public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
+    let message = public_transaction::Message::try_new(
+        program_id,
+        slots_of(program_id, &account_ids),
+        vec![],
+        (),
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -135,7 +125,7 @@ fn program_should_fail_if_transfers_balance_from_a_foreign_slot() {
     );
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![sender_account_id, receiver_account_id],
+        slots_of(program_id, &[sender_account_id, receiver_account_id]),
         vec![],
         balance_to_move,
     )
@@ -176,9 +166,13 @@ fn program_may_write_its_own_slot_without_touching_foreign_slots() {
             .slot(program_id)
             .is_none()
     );
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], vec![0_u8])
-            .unwrap();
+    let message = public_transaction::Message::try_new(
+        program_id,
+        slots_of(program_id, &[account_id]),
+        vec![],
+        vec![0_u8],
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -203,8 +197,13 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
     let account_id = AccountId::new([1; 32]);
     let program_id = crate::test_methods::minter().id();
 
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
+    let message = public_transaction::Message::try_new(
+        program_id,
+        slots_of(program_id, &[account_id]),
+        vec![],
+        (),
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -230,9 +229,13 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
     let balance_to_burn: u128 = 1;
     assert!(state.get_account_by_id(account_id).balance(program_id) > balance_to_burn);
 
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], balance_to_burn)
-            .unwrap();
+    let message = public_transaction::Message::try_new(
+        program_id,
+        slots_of(program_id, &[account_id]),
+        vec![],
+        balance_to_burn,
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
     let result = state.transition_from_public_transaction(&tx, 2, 0);
@@ -257,11 +260,13 @@ fn program_should_fail_if_writes_data_of_a_foreign_slot() {
     let program_id = crate::test_methods::foreign_slot_writer().id();
     let foreign_program_id = crate::test_methods::noop().id();
 
+    // The position names the foreign namespace: that is what makes the slot the writer
+    // reaches for one it does not own.
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![account_id],
+        slots_of(foreign_program_id, &[account_id]),
         vec![],
-        foreign_program_id,
+        (),
     )
     .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -300,11 +305,15 @@ fn program_should_fail_if_drains_a_foreign_slot() {
     let program_id = crate::test_methods::foreign_slot_drainer().id();
     let foreign_program_id = crate::test_methods::noop().id();
 
+    // `[the foreign slot it drains, its own slot it drains into]`, both at one account.
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![account_id],
+        vec![
+            SlotRef::new(account_id, foreign_program_id),
+            SlotRef::new(account_id, program_id),
+        ],
         vec![],
-        foreign_program_id,
+        (),
     )
     .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);

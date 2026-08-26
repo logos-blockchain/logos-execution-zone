@@ -16,7 +16,7 @@ use cross_zone_inbox_core::{
 };
 use integration_tests::config::{self, SequencerPartialConfig};
 use lee::{
-    PublicTransaction,
+    PublicTransaction, SlotRef,
     public_transaction::{Message, WitnessSet},
 };
 use sequencer_service_rpc::RpcClient as _;
@@ -58,7 +58,10 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
     let seen_id = inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id);
     let message = Message::try_new(
         inbox_id,
-        vec![inbox_config_account_id(inbox_id), seen_id],
+        vec![
+            SlotRef::new(inbox_config_account_id(inbox_id), inbox_id),
+            SlotRef::new(seen_id, inbox_id),
+        ],
         vec![],
         Instruction::Dispatch(msg),
     )

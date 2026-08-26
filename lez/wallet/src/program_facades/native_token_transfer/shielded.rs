@@ -3,12 +3,12 @@ use lee::AccountId;
 use lee_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
-use crate::{AccountIdentity, ExecutionFailureKind};
+use crate::{ExecutionFailureKind, Identity};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_shielded_transfer(
         &self,
-        from: AccountIdentity,
+        from: Identity,
         to: AccountId,
         balance_to_move: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
@@ -16,10 +16,11 @@ impl NativeTokenTransfer<'_> {
         self.0
             .send_privacy_preserving_tx_with_pre_check(
                 vec![
-                    from,
+                    from.in_namespace(programs::authenticated_transfer().id()),
                     self.0
                         .resolve_private_account(to)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(programs::authenticated_transfer().id()),
                 ],
                 instruction_data,
                 &program.into(),
@@ -37,7 +38,7 @@ impl NativeTokenTransfer<'_> {
 
     pub async fn send_shielded_transfer_to_outer_account(
         &self,
-        from: AccountIdentity,
+        from: Identity,
         to_npk: NullifierPublicKey,
         to_vpk: ViewingPublicKey,
         to_identifier: Identifier,
@@ -47,12 +48,13 @@ impl NativeTokenTransfer<'_> {
         self.0
             .send_privacy_preserving_tx_with_pre_check(
                 vec![
-                    from,
-                    AccountIdentity::PrivateForeign {
+                    from.in_namespace(programs::authenticated_transfer().id()),
+                    Identity::PrivateForeign {
                         npk: to_npk,
                         vpk: to_vpk,
                         identifier: to_identifier,
-                    },
+                    }
+                    .in_namespace(programs::authenticated_transfer().id()),
                 ],
                 instruction_data,
                 &program.into(),

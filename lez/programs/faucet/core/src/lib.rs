@@ -7,17 +7,14 @@ const FAUCET_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/FaucetSeed/000000000
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Transfers native tokens from the system faucet directly to a recipient account,
-    /// crediting `slots[recipient_program]` there.
+    /// crediting whichever slot the transaction named there.
     ///
     /// Executed only in genesis block by sequencer it-self. User transactions will be denied.
     ///
     /// Required accounts (2):
     /// - Faucet PDA account
     /// - Recipient account
-    GenesisTransferDirect {
-        recipient_program: ProgramId,
-        amount: u128,
-    },
+    GenesisTransferDirect { amount: u128 },
 }
 
 #[must_use]

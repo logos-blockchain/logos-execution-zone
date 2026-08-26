@@ -5,6 +5,7 @@ use std::{
 
 use common::HashType;
 use lee::{privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program};
+use wallet::Identity;
 
 use crate::{
     block_on,
@@ -187,10 +188,12 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     let mut accounts = Vec::with_capacity(account_identities_size);
 
     for ffi_acc in accounts_ffi {
-        match ffi_acc.try_into() {
-            Ok(v) => accounts.push(v),
+        match Identity::try_from(ffi_acc) {
+            // A generic call names the invoked program's namespace at every account: the
+            // caller passes bare identities and has no other namespace to mean.
+            Ok(v) => accounts.push(v.in_namespace(lee::ProgramId::from(program_id))),
             Err(err) => {
-                print_error("Failed to convert FfiAccountIdentity into AccountIdentity");
+                print_error("Failed to convert FfiAccountIdentity into Identity");
                 return err;
             }
         }
@@ -276,24 +279,27 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
     let accounts_ffi = std::slice::from_raw_parts(account_identities, account_identities_size);
     let instruction_data = std::slice::from_raw_parts(instruction_data, instruction_data_size);
 
+    let program = match unsafe { &*program_with_dependencies }.try_into() {
+        Ok(v) => v,
+        Err(err) => return err,
+    };
+    let program: &lee::privacy_preserving_transaction::circuit::ProgramWithDependencies = &program;
+
     let mut accounts = Vec::with_capacity(account_identities_size);
 
     for ffi_acc in accounts_ffi {
-        match ffi_acc.try_into() {
-            Ok(v) => accounts.push(v),
+        match Identity::try_from(ffi_acc) {
+            // A generic call names the invoked program's namespace at every account: the
+            // caller passes bare identities and has no other namespace to mean.
+            Ok(v) => accounts.push(v.in_namespace(program.program.id())),
             Err(err) => {
-                print_error("Failed to convert FfiAccountIdentity into AccountIdentity");
+                print_error("Failed to convert FfiAccountIdentity into Identity");
                 return err;
             }
         }
     }
 
-    let program = match unsafe { &*program_with_dependencies }.try_into() {
-        Ok(v) => v,
-        Err(err) => return err,
-    };
-
-    match block_on(wallet.send_privacy_preserving_tx(accounts, instruction_data.to_vec(), &program))
+    match block_on(wallet.send_privacy_preserving_tx(accounts, instruction_data.to_vec(), program))
     {
         Ok((tx_hash, secrets)) => {
             let tx_hash = CString::new(tx_hash.to_string())
