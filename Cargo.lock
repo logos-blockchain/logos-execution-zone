@@ -3255,7 +3255,6 @@ dependencies = [
 name = "faucet_program"
 version = "0.1.0"
 dependencies = [
- "authenticated_transfer_core",
  "faucet_core",
  "lee_core",
 ]
@@ -9382,7 +9381,6 @@ dependencies = [
  "clap",
  "common",
  "lee",
- "lee_core",
  "sequencer_service_rpc",
  "tokio",
  "wallet",

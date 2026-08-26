@@ -7,4 +7,3 @@ license = { workspace = true }
 [dependencies]
 lee_core.workspace = true
 faucet_core.workspace = true
-authenticated_transfer_core.workspace = true
