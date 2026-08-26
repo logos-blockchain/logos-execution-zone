@@ -1,9 +1,5 @@
 use super::*;
 
-fn native() -> ProgramId {
-    crate::test_methods::simple_balance_transfer().id()
-}
-
 #[test]
 fn program_should_fail_if_output_accounts_exceed_inputs() {
     let mut state = V03State::new()

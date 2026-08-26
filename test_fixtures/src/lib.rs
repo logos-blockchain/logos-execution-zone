@@ -26,7 +26,6 @@ use crate::{
     indexer_client::IndexerClient,
     setup::{
         SequencerSetup, fund_private_accounts, setup_bedrock_node, setup_indexer, setup_wallet,
-        sync_wallet,
     },
 };
 
@@ -755,7 +754,8 @@ impl ZoneTestContextBuilder {
 
             // Genesis credits public accounts directly, so they only need a sync; private
             // accounts have no state until something writes their commitment.
-            sync_wallet(&mut wallet)
+            wallet
+                .sync_to_latest_block()
                 .await
                 .context("Failed to sync wallet to the latest block")?;
 

@@ -1,21 +1,5 @@
 use super::*;
 
-fn assert_circuit_proving_failure<T>(result: &Result<T, LeeError>, expected: &str) {
-    assert!(
-        matches!(result, Err(LeeError::CircuitProvingError(msg)) if msg.contains(expected)),
-        "expected CircuitProvingError containing {expected:?}, got: {:?}",
-        result.as_ref().err()
-    );
-}
-
-fn assert_program_prove_failure<T>(result: &Result<T, LeeError>, expected: &str) {
-    assert!(
-        matches!(result, Err(LeeError::ProgramProveFailed(msg)) if msg.contains(expected)),
-        "expected ProgramProveFailed containing {expected:?}, got: {:?}",
-        result.as_ref().err()
-    );
-}
-
 #[test]
 fn transition_from_privacy_preserving_transaction_shielded() {
     let sender_keys = test_public_account_keys_1();
@@ -433,10 +417,13 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
     let recipient_commitment = Commitment::new(&recipient_account_id, &recipient_account_acc);
     let recipient_init_nullifier = Nullifier::for_account_initialization(&recipient_account_id);
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[(
-            sender_account.account_id,
-            sender_account.balance(simple_transfers.id()),
-        )]))
+        .with_public_account_balances(
+            native(),
+            [(
+                sender_account.account_id,
+                sender_account.balance(simple_transfers.id()),
+            )],
+        )
         .with_private_accounts([(recipient_commitment, recipient_init_nullifier)])
         .with_test_programs();
 

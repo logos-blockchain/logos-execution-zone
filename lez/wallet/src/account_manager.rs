@@ -31,16 +31,6 @@ impl AccountIdentity {
     pub const fn is_private(&self) -> bool {
         self.identity.is_private()
     }
-
-    #[must_use]
-    pub const fn is_public(&self) -> bool {
-        self.identity.is_public()
-    }
-
-    #[must_use]
-    pub const fn public_account_id(&self) -> Option<lee::AccountId> {
-        self.identity.public_account_id()
-    }
 }
 
 #[derive(Clone, PartialEq, Eq)]

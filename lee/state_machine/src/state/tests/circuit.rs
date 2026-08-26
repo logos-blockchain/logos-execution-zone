@@ -2,14 +2,6 @@ use lee_core::account::Input;
 
 use super::*;
 
-fn assert_circuit_proving_failure<T>(result: &Result<T, LeeError>, expected: &str) {
-    assert!(
-        matches!(result, Err(LeeError::CircuitProvingError(msg)) if msg.contains(expected)),
-        "expected CircuitProvingError containing {expected:?}, got: {:?}",
-        result.as_ref().err()
-    );
-}
-
 /// Builds a private-PDA pre state together with the witness that proves its identity, both
 /// from the same `(authority_program_id, seed)` binding, so the address and the witness can
 /// never disagree.
@@ -1183,8 +1175,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     let recipient_id = test_public_account_keys_2().account_id();
     let recipient_signing_key = test_public_account_keys_2().signing_key;
 
-    let mut state =
-        V03State::new().with_public_accounts(public_state_from_balances(&[(funder_id, 500)]));
+    let mut state = V03State::new().with_public_account_balances(native(), [(funder_id, 500)]);
 
     let alice_pda_0_account = Account::single(
         simple_transfer_id,

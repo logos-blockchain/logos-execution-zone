@@ -107,7 +107,7 @@ fn state_serialization_roundtrip() {
     let account_id_2 = AccountId::new([2; 32]);
     let initial_data = [(account_id_1, 100_u128), (account_id_2, 151_u128)];
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&initial_data))
+        .with_public_account_balances(native(), initial_data.iter().copied())
         .with_test_programs();
     let bytes = borsh::to_vec(&state).unwrap();
     let state_from_bytes: V03State = borsh::from_slice(&bytes).unwrap();

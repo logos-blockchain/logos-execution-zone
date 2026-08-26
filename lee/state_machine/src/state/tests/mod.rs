@@ -174,22 +174,25 @@ enum FlashSwapInstruction {
     },
 }
 
-fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<AccountId, Account> {
-    initial_data
-        .iter()
-        .copied()
-        .map(|(account_id, balance)| {
-            (
-                account_id,
-                Account::single(
-                    crate::test_methods::simple_balance_transfer().id(),
-                    balance,
-                    Data::default(),
-                    Nonce::default(),
-                ),
-            )
-        })
-        .collect()
+fn assert_circuit_proving_failure<T>(result: &Result<T, LeeError>, expected: &str) {
+    assert!(
+        matches!(result, Err(LeeError::CircuitProvingError(msg)) if msg.contains(expected)),
+        "expected CircuitProvingError containing {expected:?}, got: {:?}",
+        result.as_ref().err()
+    );
+}
+
+fn assert_program_prove_failure<T>(result: &Result<T, LeeError>, expected: &str) {
+    assert!(
+        matches!(result, Err(LeeError::ProgramProveFailed(msg)) if msg.contains(expected)),
+        "expected ProgramProveFailed containing {expected:?}, got: {:?}",
+        result.as_ref().err()
+    );
+}
+
+/// The namespace every balance-only test fixture funds.
+pub fn native() -> ProgramId {
+    crate::test_methods::simple_balance_transfer().id()
 }
 
 fn transfer_transaction(

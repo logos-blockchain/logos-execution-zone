@@ -1,9 +1,5 @@
 use super::*;
 
-fn native() -> ProgramId {
-    crate::test_methods::simple_balance_transfer().id()
-}
-
 #[test]
 fn transition_from_authenticated_transfer_program_invocation_default_account_destination() {
     let key = PrivateKey::try_new([1; 32]).unwrap();

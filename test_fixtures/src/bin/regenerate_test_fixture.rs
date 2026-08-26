@@ -15,7 +15,7 @@ use test_fixtures::{
     config,
     setup::{
         SequencerSetup, fund_private_accounts, prebuilt_sequencer_db_dump_path, setup_bedrock_node,
-        setup_wallet, sync_wallet,
+        setup_wallet,
     },
 };
 use wallet::config::WalletConfigOverrides;
@@ -68,7 +68,8 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     .await
     .context("Failed to setup wallet for fixture generation")?;
 
-    sync_wallet(&mut wallet)
+    wallet
+        .sync_to_latest_block()
         .await
         .context("Failed to sync wallet for fixture generation")?;
 

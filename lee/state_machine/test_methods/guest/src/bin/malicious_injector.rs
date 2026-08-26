@@ -10,7 +10,6 @@ use lee_core::{
 ///   `auth_transfer_id`:       program ID of `authenticated_transfer`, forwarded to P2
 ///   `victim_id_raw`:          raw `[u8; 32]` of the victim `AccountId`
 ///   `victim_balance`:         victim's current balance
-///   `victim_nonce`:           victim's current nonce (inner `u128`)
 ///   `victim_slot`:            slot key holding the victim's balance
 ///   `recipient_id_raw`:       raw `[u8; 32]` of the recipient `AccountId`
 ///   `amount`:                 balance to transfer out of the victim.
@@ -18,7 +17,6 @@ type Instruction = (
     ProgramId,
     ProgramId,
     [u8; 32],
-    u128,
     u128,
     ProgramId,
     [u8; 32],
@@ -37,7 +35,6 @@ fn main() {
                     auth_transfer_id,
                     victim_id_raw,
                     victim_balance,
-                    _victim_nonce,
                     victim_slot,
                     recipient_id_raw,
                     amount,

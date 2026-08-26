@@ -1,35 +1,13 @@
-use std::collections::HashMap;
-
-use lee_core::{
-    account::{Account, AccountId, Input, Nonce, SlotRef, data::Data},
-    program::ProgramId,
-};
+use lee_core::account::{AccountId, Input, Nonce, SlotRef, data::Data};
 
 use crate::{
     PrivateKey, PublicKey, V03State,
     error::{InvalidProgramBehaviorError, LeeError},
     program::Program,
     public_transaction::{Message, WitnessSet},
-    state::tests::slots_of,
+    state::tests::{native, slots_of},
     validated_state_diff::ValidatedStateDiff,
 };
-
-fn native() -> ProgramId {
-    crate::test_methods::simple_balance_transfer().id()
-}
-
-fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<AccountId, Account> {
-    initial_data
-        .iter()
-        .copied()
-        .map(|(account_id, balance)| {
-            (
-                account_id,
-                Account::single(native(), balance, Data::default(), Nonce::default()),
-            )
-        })
-        .collect()
-}
 
 #[test]
 fn public_diff_reflects_a_successful_transfer() {
@@ -42,7 +20,7 @@ fn public_diff_reflects_a_successful_transfer() {
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[(from, 100)]))
+        .with_public_account_balances(native(), [(from, 100)])
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
@@ -107,7 +85,6 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         lee_core::program::ProgramId, // simple_balance_transfer_id
         [u8; 32],                     // victim_id_raw
         u128,                         // victim_balance
-        u128,                         // victim_nonce
         lee_core::program::ProgramId, // victim_slot
         [u8; 32],                     // recipient_id_raw
         u128,                         // amount
@@ -124,10 +101,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 
     // genesis parks every balance in simple_balance_transfer's slot.
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[
-            (victim_id, victim_balance),
-            (recipient_id, 0),
-        ]))
+        .with_public_account_balances(native(), [(victim_id, victim_balance), (recipient_id, 0)])
         .with_programs([
             crate::test_methods::simple_balance_transfer(),
             crate::test_methods::malicious_injector(),
@@ -156,7 +130,6 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         crate::test_methods::simple_balance_transfer().id(),
         *victim_id.value(),
         victim_account.balance(native()),
-        victim_account.nonce.0,
         native(),
         *recipient_id.value(),
         victim_balance,
@@ -269,7 +242,6 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
         lee_core::program::ProgramId, // simple_balance_transfer_id
         [u8; 32],                     // victim_id_raw
         u128,                         // victim_balance
-        u128,                         // victim_nonce
         lee_core::program::ProgramId, // victim_slot
         [u8; 32],                     // recipient_id_raw
         u128,                         // amount
@@ -290,7 +262,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
 
     // Victim has no public state entry; only recipient is registered at genesis.
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[(recipient_id, 0)]))
+        .with_public_account_balances(native(), [(recipient_id, 0)])
         .with_programs([
             crate::test_methods::simple_balance_transfer(),
             crate::test_methods::malicious_injector(),
@@ -322,7 +294,6 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
         crate::test_methods::simple_balance_transfer().id(),
         *victim_id.value(),
         victim_balance,
-        0_u128, // nonce
         native(),
         *recipient_id.value(),
         victim_balance,
@@ -411,15 +382,14 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
 /// input, so a forged `is_authorized=true` flag is never trusted.
 #[test]
 fn malicious_programs_cannot_drain_victim_without_signature() {
-    // p2_id, simple_balance_transfer_id, victim_id_raw, victim_balance, victim_nonce,
-    // victim_slot, recipient_id_raw, amount.
+    // p2_id, simple_balance_transfer_id, victim_id_raw, victim_balance, victim_slot,
+    // recipient_id_raw, amount.
     // Primitives only — this instruction is borsh-encoded into instruction_data.
     type InjectorInstruction = (
         lee_core::program::ProgramId, // p2_id
         lee_core::program::ProgramId, // simple_balance_transfer_id
         [u8; 32],                     // victim_id_raw
         u128,                         // victim_balance
-        u128,                         // victim_nonce
         lee_core::program::ProgramId, // victim_slot
         [u8; 32],                     // recipient_id_raw
         u128,                         // amount
@@ -435,11 +405,14 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
 
     let victim_balance = 5_000_u128;
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[
-            (attacker_id, 100),
-            (victim_id, victim_balance),
-            (recipient_id, 0),
-        ]))
+        .with_public_account_balances(
+            native(),
+            [
+                (attacker_id, 100),
+                (victim_id, victim_balance),
+                (recipient_id, 0),
+            ],
+        )
         .with_programs([
             crate::test_methods::simple_balance_transfer(),
             crate::test_methods::malicious_injector(),
@@ -454,7 +427,6 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
         crate::test_methods::simple_balance_transfer().id(),
         *victim_id.value(),
         victim_account.balance(native()),
-        victim_account.nonce.0,
         native(),
         *recipient_id.value(),
         victim_balance,

@@ -448,12 +448,3 @@ pub async fn fund_private_accounts(
 
     Ok(())
 }
-
-pub async fn sync_wallet(wallet: &mut WalletCore) -> Result<()> {
-    wallet
-        .sync_to_latest_block()
-        .await
-        .context("Failed to sync wallet to the latest block")?;
-
-    Ok(())
-}

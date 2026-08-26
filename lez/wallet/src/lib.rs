@@ -552,18 +552,6 @@ impl WalletCore {
         self.statistics.get(sequencer_url)
     }
 
-    /// Get the balance an account holds in `program_id`'s slot. The native slot is
-    /// `programs::authenticated_transfer().id()`; balances in other slots are not spendable
-    /// through it and are never summed together.
-    pub async fn get_account_balance(&self, acc: AccountId, program_id: ProgramId) -> Result<u128> {
-        Ok(self
-            .multi_sequencer_client
-            .metered_get(async |client: &SequencerClient| {
-                client.get_account_balance(acc, program_id).await
-            })
-            .await?)
-    }
-
     /// Get accounts nonces.
     pub async fn get_accounts_nonces(&self, accs: &[AccountId]) -> Result<Vec<Nonce>> {
         Ok(self
