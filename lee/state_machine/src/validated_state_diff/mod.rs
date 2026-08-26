@@ -6,7 +6,7 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, Input},
+    account::{Account, AccountId, Input, Nonce},
     program::{CallerData, ChainedCall, compute_public_authorized_pdas, validate_execution},
 };
 use log::debug;
@@ -87,12 +87,13 @@ impl ValidatedStateDiff {
                 account_id: slot_ref.account_id,
                 is_authorized: signer_account_ids.contains(&slot_ref.account_id),
                 slot: slot_ref.program.map(|program| {
-                    (
-                        program,
-                        state
-                            .get_account_by_id(slot_ref.account_id)
-                            .slot_or_empty(program),
-                    )
+                    // Read through the borrow: an account is unbounded across slots, and a
+                    // position needs exactly one of them.
+                    let slot = state
+                        .get_account_by_id_ref(slot_ref.account_id)
+                        .map(|account| account.slot_or_empty(program))
+                        .unwrap_or_default();
+                    (program, slot)
                 }),
             })
             .collect();
@@ -158,14 +159,16 @@ impl ValidatedStateDiff {
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
                 positions_seen.insert((account_id, pre.slot.as_ref().map(|(p, _)| *p)));
-                // Check that the program output pre_states coincide with the values in the public
-                // state or with any modifications to those values during the chain of calls.
-                let expected_pre = state_diff
-                    .get(&account_id)
-                    .cloned()
-                    .unwrap_or_else(|| state.get_account_by_id(account_id));
                 if let Some((namespace, slot)) = &pre.slot {
-                    let expected_slot = expected_pre.slot_or_empty(*namespace);
+                    // Check that the program output pre_states coincide with the values in the
+                    // public state or with any modifications to those values during the chain of
+                    // calls. Only this one slot is read, so the account is never cloned — and an
+                    // address-only position reads none at all.
+                    let expected_slot = state_diff
+                        .get(&account_id)
+                        .or_else(|| state.get_account_by_id_ref(account_id))
+                        .map(|account| account.slot_or_empty(*namespace))
+                        .unwrap_or_default();
                     ensure!(
                         *slot == expected_slot,
                         InvalidProgramBehaviorError::InconsistentAccountPreState {
@@ -355,7 +358,9 @@ impl ValidatedStateDiff {
         let signer_account_ids = tx.signer_account_ids();
         // Check nonces corresponds to the current nonces on the public state.
         for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
-            let current_nonce = state.get_account_by_id(*account_id).nonce;
+            let current_nonce = state
+                .get_account_by_id_ref(*account_id)
+                .map_or_else(Nonce::default, |account| account.nonce);
             ensure!(
                 current_nonce == *nonce,
                 LeeError::InvalidInput("Nonce mismatch".into())
@@ -376,12 +381,13 @@ impl ValidatedStateDiff {
                 account_id: slot_ref.account_id,
                 is_authorized: signer_account_ids.contains(&slot_ref.account_id),
                 slot: slot_ref.program.map(|program| {
-                    (
-                        program,
-                        state
-                            .get_account_by_id(slot_ref.account_id)
-                            .slot_or_empty(program),
-                    )
+                    // Read through the borrow: an account is unbounded across slots, and a
+                    // position needs exactly one of them.
+                    let slot = state
+                        .get_account_by_id_ref(slot_ref.account_id)
+                        .map(|account| account.slot_or_empty(program))
+                        .unwrap_or_default();
+                    (program, slot)
                 }),
             })
             .collect();
@@ -477,7 +483,9 @@ fn authenticate_public_transaction_signers(
 
     let signer_account_ids = tx.signer_account_ids();
     for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
-        let current_nonce = state.get_account_by_id(*account_id).nonce;
+        let current_nonce = state
+            .get_account_by_id_ref(*account_id)
+            .map_or_else(Nonce::default, |account| account.nonce);
         ensure!(
             current_nonce == *nonce,
             LeeError::InvalidInput("Nonce mismatch".into())
