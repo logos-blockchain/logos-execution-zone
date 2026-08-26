@@ -58,9 +58,7 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
                             account_id: AccountId {
                                 value: ffi_val.account_id.data,
                             },
-                            program: ffi_val.program.into_option().map(|p| AccountId {
-                                value: lee::AccountId::from(p.data).into_value(),
-                            }),
+                            program: wire_program(ffi_val.program),
                         })
                         .collect()
                 },
@@ -184,9 +182,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                     std_vec
                         .into_iter()
                         .map(|ffi_val| {
-                            let program = ffi_val.slot.program.into_option().map(|p| AccountId {
-                                value: lee::AccountId::from(p.data).into_value(),
-                            });
+                            let program = wire_program(ffi_val.slot.program);
                             PublicActionWithID {
                                 slot: SlotRef {
                                     account_id: AccountId {
@@ -266,10 +262,7 @@ impl From<PublicActionWithID> for FfiPublicAction {
     fn from(value: PublicActionWithID) -> Self {
         let program = value.slot.program;
         Self {
-            slot: FfiSlotRef {
-                account_id: value.slot.account_id.into(),
-                program: ffi_program(program),
-            },
+            slot: value.slot.into(),
             post_state: match value.post_state {
                 None => FfiOption::from_none(),
                 Some(slot) => {
@@ -614,6 +607,14 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
     };
 
     ValidityWindow((left, right))
+}
+
+/// The inverse of [`ffi_program`]: back from the program id the FFI shows to the account id
+/// the wire carries.
+fn wire_program(program: FfiOption<FfiProgramId>) -> Option<AccountId> {
+    program.into_option().map(|p| AccountId {
+        value: lee::AccountId::from(p.data).into_value(),
+    })
 }
 
 /// A namespace is an account id on the wire; the FFI surfaces it as the program id it is.

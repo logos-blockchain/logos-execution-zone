@@ -43,6 +43,24 @@ impl From<AccountId> for lee_core::account::AccountId {
     }
 }
 
+impl From<lee_core::account::SlotRef> for SlotRef {
+    fn from(value: lee_core::account::SlotRef) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            program: value.program.map(Into::into),
+        }
+    }
+}
+
+impl From<SlotRef> for lee_core::account::SlotRef {
+    fn from(value: SlotRef) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            program: value.program.map(Into::into),
+        }
+    }
+}
+
 impl From<lee_core::account::Account> for Account {
     fn from(value: lee_core::account::Account) -> Self {
         let lee_core::account::Account { nonce, slots } = value;
@@ -52,13 +70,7 @@ impl From<lee_core::account::Account> for Account {
             slots: slots
                 .into_iter()
                 .map(|(program_id, slot)| {
-                    (
-                        ProgramId(lee::ProgramId::from(program_id)),
-                        Slot {
-                            balance: slot.balance,
-                            data: slot.data.into(),
-                        },
-                    )
+                    (ProgramId(lee::ProgramId::from(program_id)), slot.into())
                 })
                 .collect(),
         }
@@ -76,13 +88,7 @@ impl TryFrom<Account> for lee_core::account::Account {
             slots: slots
                 .into_iter()
                 .map(|(program_id, slot)| {
-                    Ok((
-                        lee::AccountId::from(program_id.0),
-                        lee_core::account::Slot {
-                            balance: slot.balance,
-                            data: slot.data.try_into()?,
-                        },
-                    ))
+                    Ok((lee::AccountId::from(program_id.0), slot.try_into()?))
                 })
                 .collect::<Result<_, Self::Error>>()?,
         })
@@ -281,13 +287,7 @@ impl From<lee::public_transaction::Message> for PublicMessage {
         } = value;
         Self {
             program_id: program_id.into(),
-            slots: slots
-                .into_iter()
-                .map(|slot| SlotRef {
-                    account_id: slot.account_id.into(),
-                    program: slot.program.map(Into::into),
-                })
-                .collect(),
+            slots: slots.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
         }
@@ -304,13 +304,7 @@ impl From<PublicMessage> for lee::public_transaction::Message {
         } = value;
         Self::new_preserialized(
             program_id.into(),
-            slots
-                .into_iter()
-                .map(|slot| lee::SlotRef {
-                    account_id: slot.account_id.into(),
-                    program: slot.program.map(Into::into),
-                })
-                .collect(),
+            slots.into_iter().map(Into::into).collect(),
             nonces
                 .iter()
                 .map(|x| lee_core::account::Nonce(*x))
@@ -323,10 +317,7 @@ impl From<PublicMessage> for lee::public_transaction::Message {
 impl From<lee::privacy_preserving_transaction::message::PublicActionWithID> for PublicActionWithID {
     fn from(value: lee::privacy_preserving_transaction::message::PublicActionWithID) -> Self {
         Self {
-            slot: SlotRef {
-                account_id: value.slot.account_id.into(),
-                program: value.slot.program.map(Into::into),
-            },
+            slot: value.slot.into(),
             post_state: value.post_state.map(Into::into),
         }
     }
@@ -369,10 +360,7 @@ impl TryFrom<PublicActionWithID>
 
     fn try_from(value: PublicActionWithID) -> Result<Self, Self::Error> {
         Ok(Self {
-            slot: lee::SlotRef {
-                account_id: value.slot.account_id.into(),
-                program: value.slot.program.map(Into::into),
-            },
+            slot: value.slot.into(),
             post_state: value
                 .post_state
                 .map(TryInto::try_into)
