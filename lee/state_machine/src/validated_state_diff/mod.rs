@@ -8,8 +8,8 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramOutput,
-        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, TransactionEvent, compute_public_authorized_pdas,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        ProgramId, ProgramOutput, TransactionEvent, compute_public_authorized_pdas,
         pre_states_match_accounts, validate_execution,
     },
 };
@@ -90,7 +90,7 @@ impl ValidatedStateDiff {
         };
 
         let initial_caller_data = CallerData {
-            caller_account_id: None,
+            account_id: None,
             authorized_accounts: signer_account_ids.iter().copied().collect(),
         };
 
@@ -110,10 +110,8 @@ impl ValidatedStateDiff {
             // requires the underlying image id rather than the dispatch-facing `AccountId`.
             let program_id = ProgramId::from(chained_call.program_account_id);
 
-            let authorized_pdas = compute_public_authorized_pdas(
-                caller_data.caller_account_id,
-                &chained_call.pda_seeds,
-            );
+            let authorized_pdas =
+                compute_public_authorized_pdas(caller_data.account_id, &chained_call.pda_seeds);
 
             // Account is authorized if it is either in the caller's authorized accounts or in the
             // list of PDAs the caller has authorized.
@@ -155,47 +153,13 @@ impl ValidatedStateDiff {
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_account_id, real_pre_states, chained_call.instruction_data
             );
-            let mut program_output = if chained_call.program_account_id
-                == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
-            {
-                // Runs `Deploy` as native Rust instead of interpreting a guest ELF — see
-                // `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc comment for why.
-                //
-                // `execute_deploy` validates its input via `assert!`/`.expect(...)`, exactly
-                // like every guest program in this codebase, relying here on `catch_unwind` to
-                // play the same role the zkVM executor plays for a real guest: converting a
-                // rejected input into a graceful `Err` instead of unwinding past this call.
-                let program_loader_core::Instruction::Deploy { bytecode } =
-                    borsh::from_slice(&chained_call.instruction_data).map_err(|e| {
-                        LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
-                    })?;
-                let deploy_pre_states = real_pre_states.clone();
-                let post_states = std::panic::catch_unwind(|| {
-                    program_loader_core::execute_deploy(program_id, deploy_pre_states, bytecode)
-                })
-                .map_err(|_panic_payload| {
-                    LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
-                })?;
-                ProgramOutput::new(
-                    chained_call.program_account_id,
-                    caller_data.caller_account_id,
-                    chained_call.instruction_data.clone(),
-                    real_pre_states.clone(),
-                    post_states,
-                )
-            } else {
-                let Some(program_account) = state.get_program(chained_call.program_account_id)
-                else {
-                    return Err(LeeError::InvalidInput("Unknown program".into()));
-                };
-                let program =
-                    Program::new_unchecked(program_id, Cow::Owned(program_account.data.to_vec()));
-                program.execute(
-                    caller_data.caller_account_id,
-                    &real_pre_states,
-                    &chained_call.instruction_data,
-                )?
-            };
+            let mut program_output = execute_chained_call(
+                state,
+                program_id,
+                &chained_call,
+                caller_data.account_id,
+                &real_pre_states,
+            )?;
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_account_id, program_output
@@ -204,7 +168,7 @@ impl ValidatedStateDiff {
             // A chained callee must account for exactly the accounts its caller named, in
             // order. The top-level call has no caller, so it's exempt here.
             ensure!(
-                caller_data.caller_account_id.is_none()
+                caller_data.account_id.is_none()
                     || pre_states_match_accounts(
                         &chained_call.pre_state_ids,
                         &program_output.pre_states
@@ -266,9 +230,9 @@ impl ValidatedStateDiff {
 
             // Verify that the program output's caller_account_id matches the actual caller.
             ensure!(
-                program_output.caller_account_id == caller_data.caller_account_id,
+                program_output.caller_account_id == caller_data.account_id,
                 InvalidProgramBehaviorError::MismatchedCallerProgramId {
-                    expected: caller_data.caller_account_id,
+                    expected: caller_data.account_id,
                     actual: program_output.caller_account_id,
                 }
             );
@@ -368,7 +332,7 @@ impl ValidatedStateDiff {
                 chained_calls.push_front((
                     new_call,
                     CallerData {
-                        caller_account_id: Some(chained_call.program_account_id),
+                        account_id: Some(chained_call.program_account_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
@@ -559,6 +523,52 @@ impl ValidatedStateDiff {
 
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
+    }
+}
+
+/// Executes a chained call, dispatching to the native `Deploy` fast path when the call
+/// targets [`DEPLOYMENT_PROGRAM_ACCOUNT_ID`], or interpreting the target's guest ELF otherwise.
+///
+/// `real_pre_states` are the protocol-resolved account values for `chained_call.pre_state_ids`
+/// (see the caller) — never `chained_call`'s own claims, which this function must not trust.
+fn execute_chained_call(
+    state: &V03State,
+    program_id: ProgramId,
+    chained_call: &ChainedCall,
+    caller_account_id: Option<AccountId>,
+    real_pre_states: &[AccountWithMetadata],
+) -> Result<ProgramOutput, LeeError> {
+    if chained_call.program_account_id == DEPLOYMENT_PROGRAM_ACCOUNT_ID {
+        // Runs `Deploy` as native Rust instead of interpreting a guest ELF.
+        let program_loader_core::Instruction::Deploy { bytecode } =
+            borsh::from_slice(&chained_call.instruction_data)
+                .map_err(|e| LeeError::InvalidInput(format!("invalid Deploy instruction: {e}")))?;
+        let deploy_pre_states = real_pre_states.to_vec();
+        // FIXME: catch_unwind won't catch aborts; remove once lez programs have better
+        // error handling than panicking on invalid input.
+        let post_states = std::panic::catch_unwind(|| {
+            program_loader_core::execute_deploy(program_id, deploy_pre_states, bytecode)
+        })
+        .map_err(|_panic_payload| {
+            LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
+        })?;
+        Ok(ProgramOutput::new(
+            chained_call.program_account_id,
+            caller_account_id,
+            chained_call.instruction_data.clone(),
+            real_pre_states.to_vec(),
+            post_states,
+        ))
+    } else {
+        let Some(program_account) = state.get_program(chained_call.program_account_id) else {
+            return Err(LeeError::InvalidInput("Unknown program".into()));
+        };
+        let program = Program::new_unchecked(program_id, Cow::Owned(program_account.data.to_vec()));
+        program.execute(
+            caller_account_id,
+            real_pre_states,
+            &chained_call.instruction_data,
+        )
     }
 }
 
