@@ -62,7 +62,7 @@ fn main() {
         panic!("Block fee summary exceeds per-block gas caps");
     }
 
-    let mut fee_state = FeeState::from_bytes(&pre_state.account.data.clone().into_inner());
+    let mut fee_state = FeeState::from_bytes(&pre_state.account.data);
     let payout = fee_state.apply_block(&summary);
     // Until charging lands the summary is all-zero, so no payout can be owed.
     assert!(payout == 0, "no payout can accrue under zero fees");

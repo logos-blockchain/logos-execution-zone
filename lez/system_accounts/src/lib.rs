@@ -105,7 +105,7 @@ pub fn fee_account() -> Account {
 #[must_use]
 pub fn fee_state_account() -> Account {
     Account {
-        program_owner: programs::fee().id(),
+        program_owner: programs::fee().id().into(),
         data: fee_core::state::FeeState::genesis()
             .to_bytes()
             .try_into()
