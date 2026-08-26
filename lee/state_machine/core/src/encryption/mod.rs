@@ -44,34 +44,15 @@ impl EphemeralSecretKey {
 pub struct SharedSecretKey(pub [u8; 32]);
 
 /// The ML-KEM-768 ciphertext produced during encapsulation; transmitted on-wire in place of the
-/// former ECDH ephemeral public key.
-#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+/// former ECDH ephemeral public key. Always `ML_KEM_768_CIPHERTEXT_LEN` (1088) bytes.
+#[derive(
+    Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize,
+)]
 pub struct EphemeralPublicKey(pub Vec<u8>);
-
-impl Serialize for EphemeralPublicKey {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_bytes(&self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for EphemeralPublicKey {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer
-            .deserialize_bytes(BytesVisitor)
-            .map(EphemeralPublicKey)
-    }
-}
 
 pub struct EncryptionScheme;
 
-/// See [`EphemeralPublicKey`]'s doc comment — same fix, same no-new-cap reasoning.
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Clone, Default, PartialEq, Eq))]
 pub struct Ciphertext(pub(crate) Vec<u8>);
 
@@ -85,59 +66,6 @@ impl std::fmt::Debug for Ciphertext {
             acc
         });
         write!(f, "Ciphertext({hex})")
-    }
-}
-
-impl Serialize for Ciphertext {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_bytes(&self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for Ciphertext {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_bytes(BytesVisitor).map(Ciphertext)
-    }
-}
-
-struct BytesVisitor;
-
-impl<'de> serde::de::Visitor<'de> for BytesVisitor {
-    type Value = Vec<u8>;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(formatter, "a byte array")
-    }
-
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-    where
-        A: serde::de::SeqAccess<'de>,
-    {
-        let mut vec = Vec::new();
-        while let Some(value) = seq.next_element()? {
-            vec.push(value);
-        }
-        Ok(vec)
-    }
-
-    fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(v)
-    }
-
-    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(v.to_vec())
     }
 }
 
@@ -373,35 +301,5 @@ mod tests {
         let esk_a = EphemeralSecretKey::new(&account_id, &random_seed, &crate::account::Nonce(0));
         let esk_b = EphemeralSecretKey::new(&account_id, &random_seed, &crate::account::Nonce(1));
         assert_ne!(esk_a.0, esk_b.0);
-    }
-
-    #[test]
-    fn ephemeral_public_key_risc0_round_trip_survives_non_word_aligned_lengths() {
-        let epk = EphemeralPublicKey(vec![1, 2, 3, 4, 5, 6, 7]);
-        let words = risc0_zkvm::serde::to_vec(&epk).unwrap();
-        let round_tripped: EphemeralPublicKey = risc0_zkvm::serde::from_slice(&words).unwrap();
-        assert_eq!(epk, round_tripped);
-    }
-
-    #[test]
-    fn ephemeral_public_key_risc0_encoding_packs_four_bytes_per_word() {
-        let epk = EphemeralPublicKey(vec![0_u8; ML_KEM_768_CIPHERTEXT_LEN]);
-        let words = risc0_zkvm::serde::to_vec(&epk).unwrap();
-        assert_eq!(words.len(), 1 + ML_KEM_768_CIPHERTEXT_LEN.div_ceil(4));
-    }
-
-    #[test]
-    fn ciphertext_risc0_round_trip_survives_non_word_aligned_lengths() {
-        let ct = Ciphertext(vec![1, 2, 3, 4, 5, 6, 7]);
-        let words = risc0_zkvm::serde::to_vec(&ct).unwrap();
-        let round_tripped: Ciphertext = risc0_zkvm::serde::from_slice(&words).unwrap();
-        assert_eq!(ct.0, round_tripped.0);
-    }
-
-    #[test]
-    fn ciphertext_risc0_encoding_packs_four_bytes_per_word() {
-        let ct = Ciphertext(vec![0_u8; 101]);
-        let words = risc0_zkvm::serde::to_vec(&ct).unwrap();
-        assert_eq!(words.len(), 1 + 101_usize.div_ceil(4));
     }
 }
