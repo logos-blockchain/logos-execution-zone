@@ -140,7 +140,7 @@ fn diff_output_new_with_claim_constructor() {
     let diff_output = AccountDiffOutput::new_claimed(diff.clone(), Claim::Authorized);
 
     assert_eq!(&diff, diff_output.diff());
-    assert_eq!(diff_output.required_claim(), Some(Claim::Authorized));
+    assert_eq!(diff_output.claim(), Some(Claim::Authorized));
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn diff_output_new_without_claim_constructor() {
     let diff_output = AccountDiffOutput::new(diff.clone());
 
     assert_eq!(&diff, diff_output.diff());
-    assert!(diff_output.required_claim().is_none());
+    assert!(diff_output.claim().is_none());
 }
 
 #[test]

@@ -420,7 +420,7 @@ impl ExecutionState {
                 .unwrap_or_else(|| pre_account.data.clone());
 
             // Owner is inherited unless a claim overrides it (AccountDiff carries no ownership).
-            let post_program_owner = if let Some(claim) = diff_output.required_claim() {
+            let post_program_owner = if let Some(claim) = diff_output.claim() {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(
                     pre_account.program_owner, DEFAULT_PROGRAM_OWNER,

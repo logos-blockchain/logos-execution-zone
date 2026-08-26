@@ -847,7 +847,7 @@ fn mint_uninit_holding_success() {
 
     assert_data_diff(&def_post, &AccountForTests::definition_account_mint());
     assert_data_diff(&holding_post, &AccountForTests::init_mint());
-    assert_eq!(holding_post.required_claim(), Some(Claim::Authorized));
+    assert_eq!(holding_post.claim(), Some(Claim::Authorized));
 }
 
 #[test]

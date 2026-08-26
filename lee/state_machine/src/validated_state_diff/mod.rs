@@ -230,7 +230,7 @@ impl ValidatedStateDiff {
 
                 // Owner is inherited unless a claim overrides it (AccountDiff carries no
                 // ownership).
-                let program_owner = if let Some(claim) = diff_output.required_claim() {
+                let program_owner = if let Some(claim) = diff_output.claim() {
                     // The invoked program can only claim accounts with default program id.
                     ensure!(
                         pre.account.program_owner == DEFAULT_PROGRAM_OWNER,
