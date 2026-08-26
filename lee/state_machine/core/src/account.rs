@@ -200,6 +200,54 @@ impl AccountWithMetadata {
     }
 }
 
+/// The slot a transaction names, as it appears in the signed message. `program` is `None` for
+/// a position that carries only an address: a marker, an authority, a PDA-derivation input.
+#[derive(
+    Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub struct SlotRef {
+    pub account_id: AccountId,
+    pub program: Option<AccountId>,
+}
+
+/// One namespace at one account, as handed to a program. An account needing two namespaces
+/// occupies two positions; no two positions may name the same pair.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct Input {
+    pub account_id: AccountId,
+    pub is_authorized: bool,
+    pub slot: Option<(AccountId, Slot)>,
+}
+
+impl Input {
+    /// The named slot, checked to be `program`'s. The check lives here so a program cannot
+    /// forget it: a caller naming some other namespace must not read as an empty one.
+    #[must_use]
+    pub fn slot_of(&self, program: impl Into<AccountId>) -> &Slot {
+        let (named, slot) = self.slot.as_ref().expect("Position names no slot");
+        assert_eq!(*named, program.into(), "Position names another namespace");
+        slot
+    }
+
+    /// The named slot by value, for a program building its post state.
+    #[must_use]
+    pub fn into_slot_of(self, program: impl Into<AccountId>) -> Slot {
+        let (named, slot) = self.slot.expect("Position names no slot");
+        assert_eq!(named, program.into(), "Position names another namespace");
+        slot
+    }
+
+    #[must_use]
+    pub fn balance(&self, program: impl Into<AccountId>) -> Balance {
+        self.slot_of(program).balance
+    }
+
+    #[must_use]
+    pub fn data(&self, program: impl Into<AccountId>) -> &Data {
+        &self.slot_of(program).data
+    }
+}
+
 #[derive(
     Default,
     Copy,
@@ -278,7 +326,23 @@ impl Display for AccountId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::DEFAULT_PROGRAM_ID;
+    use crate::program::{DEFAULT_PROGRAM_ID, ProgramId};
+
+    const OTHER_PROGRAM_ID: ProgramId = [9; 8];
+
+    fn input_naming(program: ProgramId) -> Input {
+        Input {
+            account_id: AccountId::new([0; 32]),
+            is_authorized: true,
+            slot: Some((
+                program.into(),
+                Slot {
+                    balance: 42,
+                    data: b"named".to_vec().try_into().unwrap(),
+                },
+            )),
+        }
+    }
 
     #[test]
     fn zero_balance_account_data_creation() {
@@ -337,6 +401,43 @@ mod tests {
         account.set_slot(DEFAULT_PROGRAM_ID, Slot::default());
 
         assert!(account.slots.is_empty());
+    }
+
+    #[test]
+    fn input_reads_through_the_named_slot() {
+        let input = input_naming(DEFAULT_PROGRAM_ID);
+
+        assert_eq!(input.balance(DEFAULT_PROGRAM_ID), 42);
+        assert_eq!(input.data(DEFAULT_PROGRAM_ID).as_ref(), b"named".as_slice());
+    }
+
+    #[test]
+    fn into_slot_of_takes_the_named_slot() {
+        let slot = input_naming(DEFAULT_PROGRAM_ID).into_slot_of(DEFAULT_PROGRAM_ID);
+
+        assert_eq!(slot.balance, 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "Position names another namespace")]
+    fn input_refuses_a_namespace_it_does_not_name() {
+        let balance = input_naming(DEFAULT_PROGRAM_ID).balance(OTHER_PROGRAM_ID);
+
+        unreachable!("reading an unnamed namespace must panic, got {balance}");
+    }
+
+    #[test]
+    #[should_panic(expected = "Position names no slot")]
+    fn input_refuses_a_position_carrying_only_an_address() {
+        let address_only = Input {
+            account_id: AccountId::new([0; 32]),
+            is_authorized: true,
+            slot: None,
+        };
+
+        let balance = address_only.balance(DEFAULT_PROGRAM_ID);
+
+        unreachable!("reading an address-only position must panic, got {balance}");
     }
 
     #[test]
