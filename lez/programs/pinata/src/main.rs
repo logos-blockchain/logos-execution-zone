@@ -3,8 +3,8 @@ use risc0_zkvm::sha::{Impl, Sha256 as _};
 
 const PRIZE: u128 = 150;
 
-/// A candidate solution. The winner builds the transaction and so names the slot credited to
-/// them; naming one they cannot spend from only strands their own prize.
+/// A candidate solution. The winner is credited in whichever slot the transaction named at them;
+/// the solver need not be the winner.
 type Instruction = u128;
 
 struct Challenge {
