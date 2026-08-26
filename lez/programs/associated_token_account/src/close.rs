@@ -3,6 +3,11 @@ use lee_core::{
     program::{ChainedCall, ProgramId},
 };
 
+#[must_use]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "consistent with codebase style"
+)]
 pub fn close_associated_token_account(
     owner: Input,
     ata_account: Input,

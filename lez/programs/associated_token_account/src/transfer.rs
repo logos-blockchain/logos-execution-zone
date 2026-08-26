@@ -4,6 +4,11 @@ use lee_core::{
 };
 use token_core::TokenHolding;
 
+#[must_use]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "consistent with codebase style"
+)]
 pub fn transfer_from_associated_token_account(
     owner: Input,
     sender_ata: Input,

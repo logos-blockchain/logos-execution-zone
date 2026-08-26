@@ -4,15 +4,15 @@ use associated_token_account_core::{compute_ata_seed, get_associated_token_accou
 use lee_core::account::{AccountId, Data, Input, Slot};
 use token_core::{TokenDefinition, TokenHolding};
 
-const ATA_PROGRAM_ID: lee_core::program::ProgramId = [1u32; 8];
-const TOKEN_PROGRAM_ID: lee_core::program::ProgramId = [2u32; 8];
+const ATA_PROGRAM_ID: lee_core::program::ProgramId = [1_u32; 8];
+const TOKEN_PROGRAM_ID: lee_core::program::ProgramId = [2_u32; 8];
 
 fn owner_id() -> AccountId {
-    AccountId::new([0x01u8; 32])
+    AccountId::new([0x01_u8; 32])
 }
 
 fn definition_id() -> AccountId {
-    AccountId::new([0x02u8; 32])
+    AccountId::new([0x02_u8; 32])
 }
 
 fn ata_id() -> AccountId {
@@ -34,7 +34,7 @@ fn definition_account() -> Input {
         Slot {
             balance: 0,
             data: Data::from(&TokenDefinition::Fungible {
-                name: "TEST".to_string(),
+                name: "TEST".to_owned(),
                 total_supply: 1000,
                 metadata_id: None,
             }),
@@ -97,19 +97,21 @@ fn create_is_idempotent_for_initialized_ata() {
 #[should_panic(expected = "ATA account ID does not match expected derivation")]
 fn create_panics_on_wrong_ata_address() {
     let wrong_ata = Input::named(
-        AccountId::new([0xFFu8; 32]),
+        AccountId::new([0xFF_u8; 32]),
         false,
         TOKEN_PROGRAM_ID,
         Slot::default(),
     );
 
-    crate::create::create_associated_token_account(
+    let post_states = crate::create::create_associated_token_account(
         owner_account(),
         definition_account(),
         wrong_ata,
         ATA_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
     );
+
+    unreachable!("a mis-derived ATA address must panic, got {post_states:?}");
 }
 
 #[test]
@@ -122,7 +124,7 @@ fn get_associated_token_account_id_is_deterministic() {
 
 #[test]
 fn get_associated_token_account_id_differs_by_owner() {
-    let other_owner = AccountId::new([0x99u8; 32]);
+    let other_owner = AccountId::new([0x99_u8; 32]);
     let id1 = get_associated_token_account_id(
         &ATA_PROGRAM_ID,
         &compute_ata_seed(owner_id(), definition_id()),
@@ -136,7 +138,7 @@ fn get_associated_token_account_id_differs_by_owner() {
 
 #[test]
 fn get_associated_token_account_id_differs_by_definition() {
-    let other_def = AccountId::new([0x99u8; 32]);
+    let other_def = AccountId::new([0x99_u8; 32]);
     let id1 = get_associated_token_account_id(
         &ATA_PROGRAM_ID,
         &compute_ata_seed(owner_id(), definition_id()),
@@ -158,7 +160,7 @@ fn close_delegates_the_ata_seed_for_a_foreign_definition() {
         Slot {
             balance: 0,
             data: Data::from(&TokenHolding::Fungible {
-                definition_id: AccountId::new([0xEEu8; 32]),
+                definition_id: AccountId::new([0xEE_u8; 32]),
                 balance: 0,
             }),
         },
@@ -190,32 +192,36 @@ fn close_without_owner_authorization_should_fail() {
     };
     let ata = Input::named(ata_id(), false, TOKEN_PROGRAM_ID, Slot::default());
 
-    let _ = crate::close::close_associated_token_account(
+    let post_states = crate::close::close_associated_token_account(
         owner,
         ata,
         definition_account(),
         ATA_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
     );
+
+    unreachable!("an unauthorized owner must panic, got {post_states:?}");
 }
 
 #[should_panic(expected = "ATA account ID does not match expected derivation")]
 #[test]
 fn close_at_a_non_ata_address_should_fail() {
     let not_an_ata = Input::named(
-        AccountId::new([0x77u8; 32]),
+        AccountId::new([0x77_u8; 32]),
         false,
         TOKEN_PROGRAM_ID,
         Slot::default(),
     );
 
-    let _ = crate::close::close_associated_token_account(
+    let post_states = crate::close::close_associated_token_account(
         owner_account(),
         not_an_ata,
         definition_account(),
         ATA_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
     );
+
+    unreachable!("a non-ATA address must panic, got {post_states:?}");
 }
 
 /// A bare credit into the token slot leaves it present but empty. `Create` must still
