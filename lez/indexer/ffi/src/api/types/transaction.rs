@@ -88,7 +88,7 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
 
 #[repr(C)]
 pub struct FfiPublicMessage {
-    pub program_account_id: FfiBytes32,
+    pub program_account_id: FfiAccountId,
     pub account_ids: FfiAccountIdList,
     pub nonces: FfiNonceList,
     pub instruction_data: FfiInstructionDataList,

@@ -161,7 +161,7 @@ typedef struct FfiVec_u8 {
 typedef struct FfiVec_u8 FfiInstructionDataList;
 
 typedef struct FfiPublicMessage {
-  struct FfiBytes32 program_account_id;
+  FfiAccountId program_account_id;
   FfiAccountIdList account_ids;
   FfiNonceList nonces;
   FfiInstructionDataList instruction_data;
@@ -195,7 +195,7 @@ typedef struct FfiPublicTransactionBody {
  * byte arrays since C doesn't have native u128 support.
  */
 typedef struct FfiAccount {
-  struct FfiBytes32 program_owner;
+  FfiAccountId program_owner;
   /**
    * Balance as little-endian [u8; 16].
    */

@@ -1,4 +1,4 @@
-use crate::api::types::{FfiBytes32, FfiU128};
+use crate::api::types::{FfiAccountId, FfiBytes32, FfiU128};
 
 /// Account data structure - C-compatible version of lee Account.
 ///
@@ -6,7 +6,7 @@ use crate::api::types::{FfiBytes32, FfiU128};
 /// byte arrays since C doesn't have native u128 support.
 #[repr(C)]
 pub struct FfiAccount {
-    pub program_owner: FfiBytes32,
+    pub program_owner: FfiAccountId,
     /// Balance as little-endian [u8; 16].
     pub balance: FfiU128,
     /// Pointer to account data bytes.
