@@ -954,9 +954,7 @@ mod tests {
         let account = Input::at(
             lee::SlotRef {
                 account_id: (&npk, &vpk, 0).into(),
-                program: Some(lee::AccountId::from(
-                    programs::authenticated_transfer().id(),
-                )),
+                program: Some(lee::AccountId::from(programs::native())),
             },
             false,
             &Account::default(),

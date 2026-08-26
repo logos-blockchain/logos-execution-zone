@@ -296,8 +296,8 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
     let message = public_transaction::Message::try_new(
         programs::authenticated_transfer().id(),
         vec![
-            SlotRef::new(faucet_account_id, programs::authenticated_transfer().id()),
-            SlotRef::new(recipient, programs::authenticated_transfer().id()),
+            SlotRef::new(faucet_account_id, programs::native()),
+            SlotRef::new(recipient, programs::native()),
         ],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
@@ -340,7 +340,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
         programs::faucet().id(),
         vec![
             SlotRef::new(faucet_account_id, programs::faucet().id()),
-            SlotRef::new(recipient, programs::authenticated_transfer().id()),
+            SlotRef::new(recipient, programs::native()),
         ],
         vec![],
         faucet_core::Instruction::GenesisTransferDirect { amount },

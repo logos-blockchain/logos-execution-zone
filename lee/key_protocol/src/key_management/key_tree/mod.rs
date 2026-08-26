@@ -333,7 +333,7 @@ mod tests {
     use lee::AccountId;
     use lee_core::PrivateAccountKind;
 
-    const SLOT: lee::ProgramId = [7; 8];
+    const NAMESPACE: lee::ProgramId = [7; 8];
 
     use super::*;
 
@@ -560,7 +560,7 @@ mod tests {
             .unwrap();
         acc.value.1.insert(
             PrivateAccountKind::Regular(0),
-            lee::Account::single(SLOT, 2, lee::Data::default(), lee::Nonce::default()),
+            lee::Account::single(NAMESPACE, 2, lee::Data::default(), lee::Nonce::default()),
         );
 
         let acc = tree
@@ -569,7 +569,7 @@ mod tests {
             .unwrap();
         acc.value.1.insert(
             PrivateAccountKind::Regular(0),
-            lee::Account::single(SLOT, 3, lee::Data::default(), lee::Nonce::default()),
+            lee::Account::single(NAMESPACE, 3, lee::Data::default(), lee::Nonce::default()),
         );
 
         let acc = tree
@@ -578,7 +578,7 @@ mod tests {
             .unwrap();
         acc.value.1.insert(
             PrivateAccountKind::Regular(0),
-            lee::Account::single(SLOT, 5, lee::Data::default(), lee::Nonce::default()),
+            lee::Account::single(NAMESPACE, 5, lee::Data::default(), lee::Nonce::default()),
         );
 
         let acc = tree
@@ -587,7 +587,7 @@ mod tests {
             .unwrap();
         acc.value.1.insert(
             PrivateAccountKind::Regular(0),
-            lee::Account::single(SLOT, 6, lee::Data::default(), lee::Nonce::default()),
+            lee::Account::single(NAMESPACE, 6, lee::Data::default(), lee::Nonce::default()),
         );
 
         // Update account_id_map for nodes that now have entries
@@ -621,25 +621,25 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(0)].balance(SLOT),
+            acc.value.1[&PrivateAccountKind::Regular(0)].balance(NAMESPACE),
             2
         );
 
         let acc = &tree.key_map[&ChainIndex::from_str("/2").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(0)].balance(SLOT),
+            acc.value.1[&PrivateAccountKind::Regular(0)].balance(NAMESPACE),
             3
         );
 
         let acc = &tree.key_map[&ChainIndex::from_str("/0/1").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(0)].balance(SLOT),
+            acc.value.1[&PrivateAccountKind::Regular(0)].balance(NAMESPACE),
             5
         );
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1/0").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(0)].balance(SLOT),
+            acc.value.1[&PrivateAccountKind::Regular(0)].balance(NAMESPACE),
             6
         );
     }

@@ -32,6 +32,14 @@ mod inner {
         )
     }
 
+    /// The native namespace: the one every account holds spendable balance in. A *slot* is
+    /// `{balance, data}`; this is the id that names one, so it is a namespace, not a slot.
+    #[must_use]
+    #[inline]
+    pub const fn native() -> lee::ProgramId {
+        AUTHENTICATED_TRANSFER_ID
+    }
+
     #[must_use]
     #[inline]
     pub const fn token() -> Program {

@@ -237,19 +237,13 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .wallet()
         .get_account_private(alice_pda_0_id)
         .context("alice_pda_0 not found after sync")?;
-    assert_eq!(
-        pda_0_account.balance(programs::authenticated_transfer().id()),
-        amount
-    );
+    assert_eq!(pda_0_account.balance(programs::native()), amount);
 
     let pda_1_account = ctx
         .wallet()
         .get_account_private(alice_pda_1_id)
         .context("alice_pda_1 not found after sync")?;
-    assert_eq!(
-        pda_1_account.balance(programs::authenticated_transfer().id()),
-        amount
-    );
+    assert_eq!(pda_1_account.balance(programs::native()), amount);
 
     // Commitments for both PDAs must be in the sequencer's state.
     let commitment_0 = ctx
@@ -323,7 +317,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .get_account_private(alice_pda_0_id)
         .context("alice_pda_0 not found after spend sync")?;
     assert_eq!(
-        pda_0_spent.balance(programs::authenticated_transfer().id()),
+        pda_0_spent.balance(programs::native()),
         amount - amount_spend_0
     );
 
@@ -332,7 +326,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .get_account_private(alice_pda_1_id)
         .context("alice_pda_1 not found after spend sync")?;
     assert_eq!(
-        pda_1_spent.balance(programs::authenticated_transfer().id()),
+        pda_1_spent.balance(programs::native()),
         amount - amount_spend_1
     );
 

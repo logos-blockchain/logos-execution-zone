@@ -127,10 +127,10 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
         assert_eq!(
             state_b
                 .get_account_by_id(account.account_id)
-                .balance(programs::authenticated_transfer().id()),
+                .balance(programs::native()),
             state_a
                 .get_account_by_id(account.account_id)
-                .balance(programs::authenticated_transfer().id()),
+                .balance(programs::native()),
         );
     }
 
@@ -822,7 +822,7 @@ async fn reconstruction_reconciles_already_finished_deposit() {
             .await
             .head_state()
             .get_account_by_id(recipient)
-            .balance(programs::authenticated_transfer().id()),
+            .balance(programs::native()),
         initial_public_user_accounts()[0].balance + u128::from(deposit_amount),
         "already-finished deposit must be applied exactly once"
     );

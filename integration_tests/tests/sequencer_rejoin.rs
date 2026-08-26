@@ -94,7 +94,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         &sequencer_stake_core::Instruction::UnstakeRequest {
             amount: STAKE,
             destination: settlement,
-            native_program: programs::authenticated_transfer().id(),
+            native_program: programs::native(),
         },
     )
     .await
@@ -138,7 +138,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         vec![
             // The mover debits the settlement account's native slot and credits the
             // ownership account's stake slot.
-            Identity::Public(settlement).in_namespace(programs::authenticated_transfer().id()),
+            Identity::Public(settlement).in_namespace(programs::native()),
             Identity::Public(ownership_b).in_namespace(programs::sequencer_stake().id()),
             Identity::PublicNoSign(config_id).in_namespace(programs::sequencer_stake().id()),
         ],

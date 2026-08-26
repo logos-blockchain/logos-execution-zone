@@ -215,14 +215,10 @@ async fn fund_shared_account_from_public() -> Result<()> {
 
     log::info!(
         "Shared account balance after funding: {}",
-        entry
-            .account
-            .balance(programs::authenticated_transfer().id())
+        entry.account.balance(programs::native())
     );
     assert_eq!(
-        entry
-            .account
-            .balance(programs::authenticated_transfer().id()),
+        entry.account.balance(programs::native()),
         100,
         "Shared account should have received 100"
     );

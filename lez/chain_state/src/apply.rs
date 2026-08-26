@@ -176,7 +176,7 @@ mod tests {
     use common::{
         block::HashableBlockData,
         test_utils::{
-            create_transaction_native_token_transfer, native_balance_slot, produce_dummy_block,
+            create_transaction_native_token_transfer, produce_dummy_block,
             produce_dummy_empty_transaction, sequencer_sign_key_for_testing,
         },
     };
@@ -303,11 +303,11 @@ mod tests {
         }
 
         assert_eq!(
-            state.get_account_by_id(from).balance(native_balance_slot()),
+            state.get_account_by_id(from).balance(programs::native()),
             9900
         );
         assert_eq!(
-            state.get_account_by_id(to).balance(native_balance_slot()),
+            state.get_account_by_id(to).balance(programs::native()),
             20100
         );
     }

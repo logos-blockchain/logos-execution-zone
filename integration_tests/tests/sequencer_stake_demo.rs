@@ -108,7 +108,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             vec![
                 // The mover debits the funding account's native slot and credits the
                 // ownership account's stake slot.
-                Identity::Public(funding_id).in_namespace(programs::authenticated_transfer().id()),
+                Identity::Public(funding_id).in_namespace(programs::native()),
                 Identity::Public(ownership_id).in_namespace(programs::sequencer_stake().id()),
                 Identity::PublicNoSign(config_id).in_namespace(programs::sequencer_stake().id()),
             ],
@@ -250,7 +250,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
             amount: FUNDING_BALANCE,
             destination: destination_id,
-            native_program: programs::authenticated_transfer().id(),
+            native_program: programs::native(),
         })
         .context("Failed to serialize UnstakeRequest instruction")?;
     ctx.wallet()

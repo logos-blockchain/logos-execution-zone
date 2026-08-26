@@ -1553,6 +1553,7 @@ dependencies = [
  "log",
  "logos-blockchain-core",
  "logos-blockchain-zone-sdk",
+ "programs",
  "serde",
  "serde_json",
  "testnet_initial_state",

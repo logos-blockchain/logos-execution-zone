@@ -76,7 +76,7 @@ fn stored_balance(dbio: &RocksDBIO) -> u128 {
         .unwrap()
         .expect("the store holds a chain")
         .get_account_by_id(marker_id())
-        .balance(programs::authenticated_transfer().id())
+        .balance(programs::native())
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn final_snapshot_round_trips_and_is_absent_on_fresh_store() {
     assert_eq!(
         final_state
             .get_account_by_id(marker_id())
-            .balance(programs::authenticated_transfer().id()),
+            .balance(programs::native()),
         200
     );
     // The head state is stored independently of the final snapshot.

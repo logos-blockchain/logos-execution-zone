@@ -602,7 +602,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
-    let native = programs::authenticated_transfer().id();
+    let native = programs::native();
     assert_eq!(account.balance(native), 10000);
     assert!(account.data(native).is_empty());
     assert_eq!(account.nonce.0, 0);
@@ -639,7 +639,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
-    let native = programs::authenticated_transfer().id();
+    let native = programs::native();
     assert_eq!(account.balance(native), 10000);
     assert!(account.data(native).is_empty());
 

@@ -293,7 +293,7 @@ mod tests {
         // A diff that *only* increases the bridge balance (the legitimate deposit shape)
         // must be accepted.
         let bridge_id = system_accounts::bridge_account_id();
-        let native = programs::authenticated_transfer().id();
+        let native = programs::native();
         let pre = Account::single(native, 500, lee::Data::default(), Nonce(7));
         let mut post = pre.clone();
         post.slot_mut(native).balance = 600;
@@ -312,7 +312,7 @@ mod tests {
         // A diff that changes the bridge account's data (here: the nonce) while *also*
         // increasing its balance must be rejected.
         let bridge_id = system_accounts::bridge_account_id();
-        let native = programs::authenticated_transfer().id();
+        let native = programs::native();
         let pre = Account::single(native, 500, lee::Data::default(), Nonce(7));
         let mut post = pre.clone();
         post.slot_mut(native).balance = 600;
@@ -332,7 +332,7 @@ mod tests {
         // A diff that touches the bridge account without *strictly* increasing its balance
         // must be rejected — a zero-value deposit is not a real credit.
         let bridge_id = system_accounts::bridge_account_id();
-        let native = programs::authenticated_transfer().id();
+        let native = programs::native();
         let pre = Account::single(native, 500, lee::Data::default(), Nonce(7));
         let post = pre.clone();
         let (state, diff) = state_and_diff(bridge_id, pre, post);
@@ -352,7 +352,7 @@ mod tests {
         // treat a changed account as unchanged and wave it through (and would flag an *unchanged*
         // account instead).
         let clock_id = system_accounts::clock_account_ids()[0];
-        let native = programs::authenticated_transfer().id();
+        let native = programs::native();
         let pre = Account::single(native, 1_000, lee::Data::default(), Nonce::default());
 
         let mut changed = pre.clone();

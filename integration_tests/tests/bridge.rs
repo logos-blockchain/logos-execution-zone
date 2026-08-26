@@ -44,7 +44,7 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         programs::bridge().id(),
         vec![
             SlotRef::new(bridge_account_id, programs::bridge().id()),
-            SlotRef::new(recipient_id, programs::authenticated_transfer().id()),
+            SlotRef::new(recipient_id, programs::native()),
             SlotRef::new(receipt_id, programs::bridge().id()),
         ],
         vec![],
@@ -94,7 +94,7 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
         programs::bridge().id(),
         vec![
             SlotRef::new(bridge_account_id, programs::bridge().id()),
-            SlotRef::new(recipient_id, programs::authenticated_transfer().id()),
+            SlotRef::new(recipient_id, programs::native()),
             SlotRef::new(receipt_id, programs::bridge().id()),
         ],
         vec![],

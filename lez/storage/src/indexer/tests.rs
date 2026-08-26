@@ -121,19 +121,19 @@ fn one_block_insertion() {
     assert_eq!(
         breakpoint
             .get_account_by_id(acc1())
-            .balance(programs::authenticated_transfer().id())
+            .balance(programs::native())
             - final_state
                 .get_account_by_id(acc1())
-                .balance(programs::authenticated_transfer().id()),
+                .balance(programs::native()),
         1
     );
     assert_eq!(
         final_state
             .get_account_by_id(acc2())
-            .balance(programs::authenticated_transfer().id())
+            .balance(programs::native())
             - breakpoint
                 .get_account_by_id(acc2())
-                .balance(programs::authenticated_transfer().id()),
+                .balance(programs::native()),
         1
     );
 }
@@ -196,13 +196,11 @@ fn put_block_stores_breakpoint_in_same_batch() {
 
     let bp1 = dbio.get_breakpoint(1).unwrap();
     assert_eq!(
-        bp1.get_account_by_id(acc1())
-            .balance(programs::authenticated_transfer().id()),
+        bp1.get_account_by_id(acc1()).balance(programs::native()),
         10000
     );
     assert_eq!(
-        bp1.get_account_by_id(acc2())
-            .balance(programs::authenticated_transfer().id()),
+        bp1.get_account_by_id(acc2()).balance(programs::native()),
         20000
     );
     // Only the boundary block schedules a write: breakpoint 0 must be the only other one.
@@ -210,7 +208,7 @@ fn put_block_stores_breakpoint_in_same_batch() {
         dbio.get_breakpoint(0)
             .unwrap()
             .get_account_by_id(acc1())
-            .balance(programs::authenticated_transfer().id()),
+            .balance(programs::native()),
         10000
     );
 }
@@ -249,13 +247,13 @@ fn state_replay_falls_back_over_missing_breakpoints() {
         10000
             - final_state
                 .get_account_by_id(acc1())
-                .balance(programs::authenticated_transfer().id()),
+                .balance(programs::native()),
         u128::from(BREAKPOINT_INTERVAL) + 1
     );
     assert_eq!(
         final_state
             .get_account_by_id(acc2())
-            .balance(programs::authenticated_transfer().id())
+            .balance(programs::native())
             - 20000,
         u128::from(BREAKPOINT_INTERVAL) + 1
     );

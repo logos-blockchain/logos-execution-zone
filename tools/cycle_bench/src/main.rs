@@ -284,7 +284,7 @@ impl Case {
 }
 
 fn authenticated_transfer_transfer() -> Vec<Input> {
-    let native = programs::authenticated_transfer().id();
+    let native = programs::native();
     let sender = Input {
         account_id: AccountId::new([1; 32]),
         is_authorized: true,

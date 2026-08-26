@@ -27,7 +27,7 @@ async fn get_existing_account() -> Result<()> {
 
     let account = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
 
-    let native = programs::authenticated_transfer().id();
+    let native = programs::native();
     assert_eq!(account.balance(native), 10000);
     assert!(account.data(native).is_empty());
     assert_eq!(account.nonce.0, 0);

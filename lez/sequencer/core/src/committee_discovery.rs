@@ -218,7 +218,7 @@ mod tests {
             self.pending = Some(PendingUnstake {
                 amount,
                 destination: lee::AccountId::new([200; 32]),
-                native_program: programs::authenticated_transfer().id(),
+                native_program: programs::native(),
             });
             self
         }

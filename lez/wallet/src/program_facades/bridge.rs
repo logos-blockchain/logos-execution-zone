@@ -23,8 +23,7 @@ impl Bridge<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    Identity::Public(sender_account_id)
-                        .in_namespace(programs::authenticated_transfer().id()),
+                    Identity::Public(sender_account_id).in_namespace(programs::native()),
                     Identity::PublicNoSign(bridge_account_id).in_namespace(programs::bridge().id()),
                 ],
                 instruction_data,

@@ -148,7 +148,7 @@ impl WalletActor {
                                 let balance = components
                                     .wallet
                                     .get_account_private(account_id)
-                                    .map(|account| account.balance(programs::authenticated_transfer().id()));
+                                    .map(|account| account.balance(programs::native()));
                                 let _unused = response.send(Ok(balance));
                             }
                             WalletRequest::PrivateAccountCommitment {

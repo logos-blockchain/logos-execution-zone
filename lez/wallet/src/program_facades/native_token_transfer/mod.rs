@@ -30,7 +30,7 @@ fn auth_transfer_preparation(
     // TODO: handle large Err-variant properly
     let tx_pre_check = move |accounts: &[lee::Input]| {
         let from = &accounts[0];
-        if from.balance(programs::authenticated_transfer().id()) >= balance_to_move {
+        if from.balance(programs::native()) >= balance_to_move {
             Ok(())
         } else {
             Err(ExecutionFailureKind::InsufficientFundsError)

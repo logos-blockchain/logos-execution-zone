@@ -352,13 +352,13 @@ async fn start_from_config() {
     let balance_acc_1 = sequencer
         .with_state(|s| {
             s.get_account_by_id(acc1_account_id)
-                .balance(programs::authenticated_transfer().id())
+                .balance(programs::native())
         })
         .await;
     let balance_acc_2 = sequencer
         .with_state(|s| {
             s.get_account_by_id(acc2_account_id)
-                .balance(programs::authenticated_transfer().id())
+                .balance(programs::native())
         })
         .await;
 
@@ -630,7 +630,7 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
         sequencer
             .with_state(|s| s
                 .get_account_by_id(recipient_id)
-                .balance(programs::authenticated_transfer().id()))
+                .balance(programs::native()))
             .await,
         initial_public_user_accounts()[0].balance + u128::from(amount),
         "the recipient is credited exactly once across the reorg"
@@ -673,7 +673,7 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
     assert_eq!(
         state
             .get_account_by_id(recipient_id)
-            .balance(programs::authenticated_transfer().id()),
+            .balance(programs::native()),
         credited
     );
     assert!(
@@ -689,7 +689,7 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
     assert_eq!(
         state
             .get_account_by_id(recipient_id)
-            .balance(programs::authenticated_transfer().id()),
+            .balance(programs::native()),
         credited,
         "a replayed deposit must not re-credit the recipient"
     );
@@ -1240,16 +1240,10 @@ async fn transaction_execute_native_transfer() {
         .unwrap();
 
     let bal_from = sequencer
-        .with_state(|s| {
-            s.get_account_by_id(acc1)
-                .balance(programs::authenticated_transfer().id())
-        })
+        .with_state(|s| s.get_account_by_id(acc1).balance(programs::native()))
         .await;
     let bal_to = sequencer
-        .with_state(|s| {
-            s.get_account_by_id(acc2)
-                .balance(programs::authenticated_transfer().id())
-        })
+        .with_state(|s| s.get_account_by_id(acc2).balance(programs::native()))
         .await;
 
     assert_eq!(bal_from, 9900);
@@ -1359,7 +1353,7 @@ fn the_committee_gate_holds_back_neither_ordinary_txs_nor_unknown_accounts() {
         sequencer_stake_core::PendingUnstake {
             amount: 10,
             destination: AccountId::new([2; 32]),
-            native_program: programs::authenticated_transfer().id(),
+            native_program: programs::native(),
         },
     )
     .expect("FinalizeUnstake tx should build");
@@ -1527,13 +1521,13 @@ async fn restart_from_storage() {
     let balance_acc_1 = sequencer
         .with_state(|s| {
             s.get_account_by_id(acc1_account_id)
-                .balance(programs::authenticated_transfer().id())
+                .balance(programs::native())
         })
         .await;
     let balance_acc_2 = sequencer
         .with_state(|s| {
             s.get_account_by_id(acc2_account_id)
-                .balance(programs::authenticated_transfer().id())
+                .balance(programs::native())
         })
         .await;
 
@@ -2021,7 +2015,7 @@ fn pinata_cooldown_transaction(
         program_id,
         vec![
             SlotRef::new(pinata_id, program_id),
-            SlotRef::new(winner_id, programs::authenticated_transfer().id()),
+            SlotRef::new(winner_id, programs::native()),
             SlotRef::new(clock_account_id, programs::clock().id()),
         ],
         vec![],
@@ -2078,7 +2072,7 @@ fn pinata_cooldown_claim_succeeds_after_cooldown() {
     assert_eq!(
         state
             .get_account_by_id(winner_id)
-            .balance(programs::authenticated_transfer().id()),
+            .balance(programs::native()),
         prize
     );
 }
@@ -2127,7 +2121,7 @@ fn pinata_cooldown_claim_fails_during_cooldown() {
     assert_eq!(
         state
             .get_account_by_id(winner_id)
-            .balance(programs::authenticated_transfer().id()),
+            .balance(programs::native()),
         0
     );
 }
@@ -2386,9 +2380,7 @@ async fn follow_adopted_peer_block_applies_and_persists() {
     assert_eq!(stored.header.hash, peer_block.header.hash);
     assert_eq!(
         sequencer
-            .with_state(|s| s
-                .get_account_by_id(acc2)
-                .balance(programs::authenticated_transfer().id()))
+            .with_state(|s| s.get_account_by_id(acc2).balance(programs::native()))
             .await,
         20010
     );
@@ -2431,9 +2423,7 @@ async fn follow_redelivery_of_own_block_is_deduped() {
     assert_eq!(sequencer.chain_height().await, 2);
     assert_eq!(
         sequencer
-            .with_state(|s| s
-                .get_account_by_id(acc2)
-                .balance(programs::authenticated_transfer().id()))
+            .with_state(|s| s.get_account_by_id(acc2).balance(programs::native()))
             .await,
         20010,
         "the transfer must not be double-applied"
@@ -2476,9 +2466,7 @@ async fn follow_orphan_reverts_head_and_requeues_user_txs() {
     assert_eq!(sequencer.chain_height().await, 1);
     assert_eq!(
         sequencer
-            .with_state(|s| s
-                .get_account_by_id(acc1)
-                .balance(programs::authenticated_transfer().id()))
+            .with_state(|s| s.get_account_by_id(acc1).balance(programs::native()))
             .await,
         10000,
         "the orphaned transfer must be reverted from the head"
@@ -2549,9 +2537,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
     );
     assert_eq!(
         sequencer
-            .with_state(|s| s
-                .get_account_by_id(acc2)
-                .balance(programs::authenticated_transfer().id()))
+            .with_state(|s| s.get_account_by_id(acc2).balance(programs::native()))
             .await,
         20010,
         "the finalized transfer stands"
@@ -2883,9 +2869,7 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
     assert_eq!(head_tip.hash, block2_prime.header.hash);
     assert_eq!(
         sequencer
-            .with_state(|s| s
-                .get_account_by_id(acc1)
-                .balance(programs::authenticated_transfer().id()))
+            .with_state(|s| s.get_account_by_id(acc1).balance(programs::native()))
             .await,
         10000,
         "the orphaned transfer must be reverted"
@@ -3066,7 +3050,7 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
         .unwrap()
         .expect("the store holds a chain")
         .get_account_by_id(acc2)
-        .balance(programs::authenticated_transfer().id());
+        .balance(programs::native());
     assert_eq!(stored_balance, 20010);
 }
 
@@ -3119,7 +3103,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
     let message = lee::public_transaction::Message::try_new(
         programs::sequencer_stake().id(),
         vec![
-            SlotRef::new(funding_id, programs::authenticated_transfer().id()),
+            SlotRef::new(funding_id, programs::native()),
             SlotRef::new(ownership_id, programs::sequencer_stake().id()),
             SlotRef::new(config_id, programs::sequencer_stake().id()),
         ],
@@ -3173,7 +3157,7 @@ fn stake_transaction(
     let message = lee::public_transaction::Message::try_new(
         programs::sequencer_stake().id(),
         vec![
-            SlotRef::new(funding_id, programs::authenticated_transfer().id()),
+            SlotRef::new(funding_id, programs::native()),
             SlotRef::new(ownership_id, programs::sequencer_stake().id()),
             SlotRef::new(
                 system_accounts::sequencer_stake_config_account_id(),
@@ -3258,7 +3242,7 @@ fn unstake_request_transaction(
         sequencer_stake_core::Instruction::UnstakeRequest {
             amount,
             destination,
-            native_program: programs::authenticated_transfer().id(),
+            native_program: programs::native(),
         },
     )
     .unwrap();
@@ -3296,7 +3280,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
     let message = lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id(),
         vec![
-            SlotRef::new(funding_id, programs::authenticated_transfer().id()),
+            SlotRef::new(funding_id, programs::native()),
             // The donation lands in the stake slot, which is what the request is sized off.
             SlotRef::new(ownership_id, programs::sequencer_stake().id()),
         ],
@@ -3512,7 +3496,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         sequencer_stake_core::Instruction::UnstakeRequest {
             amount,
             destination: funding_id,
-            native_program: programs::authenticated_transfer().id(),
+            native_program: programs::native(),
         },
     )
     .unwrap();
@@ -3526,7 +3510,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         sequencer_stake_core::PendingUnstake {
             amount,
             destination: funding_id,
-            native_program: programs::authenticated_transfer().id(),
+            native_program: programs::native(),
         },
     )
     .unwrap();
@@ -3634,7 +3618,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         sequencer_stake_core::Instruction::UnstakeRequest {
             amount: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
             destination,
-            native_program: programs::authenticated_transfer().id(),
+            native_program: programs::native(),
         },
     )
     .unwrap();

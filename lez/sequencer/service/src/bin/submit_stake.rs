@@ -100,8 +100,7 @@ async fn main() -> Result<()> {
                     vec![
                         // The mover debits the funder's native slot and credits the stake
                         // namespace at the ownership account.
-                        Identity::Public(funding_account)
-                            .in_namespace(programs::authenticated_transfer().id()),
+                        Identity::Public(funding_account).in_namespace(programs::native()),
                         Identity::Public(ownership_account)
                             .in_namespace(programs::sequencer_stake().id()),
                         Identity::PublicNoSign(config_id)
@@ -122,7 +121,7 @@ async fn main() -> Result<()> {
                 Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
                     amount,
                     destination,
-                    native_program: programs::authenticated_transfer().id(),
+                    native_program: programs::native(),
                 })
                 .context("Failed to serialize UnstakeRequest instruction")?;
 

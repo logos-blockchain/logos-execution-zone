@@ -20,8 +20,7 @@ impl Pinata<'_> {
             .send_pub_tx(
                 vec![
                     Identity::PublicNoSign(pinata_account_id).in_namespace(programs::pinata().id()),
-                    Identity::PublicNoSign(winner_account_id)
-                        .in_namespace(programs::authenticated_transfer().id()),
+                    Identity::PublicNoSign(winner_account_id).in_namespace(programs::native()),
                 ],
                 instruction_data,
                 programs::pinata().id(),
@@ -58,7 +57,7 @@ impl Pinata<'_> {
                     self.0
                         .resolve_private_account(winner_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                        .in_namespace(programs::authenticated_transfer().id()),
+                        .in_namespace(programs::native()),
                 ],
                 lee::program::Program::serialize_instruction(solution).unwrap(),
                 &programs::pinata().into(),

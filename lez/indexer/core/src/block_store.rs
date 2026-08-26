@@ -343,11 +343,6 @@ mod stall_reason_tests {
 }
 
 #[cfg(test)]
-fn native_slot() -> lee::ProgramId {
-    programs::authenticated_transfer().id()
-}
-
-#[cfg(test)]
 mod tests {
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
     use tempfile::tempdir;
@@ -400,7 +395,7 @@ mod tests {
                 .account_current_state(&from)
                 .await
                 .unwrap()
-                .balance(native_slot()),
+                .balance(programs::native()),
             9900
         );
         assert_eq!(
@@ -408,7 +403,7 @@ mod tests {
                 .account_current_state(&to)
                 .await
                 .unwrap()
-                .balance(native_slot()),
+                .balance(programs::native()),
             20100
         );
         // Tip advanced to the last applied block; a clean run leaves no stall.
@@ -443,14 +438,14 @@ mod tests {
             store
                 .account_state_at_block(&from, 1)
                 .unwrap()
-                .balance(native_slot()),
+                .balance(programs::native()),
             10000
         );
         assert_eq!(
             store
                 .account_state_at_block(&to, 1)
                 .unwrap()
-                .balance(native_slot()),
+                .balance(programs::native()),
             20000
         );
         // Through block 5: 4 transfers applied (blocks 2..=5).
@@ -458,14 +453,14 @@ mod tests {
             store
                 .account_state_at_block(&from, 5)
                 .unwrap()
-                .balance(native_slot()),
+                .balance(programs::native()),
             9960
         );
         assert_eq!(
             store
                 .account_state_at_block(&to, 5)
                 .unwrap()
-                .balance(native_slot()),
+                .balance(programs::native()),
             20040
         );
         // Through block 9: 8 transfers applied (blocks 2..=9).
@@ -473,14 +468,14 @@ mod tests {
             store
                 .account_state_at_block(&from, 9)
                 .unwrap()
-                .balance(native_slot()),
+                .balance(programs::native()),
             9920
         );
         assert_eq!(
             store
                 .account_state_at_block(&to, 9)
                 .unwrap()
-                .balance(native_slot()),
+                .balance(programs::native()),
             20080
         );
     }
@@ -707,7 +702,7 @@ mod accept_tests {
             .account_current_state(&from)
             .await
             .unwrap()
-            .balance(native_slot());
+            .balance(programs::native());
 
         // Re-deliver the exact same block: idempotent skip, no state change, no park.
         assert!(matches!(
@@ -719,7 +714,7 @@ mod accept_tests {
                 .account_current_state(&from)
                 .await
                 .unwrap()
-                .balance(native_slot()),
+                .balance(programs::native()),
             balance_after,
             "re-delivered block must not be applied twice"
         );
@@ -775,7 +770,7 @@ mod accept_tests {
             .account_current_state(&from)
             .await
             .unwrap()
-            .balance(native_slot());
+            .balance(programs::native());
 
         // Re-deliver block 2 (id below the tip): a re-delivery, not a divergence.
         assert!(matches!(
@@ -787,7 +782,7 @@ mod accept_tests {
                 .account_current_state(&from)
                 .await
                 .unwrap()
-                .balance(native_slot()),
+                .balance(programs::native()),
             balance_after,
             "re-delivered block below the tip must not be applied again"
         );
@@ -841,7 +836,7 @@ mod accept_tests {
         // Snapshot at block 100 = genesis + 99 transfers, written with the block.
         let bp1 = store.dbio.get_breakpoint(1).expect("breakpoint 1 present");
         assert_eq!(
-            bp1.get_account_by_id(from).balance(native_slot()),
+            bp1.get_account_by_id(from).balance(programs::native()),
             10000 - 99
         );
 

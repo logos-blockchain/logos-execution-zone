@@ -346,9 +346,7 @@ impl ChainState {
 mod tests {
     use common::{
         HashType,
-        test_utils::{
-            create_transaction_native_token_transfer, native_balance_slot, produce_dummy_block,
-        },
+        test_utils::{create_transaction_native_token_transfer, produce_dummy_block},
     };
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
@@ -549,14 +547,14 @@ mod tests {
             chain
                 .head_state()
                 .get_account_by_id(from)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             9990
         );
         assert_eq!(
             chain
                 .head_state()
                 .get_account_by_id(to)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             20010
         );
         assert_head_matches_replay(&chain);
@@ -603,14 +601,14 @@ mod tests {
             chain
                 .head_state()
                 .get_account_by_id(from)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             9940
         );
         assert_eq!(
             chain
                 .head_state()
                 .get_account_by_id(to)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             20060
         );
         assert_head_matches_replay(&chain);
@@ -652,7 +650,7 @@ mod tests {
             chain
                 .head_state()
                 .get_account_by_id(to)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             20050
         );
         assert_head_matches_replay(&chain);
@@ -706,7 +704,7 @@ mod tests {
             chain
                 .head_state()
                 .get_account_by_id(to)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             20000
         );
         assert_head_matches_replay(&chain);
@@ -740,7 +738,7 @@ mod tests {
             chain
                 .head_state()
                 .get_account_by_id(to)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             20000
         );
         assert_head_matches_replay(&chain);
@@ -845,7 +843,7 @@ mod tests {
             chain
                 .head_state()
                 .get_account_by_id(to)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             20010
         );
         assert_head_matches_replay(&chain);
@@ -924,7 +922,7 @@ mod tests {
             chain
                 .head_state()
                 .get_account_by_id(to)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             20020
         );
         // ...while final reflects only the finalized prefix.
@@ -932,7 +930,7 @@ mod tests {
             chain
                 .final_state()
                 .get_account_by_id(to)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             20010
         );
         assert_head_matches_replay(&chain);
@@ -1101,7 +1099,7 @@ mod tests {
             chain
                 .head_state()
                 .get_account_by_id(to)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             20010
         );
         assert_head_matches_replay(&chain);
@@ -1126,14 +1124,14 @@ mod tests {
             chain
                 .head_state()
                 .get_account_by_id(from)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             9990
         );
         assert_eq!(
             chain
                 .head_state()
                 .get_account_by_id(to)
-                .balance(native_balance_slot()),
+                .balance(programs::native()),
             20010
         );
     }

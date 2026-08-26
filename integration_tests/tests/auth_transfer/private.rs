@@ -107,10 +107,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         .wallet()
         .get_account_private(from)
         .context("Failed to get sender's private account")?;
-    assert_eq!(
-        from_acc.balance(programs::authenticated_transfer().id()),
-        10000
-    );
+    assert_eq!(from_acc.balance(programs::native()), 10000);
 
     send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
 
@@ -125,10 +122,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
 
     let acc_2_balance = account_balance(&ctx, to).await?;
 
-    assert_eq!(
-        from_acc.balance(programs::authenticated_transfer().id()),
-        9900
-    );
+    assert_eq!(from_acc.balance(programs::native()), 9900);
     assert_eq!(acc_2_balance, 20100);
 
     log::info!("Successfully deshielded transfer to public account");
@@ -229,10 +223,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         .wallet()
         .get_account_private(to_account_id)
         .context("Failed to get recipient's private account")?;
-    assert_eq!(
-        to_res_acc.balance(programs::authenticated_transfer().id()),
-        100
-    );
+    assert_eq!(to_res_acc.balance(programs::native()), 100);
 
     log::info!("Successfully transferred using claiming path");
 
@@ -260,10 +251,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
     let acc_from_balance = account_balance(&ctx, from).await?;
 
     assert_eq!(acc_from_balance, 9900);
-    assert_eq!(
-        acc_to.balance(programs::authenticated_transfer().id()),
-        20100
-    );
+    assert_eq!(acc_to.balance(programs::native()), 20100);
 
     log::info!("Successfully shielded transfer to owned private account");
 
@@ -367,10 +355,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         .get_account_private(to_account_id)
         .context("Failed to get receiver account")?;
 
-    assert_eq!(
-        to_res_acc.balance(programs::authenticated_transfer().id()),
-        100
-    );
+    assert_eq!(to_res_acc.balance(programs::native()), 100);
 
     Ok(())
 }
@@ -477,14 +462,14 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
         .wallet()
         .get_account_private(account_id_1)
         .context("account for identifier 1 not found after sync")?;
-    assert_eq!(acc_1.balance(programs::authenticated_transfer().id()), 100);
+    assert_eq!(acc_1.balance(programs::native()), 100);
 
     let account_id_2 = AccountId::for_regular_private_account(&npk, &vpk, identifier_2);
     let acc_2 = ctx
         .wallet()
         .get_account_private(account_id_2)
         .context("account for identifier 2 not found after sync")?;
-    assert_eq!(acc_2.balance(programs::authenticated_transfer().id()), 200);
+    assert_eq!(acc_2.balance(programs::native()), 200);
 
     // Both account ids must resolve to the same key node.
     let found_acc1 = ctx
