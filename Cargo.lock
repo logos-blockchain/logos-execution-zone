@@ -13464,6 +13464,7 @@ dependencies = [
  "authenticated_transfer_core",
  "bincode",
  "bip39",
+ "borsh",
  "bridge_core",
  "clap",
  "common",

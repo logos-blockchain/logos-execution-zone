@@ -376,7 +376,7 @@ impl AccountManager {
             states.push(state);
         }
 
-        align_private_seeds(&mut states);
+        align_private_randomness(&mut states);
 
         let dummy_commitment_root = fetch_private_proofs_and_root(wallet, &mut states).await?;
 
@@ -507,7 +507,7 @@ impl AccountManager {
                         }),
                     nullifier: match (pre.nsk, pre.proof.clone()) {
                         (Some(nsk), Some(membership_proof)) => NullifierWitness::Update {
-                            view_tag: random_view_tag(),
+                            view_tag: pre.view_tag,
                             nsk,
                             membership_proof,
                         },
@@ -597,6 +597,9 @@ struct AccountPreparedData {
     pre_state: Input,
     proof: Option<MembershipProof>,
     random_seed: [u8; 32],
+    /// Drawn per ACCOUNT, not per position: an update note's tag is random, and the circuit
+    /// requires every position of one private account to carry a byte-identical witness.
+    view_tag: ViewTag,
     /// The authority program and seed when this account is a private PDA. Used by
     /// `account_identities()` to select `WitnessKind::Pda` rather than `WitnessKind::Regular`,
     /// and to derive the address the circuit checks the witness against.
@@ -665,6 +668,7 @@ fn private_key_tree_acc_preparation(
         pre_state: sender_pre,
         proof: None,
         random_seed,
+        view_tag: random_view_tag(),
         pda_binding,
     })
 }
@@ -691,6 +695,7 @@ fn private_foreign_acc_preparation(
         pre_state: public_input(&Account::default(), false, account_id, program),
         proof: None,
         random_seed: random_bytes(),
+        view_tag: random_view_tag(),
         pda_binding,
     }
 }
@@ -727,24 +732,29 @@ fn private_shared_acc_preparation(
         pre_state,
         proof: None,
         random_seed,
+        view_tag: random_view_tag(),
         pda_binding,
     }
 }
 
 /// One account, one note: the circuit emits a single commitment per private account however
 /// many of its namespaces a transaction touches, and rejects positions whose witnesses disagree.
-/// Every witness field but the seed is derived from the identity or the wallet store, so aligning
-/// later positions on the first one's seed is what makes two namespaces at one account provable.
-fn align_private_seeds(states: &mut [State]) {
-    let mut seen: Vec<(AccountId, [u8; 32])> = Vec::new();
+/// Every other witness field is derived from the identity or the wallet store; the seed and the
+/// update tag are the two the wallet draws fresh, so aligning later positions on the first one's
+/// draws is what makes two namespaces at one account provable.
+fn align_private_randomness(states: &mut [State]) {
+    let mut seen: Vec<(AccountId, [u8; 32], ViewTag)> = Vec::new();
     for state in states {
         let State::Private(pre) = state else {
             continue;
         };
         let account_id = pre.pre_state.account_id;
-        match seen.iter().find(|(id, _)| *id == account_id) {
-            Some((_, seed)) => pre.random_seed = *seed,
-            None => seen.push((account_id, pre.random_seed)),
+        match seen.iter().find(|(id, ..)| *id == account_id) {
+            Some((_, seed, view_tag)) => {
+                pre.random_seed = *seed;
+                pre.view_tag = *view_tag;
+            }
+            None => seen.push((account_id, pre.random_seed, pre.view_tag)),
         }
     }
 }
@@ -891,8 +901,26 @@ mod tests {
             pre_state,
             proof: None,
             random_seed: seed,
+            view_tag: 0,
             pda_binding: None,
         }))
+    }
+
+    /// The same position at an account that already exists on chain: an `nsk` and a membership
+    /// proof are what select `NullifierWitness::Update`, the variant carrying a view tag.
+    fn funded_private_position(
+        tag: u8,
+        program: lee::AccountId,
+        seed: [u8; 32],
+        view_tag: ViewTag,
+    ) -> State {
+        let State::Private(mut pre) = private_position(tag, program, seed) else {
+            unreachable!("private_position builds a private state");
+        };
+        pre.nsk = Some([tag; 32]);
+        pre.proof = Some((0, Vec::new()));
+        pre.view_tag = view_tag;
+        State::Private(pre)
     }
 
     fn private_state(tag: u8) -> State {
@@ -1004,8 +1032,8 @@ mod tests {
         );
     }
 
-    /// The circuit rejects positions of one account whose witnesses disagree, and the seed is
-    /// the only witness field the wallet draws fresh per position.
+    /// The circuit rejects positions of one account whose witnesses disagree, so the seed one
+    /// position drew must reach the others — and must not leak into a different account.
     #[test]
     fn positions_of_one_account_share_a_seed() {
         let other = lee::AccountId::from(programs::faucet().id());
@@ -1015,7 +1043,7 @@ mod tests {
             private_position(2, other, [4; 32]),
         ];
 
-        align_private_seeds(&mut states);
+        align_private_randomness(&mut states);
 
         let seeds: Vec<[u8; 32]> = states
             .iter()
@@ -1026,5 +1054,35 @@ mod tests {
             .collect();
         assert_eq!(seeds[0], seeds[1], "one account, one seed");
         assert_eq!(seeds[2], [4; 32], "a different account keeps its own");
+    }
+
+    /// The property the circuit actually asserts (`output.rs`, "Positions of one private account
+    /// carry disagreeing witnesses"), stated over the wallet-produced witnesses rather than over
+    /// any one field: whatever the wallet draws fresh per position has to be aligned. Funded, so
+    /// the witnesses take the `Update` branch — the only one carrying a view tag.
+    #[test]
+    fn positions_of_one_funded_account_carry_identical_witnesses() {
+        let native = lee::AccountId::from(programs::authenticated_transfer().id());
+        let other = lee::AccountId::from(programs::faucet().id());
+        let mut states = vec![
+            funded_private_position(1, native, [9; 32], 0xAA),
+            funded_private_position(1, other, [3; 32], 0x55),
+        ];
+
+        align_private_randomness(&mut states);
+
+        let identities = manager(states).account_identities();
+        let [
+            InputAccountIdentity::Private(first),
+            InputAccountIdentity::Private(second),
+        ] = &*identities
+        else {
+            panic!("expected two private witnesses");
+        };
+        assert_eq!(
+            borsh::to_vec(first).unwrap(),
+            borsh::to_vec(second).unwrap(),
+            "positions of one private account must carry byte-identical witnesses"
+        );
     }
 }

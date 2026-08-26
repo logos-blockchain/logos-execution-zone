@@ -57,3 +57,4 @@ keycard-debug = []
 tempfile.workspace = true
 key_protocol = { workspace = true, features = ["test_utils"] }
 bincode.workspace = true
+borsh.workspace = true
