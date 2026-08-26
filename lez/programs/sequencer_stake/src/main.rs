@@ -386,3 +386,103 @@ fn finalize_unstake(self_program_id: ProgramId, pre_states: Vec<Input>) -> Vec<O
         Some(config_account_post),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use lee_core::account::Data;
+    use sequencer_stake_core::{PendingUnstake, SequencerEntry, SequencerKey};
+
+    use super::*;
+
+    const SELF: ProgramId = [9; 8];
+    const NATIVE: ProgramId = [1; 8];
+    const OTHER: ProgramId = [2; 8];
+    const AMOUNT: u128 = 40;
+
+    /// The ed25519 basepoint, compressed. `SequencerKey` only asks for a curve point, and this
+    /// source is also built as a bin of the `programs` crate, which has no ed25519 to derive one.
+    fn key() -> SequencerKey {
+        let mut bytes = [0x66; 32];
+        bytes[0] = 0x58;
+        SequencerKey::new(bytes).expect("the basepoint is a curve point")
+    }
+
+    fn ownership_id() -> AccountId {
+        AccountId::new([4; 32])
+    }
+
+    fn destination_id() -> AccountId {
+        AccountId::new([5; 32])
+    }
+
+    fn position(account_id: AccountId, program: ProgramId, balance: u128, data: Vec<u8>) -> Input {
+        Input {
+            account_id,
+            is_authorized: false,
+            slot: Some((
+                program.into(),
+                Slot {
+                    balance,
+                    data: Data::try_from(data).expect("fixture data fits"),
+                },
+            )),
+        }
+    }
+
+    /// `[ownership, destination, config]`, with the release recorded against `NATIVE` and the
+    /// destination position naming `destination_program`.
+    fn finalize_positions(destination_program: ProgramId) -> Vec<Input> {
+        let record = StakeRecord {
+            sequencer_key: key(),
+            pending_unstake: Some(PendingUnstake {
+                amount: AMOUNT,
+                destination: destination_id(),
+                native_program: NATIVE,
+            }),
+        };
+        let mut entries = std::collections::BTreeMap::new();
+        entries.insert(
+            key(),
+            SequencerEntry {
+                account_id: ownership_id(),
+                total_staked: AMOUNT,
+                total_pending_unstake: AMOUNT,
+            },
+        );
+        let config = SequencerStakeConfig {
+            minimum_sequencer_stake: 0,
+            entries,
+        };
+        vec![
+            position(ownership_id(), SELF, AMOUNT, record.to_bytes()),
+            position(destination_id(), destination_program, 0, Vec::new()),
+            position(
+                sequencer_stake_config_account_id(SELF),
+                SELF,
+                0,
+                config.to_bytes(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_release_credits_the_slot_the_request_recorded() {
+        let posts = finalize_unstake(SELF, finalize_positions(NATIVE));
+
+        assert_eq!(
+            posts[1].as_ref().expect("destination is written").balance,
+            AMOUNT
+        );
+    }
+
+    /// `FinalizeUnstake` carries no signature, so the namespace credited has to be the one the
+    /// staker chose under signature. Honouring a caller-named slot instead would let anyone
+    /// route the release into a namespace no program can ever debit.
+    #[test]
+    #[should_panic(expected = "Position names another namespace")]
+    fn a_release_into_a_slot_the_request_did_not_name_is_rejected() {
+        let posts = finalize_unstake(SELF, finalize_positions(OTHER));
+
+        unreachable!("a caller-named destination slot must panic, got {posts:?}");
+    }
+}
