@@ -33,6 +33,7 @@ use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
 };
 use tokio::test;
+use wallet::DEFAULT_MAX_FEE;
 
 /// Genesis supply per TPS account: enough to cover one transfer's fee reserve
 /// (`gas_limit x base_fee` ≈ 0.8M at genesis fees) with ample headroom.
@@ -153,7 +154,10 @@ impl TpsTestManager {
                     [pair[0].1, pair[1].1].to_vec(),
                     [Nonce(1_u128)].to_vec(),
                     authenticated_transfer_core::Instruction::Transfer { amount },
-                    lee::FeeDeclaration::new(pair[0].1, TPS_TRANSFER_GAS_LIMIT, 0, 2_000_000),
+                    // A generous max_fee (a ceiling, not the fee paid) so the
+                    // base-fee rise this test's own sustained load causes cannot
+                    // push the reserve past it and drop later txs.
+                    lee::FeeDeclaration::new(pair[0].1, TPS_TRANSFER_GAS_LIMIT, 0, DEFAULT_MAX_FEE),
                 )
                 .unwrap();
                 let witness_set =

@@ -22,7 +22,8 @@ use std::{
 
 use anyhow::Result;
 use integration_tests::{
-    BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+    BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS,
+    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, INITIAL_PUBLIC_BALANCES_FOR_WALLET},
 };
 use lee::{
     Account, AccountId, PrivateKey, PublicKey,
@@ -678,7 +679,10 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         account.program_owner,
         programs::authenticated_transfer().id().into()
     );
-    assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
+    // A private account: private balances stay small (fee-exempt under the
+    // interim policy), so this asserts against the private constant, not the
+    // LGO-scaled public one.
+    assert_eq!(account.balance, INITIAL_PRIVATE_BALANCES_FOR_WALLET[0]);
     assert!(account.data.is_empty());
 
     unsafe {

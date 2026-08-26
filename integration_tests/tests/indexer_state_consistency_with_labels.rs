@@ -10,7 +10,8 @@ use anyhow::Result;
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
-    config::INITIAL_PUBLIC_BALANCES_FOR_WALLET, public_mention,
+    config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+    public_mention,
     utils::{account_balance, get_account, send, wait_for_indexer_to_catch_up},
 };
 use wallet::{

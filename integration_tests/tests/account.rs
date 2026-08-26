@@ -5,7 +5,9 @@
 
 use anyhow::{Context as _, Result};
 use integration_tests::{
-    TestContext, config::INITIAL_PUBLIC_BALANCES_FOR_WALLET, private_mention,
+    TestContext,
+    config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+    private_mention,
     utils::{get_account, new_account},
 };
 use key_protocol::key_management::KeyChain;
