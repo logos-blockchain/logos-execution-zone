@@ -6,7 +6,7 @@
               checked against caps that keep the terms in u64"
 )]
 
-use lee_core::account::AccountId;
+use lee_core::account::{AccountId, Balance, Cycles, Fee, Gas};
 
 use crate::{market, state::FeeState};
 
@@ -15,10 +15,10 @@ use crate::{market, state::FeeState};
 pub enum FeeTxView {
     Public {
         payer: AccountId,
-        gas_limit: u64,
-        data_bytes: u64,
-        tip: u64,
-        max_fee: u128,
+        gas_limit: Gas,
+        data_bytes: Gas,
+        tip: Fee,
+        max_fee: Balance,
     },
     Private {
         payer: AccountId,
@@ -36,7 +36,7 @@ impl FeeTxView {
     /// Storage gas: serialized bytes for public, the canonical constant size
     /// for private.
     #[must_use]
-    pub const fn gas_stor(&self) -> u64 {
+    pub const fn gas_stor(&self) -> Gas {
         match self {
             Self::Public { data_bytes, .. } => *data_bytes,
             Self::Private { .. } => market::PRIVATE_GAS_STOR,
@@ -47,7 +47,7 @@ impl FeeTxView {
     /// fixed verification cost for private (which makes the private reserve
     /// equal the private actual fee).
     #[must_use]
-    pub const fn gas_limit(&self) -> u64 {
+    pub const fn gas_limit(&self) -> Gas {
         match self {
             Self::Public { gas_limit, .. } => *gas_limit,
             Self::Private { .. } => market::PRIVATE_VERIFY_GAS,
@@ -55,7 +55,7 @@ impl FeeTxView {
     }
 
     #[must_use]
-    pub const fn tip(&self) -> u64 {
+    pub const fn tip(&self) -> Fee {
         match self {
             Self::Public { tip, .. } => *tip,
             Self::Private { .. } => 0,
@@ -72,7 +72,7 @@ impl FeeTxView {
 /// fits u64 and the u128 sum cannot overflow; on an unchecked view against a
 /// corrupt state it could wrap silently in release.
 #[must_use]
-pub fn fee_reserve(view: &FeeTxView, fee_state: &FeeState) -> u128 {
+pub fn fee_reserve(view: &FeeTxView, fee_state: &FeeState) -> Balance {
     u128::from(view.gas_limit()) * u128::from(fee_state.base_fee_exec)
         + u128::from(view.gas_stor()) * u128::from(fee_state.base_fee_stor)
         + u128::from(view.tip())
@@ -87,7 +87,7 @@ pub fn fee_reserve(view: &FeeTxView, fee_state: &FeeState) -> u128 {
 /// verification cost for private. Clamping here keeps `actual + tip ≤ reserve`
 /// regardless of what the caller passes.
 #[must_use]
-pub fn fee_actual_base(charged_cycles: u64, view: &FeeTxView, fee_state: &FeeState) -> u128 {
+pub fn fee_actual_base(charged_cycles: Cycles, view: &FeeTxView, fee_state: &FeeState) -> Balance {
     let gas_exec = match view {
         FeeTxView::Public { gas_limit, .. } => charged_cycles.min(*gas_limit),
         FeeTxView::Private { .. } => market::PRIVATE_VERIFY_GAS,

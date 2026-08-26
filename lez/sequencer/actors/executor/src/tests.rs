@@ -81,6 +81,9 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
             prev_block_hash: HashType::default(),
             hash: genesis_block_meta.hash,
             timestamp: 0,
+            producer: PublicKey::new_from_private_key(
+                &PrivateKey::try_new([1_u8; 32]).expect("valid key"),
+            ),
             signature: Signature { value: [0; 64] },
         },
         body: BlockBody {

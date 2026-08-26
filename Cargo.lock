@@ -3281,6 +3281,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "lee_core",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -39,8 +39,9 @@ pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
 pub const PROOF_BYTES: u64 = 223_551;
 /// Payload size every private transaction is padded to.
 pub const PRIVATE_PAD_BYTES: u64 = 512;
-/// Canonical serialized size of every private transaction.
-pub const PRIVATE_GAS_STOR: u64 = 224_063;
+/// Canonical serialized size of every private transaction. Derived from its
+/// parts so the relationship cannot drift silently on a re-pin.
+pub const PRIVATE_GAS_STOR: u64 = PROOF_BYTES + PRIVATE_PAD_BYTES;
 
 // Genesis validation: the ±12.5% bound and elasticity framing assume
 // MAX = 2·TARGET for both resources.
