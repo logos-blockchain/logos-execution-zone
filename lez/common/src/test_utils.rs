@@ -106,7 +106,7 @@ pub fn produce_dummy_empty_transaction() -> LeeTransaction {
 /// Generous fee fields for test transactions: the sender pays, with a default
 /// gas limit and an effectively unbounded fee cap.
 #[must_use]
-pub const fn test_fee_fields(payer: AccountId) -> lee::FeeDeclaration {
+pub const fn test_fee_declaration(payer: AccountId) -> lee::FeeDeclaration {
     lee::FeeDeclaration::new(payer, 2_000_000, 0, u128::MAX >> 1)
 }
 
@@ -118,6 +118,25 @@ pub fn create_transaction_native_token_transfer(
     balance_to_move: u128,
     signing_key: &lee::PrivateKey,
 ) -> LeeTransaction {
+    create_transaction_native_token_transfer_with_fees(
+        from,
+        nonce,
+        to,
+        balance_to_move,
+        signing_key,
+        test_fee_declaration(from),
+    )
+}
+
+#[must_use]
+pub fn create_transaction_native_token_transfer_with_fees(
+    from: AccountId,
+    nonce: u128,
+    to: AccountId,
+    balance_to_move: u128,
+    signing_key: &lee::PrivateKey,
+    fee_declaration: lee::FeeDeclaration,
+) -> LeeTransaction {
     let account_ids = vec![from, to];
     let nonces = vec![nonce.into()];
     let program_id = programs::authenticated_transfer().id();
@@ -128,7 +147,7 @@ pub fn create_transaction_native_token_transfer(
         authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,
         },
-        test_fee_fields(from),
+        fee_declaration,
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);

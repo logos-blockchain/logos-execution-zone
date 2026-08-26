@@ -137,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn tampered_fee_fields_invalidate_every_signature() {
+    fn tampered_fee_declaration_invalidate_every_signature() {
         // The fee fields are inside the signed hash: raising gas_limit after
         // signing must break the payer's signature.
         let (signer_key, _) = keys();

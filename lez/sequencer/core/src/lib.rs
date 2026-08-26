@@ -56,6 +56,7 @@ pub mod block_store;
 pub mod committee_discovery;
 pub mod config;
 pub mod cross_zone_watcher;
+pub mod fees;
 pub mod gossip;
 
 #[cfg(feature = "mock")]
@@ -96,6 +97,43 @@ type FoundingStake = (
     lee::PublicKey,
     lee::Signature,
 );
+
+/// The block's declared-gas budget: the sum of included charged transactions'
+/// signed limits, tracked against the caps the transition enforces on actuals.
+/// Each transaction's actual gas is bounded by its declared gas, so a block
+/// built under this budget can never breach the consensus caps — and no
+/// execution is wasted discovering that.
+#[derive(Clone, Copy, Debug, Default)]
+struct DeclaredGasBudget {
+    exec: u64,
+    stor: u64,
+}
+
+impl DeclaredGasBudget {
+    /// Whether `view`'s declared gas fits the remaining budget.
+    ///
+    /// Saturating rather than checked: a sum that saturates is past its cap
+    /// by construction, so the answer is the same and nothing can panic.
+    const fn fits(self, view: &fee_core::assess::FeeTxView) -> bool {
+        self.exec.saturating_add(view.gas_limit()) <= fee_core::market::MAX_GAS_EXEC
+            && self.stor.saturating_add(view.gas_stor()) <= fee_core::market::MAX_GAS_STOR
+    }
+
+    /// Whether `view` fits an empty budget at all — i.e. its declared gas is
+    /// within the per-block caps. A charged transaction that fails this can
+    /// never be included in any block, so it must be dropped rather than
+    /// deferred (a deferral would repeat for ever).
+    const fn fits_empty(view: &fee_core::assess::FeeTxView) -> bool {
+        view.gas_limit() <= fee_core::market::MAX_GAS_EXEC
+            && view.gas_stor() <= fee_core::market::MAX_GAS_STOR
+    }
+
+    /// Adds a contribution [`Self::fits`] has already cleared.
+    const fn add(&mut self, view: &fee_core::assess::FeeTxView) {
+        self.exec = self.exec.saturating_add(view.gas_limit());
+        self.stor = self.stor.saturating_add(view.gas_stor());
+    }
+}
 
 /// The origin of a transaction.
 #[derive(Clone, Copy)]
@@ -1151,14 +1189,9 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             self.store.signing_key(),
         ));
 
-        // TODO: can be a helper impl in V03State
-        let opening = fee_core::state::FeeState::from_bytes(
-            &working_state
-                .get_account_by_id(system_accounts::fee_state_account_id())
-                .data
-                .into_inner(),
-        );
+        let opening = chain_state::apply::opening_fee_state(&working_state);
         let mut summary = fee_core::BlockFeeSummary::default();
+        let mut gas_budget = DeclaredGasBudget::default();
         // The fee tx's summary is only known after the loop; a default-summary
         // placeholder sizes identically (the summary struct is fixed-size).
         let placeholder_fee_lee_tx = LeeTransaction::Public(fee_invocation(
@@ -1257,6 +1290,50 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 continue;
             }
 
+            // Declared-gas pre-screen: a charged transaction whose signed
+            // limits do not fit this block's remaining budget is deferred with
+            // nothing executed, mirroring the size deferral above — unless they
+            // exceed the caps outright, in which case it fits no budget and is
+            // dropped rather than deferred for ever (the RPC door screens these
+            // out, but gossip ingest does not). One that does not even classify
+            // (an unserializable transaction) falls through: the settlement
+            // below rejects it and it is dropped like any other failed
+            // application.
+            let charged_view = match chain_state::classify::classify(&tx, false, &working_state) {
+                Ok(chain_state::classify::FeeClass::Charged(view)) => Some(view),
+                Ok(chain_state::classify::FeeClass::Exempt) | Err(_) => None,
+            };
+            if let Some(view) = &charged_view
+                && !gas_budget.fits(view)
+            {
+                // A transaction whose declared gas exceeds the caps fits no
+                // budget, not even an empty one, so deferring it would stall the
+                // builder behind it for ever. The RPC door screens these out,
+                // but gossip ingest does not, so drop it here instead.
+                if !DeclaredGasBudget::fits_empty(view) {
+                    error!(
+                        "Transaction with hash {tx_hash} declares gas beyond the block caps \
+                         (limit {}, bytes {}); dropping it rather than stalling production",
+                        view.gas_limit(),
+                        view.gas_stor(),
+                    );
+                    self.count_dispatch_failure(&tx).await;
+                    continue;
+                }
+                warn!(
+                    "Transaction with hash {tx_hash} deferred to next block: declared gas \
+                     (limit {}, bytes {}) would exceed the block gas caps",
+                    view.gas_limit(),
+                    view.gas_stor(),
+                );
+                // Anything drained from the store needs no requeue: its record
+                // stays there and is drained again on the next turn.
+                if !from_store {
+                    self.mempool.push_front((origin, tx));
+                }
+                break;
+            }
+
             let before_tx_apply = Instant::now();
             let applied = Self::apply_mempool_transaction(
                 &mut working_state,
@@ -1270,6 +1347,9 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 &mut summary,
             );
             if applied {
+                if let Some(view) = &charged_view {
+                    gas_budget.add(view);
+                }
                 sequencer_core_metrics::record_mempool_transaction_application_time(
                     origin.into(),
                     tx.kind().into(),

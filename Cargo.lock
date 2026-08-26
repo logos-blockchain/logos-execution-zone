@@ -11009,6 +11009,7 @@ dependencies = [
  "programs",
  "rand 0.8.6",
  "sequencer_core_metrics",
+ "sequencer_service_protocol",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "serde",
@@ -11055,11 +11056,13 @@ dependencies = [
  "num-bigint 0.4.6",
  "num-traits",
  "sequencer_core",
+ "sequencer_service_protocol",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "system_accounts",
  "tempfile",
  "test_programs",
+ "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -11129,7 +11132,9 @@ dependencies = [
  "lee",
  "lee_core",
  "serde",
+ "serde_json",
  "serde_with",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

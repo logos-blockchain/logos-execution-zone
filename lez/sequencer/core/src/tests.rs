@@ -1177,6 +1177,87 @@ async fn a_delivery_backlog_is_spread_across_blocks() {
     assert_eq!(dispatches_in(&block).len(), 3);
 }
 
+#[tokio::test]
+async fn a_block_full_of_declared_gas_defers_the_rest() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let sign_key = create_signing_key_for_account1();
+
+    // Six transfers declaring the default 2M-cycle test gas limit each: five
+    // fill the 10M-cycle block execution budget exactly, so the sixth does
+    // not fit however few cycles the transfers actually use — the budget
+    // prices declared gas, not metered gas.
+    let transfers: Vec<_> = (0..6_u128)
+        .map(|nonce| {
+            common::test_utils::create_transaction_native_token_transfer(
+                acc1, nonce, acc2, 10, &sign_key,
+            )
+        })
+        .collect();
+    for tx in &transfers {
+        mempool_handle
+            .push((TransactionOrigin::User, tx.clone()))
+            .await
+            .unwrap();
+    }
+
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    assert_block_tail(&block, &transfers[..5]);
+
+    // Deferred, not dropped: the sixth leads the next block.
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    assert_block_tail(&block, &transfers[5..]);
+}
+
+#[tokio::test]
+async fn an_over_cap_transaction_is_dropped_not_deferred() {
+    // C1: a charged transaction whose declared gas exceeds the caps fits no
+    // budget, not even an empty one. The RPC door screens these out, but gossip
+    // ingest does not, so the builder must DROP it — deferring it would stall
+    // every subsequent block behind it. A normal transfer queued after it must
+    // still make the block.
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let sign_key = create_signing_key_for_account1();
+
+    // Declares exec gas one cycle beyond the per-block cap, so it can never fit
+    // any block. Origin `Gossip` stands in for the unscreened ingest path.
+    let over_cap = common::test_utils::create_transaction_native_token_transfer_with_fees(
+        acc1,
+        0,
+        acc2,
+        10,
+        &sign_key,
+        lee::FeeDeclaration::new(acc1, fee_core::market::MAX_GAS_EXEC + 1, 0, u128::MAX >> 1),
+    );
+    let normal =
+        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key);
+
+    mempool_handle
+        .push((TransactionOrigin::Gossip, over_cap))
+        .await
+        .unwrap();
+    mempool_handle
+        .push((TransactionOrigin::User, normal.clone()))
+        .await
+        .unwrap();
+
+    // The over-cap tx is dropped and the normal transfer still makes the block:
+    // the builder did not stall behind the unfittable transaction.
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    assert_block_tail(&block, std::slice::from_ref(&normal));
+
+    // Nothing was deferred: the next block carries no user transactions.
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    assert_block_tail(&block, &[]);
+}
+
 #[test]
 fn transaction_pre_check_pass() {
     let tx = common::test_utils::produce_dummy_empty_transaction();

@@ -10,8 +10,9 @@ use kameo::actor::ActorRef;
 use log::{error, warn};
 use sequencer_core::{block_publisher::BlockPublisherTrait, gossip::GossipTxPublisher};
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
-    CrossZoneDeadLetter, CrossZoneDeadLetterReport, HashType, MembershipProof, Nonce, ProgramId,
+    Account, AccountId, AdmissionRejection, Block, BlockId, ChannelId, Commitment,
+    CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport, FeeStateQuote, HashType,
+    MembershipProof, Nonce, ProgramId,
 };
 
 pub struct Service<BP: BlockPublisherTrait + Send + Sync + 'static> {
@@ -102,20 +103,39 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             error!("Transaction failed before reaching mempool: {err:#?}");
         })?;
 
-        // Publish to the gossip mesh before the local mempool admission so a
-        // full mempool doesn't delay propagation.
-        if let Some(publisher) = &self.gossip_tx_publisher {
-            publisher.publish(authenticated_tx.clone());
-        }
-
-        self.executor_ref
+        // The executor screens the transaction against the head state (fee
+        // admission) before pushing it to the mempool; a rejection comes back
+        // as a verdict, not an actor failure.
+        let outcome = self
+            .executor_ref
             .ask(sequencer_executor_actor::protocol::Transaction {
-                transaction: authenticated_tx,
+                transaction: authenticated_tx.clone(),
             })
             .await
             .map_err(internal_error)?;
+        if let sequencer_executor_actor::protocol::SubmitOutcome::Rejected(rejection) = outcome {
+            sequencer_rpc_server_actor_metrics::increment_before_mempool_failed_transactions_total(
+            );
+            warn!("Transaction refused at fee admission: {rejection}");
+            return Err(rejection_error(&rejection));
+        }
+
+        // Published only once admitted, so peers are not fed what the door
+        // refused. (A full local mempool has already errored above, so a
+        // publish cannot be lost to it either.)
+        if let Some(publisher) = &self.gossip_tx_publisher {
+            publisher.publish(authenticated_tx);
+        }
 
         Ok(tx_hash)
+    }
+
+    async fn get_fee_state(&self) -> Result<FeeStateQuote, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetFeeQuote)
+            .await
+            .map(|reply| reply.quote)
+            .map_err(internal_error)
     }
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
@@ -256,4 +276,11 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
 
 fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+}
+
+/// The JSON-RPC error a fee-admission rejection is returned as: its own code,
+/// the rendered reason, and the structured rejection in `data` for a client
+/// that would rather not parse prose.
+fn rejection_error(rejection: &AdmissionRejection) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(rejection.code(), rejection.to_string(), Some(rejection))
 }

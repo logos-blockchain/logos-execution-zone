@@ -163,15 +163,7 @@ pub fn apply_block_to_state(block: &Block, state: &mut V03State) -> Result<(), B
     // The fee tx is byte-compared only after the user transactions have been
     // settled: its summary is derived from their execution.
 
-    // A malformed fee-state account is consensus-critical corruption (only the
-    // fee guest may write it), so the panic inside `from_bytes` is the
-    // halt-the-node behavior the spec prescribes for consensus faults.
-    let opening = FeeState::from_bytes(
-        &state
-            .get_account_by_id(system_accounts::fee_state_account_id())
-            .data
-            .into_inner(),
-    );
+    let opening = opening_fee_state(state);
     let mut summary = BlockFeeSummary::default();
 
     let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
@@ -233,6 +225,21 @@ pub fn apply_block_to_state(block: &Block, state: &mut V03State) -> Result<(), B
     Ok(())
 }
 
+/// Reads the fee state a block opening on `state` prices against.
+///
+/// A malformed fee-state account is consensus-critical corruption (only the
+/// fee guest may write it), so the panic inside `from_bytes` is the
+/// halt-the-node behavior the spec prescribes for consensus faults.
+#[must_use]
+pub fn opening_fee_state(state: &V03State) -> FeeState {
+    FeeState::from_bytes(
+        &state
+            .get_account_by_id(system_accounts::fee_state_account_id())
+            .data
+            .into_inner(),
+    )
+}
+
 /// Derives the block fee summary the given user transactions settle to.
 ///
 /// Runs the settlement on a scratch clone of `state`. What block builders
@@ -244,12 +251,7 @@ pub fn derive_block_summary(
     timestamp: Timestamp,
 ) -> Result<BlockFeeSummary, BlockIngestError> {
     let mut scratch = state.clone();
-    let opening = FeeState::from_bytes(
-        &scratch
-            .get_account_by_id(system_accounts::fee_state_account_id())
-            .data
-            .into_inner(),
-    );
+    let opening = opening_fee_state(state);
     let mut summary = BlockFeeSummary::default();
     for (tx_index, transaction) in transactions.iter().enumerate() {
         settle_transaction(
@@ -761,7 +763,7 @@ mod tests {
             fee_core::Instruction::Refund {
                 amount: inbox_revenue,
             },
-            common::test_utils::test_fee_fields(attacker),
+            common::test_utils::test_fee_declaration(attacker),
         )
         .expect("drain message builds");
         let witness = lee::public_transaction::WitnessSet::for_message(&message, &[&attacker_key]);

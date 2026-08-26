@@ -28,6 +28,7 @@ system_accounts.workspace = true
 cross_zone.workspace = true
 cross_zone_inbox_core.workspace = true
 sequencer_stake_core.workspace = true
+sequencer_service_protocol.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-core.workspace = true
