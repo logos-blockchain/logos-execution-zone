@@ -243,6 +243,44 @@ pub struct Input {
 }
 
 impl Input {
+    /// A position naming `program`'s namespace, holding `slot`.
+    #[must_use]
+    pub fn named(
+        account_id: AccountId,
+        is_authorized: bool,
+        program: impl Into<AccountId>,
+        slot: Slot,
+    ) -> Self {
+        Self {
+            account_id,
+            is_authorized,
+            slot: Some((program.into(), slot)),
+        }
+    }
+
+    /// A position carrying only an address: a marker, an authority, a derivation input.
+    #[must_use]
+    pub const fn address_only(account_id: AccountId, is_authorized: bool) -> Self {
+        Self {
+            account_id,
+            is_authorized,
+            slot: None,
+        }
+    }
+
+    /// The position `slot_ref` names, read out of `account`. The inverse of the `SlotRef`
+    /// conversion above: a vacant slot reads as empty, and an address-only ref reads nothing.
+    #[must_use]
+    pub fn at(slot_ref: SlotRef, is_authorized: bool, account: &Account) -> Self {
+        Self {
+            account_id: slot_ref.account_id,
+            is_authorized,
+            slot: slot_ref
+                .program
+                .map(|program| (program, account.slot_or_empty(program))),
+        }
+    }
+
     /// The named slot, checked to be `program`'s. The check lives here so a program cannot
     /// forget it: a caller naming some other namespace must not read as an empty one.
     #[must_use]
