@@ -165,9 +165,9 @@ impl ValidatedStateDiff {
                 &chained_call.instruction_data,
                 cycle_budget.saturating_sub(cycles_used),
             )?;
-            cycles_used = cycles_used
-                .checked_add(call_cycles)
-                .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
+            // saturate here is ok, because this can never be U64::MAX anyways
+            // because the program execution is bounded by the budget
+            cycles_used = cycles_used.saturating_add(call_cycles);
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_id, program_output
