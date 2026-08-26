@@ -32,6 +32,10 @@ pub struct ExecutionState {
     /// The private-PDA keys supplied at each account's first sight, so a caller's seeds can be
     /// re-matched against the private derivation on later calls.
     private_pda_keys: HashMap<AccountId, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
+    /// Accounts a caller authorized by delegating a seed, holding no credential of their own.
+    /// Account-level, not position-level: the journal must report "no credential" at every
+    /// position of such an account, not only at the one the seed arrived with.
+    keyless_authorized: HashSet<AccountId>,
     /// Across the whole transaction each `(program, seed)` resolves to at most one account, so
     /// one delegated seed cannot authorize several members of the same PDA family.
     pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
@@ -81,6 +85,7 @@ impl ExecutionState {
             timestamp_validity_window,
             globally_authorized: HashSet::new(),
             private_pda_keys: HashMap::new(),
+            keyless_authorized: HashSet::new(),
             pda_family_binding: HashMap::new(),
         };
 
@@ -278,9 +283,12 @@ impl ExecutionState {
                         pre_account_id,
                     );
                 }
+                // Authorization is a property of the ACCOUNT, so a namespace of it seen for the
+                // first time inherits what the tree already established — exactly as the public
+                // path does, which draws no first-sight/repeat distinction at all.
                 assert_eq!(
                     pre.is_authorized,
-                    granted.is_some(),
+                    granted.is_some() || self.is_already_authorized(caller, pre_account_id),
                     "Inconsistent authorization for private PDA {pre_account_id}"
                 );
                 self.private_pda_keys.insert(pre_account_id, keys);
@@ -300,6 +308,12 @@ impl ExecutionState {
                     // The verifier re-derives a public account's authorization from the signer
                     // set, where a keyless PDA can never appear, so the journal must report the
                     // credential it has, not the grant.
+                    self.keyless_authorized.insert(pre_account_id);
+                    journal_pre.is_authorized = false;
+                }
+                // A seed authorized this account at an earlier position. It still holds no
+                // credential, so every later position of it must journal that too.
+                None if self.keyless_authorized.contains(&pre_account_id) => {
                     journal_pre.is_authorized = false;
                 }
                 None => {
@@ -310,6 +324,14 @@ impl ExecutionState {
             },
         }
         self.pre_states.push(journal_pre);
+    }
+
+    /// Whether the tree has already established this account's authorization — by a grant that
+    /// reached it, or by a credential recorded at its first sight. Subtree-scoped through
+    /// `caller.authorized_accounts`, exactly like the public path's inherited set.
+    fn is_already_authorized(&self, caller: &CallerData, account_id: AccountId) -> bool {
+        self.globally_authorized.contains(&account_id)
+            || caller.authorized_accounts.contains(&account_id)
     }
 
     /// A position already journalled by an earlier frame. It is anchored to what that frame
@@ -347,9 +369,7 @@ impl ExecutionState {
                 pre_account_id,
             );
         }
-        let is_authorized = granted.is_some()
-            || self.globally_authorized.contains(&pre_account_id)
-            || caller.authorized_accounts.contains(&pre_account_id);
+        let is_authorized = granted.is_some() || self.is_already_authorized(caller, pre_account_id);
         assert_eq!(
             pre.is_authorized, is_authorized,
             "Inconsistent authorization for account {pre_account_id}",
@@ -378,6 +398,7 @@ impl ExecutionState {
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             globally_authorized: HashSet::new(),
             private_pda_keys: HashMap::new(),
+            keyless_authorized: HashSet::new(),
             pda_family_binding: HashMap::new(),
         }
     }
