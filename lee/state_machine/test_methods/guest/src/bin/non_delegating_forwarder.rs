@@ -23,7 +23,7 @@ fn main() {
             .iter()
             .map(|account| AccountPostState::new(account.account.clone()))
             .collect();
-        (pre_states.clone(), post_states)
+        (pre_states, post_states)
     } else {
         (Vec::new(), Vec::new())
     };

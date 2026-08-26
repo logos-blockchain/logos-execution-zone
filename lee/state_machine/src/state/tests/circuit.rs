@@ -685,6 +685,55 @@ fn inherited_scope_passes_through_intermediate_calls() {
     );
 }
 
+/// The circuit tracks accounts by `AccountId` across the whole call tree, not per-step: a
+/// *private* account handed to an intermediate call but never declared in that step's own
+/// `pre_states`/`post_states` is still correctly resolved — including its private-witness
+/// (npk/vpk/nullifier) binding — when a later chained call references it by id.
+#[test]
+fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
+    let forwarder = crate::test_methods::non_delegating_forwarder();
+    let callee = crate::test_methods::noop();
+    let callee_id = callee.id();
+
+    let keys = test_private_account_keys_1();
+    // is_authorized must match whether the witness below supplies an `ask` credential.
+    let pre_state =
+        AccountWithMetadata::new(Account::default(), true, (&keys.npk(), &keys.vpk(), 0));
+
+    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+
+    let (output, proof) = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction((
+            callee_id,
+            Program::serialize_instruction(()).unwrap(),
+            // declare_pre_states: forwarder's own output never mentions this account.
+            false,
+        ))
+        .unwrap(),
+        vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: WitnessKind::Regular {
+                ask: Some(keys.ask),
+            },
+            nullifier: NullifierWitness::Init {
+                npk: NullifierPublicKey::from(&keys.nsk()),
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
+        &program_with_deps,
+    )
+    .expect(
+        "a private account never declared in an intermediate step's own pre/post states is \
+         still resolved, witness binding included, when a later chained call references it by \
+         id",
+    );
+
+    assert!(proof.is_valid_for(&output));
+}
+
 /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
 /// `AccountId`s, one public PDA and one private PDA per distinct npk. Without the tx-wide
 /// family-binding check, a program could claim `PDA_alice` (`alice_npk`) and
