@@ -141,15 +141,13 @@ fn lock(
     // slot, so it debits one and credits the other directly; conservation holds because
     // the same amount moves between them.
     let mut holder_post = holder.slot_of(self_program_id).clone();
-    let holder_slot = &mut holder_post;
-    holder_slot.balance = holder_slot
+    holder_post.balance = holder_post
         .balance
         .checked_sub(amount)
         .expect("insufficient balance to lock");
 
     let mut escrow_post = escrow.slot_of(self_program_id).clone();
-    let escrow_slot = &mut escrow_post;
-    escrow_slot.balance = escrow_slot
+    escrow_post.balance = escrow_post
         .balance
         .checked_add(amount)
         .expect("escrow balance overflow");

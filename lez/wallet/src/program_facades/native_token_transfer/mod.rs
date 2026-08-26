@@ -19,7 +19,7 @@ fn auth_transfer_preparation(
 ) -> (
     InstructionData,
     Program,
-    impl FnOnce(&[&lee::Input]) -> Result<(), ExecutionFailureKind>,
+    impl FnOnce(&[lee::Input]) -> Result<(), ExecutionFailureKind>,
 ) {
     let instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
@@ -28,8 +28,8 @@ fn auth_transfer_preparation(
         .unwrap();
 
     // TODO: handle large Err-variant properly
-    let tx_pre_check = move |accounts: &[&lee::Input]| {
-        let from = accounts[0];
+    let tx_pre_check = move |accounts: &[lee::Input]| {
+        let from = &accounts[0];
         if from.balance(programs::authenticated_transfer().id()) >= balance_to_move {
             Ok(())
         } else {

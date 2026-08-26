@@ -198,7 +198,9 @@ impl AtaSubcommand {
             );
             let account = wallet_core.get_account_public(ata_id).await?;
 
-            if account.slot(token_program_id).is_none() {
+            // A slot with no data holds no token: a stranger's bare credit brings the slot
+            // into existence without ever writing a holding. Same rule as `token::close`.
+            if account.data(token_program_id).is_empty() {
                 println!("No ATA for definition {def}");
             } else {
                 let holding = TokenHolding::try_from(account.data(token_program_id))?;

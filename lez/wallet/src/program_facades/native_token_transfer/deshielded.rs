@@ -19,9 +19,8 @@ impl NativeTokenTransfer<'_> {
                     self.0
                         .resolve_private_account(from)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                        .in_namespace(programs::authenticated_transfer().id()),
-                    Identity::PublicNoSign(to)
-                        .in_namespace(programs::authenticated_transfer().id()),
+                        .in_namespace(program.id()),
+                    Identity::PublicNoSign(to).in_namespace(program.id()),
                 ],
                 instruction_data,
                 &program.into(),

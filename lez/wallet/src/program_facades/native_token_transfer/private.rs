@@ -24,13 +24,13 @@ impl NativeTokenTransfer<'_> {
                     self.0
                         .resolve_private_account(from)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                        .in_namespace(programs::authenticated_transfer().id()),
+                        .in_namespace(program.id()),
                     Identity::PrivateForeign {
                         npk: to_npk,
                         vpk: to_vpk,
                         identifier: to_identifier,
                     }
-                    .in_namespace(programs::authenticated_transfer().id()),
+                    .in_namespace(program.id()),
                 ],
                 instruction_data,
                 &program.into(),
@@ -65,8 +65,8 @@ impl NativeTokenTransfer<'_> {
         self.0
             .send_privacy_preserving_tx_with_pre_check(
                 vec![
-                    from_account.in_namespace(programs::authenticated_transfer().id()),
-                    to_account.in_namespace(programs::authenticated_transfer().id()),
+                    from_account.in_namespace(program.id()),
+                    to_account.in_namespace(program.id()),
                 ],
                 instruction_data,
                 &program.into(),

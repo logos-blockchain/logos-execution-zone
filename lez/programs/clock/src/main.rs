@@ -17,12 +17,12 @@ use lee_core::{
 };
 
 fn update_if_multiple(
-    pre: Input,
+    pre: &Input,
     self_program_id: ProgramId,
     divisor: u64,
     current_block_id: u64,
     updated_data: &[u8],
-) -> (Input, Option<Slot>) {
+) -> Slot {
     let mut post = pre.slot_of(self_program_id).clone();
     if current_block_id.is_multiple_of(divisor) {
         post.data = updated_data
@@ -30,7 +30,7 @@ fn update_if_multiple(
             .try_into()
             .expect("Clock account data should fit in account data");
     }
-    (pre, Some(post))
+    post
 }
 
 fn main() {
@@ -68,19 +68,28 @@ fn main() {
     }
     .to_bytes();
 
-    let (pre_01, post_01) =
-        update_if_multiple(pre_01, self_program_id, 1, current_block_id, &updated_data);
-    let (pre_10, post_10) =
-        update_if_multiple(pre_10, self_program_id, 10, current_block_id, &updated_data);
-    let (pre_50, post_50) =
-        update_if_multiple(pre_50, self_program_id, 50, current_block_id, &updated_data);
+    let post_01 = update_if_multiple(&pre_01, self_program_id, 1, current_block_id, &updated_data);
+    let post_10 = update_if_multiple(
+        &pre_10,
+        self_program_id,
+        10,
+        current_block_id,
+        &updated_data,
+    );
+    let post_50 = update_if_multiple(
+        &pre_50,
+        self_program_id,
+        50,
+        current_block_id,
+        &updated_data,
+    );
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![pre_01, pre_10, pre_50],
-        vec![post_01, post_10, post_50],
+        vec![Some(post_01), Some(post_10), Some(post_50)],
     )
     .write();
 }

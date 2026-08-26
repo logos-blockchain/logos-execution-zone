@@ -331,12 +331,11 @@ fn finalize_unstake(self_program_id: ProgramId, pre_states: Vec<Input>) -> Vec<O
 
     // no signature check: already authorized back in UnstakeRequest
     let mut ownership_account_post = ownership_account.slot_of(self_program_id).clone();
-    let ownership_slot = &mut ownership_account_post;
-    ownership_slot.balance = ownership_slot
+    ownership_account_post.balance = ownership_account_post
         .balance
         .checked_sub(pending.amount)
         .expect("insufficient staked balance");
-    ownership_slot.data = record
+    ownership_account_post.data = record
         .to_bytes()
         .try_into()
         .expect("StakeRecord should fit in account data");

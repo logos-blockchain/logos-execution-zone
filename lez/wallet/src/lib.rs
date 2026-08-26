@@ -757,13 +757,13 @@ impl WalletCore {
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
-        tx_pre_check: impl FnOnce(&[&lee::Input]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[lee::Input]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         let pre_states = acc_manager.pre_states();
 
-        tx_pre_check(&pre_states.iter().collect::<Vec<_>>())?;
+        tx_pre_check(&pre_states)?;
 
         let private_account_keys = acc_manager.private_account_keys();
         let (output, proof) =
@@ -824,7 +824,7 @@ impl WalletCore {
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program_id: ProgramId,
-        tx_pre_check: impl FnOnce(&[&lee::Input]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[lee::Input]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
         if accounts.iter().any(AccountIdentity::is_private) {
@@ -838,7 +838,7 @@ impl WalletCore {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         let pre_states = acc_manager.pre_states();
-        tx_pre_check(&pre_states.iter().collect::<Vec<_>>())?;
+        tx_pre_check(&pre_states)?;
 
         let slots = acc_manager.public_slots();
         let nonces = acc_manager.public_account_nonces();
