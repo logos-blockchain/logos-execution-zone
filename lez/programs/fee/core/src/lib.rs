@@ -1,10 +1,10 @@
 //! Core data structures and constants for the Fee Program.
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Balance},
     program::{PdaSeed, ProgramId},
 };
-use serde::{Deserialize, Serialize};
 
 const FEE_STATE_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/State/0000000/";
 const FEE_ESCROW_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Escrow/000000/";
@@ -13,7 +13,7 @@ const FEE_INBOX_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Inbox/0000000/";
 /// Per-block fee summary carried as the fee invocation's instruction and
 /// validated byte-for-byte by the transition. All-zero until fee metering
 /// lands.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BlockFeeSummary {
     pub gas_used_exec: u64,
     pub gas_used_stor: u64,

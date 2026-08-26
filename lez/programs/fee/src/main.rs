@@ -41,9 +41,9 @@ fn main() {
     }
 
     // Verify all fee accounts are owned by this program (assigned at genesis).
-    if pre_state.account.program_owner != self_program_id
-        || pre_escrow.account.program_owner != self_program_id
-        || pre_inbox.account.program_owner != self_program_id
+    if pre_state.account.program_owner != self_program_id.into()
+        || pre_escrow.account.program_owner != self_program_id.into()
+        || pre_inbox.account.program_owner != self_program_id.into()
     {
         panic!("Fee accounts must be owned by the fee program");
     }

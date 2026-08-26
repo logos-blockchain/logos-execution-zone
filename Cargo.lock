@@ -3278,8 +3278,8 @@ dependencies = [
 name = "fee_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
- "serde",
 ]
 
 [[package]]

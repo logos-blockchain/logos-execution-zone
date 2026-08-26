@@ -430,7 +430,7 @@ mod tests {
                 assert_ne!(id, other);
             }
             let account = state.get_account_by_id(*id);
-            assert_eq!(account.program_owner, fee_program_id);
+            assert_eq!(account.program_owner, fee_program_id.into());
             assert_eq!(account.balance, 0);
         }
     }

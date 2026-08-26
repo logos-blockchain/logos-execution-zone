@@ -95,7 +95,7 @@ pub fn fee_account_ids() -> [AccountId; 3] {
 #[must_use]
 pub fn fee_account() -> Account {
     Account {
-        program_owner: programs::fee().id(),
+        program_owner: programs::fee().id().into(),
         ..Account::default()
     }
 }
