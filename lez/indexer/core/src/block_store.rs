@@ -342,6 +342,40 @@ mod stall_reason_tests {
     }
 }
 
+/// A block whose forced fee transaction carries the summary its transactions
+/// settle to against `state`, which is advanced past the block.
+#[cfg(test)]
+fn settled_test_block(
+    state: &mut lee::V03State,
+    id: u64,
+    prev_hash: Option<common::HashType>,
+    txs: Vec<common::transaction::LeeTransaction>,
+) -> common::block::Block {
+    use common::{
+        block::HashableBlockData,
+        test_utils::sequencer_sign_key_for_testing,
+        transaction::{LeeTransaction, clock_invocation, fee_invocation},
+    };
+    let timestamp = id.saturating_mul(100);
+    let summary = chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
+        .expect("test transactions settle");
+    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
+        &sequencer_sign_key_for_testing(),
+    ));
+    let mut transactions = txs;
+    transactions.push(LeeTransaction::Public(fee_invocation(summary, producer)));
+    transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
+    let block = HashableBlockData {
+        block_id: id,
+        prev_block_hash: prev_hash.unwrap_or_default(),
+        timestamp,
+        transactions,
+    }
+    .into_pending_block(&sequencer_sign_key_for_testing());
+    chain_state::apply::apply_block_to_state(&block, state).expect("settled block applies");
+    block
+}
+
 #[cfg(test)]
 mod tests {
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
@@ -371,18 +405,23 @@ mod tests {
         let to = initial_accounts[1].account_id;
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
-        // Genesis (block 1): clock-only.
+        // Genesis (block 1): fee/clock only.
+        let mut build_state = testnet_initial_state::initial_state();
+        let initial_from = build_state.get_account_by_id(from).balance;
+        let initial_to = build_state.get_account_by_id(to).balance;
         let genesis = produce_dummy_block(1, None, vec![]);
+        chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
+            .expect("genesis applies");
         let mut prev_hash = genesis.header.hash;
         assert!(matches!(
             store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
 
-        // Blocks 2..=11: one native transfer of 10 each (nonces 0..=9).
+        // Blocks 2..=11: one charged native transfer of 10 each (nonces 0..=9).
         for i in 0..10_u64 {
             let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &sign_key);
-            let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
+            let block = settled_test_block(&mut build_state, i + 2, Some(prev_hash), vec![tx]);
             prev_hash = block.header.hash;
             assert!(matches!(
                 store.accept_block(&block, Slot::from(0)).await.unwrap(),
@@ -390,13 +429,11 @@ mod tests {
             ));
         }
 
-        assert_eq!(
-            store.account_current_state(&from).await.unwrap().balance,
-            9900
-        );
+        // The recipient gains exactly the transfers; the sender also pays fees.
+        assert!(store.account_current_state(&from).await.unwrap().balance < initial_from - 100);
         assert_eq!(
             store.account_current_state(&to).await.unwrap().balance,
-            20100
+            initial_to + 100
         );
         // Tip advanced to the last applied block; a clean run leaves no stall.
         assert_eq!(store.get_last_block_id().unwrap(), Some(11));
@@ -413,13 +450,18 @@ mod tests {
         let to = initial_accounts[1].account_id;
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
+        let mut build_state = testnet_initial_state::initial_state();
+        let initial_from = build_state.get_account_by_id(from).balance;
+        let initial_to = build_state.get_account_by_id(to).balance;
         let genesis = produce_dummy_block(1, None, vec![]);
+        chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
+            .expect("genesis applies");
         let mut prev_hash = genesis.header.hash;
         store.accept_block(&genesis, Slot::from(0)).await.unwrap();
 
         for i in 0..10_u64 {
             let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &sign_key);
-            let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
+            let block = settled_test_block(&mut build_state, i + 2, Some(prev_hash), vec![tx]);
             prev_hash = block.header.hash;
             store.accept_block(&block, Slot::from(0)).await.unwrap();
         }
@@ -428,21 +470,25 @@ mod tests {
         // Block 1 (genesis, clock-only): no transfers yet.
         assert_eq!(
             store.account_state_at_block(&from, 1).unwrap().balance,
-            10000
+            initial_from
         );
-        assert_eq!(store.account_state_at_block(&to, 1).unwrap().balance, 20000);
-        // Through block 5: 4 transfers applied (blocks 2..=5).
         assert_eq!(
-            store.account_state_at_block(&from, 5).unwrap().balance,
-            9960
+            store.account_state_at_block(&to, 1).unwrap().balance,
+            initial_to
         );
-        assert_eq!(store.account_state_at_block(&to, 5).unwrap().balance, 20040);
+        // Through block 5: 4 transfers applied (blocks 2..=5); the sender also
+        // pays a fee per charged transfer.
+        assert!(store.account_state_at_block(&from, 5).unwrap().balance < initial_from - 40);
+        assert_eq!(
+            store.account_state_at_block(&to, 5).unwrap().balance,
+            initial_to + 40
+        );
         // Through block 9: 8 transfers applied (blocks 2..=9).
+        assert!(store.account_state_at_block(&from, 9).unwrap().balance < initial_from - 80);
         assert_eq!(
-            store.account_state_at_block(&from, 9).unwrap().balance,
-            9920
+            store.account_state_at_block(&to, 9).unwrap().balance,
+            initial_to + 80
         );
-        assert_eq!(store.account_state_at_block(&to, 9).unwrap().balance, 20080);
     }
 }
 
@@ -648,7 +694,10 @@ mod accept_tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
+        let mut build_state = testnet_initial_state::initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
+        chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
+            .expect("genesis applies");
         store
             .accept_block(&genesis, Slot::from(0))
             .await
@@ -658,7 +707,12 @@ mod accept_tests {
         let tx = common::test_utils::create_transaction_native_token_transfer(
             from, 0, to, 10, &sign_key,
         );
-        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
+        let block = crate::block_store::settled_test_block(
+            &mut build_state,
+            2,
+            Some(genesis.header.hash),
+            vec![tx],
+        );
         assert!(matches!(
             store.accept_block(&block, Slot::from(0)).await.unwrap(),
             AcceptOutcome::Applied
@@ -699,7 +753,10 @@ mod accept_tests {
         let sign_key = accounts[0].pub_sign_key.clone();
 
         // Build a short chain: genesis (1) -> block 2 -> block 3, so the tip is 3.
+        let mut build_state = testnet_initial_state::initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
+        chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
+            .expect("genesis applies");
         store
             .accept_block(&genesis, Slot::from(0))
             .await
@@ -708,7 +765,12 @@ mod accept_tests {
         let tx2 = common::test_utils::create_transaction_native_token_transfer(
             from, 0, to, 10, &sign_key,
         );
-        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx2]);
+        let block2 = crate::block_store::settled_test_block(
+            &mut build_state,
+            2,
+            Some(genesis.header.hash),
+            vec![tx2],
+        );
         assert!(matches!(
             store.accept_block(&block2, Slot::from(0)).await.unwrap(),
             AcceptOutcome::Applied
@@ -717,7 +779,12 @@ mod accept_tests {
         let tx3 = common::test_utils::create_transaction_native_token_transfer(
             from, 1, to, 10, &sign_key,
         );
-        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![tx3]);
+        let block3 = crate::block_store::settled_test_block(
+            &mut build_state,
+            3,
+            Some(block2.header.hash),
+            vec![tx3],
+        );
         assert!(matches!(
             store.accept_block(&block3, Slot::from(0)).await.unwrap(),
             AcceptOutcome::Applied
@@ -758,14 +825,19 @@ mod accept_tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
+        let mut build_state = testnet_initial_state::initial_state();
+        let initial_from = build_state.get_account_by_id(from).balance;
         let genesis = produce_dummy_block(1, None, vec![]);
+        chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
+            .expect("genesis applies");
         assert!(matches!(
             store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
         let mut prev_hash = genesis.header.hash;
 
-        // Blocks 2..=101: one transfer of 1 each; block 100 crosses the interval.
+        // Blocks 2..=101: one charged transfer of 1 each; block 100 crosses the
+        // interval.
         for i in 0..100_u64 {
             let tx = common::test_utils::create_transaction_native_token_transfer(
                 from,
@@ -774,7 +846,12 @@ mod accept_tests {
                 1,
                 &sign_key,
             );
-            let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
+            let block = crate::block_store::settled_test_block(
+                &mut build_state,
+                i + 2,
+                Some(prev_hash),
+                vec![tx],
+            );
             prev_hash = block.header.hash;
             assert!(matches!(
                 store.accept_block(&block, Slot::from(0)).await.unwrap(),
@@ -782,9 +859,10 @@ mod accept_tests {
             ));
         }
 
-        // Snapshot at block 100 = genesis + 99 transfers, written with the block.
+        // Snapshot at block 100 = genesis + 99 transfers (plus their fees),
+        // written with the block.
         let bp1 = store.dbio.get_breakpoint(1).expect("breakpoint 1 present");
-        assert_eq!(bp1.get_account_by_id(from).balance, 10000 - 99);
+        assert!(bp1.get_account_by_id(from).balance < initial_from - 99);
 
         // The #605 restart: reopening past the boundary must work.
         drop(store);
@@ -794,15 +872,8 @@ mod accept_tests {
 
     #[tokio::test]
     async fn transient_apply_failure_returns_retryable_failure_without_stall() {
-        use testnet_initial_state::initial_pub_accounts_private_keys;
-
         let dir = tempfile::tempdir().expect("tempdir");
         let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
-
-        let accounts = initial_pub_accounts_private_keys();
-        let from = accounts[0].account_id;
-        let to = accounts[1].account_id;
-        let sign_key = accounts[0].pub_sign_key.clone();
 
         let genesis = produce_dummy_block(1, None, vec![]);
         store
@@ -810,15 +881,32 @@ mod accept_tests {
             .await
             .expect("accept genesis");
 
-        // Overdraft: rejected during execution → StateTransition → retryable.
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            from,
-            0,
-            to,
-            1_000_000_000,
-            &sign_key,
-        );
-        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
+        // A system-shaped bridge deposit (empty witness set, so fee-exempt by
+        // classification) whose execution fails: the guest rejects the bogus
+        // accounts → StateTransition → retryable. A charged overdraft no
+        // longer works here: it reverts-with-fee inside a valid block.
+        let bogus_deposit = {
+            let message = lee::public_transaction::Message::try_new(
+                programs::bridge().id(),
+                vec![
+                    lee::AccountId::new([1_u8; 32]),
+                    lee::AccountId::new([2_u8; 32]),
+                ],
+                vec![],
+                bridge_core::Instruction::Deposit {
+                    l1_deposit_op_id: [7_u8; 32],
+                    vault_program_id: programs::vault().id(),
+                    recipient_id: lee::AccountId::new([3_u8; 32]),
+                    amount: 5,
+                },
+            )
+            .expect("valid message");
+            common::transaction::LeeTransaction::Public(lee::PublicTransaction::new(
+                message,
+                lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+            ))
+        };
+        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![bogus_deposit]);
         let outcome = store.accept_block(&block, Slot::from(0)).await.unwrap();
 
         assert!(matches!(

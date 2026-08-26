@@ -88,23 +88,14 @@ impl LeeTransaction {
         timestamp: Timestamp,
     ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
         let diff = self.compute_state_diff(state, block_id, timestamp)?;
-
-        let restricted_modification_accounts = system_accounts::clock_account_ids()
-            .into_iter()
-            .chain(std::iter::once(system_accounts::faucet_account_id()))
-            .chain(system_accounts::fee_account_ids());
-        for account_id in restricted_modification_accounts {
-            validate_doesnt_modify_account(state, &diff, account_id)?;
-        }
-
+        validate_no_restricted_account_modification(state, &diff)?;
         self.validate_bridge_account_modification(state, &diff)?;
-
         Ok(diff)
     }
 
     /// Computes the validated state diff. Shared by [`Self::validate_on_state`]
     /// (which adds the system-account guards) and [`Self::execute_on_state`].
-    fn compute_state_diff(
+    pub fn compute_state_diff(
         &self,
         state: &V03State,
         block_id: BlockId,
@@ -245,23 +236,164 @@ pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransa
     )
 }
 
+/// Whether `tx` is a sequencer-injected system transaction.
+///
+/// Identified by shape: an empty witness set invoking the bridge deposit or
+/// the cross-zone inbox dispatch. Fee- and cap-exempt. Shared by the sequencer
+/// (build) and the transition (replay) so the two can never disagree.
+#[must_use]
+pub fn is_system_injection(tx: &LeeTransaction) -> bool {
+    let LeeTransaction::Public(public_tx) = tx else {
+        return false;
+    };
+    if !public_tx
+        .witness_set()
+        .signatures_and_public_keys()
+        .is_empty()
+    {
+        return false;
+    }
+    let message = public_tx.message();
+    if message.program_id == programs::bridge().id() {
+        return matches!(
+            borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data),
+            Ok(bridge_core::Instruction::Deposit { .. })
+        );
+    }
+    if message.program_id == programs::cross_zone_inbox().id() {
+        return matches!(
+            borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data),
+            Ok(cross_zone_inbox_core::Instruction::Dispatch(_))
+        );
+    }
+    false
+}
+
+/// Whether `tx` is a full-sweep vault claim.
+///
+/// A `vault::Claim` whose amount equals the vault's entire balance in `state`.
+/// Fee-exempt by the bootstrap decision — all funding lands in vaults while
+/// fees debit account balances, so a charged first claim could never pay.
+/// Asked against the working state at the transaction's turn.
+///
+/// FIXME: this can be removed after Vault is removed.
+#[must_use]
+pub fn is_full_vault_sweep(tx: &LeeTransaction, state: &V03State) -> bool {
+    let LeeTransaction::Public(public_tx) = tx else {
+        return false;
+    };
+
+    let message = public_tx.message();
+    if message.program_id != programs::vault().id() {
+        return false;
+    }
+
+    let Ok(vault_core::Instruction::Claim { amount }) =
+        borsh::from_slice::<vault_core::Instruction>(&message.instruction_data)
+    else {
+        return false;
+    };
+
+    let [owner_id, vault_id] = message.account_ids.as_slice() else {
+        return false;
+    };
+    if *vault_id != vault_core::compute_vault_account_id(programs::vault().id(), *owner_id) {
+        return false;
+    }
+
+    amount != 0 && amount == state.get_account_by_id(*vault_id).balance
+}
+
+/// Initializes the producer account as an ordinary user account if it has
+/// never been seen.
+///
+/// Program output may not modify an unclaimed default account, so the fee
+/// program could not credit it. The same initialization genesis applies to
+/// user accounts. Shared by the block builder and the transition so the two
+/// can never disagree.
+pub fn initialize_producer_account(state: &mut V03State, producer: AccountId) {
+    state.initialize_account_owner(producer, programs::authenticated_transfer().id());
+}
+
 /// Returns the canonical Fee Program invocation transaction for the given block fee summary.
 ///
 /// Every valid block must contain exactly one occurrence of this transaction as its
-/// second-to-last transaction, immediately before the clock invocation.
+/// second-to-last transaction, immediately before the clock invocation. The producer
+/// account (derived from the block header's producer key) rides as the fourth account
+/// so the guest can pay it.
 #[must_use]
-pub fn fee_invocation(summary: fee_core::Instruction) -> lee::PublicTransaction {
+pub fn fee_invocation(
+    summary: fee_core::BlockFeeSummary,
+    producer: lee::AccountId,
+) -> lee::PublicTransaction {
+    let mut account_ids = system_accounts::fee_account_ids().to_vec();
+    account_ids.push(producer);
     let message = lee::public_transaction::Message::try_new(
         programs::fee().id(),
-        system_accounts::fee_account_ids().to_vec(),
+        account_ids,
         vec![],
-        summary,
+        fee_core::Instruction::Distribute(summary),
     )
     .expect("Fee invocation message should always be constructable");
     lee::PublicTransaction::new(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     )
+}
+
+/// The fee reserve: hold `amount` from `payer` in the fee inbox.
+///
+/// Runs `authenticated_transfer` as a fee-settlement invocation authorized by
+/// the payer's fee declaration; the returned message carries only the program,
+/// accounts, and instruction the invocation needs.
+#[must_use]
+pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
+    lee::public_transaction::Message::try_new(
+        programs::authenticated_transfer().id(),
+        vec![payer, system_accounts::fee_inbox_account_id()],
+        vec![],
+        authenticated_transfer_core::Instruction::Transfer { amount },
+    )
+    .expect("Fee reserve message should always be constructable")
+}
+
+/// The fee refund: return `amount` from the fee inbox to `payer`.
+///
+/// Runs the fee program as a fee-settlement invocation needing no authorization
+/// — the fee program owns the inbox it debits.
+#[must_use]
+pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
+    lee::public_transaction::Message::try_new(
+        programs::fee().id(),
+        vec![system_accounts::fee_inbox_account_id(), payer],
+        vec![],
+        fee_core::Instruction::Refund { amount },
+    )
+    .expect("Fee refund message should always be constructable")
+}
+
+/// Rejects a diff that modifies any always-restricted system account (the clock
+/// accounts, the faucet, or the fee subsystem's accounts).
+///
+/// These are written only by their sequencer-forced invocations, never by a user
+/// transaction. Enforcing this on the apply/settlement path as well as the
+/// builder is what stops a block author from draining the fee inbox/escrow with a
+/// user-section fee-program invocation that honest followers would otherwise
+/// apply. The bridge account has its own increase-only rule
+/// ([`LeeTransaction::validate_bridge_account_modification`]) and is not included
+/// here.
+pub fn validate_no_restricted_account_modification(
+    state: &V03State,
+    diff: &ValidatedStateDiff,
+) -> Result<(), lee::error::LeeError> {
+    let restricted_modification_accounts = system_accounts::clock_account_ids()
+        .into_iter()
+        .chain(std::iter::once(system_accounts::faucet_account_id()))
+        .chain(system_accounts::fee_account_ids());
+    for account_id in restricted_modification_accounts {
+        validate_doesnt_modify_account(state, diff, account_id)?;
+    }
+    Ok(())
 }
 
 fn validate_doesnt_modify_account(

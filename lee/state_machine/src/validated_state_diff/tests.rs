@@ -648,3 +648,26 @@ fn chained_calls_share_one_budget() {
 fn free_outcome_is_zero_cycles() {
     assert_eq!(crate::ExecutionOutcome::FREE.cycles, 0);
 }
+
+#[test]
+fn metered_failure_still_reports_cycles() {
+    let (state, tx) = metering_transfer_fixture();
+    let (outcome, result) =
+        ValidatedStateDiff::from_public_transaction_metered(&tx, &state, 1, 0, 1_024);
+    assert!(matches!(result, Err(LeeError::OutOfGas { .. })));
+    assert_eq!(
+        outcome.cycles, 1_024,
+        "out-of-gas is metered at the whole budget"
+    );
+}
+
+#[test]
+fn advance_nonces_bumps_exactly_the_given_accounts() {
+    let bumped = AccountId::new([6_u8; 32]);
+    let untouched = AccountId::new([7_u8; 32]);
+    let mut state = V03State::new().with_public_account_balances([(bumped, 1), (untouched, 1)]);
+
+    state.advance_nonces(&[bumped]);
+    assert_eq!(state.get_account_by_id(bumped).nonce.0, 1);
+    assert_eq!(state.get_account_by_id(untouched).nonce.0, 0);
+}

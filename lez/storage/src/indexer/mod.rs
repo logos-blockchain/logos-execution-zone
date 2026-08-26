@@ -1,10 +1,7 @@
 use std::{path::Path, sync::Arc};
 
-use common::{
-    block::Block,
-    transaction::{LeeTransaction, clock_invocation, fee_invocation},
-};
-use lee::{GENESIS_BLOCK_ID, V03State};
+use common::block::Block;
+use lee::V03State;
 use log::warn;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
@@ -189,7 +186,7 @@ impl RocksDBIO {
         for block in self.get_block_batch_seq(
             start.checked_add(1).expect("Will be lesser that u64::MAX")..=block_id,
         )? {
-            apply_block_transactions(block, &mut state)?;
+            apply_block_transactions(&block, &mut state)?;
         }
 
         Ok(state)
@@ -201,103 +198,11 @@ impl RocksDBIO {
     }
 }
 
-fn apply_block_transactions(mut block: Block, state: &mut V03State) -> DbResult<()> {
-    let expected_clock = LeeTransaction::Public(clock_invocation(block.header.timestamp));
-
-    let clock_tx = block.body.transactions.pop().ok_or_else(|| {
-        DbError::db_interaction_error("Block must contain clock transaction at the end".to_owned())
-    })?;
-
-    if clock_tx != expected_clock {
-        return Err(DbError::db_interaction_error(
-            "Last transaction in block must be the clock invocation for the block timestamp"
-                .to_owned(),
-        ));
-    }
-
-    let expected_fee = LeeTransaction::Public(fee_invocation(fee_core::Instruction::default()));
-
-    let fee_tx = block.body.transactions.pop().ok_or_else(|| {
-        DbError::db_interaction_error(
-            "Block must contain fee transaction before the clock transaction".to_owned(),
-        )
-    })?;
-
-    if fee_tx != expected_fee {
-        return Err(DbError::db_interaction_error(
-            "Second-to-last transaction in block must be the fee invocation".to_owned(),
-        ));
-    }
-
-    for transaction in block.body.transactions {
-        if block.header.block_id == GENESIS_BLOCK_ID {
-            let genesis_tx = match transaction {
-                LeeTransaction::Public(public_tx) => public_tx,
-                LeeTransaction::PrivacyPreserving(_) | LeeTransaction::ProgramDeployment(_) => {
-                    return Err(DbError::db_interaction_error(
-                        "Genesis block should contain only public transactions".to_owned(),
-                    ));
-                }
-            };
-            state
-                .transition_from_public_transaction(
-                    &genesis_tx,
-                    block.header.block_id,
-                    block.header.timestamp,
-                )
-                .map_err(|err| {
-                    DbError::db_interaction_error(format!(
-                        "genesis transaction execution failed with err {err:?}"
-                    ))
-                })?;
-        } else {
-            transaction
-                .execute_on_state(state, block.header.block_id, block.header.timestamp)
-                .map_err(|err| {
-                    DbError::db_interaction_error(format!(
-                        "transaction execution failed with err {err:?}"
-                    ))
-                })?;
-        }
-    }
-
-    let LeeTransaction::Public(fee_public_tx) = fee_tx else {
-        return Err(DbError::db_interaction_error(
-            "Fee invocation must be a public transaction".to_owned(),
-        ));
-    };
-
-    state
-        .transition_from_public_transaction(
-            &fee_public_tx,
-            block.header.block_id,
-            block.header.timestamp,
-        )
-        .map_err(|err| {
-            DbError::db_interaction_error(format!(
-                "fee transaction execution failed with err {err:?}"
-            ))
-        })?;
-
-    let LeeTransaction::Public(clock_public_tx) = clock_tx else {
-        return Err(DbError::db_interaction_error(
-            "Clock invocation must be a public transaction".to_owned(),
-        ));
-    };
-
-    state
-        .transition_from_public_transaction(
-            &clock_public_tx,
-            block.header.block_id,
-            block.header.timestamp,
-        )
-        .map_err(|err| {
-            DbError::db_interaction_error(format!(
-                "clock transaction execution failed with err {err:?}"
-            ))
-        })?;
-
-    Ok(())
+fn apply_block_transactions(block: &Block, state: &mut V03State) -> DbResult<()> {
+    // The indexer replays through the same transition the sequencer and
+    // validators use, so the fee settlement arithmetic exists exactly once.
+    chain_state::apply::apply_block_to_state(block, state)
+        .map_err(|err| DbError::db_interaction_error(format!("block replay failed: {err}")))
 }
 
 fn closest_breakpoint_id(block_id: u64) -> u64 {

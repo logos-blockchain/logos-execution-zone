@@ -27,7 +27,19 @@ pub struct BlockFeeSummary {
 }
 
 /// The instruction type for the Fee Program.
-pub type Instruction = BlockFeeSummary;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Instruction {
+    /// Block-tail distribution: apply the market update, drain the inbox (base
+    /// revenue to escrow, tips to the producer), and pay the smoothed payout.
+    ///
+    /// Accounts: `[state, escrow, inbox, producer]`.
+    Distribute(BlockFeeSummary),
+    /// Per-transaction refund: return `amount` (the unspent part of the reserve)
+    /// from the inbox to the payer.
+    ///
+    /// Accounts: `[inbox, payer]`.
+    Refund { amount: Balance },
+}
 
 #[must_use]
 pub const fn fee_state_seed() -> PdaSeed {

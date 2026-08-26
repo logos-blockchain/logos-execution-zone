@@ -873,6 +873,18 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::InvalidProducerSignature => {
                 Self::InvalidProducerSignature
             }
+            indexer_core::BlockIngestError::InvalidFeeClass { tx_index, reason } => {
+                Self::InvalidFeeClass { tx_index, reason }
+            }
+            indexer_core::BlockIngestError::MissingFeeDeclaration { tx_index } => {
+                Self::MissingFeeDeclaration { tx_index }
+            }
+            indexer_core::BlockIngestError::GasCapExceeded { tx_index, reason } => {
+                Self::GasCapExceeded { tx_index, reason }
+            }
+            indexer_core::BlockIngestError::RestrictedAccountModification { tx_index, reason } => {
+                Self::RestrictedAccountModification { tx_index, reason }
+            }
             indexer_core::BlockIngestError::NonPublicGenesisTransaction => {
                 Self::NonPublicGenesisTransaction
             }

@@ -884,6 +884,10 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     /// Validates and applies a single mempool transaction to the current state.
     /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
     /// it was skipped due to validation failure.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the settlement threads exactly the block-transition context the spec names"
+    )]
     fn apply_mempool_transaction(
         state: &mut lee::V03State,
         origin: TransactionOrigin,
@@ -891,38 +895,65 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         block_height: u64,
         timestamp: u64,
         withdrawals: &mut Vec<WithdrawArg>,
+        opening: &fee_core::state::FeeState,
+        tx_index: u64,
+        summary: &mut fee_core::BlockFeeSummary,
     ) -> bool {
         let tx_hash = tx.hash();
         match origin {
             // Gossiped transactions arrive from untrusted peers, same as
             // user-submitted ones, so they get the same full state validation.
             TransactionOrigin::User | TransactionOrigin::Gossip => {
-                let validated_diff = match tx.validate_on_state(state, block_height, timestamp) {
-                    Ok(diff) => diff,
-                    Err(err) => {
-                        // A gossiped tx the leader already included is
-                        // expected to fail here (e.g. on nonce) for every
-                        // other node on its turn; that is steady-state noise,
-                        // not an error. User-submitted failures still warrant
-                        // `error!`.
-                        if matches!(origin, TransactionOrigin::Gossip) {
-                            debug!(
-                                "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
-                            );
-                        } else {
-                            error!(
-                                "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
-                            );
-                        }
-                        return false;
+                // Guard pass: the restricted-system-account rules, validated
+                // exactly as before charging existed.
+                // FIXME: this executes the transaction once for the guard and
+                // once for the metered settlement below; fold the guards into
+                // the settlement to halve the per-tx execution cost.
+                if let Err(err) = tx.validate_on_state(state, block_height, timestamp) {
+                    // A gossiped tx the leader already included is
+                    // expected to fail here (e.g. on nonce) for every
+                    // other node on its turn; that is steady-state noise,
+                    // not an error. User-submitted failures still warrant
+                    // `error!`.
+                    if matches!(origin, TransactionOrigin::Gossip) {
+                        debug!(
+                            "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                        );
+                    } else {
+                        error!(
+                            "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                        );
                     }
-                };
-
-                if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
-                    withdrawals.push(withdraw_data);
+                    return false;
                 }
 
-                state.apply_state_diff(validated_diff);
+                // Charged settlement on a scratch clone: a transaction that
+                // cannot pay (or breaches a cap) is dropped, never included.
+                let mut scratch = state.clone();
+                let mut scratch_summary = *summary;
+                match chain_state::apply::settle_transaction(
+                    tx,
+                    &mut scratch,
+                    opening,
+                    block_height,
+                    timestamp,
+                    tx_index,
+                    &mut scratch_summary,
+                ) {
+                    Ok(()) => {
+                        if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
+                            withdrawals.push(withdraw_data);
+                        }
+                        *state = scratch;
+                        *summary = scratch_summary;
+                    }
+                    Err(err) => {
+                        error!(
+                            "Transaction with hash {tx_hash} failed fee settlement: {err:#?}, skipping it",
+                        );
+                        return false;
+                    }
+                }
             }
             TransactionOrigin::Sequencer => {
                 let LeeTransaction::Public(public_tx) = tx else {
@@ -1116,8 +1147,24 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
-        let fee_tx = fee_invocation(fee_core::Instruction::default());
-        let fee_lee_tx = LeeTransaction::Public(fee_tx.clone());
+        let producer_account = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
+            self.store.signing_key(),
+        ));
+
+        // TODO: can be a helper impl in V03State
+        let opening = fee_core::state::FeeState::from_bytes(
+            &working_state
+                .get_account_by_id(system_accounts::fee_state_account_id())
+                .data
+                .into_inner(),
+        );
+        let mut summary = fee_core::BlockFeeSummary::default();
+        // The fee tx's summary is only known after the loop; a default-summary
+        // placeholder sizes identically (the summary struct is fixed-size).
+        let placeholder_fee_lee_tx = LeeTransaction::Public(fee_invocation(
+            fee_core::BlockFeeSummary::default(),
+            producer_account,
+        ));
         let clock_tx = clock_invocation(new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
@@ -1139,7 +1186,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
-                std::slice::from_ref(&fee_lee_tx),
+                std::slice::from_ref(&placeholder_fee_lee_tx),
                 std::slice::from_ref(&clock_lee_tx),
             ]
             .concat();
@@ -1168,7 +1215,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 if from_store
                     && !self.fits_in_an_empty_block(
                         &tx,
-                        &[fee_lee_tx.clone(), clock_lee_tx.clone()],
+                        &[placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()],
                         new_block_height,
                         prev_block_hash,
                         new_block_timestamp,
@@ -1218,6 +1265,9 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 new_block_height,
                 new_block_timestamp,
                 &mut withdrawals,
+                &opening,
+                valid_transactions.len().try_into().expect("fits u64"),
+                &mut summary,
             );
             if applied {
                 sequencer_core_metrics::record_mempool_transaction_application_time(
@@ -1246,10 +1296,12 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             }
         }
 
+        let fee_tx = fee_invocation(summary, producer_account);
+        common::transaction::initialize_producer_account(&mut working_state, producer_account);
         working_state
             .transition_from_public_transaction(&fee_tx, new_block_height, new_block_timestamp)
             .context("Fee transaction failed. Aborting block production.")?;
-        valid_transactions.push(fee_lee_tx);
+        valid_transactions.push(LeeTransaction::Public(fee_tx));
 
         working_state
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
@@ -1781,7 +1833,9 @@ fn genesis_block_and_state(
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     config: &SequencerConfig,
 ) -> (Block, lee::V03State) {
-    let (genesis_state, genesis_txs) = build_genesis_state(config, bootstrap_sequencer_key);
+    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key));
+    let (genesis_state, genesis_txs) =
+        build_genesis_state(config, bootstrap_sequencer_key, producer);
     let genesis_block = HashableBlockData {
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
@@ -1819,6 +1873,7 @@ fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
 fn build_genesis_state(
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
+    producer: lee::AccountId,
 ) -> (lee::V03State, Vec<LeeTransaction>) {
     let mut state = build_initial_state(config);
 
@@ -1878,22 +1933,35 @@ fn build_genesis_state(
     }
     let bootstrap_stake_txs = build_stake_genesis_transactions(&staked);
 
-    let genesis_txs = wrapped_token_config_tx
+    let mut genesis_txs: Vec<_> = wrapped_token_config_tx
         .chain(ping_sender_config_tx)
         .chain(ping_receiver_config_tx)
         .chain(bridge_lock_config_tx)
         .chain(inbox_config_tx)
         .chain(supply_txs)
         .chain(bootstrap_stake_txs)
-        .chain(std::iter::once(fee_invocation(
-            fee_core::Instruction::default(),
-        )))
-        .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
             state
                 .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
                 .expect("Failed to execute genesis transaction");
         })
+        .collect();
+
+    // The genesis fee invocation credits the producer, which must be
+    // initialized first — at the same point the validators' replay does it,
+    // so builder and replay cannot diverge.
+    common::transaction::initialize_producer_account(&mut state, producer);
+    for tx in [
+        fee_invocation(fee_core::BlockFeeSummary::default(), producer),
+        clock_invocation(0),
+    ] {
+        state
+            .transition_from_public_transaction(&tx, GENESIS_BLOCK_ID, 0)
+            .expect("Failed to execute genesis transaction");
+        genesis_txs.push(tx);
+    }
+    let genesis_txs = genesis_txs
+        .into_iter()
         .map(LeeTransaction::Public)
         .collect();
 

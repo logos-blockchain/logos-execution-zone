@@ -204,6 +204,32 @@ impl V03State {
         self.public_state.insert(account_id, account);
     }
 
+    /// Assigns `program_owner` to the account if it is still default-owned.
+    /// Used to initialize the producer account before the fee program credits
+    /// it: program output may not modify an unclaimed default account.
+    pub fn initialize_account_owner(&mut self, account_id: AccountId, program_owner: ProgramId) {
+        let account = self.get_account_by_id_mut(account_id);
+        if account.program_owner == lee_core::program::DEFAULT_PROGRAM_OWNER {
+            account.program_owner = program_owner.into();
+        }
+    }
+
+    /// Advances the replay nonce of each given account by one. Used when a
+    /// charged transaction reverts: its fee is kept and its replay protection
+    /// is consumed even though its effects are discarded.
+    pub fn advance_nonces(&mut self, account_ids: &[AccountId]) {
+        for account_id in account_ids {
+            let account = self.get_account_by_id_mut(*account_id);
+            account.nonce = lee_core::account::Nonce(
+                account
+                    .nonce
+                    .0
+                    .checked_add(1)
+                    .expect("nonce increment overflow"),
+            );
+        }
+    }
+
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
         let StateDiff {
             signer_account_ids,

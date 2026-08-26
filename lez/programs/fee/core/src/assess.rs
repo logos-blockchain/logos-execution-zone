@@ -10,7 +10,7 @@ use lee_core::account::{AccountId, Balance, Cycles, Fee, Gas};
 
 use crate::{market, state::FeeState};
 
-/// The fee-relevant view of a transaction (spec *Transactions*).
+/// The fee-relevant view of a transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeeTxView {
     Public {

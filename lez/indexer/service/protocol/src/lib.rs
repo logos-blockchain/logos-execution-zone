@@ -480,6 +480,21 @@ pub enum BlockIngestError {
     InvalidProducerSignature,
     InvalidClockTransaction,
     InvalidFeeTransaction,
+    InvalidFeeClass {
+        tx_index: u64,
+        reason: String,
+    },
+    MissingFeeDeclaration {
+        tx_index: u64,
+    },
+    GasCapExceeded {
+        tx_index: u64,
+        reason: String,
+    },
+    RestrictedAccountModification {
+        tx_index: u64,
+        reason: String,
+    },
     NonPublicGenesisTransaction,
     StateTransition {
         /// Index of the failing transaction within the block body.

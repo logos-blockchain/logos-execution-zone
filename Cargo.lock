@@ -1802,7 +1802,9 @@ dependencies = [
  "authenticated_transfer_core",
  "base64 0.22.1",
  "borsh",
+ "bridge_core",
  "clock_core",
+ "cross_zone_inbox_core",
  "fee_core",
  "hex",
  "lee",
@@ -1815,6 +1817,7 @@ dependencies = [
  "sha2 0.10.9",
  "system_accounts",
  "thiserror 2.0.18",
+ "vault_core",
 ]
 
 [[package]]
@@ -4614,6 +4617,7 @@ dependencies = [
  "arc-swap",
  "async-stream",
  "borsh",
+ "bridge_core",
  "chain_state",
  "common",
  "cross_zone",
@@ -11769,6 +11773,7 @@ name = "storage"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "chain_state",
  "common",
  "fee_core",
  "lee",

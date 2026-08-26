@@ -12,6 +12,7 @@ pub use stall_reason::StallReason;
 
 pub mod apply;
 pub mod chain;
+pub mod classify;
 pub mod consistency;
 pub mod ingest_error;
 pub mod stall_reason;

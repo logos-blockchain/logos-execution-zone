@@ -30,6 +30,29 @@ pub enum BlockIngestError {
     InvalidClockTransaction,
     #[error("Second-to-last transaction must be the canonical public fee invocation")]
     InvalidFeeTransaction,
+    #[error("Transaction {tx_index} failed fee classification: {reason}")]
+    InvalidFeeClass {
+        /// Index of the failing transaction within the block body.
+        tx_index: u64,
+        reason: String,
+    },
+    #[error("Transaction {tx_index} is a user public transaction that omits its required fee")]
+    MissingFeeDeclaration {
+        /// Index of the offending transaction within the block body.
+        tx_index: u64,
+    },
+    #[error("Transaction {tx_index} exceeds a block gas cap: {reason}")]
+    GasCapExceeded {
+        /// Index of the transaction that breached the cap.
+        tx_index: u64,
+        reason: String,
+    },
+    #[error("Transaction {tx_index} modifies a restricted system account: {reason}")]
+    RestrictedAccountModification {
+        /// Index of the offending transaction within the block body.
+        tx_index: u64,
+        reason: String,
+    },
     #[error("Genesis block must contain only public transactions")]
     NonPublicGenesisTransaction,
     #[error("State transition failed at transaction {tx_index}: {reason}")]

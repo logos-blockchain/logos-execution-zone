@@ -12,6 +12,7 @@ common.workspace = true
 fee_core.workspace = true
 lee.workspace = true
 lee_core.workspace = true
+system_accounts.workspace = true
 logos-blockchain-core.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 
@@ -25,5 +26,4 @@ tokio.workspace = true
 
 [dev-dependencies]
 testnet_initial_state.workspace = true
-system_accounts.workspace = true
 serde_json.workspace = true

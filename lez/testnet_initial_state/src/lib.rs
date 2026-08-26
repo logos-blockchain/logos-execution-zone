@@ -27,11 +27,13 @@ const SSK_PRIV_ACC_B: [u8; 32] = [
     180, 43, 120, 55, 151, 50, 21, 113, 22, 254, 83, 148, 56,
 ];
 
-const PUB_ACC_A_INITIAL_BALANCE: u128 = 10000;
-const PUB_ACC_B_INITIAL_BALANCE: u128 = 20000;
+// LGO-scale balances (10^9 atomic units per LGO): once transactions pay real
+// fees, the pre-fee 10_000/20_000 could not afford a single reservation.
+const PUB_ACC_A_INITIAL_BALANCE: u128 = 10_000_000_000_000;
+const PUB_ACC_B_INITIAL_BALANCE: u128 = 20_000_000_000_000;
 
-const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10000;
-const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20000;
+const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10_000_000_000_000;
+const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20_000_000_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicAccountPublicInitialData {

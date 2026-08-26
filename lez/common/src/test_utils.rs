@@ -64,7 +64,10 @@ pub fn produce_dummy_block(
     mut transactions: Vec<LeeTransaction>,
 ) -> Block {
     transactions.push(LeeTransaction::Public(fee_invocation(
-        fee_core::Instruction::default(),
+        fee_core::BlockFeeSummary::default(),
+        lee::AccountId::from(&lee::PublicKey::new_from_private_key(
+            &sequencer_sign_key_for_testing(),
+        )),
     )));
     transactions.push(LeeTransaction::Public(clock_invocation(
         id.saturating_mul(100),
@@ -100,6 +103,13 @@ pub fn produce_dummy_empty_transaction() -> LeeTransaction {
     LeeTransaction::Public(lee_tx)
 }
 
+/// Generous fee fields for test transactions: the sender pays, with a default
+/// gas limit and an effectively unbounded fee cap.
+#[must_use]
+pub const fn test_fee_fields(payer: AccountId) -> lee::FeeDeclaration {
+    lee::FeeDeclaration::new(payer, 2_000_000, 0, u128::MAX >> 1)
+}
+
 #[must_use]
 pub fn create_transaction_native_token_transfer(
     from: AccountId,
@@ -111,13 +121,14 @@ pub fn create_transaction_native_token_transfer(
     let account_ids = vec![from, to];
     let nonces = vec![nonce.into()];
     let program_id = programs::authenticated_transfer().id();
-    let message = lee::public_transaction::Message::try_new(
+    let message = lee::public_transaction::Message::try_new_with_fees(
         program_id,
         account_ids,
         nonces,
         authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,
         },
+        test_fee_fields(from),
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
@@ -125,4 +136,30 @@ pub fn create_transaction_native_token_transfer(
     let lee_tx = lee::PublicTransaction::new(message, witness_set);
 
     LeeTransaction::Public(lee_tx)
+}
+
+/// A correctly-signed native-token transfer that omits its fee declaration.
+///
+/// Classification rejects this: a user public transaction that is not an exempt
+/// shape must declare a fee, or it would be executed and included for free.
+#[must_use]
+pub fn create_transaction_native_token_transfer_without_fee(
+    from: AccountId,
+    nonce: u128,
+    to: AccountId,
+    balance_to_move: u128,
+    signing_key: &lee::PrivateKey,
+) -> LeeTransaction {
+    let message = lee::public_transaction::Message::try_new(
+        programs::authenticated_transfer().id(),
+        vec![from, to],
+        vec![nonce.into()],
+        authenticated_transfer_core::Instruction::Transfer {
+            amount: balance_to_move,
+        },
+    )
+    .unwrap();
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+
+    LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
 }

@@ -13,6 +13,9 @@ lee_core.workspace = true
 authenticated_transfer_core.workspace = true
 clock_core.workspace = true
 fee_core.workspace = true
+vault_core.workspace = true
+bridge_core.workspace = true
+cross_zone_inbox_core.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
 
