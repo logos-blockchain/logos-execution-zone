@@ -206,139 +206,21 @@ impl ExecutionState {
         // position is visited — `validate_execution` has already rejected two positions
         // naming the same one, and one account may legitimately hold two namespaces.
         for pre in &output_pre_states {
-            let pre_account_id = pre.account_id;
-            let pre_is_authorized = pre.is_authorized;
-            let pre_slot = pre.slot.as_ref().map(|(program, slot)| (*program, slot));
-            // A caller may delegate its own PDAs to this callee by seed. That is the only way
-            // a keyless address can be authorized, in either form.
-            let seed_granted =
-                |keys: Option<&(NullifierPublicKey, ViewingPublicKey, Identifier)>| {
-                    let caller_program_id = caller.program_id?;
-                    caller_pda_seeds.iter().find_map(|seed| {
-                        let derived = match keys {
-                            Some((npk, vpk, identifier)) => AccountId::for_private_pda(
-                                &caller_program_id,
-                                seed,
-                                npk,
-                                vpk,
-                                *identifier,
-                            ),
-                            None => AccountId::for_public_pda(&caller_program_id, seed),
-                        };
-                        (derived == pre_account_id).then_some((caller_program_id, *seed))
-                    })
-                };
-
-            // A position is journalled once, at its first sight. Later sightings are anchored to
-            // what an earlier frame in this tree wrote, so they are checked here instead.
-            let position = (pre_account_id, pre_slot.map(|(program, _)| program));
+            // A position is journalled once, at its first sight, and is anchored there to chain
+            // state. Later sightings are anchored to what an earlier frame in this tree wrote.
+            let position = (
+                pre.account_id,
+                pre.slot.as_ref().map(|(program, _)| *program),
+            );
             if self.journalled.insert(position) {
-                // First sight: anchored to chain state, so this is the entry the verifier
-                // reconciles with the message.
-                let pre_state_position = self.pre_states.len();
-                let mut journal_pre = pre.clone();
-                match account_identities.get(pre_state_position) {
-                    Some(InputAccountIdentity::Private(PrivateWitness {
-                        vpk,
-                        identifier,
-                        kind:
-                            WitnessKind::Pda {
-                                binding: (authority_program_id, seed),
-                            },
-                        nullifier,
-                        ..
-                    })) => {
-                        // The witness is the only link between the supplied npk and the
-                        // address, so it is proven here, once, at first sight.
-                        let keys = (nullifier.npk(), vpk.clone(), *identifier);
-                        assert_eq!(
-                            pre_account_id,
-                            AccountId::for_private_pda(
-                                authority_program_id,
-                                seed,
-                                &keys.0,
-                                &keys.1,
-                                keys.2,
-                            ),
-                            "Private PDA at position {pre_state_position} does not match its witness binding"
-                        );
-                        let granted = seed_granted(Some(&keys));
-                        if let Some((granting_program, granting_seed)) = granted {
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                granting_program,
-                                granting_seed,
-                                pre_account_id,
-                            );
-                        }
-                        assert_eq!(
-                            pre_is_authorized,
-                            granted.is_some(),
-                            "Inconsistent authorization for private PDA {pre_account_id}"
-                        );
-                        self.private_pda_keys.insert(pre_account_id, keys);
-                    }
-                    _ => {
-                        match seed_granted(None) {
-                            Some((program_id, seed)) => {
-                                assert!(
-                                    pre_is_authorized,
-                                    "Caller-seeded public PDA must be declared authorized at first sight: {pre_account_id}"
-                                );
-                                assert_family_binding(
-                                    &mut self.pda_family_binding,
-                                    program_id,
-                                    seed,
-                                    pre_account_id,
-                                );
-                                // The verifier re-derives a public account's authorization from
-                                // the signer set, where a keyless PDA can never appear, so the
-                                // journal must report the credential it has, not the grant.
-                                journal_pre.is_authorized = false;
-                            }
-                            None => {
-                                if pre_is_authorized {
-                                    self.globally_authorized.insert(pre_account_id);
-                                }
-                            }
-                        }
-                    }
-                }
-                self.pre_states.push(journal_pre);
+                self.journal_first_sight(account_identities, &caller, caller_pda_seeds, pre);
             } else {
-                if let Some((program, slot)) = pre_slot {
-                    // Ensure that new pre state is the same as known post state
-                    let known_post = self
-                        .post_states
-                        .get(&(pre_account_id, program))
-                        .expect("a journalled slot position has left a post behind");
-                    assert_eq!(
-                        known_post, slot,
-                        "Inconsistent pre state for account {pre_account_id}",
-                    );
-                }
-
-                let granted = seed_granted(self.private_pda_keys.get(&pre_account_id));
-                if let Some((program_id, seed)) = granted {
-                    assert_family_binding(
-                        &mut self.pda_family_binding,
-                        program_id,
-                        seed,
-                        pre_account_id,
-                    );
-                }
-                let is_authorized = granted.is_some()
-                    || self.globally_authorized.contains(&pre_account_id)
-                    || caller.authorized_accounts.contains(&pre_account_id);
-                assert_eq!(
-                    pre_is_authorized, is_authorized,
-                    "Inconsistent authorization for account {pre_account_id}",
-                );
+                self.check_known_position(&caller, caller_pda_seeds, pre);
             }
 
             // If an account it authorized, push it to the autorized set.
-            if pre_is_authorized {
-                authorized_output_accounts.push(pre_account_id);
+            if pre.is_authorized {
+                authorized_output_accounts.push(pre.account_id);
             }
         }
 
@@ -352,6 +234,130 @@ impl ExecutionState {
         let mut authorized_accounts = caller.authorized_accounts;
         authorized_accounts.extend(authorized_output_accounts);
         authorized_accounts
+    }
+
+    /// A position seen for the first time. Nothing in this tree has written it yet, so it is
+    /// journalled: the verifier is what anchors the entry, against chain state for a public
+    /// account and against the committed witness for a private one. A private PDA's npk is
+    /// bound to its address here, once, because the witness is the only link between them.
+    fn journal_first_sight(
+        &mut self,
+        account_identities: &[InputAccountIdentity],
+        caller: &CallerData,
+        caller_pda_seeds: &[PdaSeed],
+        pre: &Input,
+    ) {
+        let pre_account_id = pre.account_id;
+        let pre_state_position = self.pre_states.len();
+        let mut journal_pre = pre.clone();
+        match account_identities.get(pre_state_position) {
+            Some(InputAccountIdentity::Private(PrivateWitness {
+                vpk,
+                identifier,
+                kind:
+                    WitnessKind::Pda {
+                        binding: (authority_program_id, seed),
+                    },
+                nullifier,
+                ..
+            })) => {
+                let keys = (nullifier.npk(), vpk.clone(), *identifier);
+                assert_eq!(
+                    pre_account_id,
+                    AccountId::for_private_pda(
+                        authority_program_id,
+                        seed,
+                        &keys.0,
+                        &keys.1,
+                        keys.2
+                    ),
+                    "Private PDA at position {pre_state_position} does not match its witness binding"
+                );
+                let granted = seed_granted(caller, caller_pda_seeds, pre_account_id, Some(&keys));
+                if let Some((granting_program, granting_seed)) = granted {
+                    assert_family_binding(
+                        &mut self.pda_family_binding,
+                        granting_program,
+                        granting_seed,
+                        pre_account_id,
+                    );
+                }
+                assert_eq!(
+                    pre.is_authorized,
+                    granted.is_some(),
+                    "Inconsistent authorization for private PDA {pre_account_id}"
+                );
+                self.private_pda_keys.insert(pre_account_id, keys);
+            }
+            _ => match seed_granted(caller, caller_pda_seeds, pre_account_id, None) {
+                Some((program_id, seed)) => {
+                    assert!(
+                        pre.is_authorized,
+                        "Caller-seeded public PDA must be declared authorized at first sight: {pre_account_id}"
+                    );
+                    assert_family_binding(
+                        &mut self.pda_family_binding,
+                        program_id,
+                        seed,
+                        pre_account_id,
+                    );
+                    // The verifier re-derives a public account's authorization from the signer
+                    // set, where a keyless PDA can never appear, so the journal must report the
+                    // credential it has, not the grant.
+                    journal_pre.is_authorized = false;
+                }
+                None => {
+                    if pre.is_authorized {
+                        self.globally_authorized.insert(pre_account_id);
+                    }
+                }
+            },
+        }
+        self.pre_states.push(journal_pre);
+    }
+
+    /// A position already journalled by an earlier frame. It is anchored to what that frame
+    /// left behind rather than to chain state, so both its slot and its authorization are
+    /// checked here against what this tree already established.
+    fn check_known_position(
+        &mut self,
+        caller: &CallerData,
+        caller_pda_seeds: &[PdaSeed],
+        pre: &Input,
+    ) {
+        let pre_account_id = pre.account_id;
+        if let Some((program, slot)) = &pre.slot {
+            let known_post = self
+                .post_states
+                .get(&(pre_account_id, *program))
+                .expect("a journalled slot position has left a post behind");
+            assert_eq!(
+                known_post, slot,
+                "Inconsistent pre state for account {pre_account_id}",
+            );
+        }
+
+        let granted = seed_granted(
+            caller,
+            caller_pda_seeds,
+            pre_account_id,
+            self.private_pda_keys.get(&pre_account_id),
+        );
+        if let Some((program_id, seed)) = granted {
+            assert_family_binding(
+                &mut self.pda_family_binding,
+                program_id,
+                seed,
+                pre_account_id,
+            );
+        }
+        let is_authorized = granted.is_some()
+            || self.globally_authorized.contains(&pre_account_id)
+            || caller.authorized_accounts.contains(&pre_account_id);
+        assert_eq!(
+            pre.is_authorized, is_authorized,
+            "Inconsistent authorization for account {pre_account_id}",
+        );
     }
 
     /// The state a completed call tree leaves behind, built directly. Lets the output stage be
@@ -409,6 +415,27 @@ impl ExecutionState {
             states_iter,
         )
     }
+}
+
+/// A caller may delegate its own PDAs to this callee by seed. That is the only way a keyless
+/// address can be authorized, in either form: `keys` selects the private derivation, its absence
+/// the public one.
+fn seed_granted(
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
+    account_id: AccountId,
+    keys: Option<&(NullifierPublicKey, ViewingPublicKey, Identifier)>,
+) -> Option<(ProgramId, PdaSeed)> {
+    let caller_program_id = caller.program_id?;
+    caller_pda_seeds.iter().find_map(|seed| {
+        let derived = match keys {
+            Some((npk, vpk, identifier)) => {
+                AccountId::for_private_pda(&caller_program_id, seed, npk, vpk, *identifier)
+            }
+            None => AccountId::for_public_pda(&caller_program_id, seed),
+        };
+        (derived == account_id).then_some((caller_program_id, *seed))
+    })
 }
 
 fn assert_family_binding(
