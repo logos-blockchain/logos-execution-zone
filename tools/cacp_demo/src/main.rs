@@ -1,19 +1,54 @@
+// Submission provenance and full references
+//
+// This source accompanies:
+// Q. Jiang, “Costly Escalation in Cross-Zone Atomic Coordination: A Neutral-Zone Fee
+// and Stake Mechanism for CACP,” MSc Emerging Digital Technologies dissertation,
+// Department of Computer Science, University College London, 2026.
+//
+// The project specifications, platform specifications, and design literature are:
+// [1] T. Lavaur, “[1.1.1] Cross-Channel Messaging,” The Logos Blockchain Project,
+// specification version 1.1.1, 6 May 2026. [Online]. Available:
+// https://nomos-tech.notion.site/1-1-1-Template-Cross-Channel-Messaging-33e261aa09df80b2a6aaca0e7cfd2ce7.
+// [Accessed: 24 Aug. 2026].
+// [3] T. Lavaur, “[1.5.0] Mantle,” The Logos Blockchain Project, specification version
+// 1.5.0, 6 May 2026. [Online]. Available:
+// https://nomos-tech.notion.site/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85.
+// [Accessed: 24 Aug. 2026].
+// [4] Logos Blockchain Project, “LEE v0.3 Specifications,” Logos Improvement Proposal
+// 237, Standards Track, raw status, 8 June 2026. [Online]. Available:
+// https://lip.logos.co/blockchain/raw/lez/lee-v0.3-specifications.html.
+// [Accessed: 24 Aug. 2026].
+// [14] N. Asokan, M. Schunter, and M. Waidner, “Optimistic Protocols for Fair
+// Exchange,” in Proc. 4th ACM Conference on Computer and Communications Security,
+// pp. 7–17, 1997, doi: 10.1145/266420.266426.
+// [15] N. Asokan, V. Shoup, and M. Waidner, “Optimistic Fair Exchange of Digital
+// Signatures,” in Advances in Cryptology—EUROCRYPT 1998, pp. 591–606, 1998,
+// doi: 10.1007/BFb0054156.
+// [16] S. Dziembowski, L. Eckey, and S. Faust, “FairSwap: How to Fairly Exchange
+// Digital Goods,” in Proc. 2018 ACM SIGSAC Conference on Computer and Communications
+// Security, pp. 967–984, 2018, doi: 10.1145/3243734.3243857.
+// [18] I. Bentov and R. Kumaresan, “How to Use Bitcoin to Design Fair Protocols,” in
+// Advances in Cryptology—CRYPTO 2014, pp. 421–439, 2014,
+// doi: 10.1007/978-3-662-44381-1_24.
+// [23] Q. Jiang, “Specification for CACP: Cross-Zone Atomic Coordination Protocol,”
+// University College London, project specification, 2026.
+// [24] Q. Jiang, “LEZ CACP Costly Escalation Bond Protocol,” University College
+// London, project specification, 2026.
+
 #![allow(clippy::print_stdout, reason = "the demo reports verified scenarios")]
 
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
-use authenticated_transfer_core::Instruction as TransferInstruction;
 use cacp_bond_core::{
-    BondState, Instruction as BondInstruction, MantleSignature, Settlement,
-    accept_candidate_commitment, escrow_account_id, proof_commitment, state_account_id,
+    AGREEMENT_VERSION, AgreementId, BondAgreement, BondState, Instruction as BondInstruction,
+    MantleSignature, Settlement, burn_account_id, escrow_account_id, state_account_id,
 };
 use clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID;
 use common::transaction::LeeTransaction;
 use cross_zone::cacp::{
-    CacpError, ChannelParent, CostlyEscalationBondTerms, CounterpartySession, CrossZoneIntent,
-    Finalize, InitiatorSession, InscribeIntent, Phase, TimeoutOutcome, TwoZoneTopology,
-    ZoneSequencer,
+    CacpError, ChannelParent, CounterpartySession, CrossZoneIntent, Finalize, InitiatorSession,
+    InscribeIntent, Phase, TimeoutOutcome, TwoZoneTopology, ZoneSequencer,
 };
 use lee::{AccountId, PrivateKey, PublicKey, PublicTransaction, public_transaction};
 use logos_blockchain_codec::{BinaryDecodeExt as _, BinaryEncode as _};
@@ -64,28 +99,14 @@ struct LiveNetwork {
     key_b: Ed25519Key,
     account_a: AccountId,
     account_b: AccountId,
-    fee_collector: AccountId,
     lee_key_a: PrivateKey,
     lee_key_b: PrivateKey,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    println!("CACP + protocol-enforced costly-escalation live demo");
-    println!("1 local Bedrock | 2 participant zones | 1 neutral bond execution zone");
-    println!(
-        "The two business operations are ChannelInscribe; Bedrock may append one fee transfer.\n"
-    );
-
-    let network = LiveNetwork::start().await?;
-    happy_path(&network, 1).await?;
-    fallback_submission(&network, 2).await?;
-    safe_abort(&network, 3).await?;
-    stale_parent_rejection(&network, 4).await?;
-    automatic_forfeiture(&network, 5).await?;
-
-    println!("\nALL 5 LIVE CACP SCENARIOS PASSED");
-    Ok(())
+struct BondEvidence {
+    agreement: BondAgreement,
+    agreement_id: AgreementId,
+    tx_hash: [u8; 32],
 }
 
 impl LiveNetwork {
@@ -139,14 +160,10 @@ impl LiveNetwork {
         public_accounts
             .sort_by_key(|(key, _)| AccountId::from(&PublicKey::new_from_private_key(key)));
         let [(lee_key_a, _), (lee_key_b, _)] = <[_; 2]>::try_from(public_accounts)
-            .map_err(|_| anyhow::anyhow!("fixture must provide two public accounts"))?;
+            .map_err(|_error| anyhow::anyhow!("fixture must provide two public accounts"))?;
         let account_a = AccountId::from(&PublicKey::new_from_private_key(&lee_key_a));
         let account_b = AccountId::from(&PublicKey::new_from_private_key(&lee_key_b));
-        let fee_collector_key = PrivateKey::try_new([3; 32]).context("fee collector key")?;
-        let fee_collector = AccountId::from(&PublicKey::new_from_private_key(&fee_collector_key));
-        ensure!(fee_collector != account_a && fee_collector != account_b);
         let bond_client = bond.sequencer_client().clone();
-        initialize_fee_collector(&bond_client, fee_collector, &fee_collector_key).await?;
 
         println!(
             "Started real HTTP services: Bedrock + sequencer A + sequencer B + neutral bond sequencer\n"
@@ -163,7 +180,6 @@ impl LiveNetwork {
             key_b: Ed25519Key::from_bytes(&KEY_B),
             account_a,
             account_b,
-            fee_collector,
             lee_key_a,
             lee_key_b,
         })
@@ -182,8 +198,8 @@ impl LiveNetwork {
         ])
     }
 
-    fn intent(&self, nonce: u64) -> Result<CrossZoneIntent> {
-        CrossZoneIntent::new(
+    fn intent(nonce: u64) -> Result<CrossZoneIntent> {
+        Ok(CrossZoneIntent::new(
             [
                 InscribeIntent {
                     channel_id: channel_a(),
@@ -195,17 +211,7 @@ impl LiveNetwork {
                 },
             ],
             nonce,
-        )?
-        .with_costly_escalation_bond(CostlyEscalationBondTerms {
-            bond_zone: config::bedrock_channel_id(),
-            bond_program_id: programs::cacp_bond().id(),
-            fee_collector: self.fee_collector,
-            stake_amount: STAKE,
-            challenge_fee: CHALLENGE_FEE,
-            response_fee: RESPONSE_FEE,
-            response_window_blocks: WINDOW,
-        })
-        .map_err(Into::into)
+        )?)
     }
 
     fn topology(&self, intent: &CrossZoneIntent) -> Result<TwoZoneTopology> {
@@ -223,32 +229,30 @@ impl LiveNetwork {
     }
 }
 
-async fn initialize_fee_collector(
-    client: &SequencerClient,
-    fee_collector: AccountId,
-    fee_collector_key: &PrivateKey,
-) -> Result<()> {
-    let nonce = client.get_accounts_nonces(vec![fee_collector]).await?[0];
-    let message = public_transaction::Message::try_new(
-        programs::authenticated_transfer().id(),
-        vec![fee_collector],
-        vec![nonce],
-        TransferInstruction::Initialize,
-    )?;
-    let witness = public_transaction::WitnessSet::for_message(&message, &[fee_collector_key]);
-    let hash = client
-        .send_transaction(LeeTransaction::Public(PublicTransaction::new(
-            message, witness,
-        )))
-        .await?;
-    wait_for_lee_tx(client, hash).await
+#[tokio::main]
+async fn main() -> Result<()> {
+    println!("CACP + protocol-enforced costly-escalation live demo");
+    println!("1 local Bedrock | 2 participant zones | 1 neutral bond execution zone");
+    println!(
+        "The two business operations are ChannelInscribe; Bedrock may append one fee transfer.\n"
+    );
+
+    let network = LiveNetwork::start().await?;
+    happy_path(&network, 1).await?;
+    fallback_submission(&network, 2).await?;
+    safe_abort(&network, 3).await?;
+    stale_parent_rejection(&network, 4).await?;
+    automatic_forfeiture(&network, 5).await?;
+
+    println!("\nALL 5 LIVE CACP SCENARIOS PASSED");
+    Ok(())
 }
 
 async fn funded_phase_three(
     network: &LiveNetwork,
     nonce: u64,
 ) -> Result<(InitiatorSession, CounterpartySession)> {
-    let intent = network.intent(nonce)?;
+    let intent = LiveNetwork::intent(nonce)?;
     let topology = network.topology(&intent)?;
     let parents = network.parents().await?;
     let mut initiator = InitiatorSession::new(topology.clone(), intent.clone(), parents)?;
@@ -342,7 +346,7 @@ async fn fallback_submission(network: &LiveNetwork, nonce: u64) -> Result<()> {
 async fn safe_abort(network: &LiveNetwork, nonce: u64) -> Result<()> {
     heading(3, "safe abort before Phase 3");
     let before = network.parents().await?;
-    let intent = network.intent(nonce)?;
+    let intent = LiveNetwork::intent(nonce)?;
     let topology = network.topology(&intent)?;
     let mut a = InitiatorSession::new(topology, intent, before)?;
     ensure!(a.on_timeout() == TimeoutOutcome::Aborted);
@@ -393,9 +397,12 @@ async fn stale_parent_rejection(network: &LiveNetwork, nonce: u64) -> Result<()>
 async fn automatic_forfeiture(network: &LiveNetwork, nonce: u64) -> Result<()> {
     heading(5, "costly escalation fees and stake forfeiture");
     run_counterparty_response(network, nonce).await?;
-    run_initiator_response(network, nonce + 1).await?;
-    run_counterparty_forfeit(network, nonce + 2).await?;
-    run_initiator_forfeit(network, nonce + 3).await?;
+    let initiator_response_nonce = nonce.checked_add(1).context("scenario nonce overflow")?;
+    let counterparty_forfeit_nonce = nonce.checked_add(2).context("scenario nonce overflow")?;
+    let initiator_forfeit_nonce = nonce.checked_add(3).context("scenario nonce overflow")?;
+    run_initiator_response(network, initiator_response_nonce).await?;
+    run_counterparty_forfeit(network, counterparty_forfeit_nonce).await?;
+    run_initiator_forfeit(network, initiator_forfeit_nonce).await?;
     println!(
         "  PASS: valid responders paid the zone, neither participant profited, and unanswered challenges forfeited only stake"
     );
@@ -403,51 +410,51 @@ async fn automatic_forfeiture(network: &LiveNetwork, nonce: u64) -> Result<()> {
 }
 
 async fn run_counterparty_response(network: &LiveNetwork, nonce: u64) -> Result<()> {
-    let evidence = bond_evidence(network, nonce, false).await?;
+    let evidence = bond_evidence(network, nonce).await?;
     let balances_before = participant_balances(network).await?;
-    let collector_before = fee_collector_balance(network).await?;
+    let burn_before = burn_balance(network).await?;
     open_and_join_bond(network, &evidence).await?;
     submit_bond(
         network,
-        evidence.proposal,
+        evidence.agreement_id,
         &network.lee_key_a,
         BondInstruction::ChallengeAccept {
-            proposal_id: evidence.proposal,
+            agreement_id: evidence.agreement_id,
         },
     )
     .await?;
+    let b_proof = counterparty_proof(network, &evidence);
     submit_bond(
         network,
-        evidence.proposal,
+        evidence.agreement_id,
         &network.lee_key_b,
         BondInstruction::DiscloseAccept {
-            proposal_id: evidence.proposal,
-            accept_candidate: evidence.accept_candidate.clone(),
-            proof: evidence.b_proof.clone(),
+            agreement_id: evidence.agreement_id,
+            proof: b_proof.clone(),
         },
     )
     .await?;
     ensure!(
-        bond_state(network, evidence.proposal).await?.phase
+        bond_state(network, evidence.agreement_id).await?.phase
             == cacp_bond_core::Phase::AwaitingFinalize
     );
     let a_proof = MantleSignature::new(network.key_a.sign_payload(&evidence.tx_hash).to_bytes());
     submit_bond(
         network,
-        evidence.proposal,
+        evidence.agreement_id,
         &network.lee_key_a,
         BondInstruction::Complete {
-            proposal_id: evidence.proposal,
+            agreement_id: evidence.agreement_id,
             initiator_proof: a_proof,
-            counterparty_proof: evidence.b_proof,
+            counterparty_proof: b_proof,
         },
     )
     .await?;
     assert_escalation_balances(
         network,
-        evidence.proposal,
+        evidence.agreement_id,
         balances_before,
-        collector_before,
+        burn_before,
         CHALLENGE_FEE,
         RESPONSE_FEE,
     )
@@ -455,37 +462,36 @@ async fn run_counterparty_response(network: &LiveNetwork, nonce: u64) -> Result<
 }
 
 async fn run_initiator_response(network: &LiveNetwork, nonce: u64) -> Result<()> {
-    let evidence = bond_evidence(network, nonce, true).await?;
+    let evidence = bond_evidence(network, nonce).await?;
     let balances_before = participant_balances(network).await?;
-    let collector_before = fee_collector_balance(network).await?;
+    let burn_before = burn_balance(network).await?;
     open_and_join_bond(network, &evidence).await?;
     submit_bond(
         network,
-        evidence.proposal,
+        evidence.agreement_id,
         &network.lee_key_b,
         BondInstruction::ChallengeFinalize {
-            proposal_id: evidence.proposal,
-            accept_candidate: evidence.accept_candidate,
-            accept_proof: evidence.b_proof,
+            agreement_id: evidence.agreement_id,
+            accept_proof: counterparty_proof(network, &evidence),
         },
     )
     .await?;
     let a_proof = MantleSignature::new(network.key_a.sign_payload(&evidence.tx_hash).to_bytes());
     submit_bond(
         network,
-        evidence.proposal,
+        evidence.agreement_id,
         &network.lee_key_a,
         BondInstruction::DiscloseFinalize {
-            proposal_id: evidence.proposal,
+            agreement_id: evidence.agreement_id,
             proof: a_proof,
         },
     )
     .await?;
     assert_escalation_balances(
         network,
-        evidence.proposal,
+        evidence.agreement_id,
         balances_before,
-        collector_before,
+        burn_before,
         RESPONSE_FEE,
         CHALLENGE_FEE,
     )
@@ -495,34 +501,19 @@ async fn run_initiator_response(network: &LiveNetwork, nonce: u64) -> Result<()>
 async fn open_and_join_bond(network: &LiveNetwork, evidence: &BondEvidence) -> Result<()> {
     submit_bond(
         network,
-        evidence.proposal,
+        evidence.agreement_id,
         &network.lee_key_a,
         BondInstruction::Open {
-            proposal_id: evidence.proposal,
-            counterparty: network.account_b,
-            fee_collector: network.fee_collector,
-            expected_tx_hash: evidence.tx_hash,
-            expected_accept_candidate_commitment: accept_candidate_commitment(
-                &evidence.accept_candidate,
-            ),
-            initiator_mantle_key: network.key_a.public_key().to_bytes(),
-            stake_amount: STAKE,
-            challenge_fee: CHALLENGE_FEE,
-            response_fee: RESPONSE_FEE,
-            response_window_blocks: WINDOW,
+            agreement: evidence.agreement.clone(),
         },
     )
     .await?;
     submit_bond(
         network,
-        evidence.proposal,
+        evidence.agreement_id,
         &network.lee_key_b,
         BondInstruction::Join {
-            proposal_id: evidence.proposal,
-            tx_hash: evidence.tx_hash,
-            accept_candidate_commitment: accept_candidate_commitment(&evidence.accept_candidate),
-            counterparty_mantle_key: network.key_b.public_key().to_bytes(),
-            accept_commitment: proof_commitment(&evidence.b_proof),
+            agreement_id: evidence.agreement_id,
         },
     )
     .await
@@ -530,86 +521,54 @@ async fn open_and_join_bond(network: &LiveNetwork, evidence: &BondEvidence) -> R
 
 async fn assert_escalation_balances(
     network: &LiveNetwork,
-    proposal: [u8; 32],
+    agreement_id: AgreementId,
     before: (u128, u128),
-    collector_before: u128,
+    burn_before: u128,
     a_fee: u128,
     b_fee: u128,
 ) -> Result<()> {
-    ensure!(bond_state(network, proposal).await?.settlement == Some(Settlement::Completed));
+    ensure!(bond_state(network, agreement_id).await?.settlement == Some(Settlement::Completed));
     let after = participant_balances(network).await?;
     ensure!(after.0 == before.0.checked_sub(a_fee).context("A fee underflow")?);
     ensure!(after.1 == before.1.checked_sub(b_fee).context("B fee underflow")?);
     let collected = a_fee.checked_add(b_fee).context("fee total overflow")?;
     ensure!(
-        fee_collector_balance(network).await?
-            == collector_before
+        burn_balance(network).await?
+            == burn_before
                 .checked_add(collected)
-                .context("collector overflow")?
+                .context("burn sink overflow")?
     );
-    ensure!(bond_escrow_balance(network, proposal).await? == 0);
+    ensure!(bond_escrow_balance(network, agreement_id).await? == 0);
     Ok(())
 }
 
 async fn run_counterparty_forfeit(network: &LiveNetwork, nonce: u64) -> Result<()> {
     // B creates and commits ACCEPT but deliberately does not deliver it to A.
-    let evidence = bond_evidence(network, nonce, false).await?;
+    let evidence = bond_evidence(network, nonce).await?;
     let balances_before = participant_balances(network).await?;
-    let collector_before = fee_collector_balance(network).await?;
+    let burn_before = burn_balance(network).await?;
+    open_and_join_bond(network, &evidence).await?;
     submit_bond(
         network,
-        evidence.proposal,
-        &network.lee_key_a,
-        BondInstruction::Open {
-            proposal_id: evidence.proposal,
-            counterparty: network.account_b,
-            fee_collector: network.fee_collector,
-            expected_tx_hash: evidence.tx_hash,
-            expected_accept_candidate_commitment: accept_candidate_commitment(
-                &evidence.accept_candidate,
-            ),
-            initiator_mantle_key: network.key_a.public_key().to_bytes(),
-            stake_amount: STAKE,
-            challenge_fee: CHALLENGE_FEE,
-            response_fee: RESPONSE_FEE,
-            response_window_blocks: WINDOW,
-        },
-    )
-    .await?;
-    submit_bond(
-        network,
-        evidence.proposal,
-        &network.lee_key_b,
-        BondInstruction::Join {
-            proposal_id: evidence.proposal,
-            tx_hash: evidence.tx_hash,
-            accept_candidate_commitment: accept_candidate_commitment(&evidence.accept_candidate),
-            counterparty_mantle_key: network.key_b.public_key().to_bytes(),
-            accept_commitment: proof_commitment(&evidence.b_proof),
-        },
-    )
-    .await?;
-    submit_bond(
-        network,
-        evidence.proposal,
+        evidence.agreement_id,
         &network.lee_key_a,
         BondInstruction::ChallengeAccept {
-            proposal_id: evidence.proposal,
+            agreement_id: evidence.agreement_id,
         },
     )
     .await?;
-    wait_bond_deadline(network, evidence.proposal).await?;
+    wait_bond_deadline(network, evidence.agreement_id).await?;
     submit_bond(
         network,
-        evidence.proposal,
+        evidence.agreement_id,
         &network.lee_key_a,
         BondInstruction::SettleTimeout {
-            proposal_id: evidence.proposal,
+            agreement_id: evidence.agreement_id,
         },
     )
     .await?;
     ensure!(
-        bond_state(network, evidence.proposal).await?.settlement
+        bond_state(network, evidence.agreement_id).await?.settlement
             == Some(Settlement::CounterpartyForfeited)
     );
     let balances_after = participant_balances(network).await?;
@@ -621,76 +580,43 @@ async fn run_counterparty_forfeit(network: &LiveNetwork, nonce: u64) -> Result<(
     ensure!(balances_after.0 == expected_a);
     ensure!(balances_after.1.checked_add(STAKE) == Some(balances_before.1));
     ensure!(
-        fee_collector_balance(network).await?
-            == collector_before
+        burn_balance(network).await?
+            == burn_before
                 .checked_add(CHALLENGE_FEE)
-                .context("collector overflow")?
+                .context("burn sink overflow")?
     );
-    ensure!(bond_escrow_balance(network, evidence.proposal).await? == 0);
+    ensure!(bond_escrow_balance(network, evidence.agreement_id).await? == 0);
     Ok(())
 }
 
 async fn run_initiator_forfeit(network: &LiveNetwork, nonce: u64) -> Result<()> {
     // A receives B's ACCEPT and creates FINALIZE but deliberately withholds it.
-    let evidence = bond_evidence(network, nonce, true).await?;
+    let evidence = bond_evidence(network, nonce).await?;
     let balances_before = participant_balances(network).await?;
-    let collector_before = fee_collector_balance(network).await?;
+    let burn_before = burn_balance(network).await?;
+    open_and_join_bond(network, &evidence).await?;
     submit_bond(
         network,
-        evidence.proposal,
-        &network.lee_key_a,
-        BondInstruction::Open {
-            proposal_id: evidence.proposal,
-            counterparty: network.account_b,
-            fee_collector: network.fee_collector,
-            expected_tx_hash: evidence.tx_hash,
-            expected_accept_candidate_commitment: accept_candidate_commitment(
-                &evidence.accept_candidate,
-            ),
-            initiator_mantle_key: network.key_a.public_key().to_bytes(),
-            stake_amount: STAKE,
-            challenge_fee: CHALLENGE_FEE,
-            response_fee: RESPONSE_FEE,
-            response_window_blocks: WINDOW,
-        },
-    )
-    .await?;
-    submit_bond(
-        network,
-        evidence.proposal,
-        &network.lee_key_b,
-        BondInstruction::Join {
-            proposal_id: evidence.proposal,
-            tx_hash: evidence.tx_hash,
-            accept_candidate_commitment: accept_candidate_commitment(&evidence.accept_candidate),
-            counterparty_mantle_key: network.key_b.public_key().to_bytes(),
-            accept_commitment: proof_commitment(&evidence.b_proof),
-        },
-    )
-    .await?;
-    submit_bond(
-        network,
-        evidence.proposal,
+        evidence.agreement_id,
         &network.lee_key_b,
         BondInstruction::ChallengeFinalize {
-            proposal_id: evidence.proposal,
-            accept_candidate: evidence.accept_candidate,
-            accept_proof: evidence.b_proof,
+            agreement_id: evidence.agreement_id,
+            accept_proof: counterparty_proof(network, &evidence),
         },
     )
     .await?;
-    wait_bond_deadline(network, evidence.proposal).await?;
+    wait_bond_deadline(network, evidence.agreement_id).await?;
     submit_bond(
         network,
-        evidence.proposal,
+        evidence.agreement_id,
         &network.lee_key_b,
         BondInstruction::SettleTimeout {
-            proposal_id: evidence.proposal,
+            agreement_id: evidence.agreement_id,
         },
     )
     .await?;
     ensure!(
-        bond_state(network, evidence.proposal).await?.settlement
+        bond_state(network, evidence.agreement_id).await?.settlement
             == Some(Settlement::InitiatorForfeited)
     );
     let balances_after = participant_balances(network).await?;
@@ -702,63 +628,56 @@ async fn run_initiator_forfeit(network: &LiveNetwork, nonce: u64) -> Result<()> 
         .context("B forfeiture payout overflow")?;
     ensure!(balances_after.1 == expected_b);
     ensure!(
-        fee_collector_balance(network).await?
-            == collector_before
+        burn_balance(network).await?
+            == burn_before
                 .checked_add(CHALLENGE_FEE)
-                .context("collector overflow")?
+                .context("burn sink overflow")?
     );
-    ensure!(bond_escrow_balance(network, evidence.proposal).await? == 0);
+    ensure!(bond_escrow_balance(network, evidence.agreement_id).await? == 0);
     Ok(())
 }
 
-struct BondEvidence {
-    proposal: [u8; 32],
-    tx_hash: [u8; 32],
-    accept_candidate: Vec<u8>,
-    b_proof: MantleSignature,
-}
-
-async fn bond_evidence(
-    network: &LiveNetwork,
-    nonce: u64,
-    deliver_accept_to_initiator: bool,
-) -> Result<BondEvidence> {
-    let intent = network.intent(nonce)?;
+async fn bond_evidence(network: &LiveNetwork, nonce: u64) -> Result<BondEvidence> {
+    let intent = LiveNetwork::intent(nonce)?;
     let topology = network.topology(&intent)?;
     let parents = network.parents().await?;
-    let mut initiator = InitiatorSession::new(topology.clone(), intent.clone(), parents)?;
-    let mut counterparty = CounterpartySession::new(topology.clone(), intent.clone(), parents)?;
-    let raw = cross_zone::cacp::build_joint_tx(&initiator.propose().intent, &topology, &parents)?;
+    let raw = cross_zone::cacp::build_joint_tx(&intent, &topology, &parents)?;
     let (funded_tx, funding_proof) = fund_ops(&network.node, raw).await?;
-    let accept = counterparty.receive_funded_propose(
-        &initiator.propose(),
-        funded_tx,
-        funding_proof.context("bonded proposal requires its fee proof")?,
-        &network.key_b,
-    )?;
-    let hash = accept.tx.hash();
-    let accept_candidate = accept.candidate()?.to_bytes()?;
-    if deliver_accept_to_initiator {
-        let _withheld_finalize = initiator.receive_accept(accept.clone(), &network.key_a)?;
-        ensure!(initiator.phase() == Phase::SignaturesExchanged);
-    }
+    funding_proof.context("bonded proposal requires its non-EdDSA fee proof")?;
+    let hash = funded_tx.hash();
     let tx_hash = *hash.as_ref();
-    Ok(BondEvidence {
-        proposal: intent.proposal_id().0,
+    let agreement = BondAgreement {
+        version: AGREEMENT_VERSION,
+        initiator: network.account_a,
+        counterparty: network.account_b,
         tx_hash,
-        accept_candidate,
-        b_proof: MantleSignature::new(accept.counterparty_proof.to_bytes()),
+        initiator_mantle_key: network.key_a.public_key().to_bytes(),
+        counterparty_mantle_key: network.key_b.public_key().to_bytes(),
+        stake_amount: STAKE,
+        challenge_fee: CHALLENGE_FEE,
+        response_fee: RESPONSE_FEE,
+        response_window_blocks: WINDOW,
+    };
+    let agreement_id = agreement.id(programs::cacp_bond().id());
+    Ok(BondEvidence {
+        agreement,
+        agreement_id,
+        tx_hash,
     })
+}
+
+fn counterparty_proof(network: &LiveNetwork, evidence: &BondEvidence) -> MantleSignature {
+    MantleSignature::new(network.key_b.sign_payload(&evidence.tx_hash).to_bytes())
 }
 
 async fn submit_bond(
     network: &LiveNetwork,
-    proposal: [u8; 32],
+    agreement_id: AgreementId,
     signer: &PrivateKey,
     instruction: BondInstruction,
 ) -> Result<()> {
-    let state = state_account_id(programs::cacp_bond().id(), &proposal);
-    let escrow = escrow_account_id(programs::cacp_bond().id(), &proposal);
+    let state = state_account_id(programs::cacp_bond().id(), &agreement_id);
+    let escrow = escrow_account_id(programs::cacp_bond().id(), &agreement_id);
     let nonce = network
         .bond_client
         .get_accounts_nonces(vec![network.account_a, network.account_b])
@@ -776,9 +695,7 @@ async fn submit_bond(
         state,
         CLOCK_01_PROGRAM_ACCOUNT_ID,
     ];
-    if !matches!(&instruction, BondInstruction::Open { .. }) {
-        accounts.push(network.fee_collector);
-    }
+    accounts.push(burn_account_id(programs::cacp_bond().id()));
     let message = public_transaction::Message::try_new(
         programs::cacp_bond().id(),
         accounts,
@@ -795,10 +712,10 @@ async fn submit_bond(
     wait_for_lee_tx(&network.bond_client, hash).await
 }
 
-async fn bond_state(network: &LiveNetwork, proposal: [u8; 32]) -> Result<BondState> {
+async fn bond_state(network: &LiveNetwork, agreement_id: AgreementId) -> Result<BondState> {
     let account = network
         .bond_client
-        .get_account(state_account_id(programs::cacp_bond().id(), &proposal))
+        .get_account(state_account_id(programs::cacp_bond().id(), &agreement_id))
         .await?;
     BondState::from_bytes(&account.data).context("decoding on-chain bond state")
 }
@@ -816,24 +733,24 @@ async fn participant_balances(network: &LiveNetwork) -> Result<(u128, u128)> {
     ))
 }
 
-async fn fee_collector_balance(network: &LiveNetwork) -> Result<u128> {
+async fn burn_balance(network: &LiveNetwork) -> Result<u128> {
     network
         .bond_client
-        .get_account_balance(network.fee_collector)
+        .get_account_balance(burn_account_id(programs::cacp_bond().id()))
         .await
         .map_err(Into::into)
 }
 
-async fn bond_escrow_balance(network: &LiveNetwork, proposal: [u8; 32]) -> Result<u128> {
+async fn bond_escrow_balance(network: &LiveNetwork, agreement_id: AgreementId) -> Result<u128> {
     network
         .bond_client
-        .get_account_balance(escrow_account_id(programs::cacp_bond().id(), &proposal))
+        .get_account_balance(escrow_account_id(programs::cacp_bond().id(), &agreement_id))
         .await
         .map_err(Into::into)
 }
 
-async fn wait_bond_deadline(network: &LiveNetwork, proposal: [u8; 32]) -> Result<()> {
-    let deadline = bond_state(network, proposal).await?.expires_at_block;
+async fn wait_bond_deadline(network: &LiveNetwork, agreement_id: AgreementId) -> Result<()> {
+    let deadline = bond_state(network, agreement_id).await?.expires_at_block;
     let wait = async {
         loop {
             if network.bond_client.get_last_block_id().await? >= deadline {
@@ -890,6 +807,10 @@ fn assert_live_shape(tx: &SignedMantleTx<Unverified>) -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only inscriptions contribute channel tips"
+)]
 fn inscription_tips(tx: &SignedMantleTx<Unverified>) -> Result<[(ChannelId, MsgId); 2]> {
     let tips = tx
         .mantle_tx()
@@ -900,7 +821,7 @@ fn inscription_tips(tx: &SignedMantleTx<Unverified>) -> Result<[(ChannelId, MsgI
             _ => None,
         })
         .collect::<Vec<_>>();
-    <[_; 2]>::try_from(tips).map_err(|_| anyhow::anyhow!("expected exactly two inscriptions"))
+    <[_; 2]>::try_from(tips).map_err(|_error| anyhow::anyhow!("expected exactly two inscriptions"))
 }
 
 async fn wait_for_channel(node: &NodeHttpClient, channel: ChannelId) -> Result<()> {

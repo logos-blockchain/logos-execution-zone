@@ -1,7 +1,43 @@
+// Submission provenance and full references
+//
+// This source accompanies:
+// Q. Jiang, “Costly Escalation in Cross-Zone Atomic Coordination: A Neutral-Zone Fee
+// and Stake Mechanism for CACP,” MSc Emerging Digital Technologies dissertation,
+// Department of Computer Science, University College London, 2026.
+//
+// The project specifications, platform specifications, and design literature are:
+// [1] T. Lavaur, “[1.1.1] Cross-Channel Messaging,” The Logos Blockchain Project,
+// specification version 1.1.1, 6 May 2026. [Online]. Available:
+// https://nomos-tech.notion.site/1-1-1-Template-Cross-Channel-Messaging-33e261aa09df80b2a6aaca0e7cfd2ce7.
+// [Accessed: 24 Aug. 2026].
+// [3] T. Lavaur, “[1.5.0] Mantle,” The Logos Blockchain Project, specification version
+// 1.5.0, 6 May 2026. [Online]. Available:
+// https://nomos-tech.notion.site/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85.
+// [Accessed: 24 Aug. 2026].
+// [4] Logos Blockchain Project, “LEE v0.3 Specifications,” Logos Improvement Proposal
+// 237, Standards Track, raw status, 8 June 2026. [Online]. Available:
+// https://lip.logos.co/blockchain/raw/lez/lee-v0.3-specifications.html.
+// [Accessed: 24 Aug. 2026].
+// [14] N. Asokan, M. Schunter, and M. Waidner, “Optimistic Protocols for Fair
+// Exchange,” in Proc. 4th ACM Conference on Computer and Communications Security,
+// pp. 7–17, 1997, doi: 10.1145/266420.266426.
+// [15] N. Asokan, V. Shoup, and M. Waidner, “Optimistic Fair Exchange of Digital
+// Signatures,” in Advances in Cryptology—EUROCRYPT 1998, pp. 591–606, 1998,
+// doi: 10.1007/BFb0054156.
+// [16] S. Dziembowski, L. Eckey, and S. Faust, “FairSwap: How to Fairly Exchange
+// Digital Goods,” in Proc. 2018 ACM SIGSAC Conference on Computer and Communications
+// Security, pp. 967–984, 2018, doi: 10.1145/3243734.3243857.
+// [18] I. Bentov and R. Kumaresan, “How to Use Bitcoin to Design Fair Protocols,” in
+// Advances in Cryptology—CRYPTO 2014, pp. 421–439, 2014,
+// doi: 10.1007/978-3-662-44381-1_24.
+// [23] Q. Jiang, “Specification for CACP: Cross-Zone Atomic Coordination Protocol,”
+// University College London, project specification, 2026.
+// [24] Q. Jiang, “LEZ CACP Costly Escalation Bond Protocol,” University College
+// London, project specification, 2026.
+
 use std::collections::{HashMap, HashSet};
 
 use bincode::Options as _;
-use cacp_bond_core::ACCEPT_CANDIDATE_DOMAIN;
 use logos_blockchain_core::mantle::{
     SignedMantleTx,
     ops::{
@@ -24,7 +60,7 @@ use thiserror::Error;
 
 pub const INTENT_VERSION: u8 = 1;
 pub const PARTICIPANT_COUNT: usize = 2;
-pub const COSTLY_ESCALATION_BOND_DOMAIN: &[u8] = b"/CACP/CostlyEscalationBond/v2/";
+pub const ACCEPT_CANDIDATE_DOMAIN: &[u8] = b"/CACP/AcceptCandidate/v1/";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InscribeIntent {
@@ -32,28 +68,11 @@ pub struct InscribeIntent {
     pub payload: Vec<u8>,
 }
 
-/// Economic terms executed by the neutral LEZ bond zone.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CostlyEscalationBondTerms {
-    pub bond_zone: ChannelId,
-    pub bond_program_id: lee::ProgramId,
-    pub fee_collector: lee::AccountId,
-    pub stake_amount: u128,
-    pub challenge_fee: u128,
-    pub response_fee: u128,
-    pub response_window_blocks: u64,
-}
-
-/// Backwards-compatible source alias. New code should use the costly
-/// escalation name because the neutral zone does not determine who aborted.
-pub type CostlyAbortBondTerms = CostlyEscalationBondTerms;
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CrossZoneIntent {
     version: u8,
     operations: [InscribeIntent; PARTICIPANT_COUNT],
     nonce: u64,
-    costly_escalation_bond: Option<CostlyEscalationBondTerms>,
 }
 
 impl CrossZoneIntent {
@@ -82,29 +101,7 @@ impl CrossZoneIntent {
             version: INTENT_VERSION,
             operations,
             nonce,
-            costly_escalation_bond: None,
         })
-    }
-
-    /// Binds a separately executed neutral-zone bond to this proposal.
-    pub fn with_costly_escalation_bond(
-        mut self,
-        terms: CostlyEscalationBondTerms,
-    ) -> Result<Self, CacpError> {
-        if terms.stake_amount == 0
-            || terms.challenge_fee == 0
-            || terms.response_fee == 0
-            || terms.response_window_blocks == 0
-        {
-            return Err(CacpError::InvalidBondTerms);
-        }
-        self.costly_escalation_bond = Some(terms);
-        Ok(self)
-    }
-
-    /// Compatibility wrapper for callers using the former protocol name.
-    pub fn with_costly_abort_bond(self, terms: CostlyAbortBondTerms) -> Result<Self, CacpError> {
-        self.with_costly_escalation_bond(terms)
     }
 
     #[must_use]
@@ -122,16 +119,6 @@ impl CrossZoneIntent {
         self.nonce
     }
 
-    #[must_use]
-    pub const fn costly_escalation_bond(&self) -> Option<CostlyEscalationBondTerms> {
-        self.costly_escalation_bond
-    }
-
-    #[must_use]
-    pub const fn costly_abort_bond(&self) -> Option<CostlyAbortBondTerms> {
-        self.costly_escalation_bond
-    }
-
     /// Fixed-field-order encoding used to identify one CACP proposal.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -146,18 +133,6 @@ impl CrossZoneIntent {
             bytes.extend_from_slice(&operation.payload);
         }
         bytes.extend_from_slice(&self.nonce.to_le_bytes());
-        if let Some(terms) = self.costly_escalation_bond {
-            bytes.extend_from_slice(COSTLY_ESCALATION_BOND_DOMAIN);
-            bytes.extend_from_slice(terms.bond_zone.as_ref());
-            for word in terms.bond_program_id {
-                bytes.extend_from_slice(&word.to_le_bytes());
-            }
-            bytes.extend_from_slice(terms.fee_collector.as_ref());
-            bytes.extend_from_slice(&terms.stake_amount.to_le_bytes());
-            bytes.extend_from_slice(&terms.challenge_fee.to_le_bytes());
-            bytes.extend_from_slice(&terms.response_fee.to_le_bytes());
-            bytes.extend_from_slice(&terms.response_window_blocks.to_le_bytes());
-        }
         bytes
     }
 
@@ -241,8 +216,8 @@ impl Accept {
 }
 
 /// The exact funded transaction and fee proof that A must be able to recover
-/// before it can safely produce FINALIZE. B's signature is committed
-/// separately by the bond state.
+/// before it can safely produce FINALIZE. The bond agreement separately binds
+/// this transaction hash and B's verification key.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AcceptCandidate {
     pub tx: RawMantleTx,
@@ -392,7 +367,7 @@ impl InitiatorSession {
             &self.topology,
             initiator_proof,
             accept.counterparty_proof,
-            accept.funding_proof,
+            accept.funding_proof.as_ref(),
         )?;
         let signed_tx = SignedMantleTx::new(accept.tx, proofs);
         signed_tx
@@ -550,6 +525,10 @@ impl CounterpartySession {
         Ok(())
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only the two locked demo operation kinds may reach FINALIZE"
+    )]
     fn validate_finalize_proofs(
         &self,
         signed_tx: &SignedMantleTx<Unverified>,
@@ -725,10 +704,6 @@ pub enum CacpError {
     EmptyInscription,
     #[error("an inscription exceeds the Mantle bound")]
     InscriptionTooLarge,
-    #[error(
-        "stake, challenge fee, response fee, and response window must all be greater than zero"
-    )]
-    InvalidBondTerms,
     #[error("the intent does not match the fixed two-zone topology")]
     TopologyMismatch,
     #[error("a channel parent is missing")]
@@ -829,7 +804,7 @@ fn proofs_in_operation_order(
     topology: &TwoZoneTopology,
     initiator_proof: Ed25519Signature,
     counterparty_proof: Ed25519Signature,
-    funding_proof: Option<OpProof>,
+    funding_proof: Option<&OpProof>,
 ) -> Result<OpsProofs, CacpError> {
     #[expect(
         clippy::wildcard_enum_match_arm,
@@ -850,7 +825,7 @@ fn proofs_in_operation_order(
                 Ok(OpProof::Ed25519Sig(counterparty_proof))
             }
             Op::Transfer(_) => funding_proof
-                .clone()
+                .cloned()
                 .ok_or(CacpError::InvalidJointTransaction),
             _ => Err(CacpError::InvalidJointTransaction),
         })
@@ -962,72 +937,6 @@ mod tests {
             topology,
             parents,
         }
-    }
-
-    #[test]
-    fn costly_escalation_terms_are_bound_to_the_proposal() {
-        let fixture = fixture();
-        let terms = CostlyEscalationBondTerms {
-            bond_zone: ChannelId::from([9; 32]),
-            bond_program_id: [7; 8],
-            fee_collector: lee::AccountId::new([6; 32]),
-            stake_amount: 1_000,
-            challenge_fee: 100,
-            response_fee: 80,
-            response_window_blocks: 4,
-        };
-        let first = fixture
-            .intent
-            .clone()
-            .with_costly_escalation_bond(terms)
-            .unwrap();
-        let different_amount = fixture
-            .intent
-            .clone()
-            .with_costly_escalation_bond(CostlyEscalationBondTerms {
-                stake_amount: 2_000,
-                ..terms
-            })
-            .unwrap();
-        let different_zone = fixture
-            .intent
-            .clone()
-            .with_costly_escalation_bond(CostlyEscalationBondTerms {
-                bond_zone: ChannelId::from([8; 32]),
-                ..terms
-            })
-            .unwrap();
-        let different_collector = fixture
-            .intent
-            .clone()
-            .with_costly_escalation_bond(CostlyEscalationBondTerms {
-                fee_collector: lee::AccountId::new([5; 32]),
-                ..terms
-            })
-            .unwrap();
-        let different_response_fee = fixture
-            .intent
-            .clone()
-            .with_costly_escalation_bond(CostlyEscalationBondTerms {
-                response_fee: 81,
-                ..terms
-            })
-            .unwrap();
-
-        assert_ne!(first.proposal_id(), fixture.intent.proposal_id());
-        assert_ne!(first.proposal_id(), different_amount.proposal_id());
-        assert_ne!(first.proposal_id(), different_zone.proposal_id());
-        assert_ne!(first.proposal_id(), different_collector.proposal_id());
-        assert_ne!(first.proposal_id(), different_response_fee.proposal_id());
-        assert!(matches!(
-            fixture
-                .intent
-                .with_costly_escalation_bond(CostlyEscalationBondTerms {
-                    stake_amount: 0,
-                    ..terms
-                }),
-            Err(CacpError::InvalidBondTerms)
-        ));
     }
 
     fn phase_three(fixture: &Fixture) -> (InitiatorSession, CounterpartySession, Finalize) {

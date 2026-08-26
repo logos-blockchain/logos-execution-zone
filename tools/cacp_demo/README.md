@@ -20,23 +20,33 @@ the `cacp_bond` program. Challenges, response deadlines, Ed25519 evidence and
 payouts execute inside the neutral zone. There is no resolver/custodian private
 key that can choose a winner or seize escrow.
 
-The intent also commits a neutral-zone fee collector plus fixed challenge and
-response fees. A challenger pays the challenge fee directly to that collector;
-a challenged participant pays the response fee when publishing a valid
-response. Neither fee enters participant escrow or is paid to the other party.
-The collector represents the neutral sequencer's normal conflict-resolution
-execution revenue in this local network.
+There is no participant-selected fee collector. The bond program derives one
+fixed, protocol-owned sink address from its own program ID. Native LEE balance
+must remain conserved, so this demo implements burning as a transfer to that
+sink; the bond program has no instruction that can withdraw it. A production
+fee mechanism may route the value into the zone's protocol fee pool instead,
+but A and B can never receive it.
+
+Before joining, both parties review one `BondAgreement` containing the exact
+funded Mantle transaction hash, both public LEE accounts, both Mantle Ed25519
+keys, the stake, challenge fee, response fee and response window. Its agreement
+ID also binds the bond program and fixed burn-policy versions. The program
+recomputes that ID at `Open`. B's authorized `Join` signs the ID, so changing
+even one economic field requires a different Join. This prevents A from
+advertising a small response fee off-chain and then opening an unaffordable
+one.
+
+Each participant deposits `stake + challenge_fee + response_fee` before the
+exchange. Challenge and response fees therefore come from prepaid escrow, not
+new funds demanded at the deadline. Unused fee reserves are refunded at
+settlement. Only stake is forfeitable.
 
 The bond is challenge-driven. A normal successful exchange needs no routine
-on-chain confirmation: either party can close the bond by presenting both
-signatures. Before staking, A commits to versioned canonical bytes containing
-the exact funded Mantle transaction and its fee proof; B confirms the same
-commitment when joining. If A says B withheld ACCEPT, A pays the challenge fee
-and B must publish both those committed candidate bytes and its pre-committed
-signature. If B says A withheld FINALIZE, B must publish the same complete
-candidate and signature in the challenge. The chain data therefore gives A
-everything needed to reconstruct FINALIZE instead of proving only that B once
-signed an unavailable transaction.
+escalation: either party can close the bond by presenting both Ed25519
+signatures over the agreed Mantle transaction hash. If A challenges, A's
+prepaid challenge fee is burned and B must publish its signature; a valid
+response burns B's prepaid response fee. The reverse direction works the same
+way: B includes its signature while challenging and A must publish its own.
 
 A frivolous challenge costs the challenger a fixed fee and earns it nothing.
 Answering on-chain also costs the responder a fixed fee and earns it nothing.
@@ -53,8 +63,8 @@ fee proof), so the CACP remedy is fallback submission. The demo separately
 checks actual Bedrock channel tips to confirm inclusion.
 
 The costly-escalation scenarios assert the exact balance deltas for both
-participants and the neutral fee collector, and that proposal escrow returns to
-zero after settlement.
+participants and the fixed burn sink, and that agreement escrow returns to zero
+after settlement.
 
 Every funded Phase 3 setup also mutates only the wallet-generated Transfer
 proof and asserts that B rejects that substituted FINALIZE before accepting the
@@ -86,9 +96,11 @@ ALL 5 LIVE CACP SCENARIOS PASSED
    advances.
 4. Stale parent: A's parent advances first; Bedrock rejects the old joint
    transaction atomically, including B's otherwise-current inscription.
-5. Costly escalation: real CACP sessions construct a wallet-funded candidate.
+5. Costly escalation: the same two-channel builder constructs an exact
+   wallet-funded Mantle transaction before either party joins the bond.
    Both successful-response directions prove that the challenger pays the
    challenge fee, the responder pays the response fee, both stakes are refunded,
-   and only the neutral-zone collector gains the two fees. Two unanswered
+   and only the fixed burn sink receives the two fees. Two unanswered
    challenge directions prove that the silent participant loses its stake while
-   the challenger still pays its own challenge fee.
+   the challenger still pays its own challenge fee and both unused fee reserves
+   are refunded.
