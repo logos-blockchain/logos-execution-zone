@@ -28,11 +28,10 @@ fn bound_private_pda(
         identifier,
     );
     (
-        input_of(
-            &Account::default(),
+        Input::at(
+            SlotRef::new(account_id, authority_program_id),
             is_authorized,
-            account_id,
-            authority_program_id,
+            &Account::default(),
         ),
         init_pda_witness(keys, identifier, binding),
     )
@@ -43,17 +42,15 @@ fn circuit_fails_if_visibility_masks_have_incorrect_lenght() {
     let program = crate::test_methods::simple_balance_transfer();
     let public_account_1_acc =
         Account::single(program.id(), 100, Data::default(), Nonce::default());
-    let public_account_1 = input_of(
+    let public_account_1 = Input::at(
+        SlotRef::new(AccountId::new([0; 32]), program.id()),
+        true,
         &public_account_1_acc,
-        true,
-        AccountId::new([0; 32]),
-        program.id(),
     );
-    let public_account_2 = input_of(
-        &Account::default(),
+    let public_account_2 = Input::at(
+        SlotRef::new(AccountId::new([1; 32]), program.id()),
         true,
-        AccountId::new([1; 32]),
-        program.id(),
+        &Account::default(),
     );
 
     // Single account_identity entry for a circuit execution with two pre_state accounts.
@@ -74,18 +71,22 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
     let recipient_keys = test_private_account_keys_2();
     let private_account_1_acc =
         Account::single(program.id(), 100, Data::default(), Nonce::default());
-    let private_account_1 = input_of(
-        &private_account_1_acc,
+    let private_account_1 = Input::at(
+        SlotRef::new(
+            (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_1_acc,
     );
     let private_account_2_acc = Account::default();
-    let private_account_2 = input_of(
-        &private_account_2_acc,
+    let private_account_2 = Input::at(
+        SlotRef::new(
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_2_acc,
     );
 
     // Setting the recipient nsk to authorize the sender.
@@ -137,19 +138,23 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
     let recipient_keys = test_private_account_keys_2();
     let private_account_1_acc =
         Account::single(program.id(), 100, Data::default(), Nonce::default());
-    let private_account_1 = input_of(
-        &private_account_1_acc,
+    let private_account_1 = Input::at(
+        SlotRef::new(
+            (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_1_acc,
     );
     let private_account_2_acc = // Non default balance
         Account::single(program.id(), 1, Data::default(), Nonce::default());
-    let private_account_2 = input_of(
-        &private_account_2_acc,
+    let private_account_2 = Input::at(
+        SlotRef::new(
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_2_acc,
     );
 
     let result = execute_and_prove(
@@ -197,11 +202,13 @@ fn circuit_should_fail_if_new_private_account_with_a_foreign_slot_is_provided() 
     let recipient_keys = test_private_account_keys_2();
     let private_account_1_acc =
         Account::single(program.id(), 100, Data::default(), Nonce::default());
-    let private_account_1 = input_of(
-        &private_account_1_acc,
+    let private_account_1 = Input::at(
+        SlotRef::new(
+            (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_1_acc,
     );
     let private_account_2_acc = // A slot held by another program: still not a default pre-state
         Account::single(
@@ -210,11 +217,13 @@ fn circuit_should_fail_if_new_private_account_with_a_foreign_slot_is_provided() 
             Data::default(),
             Nonce::default(),
         );
-    let private_account_2 = input_of(
-        &private_account_2_acc,
+    let private_account_2 = Input::at(
+        SlotRef::new(
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_2_acc,
     );
 
     let result = execute_and_prove(
@@ -262,11 +271,13 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
     let recipient_keys = test_private_account_keys_2();
     let private_account_1_acc =
         Account::single(program.id(), 100, Data::default(), Nonce::default());
-    let private_account_1 = input_of(
-        &private_account_1_acc,
+    let private_account_1 = Input::at(
+        SlotRef::new(
+            (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_1_acc,
     );
     let private_account_2_acc = // Non default data
         Account::single(
@@ -275,11 +286,13 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
             b"hola mundo".to_vec().try_into().unwrap(),
             Nonce::default(),
         );
-    let private_account_2 = input_of(
-        &private_account_2_acc,
+    let private_account_2 = Input::at(
+        SlotRef::new(
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_2_acc,
     );
 
     let result = execute_and_prove(
@@ -327,22 +340,26 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
     let recipient_keys = test_private_account_keys_2();
     let private_account_1_acc =
         Account::single(program.id(), 100, Data::default(), Nonce::default());
-    let private_account_1 = input_of(
-        &private_account_1_acc,
+    let private_account_1 = Input::at(
+        SlotRef::new(
+            (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_1_acc,
     );
     let private_account_2_acc = Account {
         // Non default nonce
         nonce: Nonce(0xdead_beef),
         ..Account::default()
     };
-    let private_account_2 = input_of(
-        &private_account_2_acc,
+    let private_account_2 = Input::at(
+        SlotRef::new(
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_2_acc,
     );
 
     let result = execute_and_prove(
@@ -391,18 +408,22 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
     let recipient_keys = test_private_account_keys_2();
     let private_account_1_acc =
         Account::single(program.id(), 100, Data::default(), Nonce::default());
-    let private_account_1 = input_of(
-        &private_account_1_acc,
+    let private_account_1 = Input::at(
+        SlotRef::new(
+            (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_1_acc,
     );
     let private_account_2_acc = Account::default();
-    let private_account_2 = input_of(
-        &private_account_2_acc, // This should be set to true in normal circumstances
+    let private_account_2 = Input::at(
+        SlotRef::new(
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+            program.id(),
+        ), // This should be set to true in normal circumstances
         false,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_2_acc,
     );
 
     let result = execute_and_prove(
@@ -458,7 +479,11 @@ fn private_pda_with_matching_binding_succeeds() {
 
     let account_id = AccountId::for_private_pda(&authority_id, &seed, &npk, &keys.vpk(), u128::MAX);
     let pre_state_acc = Account::default();
-    let pre_state = input_of(&pre_state_acc, false, account_id, authority_id);
+    let pre_state = Input::at(
+        SlotRef::new(account_id, authority_id),
+        false,
+        &pre_state_acc,
+    );
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -492,7 +517,11 @@ fn private_pda_npk_mismatch_fails() {
     let account_id =
         AccountId::for_private_pda(&authority_id, &seed, &npk_a, &keys_a.vpk(), u128::MAX);
     let pre_state_acc = Account::default();
-    let pre_state = input_of(&pre_state_acc, false, account_id, authority_id);
+    let pre_state = Input::at(
+        SlotRef::new(account_id, authority_id),
+        false,
+        &pre_state_acc,
+    );
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -655,7 +684,11 @@ fn holder_authorization_survives_across_sibling_calls() {
     let holder_id =
         AccountId::for_regular_private_account(&holder_keys.npk(), &holder_keys.vpk(), 0);
     let holder_pre_state_acc = Account::default();
-    let holder_pre_state = input_of(&holder_pre_state_acc, true, holder_id, delegator.id());
+    let holder_pre_state = Input::at(
+        SlotRef::new(holder_id, delegator.id()),
+        true,
+        &holder_pre_state_acc,
+    );
 
     let callee_id = callee.id();
     let sibling_id = sibling.id();
@@ -799,7 +832,11 @@ fn undeclaring_public_delegation(
     let sibling = crate::test_methods::noop();
 
     let pre_state_acc = Account::default();
-    let pre_state = input_of(&pre_state_acc, false, account_id, delegator.id());
+    let pre_state = Input::at(
+        SlotRef::new(account_id, delegator.id()),
+        false,
+        &pre_state_acc,
+    );
 
     let callee_id = callee.id();
     let sibling_id = sibling.id();
@@ -1018,11 +1055,13 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
     let sender_keys = test_private_account_keys_1();
     let private_account_1_acc =
         Account::single(program.id(), 100, Data::default(), Nonce::default());
-    let private_account_1 = input_of(
-        &private_account_1_acc,
+    let private_account_1 = Input::at(
+        SlotRef::new(
+            (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
-        program.id(),
+        &private_account_1_acc,
     );
 
     let result = execute_and_prove(
@@ -1074,11 +1113,13 @@ fn private_authorized_uninitialized_account() {
     // Create an authorized private account with default values (new account being initialized)
     let authorized_account_acc = Account::default();
     let program = crate::test_methods::simple_balance_transfer();
-    let authorized_account = input_of(
-        &authorized_account_acc,
+    let authorized_account = Input::at(
+        SlotRef::new(
+            (&private_keys.npk(), &private_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&private_keys.npk(), &private_keys.vpk(), 0).into(),
-        program.id(),
+        &authorized_account_acc,
     );
 
     // Set up parameters for the new account
@@ -1164,12 +1205,15 @@ fn two_private_pda_family_members_receive_and_spend() {
         let funder_nonce = funder_account.nonce;
         let (output, proof) = execute_and_prove(
             vec![
-                input_of(&funder_account, true, funder_id, simple_transfer_id),
-                input_of(
-                    &Account::default(),
+                Input::at(
+                    SlotRef::new(funder_id, simple_transfer_id),
+                    true,
+                    &funder_account,
+                ),
+                Input::at(
+                    SlotRef::new(alice_pda_0_id, simple_transfer_id),
                     false,
-                    alice_pda_0_id,
-                    simple_transfer_id,
+                    &Account::default(),
                 ),
             ],
             Program::serialize_instruction(amount).unwrap(),
@@ -1197,12 +1241,15 @@ fn two_private_pda_family_members_receive_and_spend() {
         let funder_nonce = funder_account.nonce;
         let (output, proof) = execute_and_prove(
             vec![
-                input_of(&funder_account, true, funder_id, simple_transfer_id),
-                input_of(
-                    &Account::default(),
+                Input::at(
+                    SlotRef::new(funder_id, simple_transfer_id),
+                    true,
+                    &funder_account,
+                ),
+                Input::at(
+                    SlotRef::new(alice_pda_1_id, simple_transfer_id),
                     false,
-                    alice_pda_1_id,
-                    simple_transfer_id,
+                    &Account::default(),
                 ),
             ],
             Program::serialize_instruction(amount).unwrap(),
@@ -1235,13 +1282,16 @@ fn two_private_pda_family_members_receive_and_spend() {
         let recipient_account = state.get_account_by_id(recipient_id);
         let (output, proof) = execute_and_prove(
             vec![
-                input_of(
-                    &alice_pda_0_account,
+                Input::at(
+                    SlotRef::new(alice_pda_0_id, simple_transfer_id),
                     false,
-                    alice_pda_0_id,
-                    simple_transfer_id,
+                    &alice_pda_0_account,
                 ),
-                input_of(&recipient_account, true, recipient_id, simple_transfer_id),
+                Input::at(
+                    SlotRef::new(recipient_id, simple_transfer_id),
+                    true,
+                    &recipient_account,
+                ),
             ],
             Program::serialize_instruction(amount).unwrap(),
             vec![
@@ -1282,13 +1332,16 @@ fn two_private_pda_family_members_receive_and_spend() {
         let recipient_account = state.get_account_by_id(recipient_id);
         let (output, proof) = execute_and_prove(
             vec![
-                input_of(
-                    &alice_pda_1_account,
+                Input::at(
+                    SlotRef::new(alice_pda_1_id, simple_transfer_id),
                     false,
-                    alice_pda_1_id,
-                    simple_transfer_id,
+                    &alice_pda_1_account,
                 ),
-                input_of(&recipient_account, false, recipient_id, simple_transfer_id),
+                Input::at(
+                    SlotRef::new(recipient_id, simple_transfer_id),
+                    false,
+                    &recipient_account,
+                ),
             ],
             Program::serialize_instruction(amount).unwrap(),
             vec![
@@ -1347,12 +1400,15 @@ fn two_private_pda_family_members_receive_and_spend() {
         let recipient_nonce = recipient_account.nonce;
         let (output, proof) = execute_and_prove(
             vec![
-                input_of(&recipient_account, true, recipient_id, simple_transfer_id),
-                input_of(
-                    &alice_pda_1_account_after_spend,
+                Input::at(
+                    SlotRef::new(recipient_id, simple_transfer_id),
+                    true,
+                    &recipient_account,
+                ),
+                Input::at(
+                    SlotRef::new(alice_pda_1_id, simple_transfer_id),
                     false,
-                    alice_pda_1_id,
-                    simple_transfer_id,
+                    &alice_pda_1_account_after_spend,
                 ),
             ],
             Program::serialize_instruction(amount).unwrap(),

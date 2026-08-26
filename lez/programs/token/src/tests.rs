@@ -35,71 +35,77 @@ struct AccountForTests;
 
 impl AccountForTests {
     fn definition_account_auth() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenDefinition::Fungible {
+        Input::named(
+            IdForTests::pool_definition_id(),
+            true,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
                 total_supply: BalanceForTests::init_supply(),
                 metadata_id: None,
-            }))),
-            is_authorized: true,
-            account_id: IdForTests::pool_definition_id(),
-        }
+            })),
+        )
     }
 
     fn definition_account_without_auth() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenDefinition::Fungible {
+        Input::named(
+            IdForTests::pool_definition_id(),
+            false,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
                 total_supply: BalanceForTests::init_supply(),
                 metadata_id: None,
-            }))),
-            is_authorized: false,
-            account_id: IdForTests::pool_definition_id(),
-        }
+            })),
+        )
     }
 
     fn holding_different_definition() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenHolding::Fungible {
+        Input::named(
+            IdForTests::holding_id_2(),
+            true,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id_diff(),
                 balance: BalanceForTests::holding_balance(),
-            }))),
-            is_authorized: true,
-            account_id: IdForTests::holding_id_2(),
-        }
+            })),
+        )
     }
 
     fn holding_same_definition_with_authorization() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenHolding::Fungible {
+        Input::named(
+            IdForTests::holding_id(),
+            true,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::holding_balance(),
-            }))),
-            is_authorized: true,
-            account_id: IdForTests::holding_id(),
-        }
+            })),
+        )
     }
 
     fn holding_same_definition_without_authorization() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenHolding::Fungible {
+        Input::named(
+            IdForTests::holding_id(),
+            false,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::holding_balance(),
-            }))),
-            is_authorized: false,
-            account_id: IdForTests::holding_id(),
-        }
+            })),
+        )
     }
 
     fn holding_same_definition_without_authorization_overflow() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenHolding::Fungible {
+        Input::named(
+            IdForTests::holding_id(),
+            false,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::init_supply(),
-            }))),
-            is_authorized: false,
-            account_id: IdForTests::holding_id(),
-        }
+            })),
+        )
     }
 
     fn definition_account_post_burn() -> Slot {
@@ -118,11 +124,12 @@ impl AccountForTests {
     }
 
     fn holding_account_uninit() -> Input {
-        Input {
-            slot: named(Slot::default()),
-            is_authorized: false,
-            account_id: IdForTests::holding_id_2(),
-        }
+        Input::named(
+            IdForTests::holding_id_2(),
+            false,
+            TOKEN_PROGRAM_ID,
+            Slot::default(),
+        )
     }
 
     fn init_mint() -> Slot {
@@ -133,14 +140,15 @@ impl AccountForTests {
     }
 
     fn holding_account_same_definition_mint() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenHolding::Fungible {
+        Input::named(
+            IdForTests::pool_definition_id(),
+            true,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::holding_balance_mint(),
-            }))),
-            is_authorized: true,
-            account_id: IdForTests::pool_definition_id(),
-        }
+            })),
+        )
     }
 
     fn definition_account_mint() -> Slot {
@@ -152,45 +160,49 @@ impl AccountForTests {
     }
 
     fn holding_same_definition_with_authorization_and_large_balance() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenHolding::Fungible {
+        Input::named(
+            IdForTests::pool_definition_id(),
+            true,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::mint_overflow(),
-            }))),
-            is_authorized: true,
-            account_id: IdForTests::pool_definition_id(),
-        }
+            })),
+        )
     }
 
     fn definition_account_with_authorization_nonfungible() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenDefinition::NonFungible {
+        Input::named(
+            IdForTests::pool_definition_id(),
+            true,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenDefinition::NonFungible {
                 name: String::from("test"),
                 printable_supply: BalanceForTests::printable_copies(),
                 metadata_id: AccountId::new([0; 32]),
-            }))),
-            is_authorized: true,
-            account_id: IdForTests::pool_definition_id(),
-        }
+            })),
+        )
     }
 
     fn definition_account_uninit() -> Input {
-        Input {
-            slot: named(Slot::default()),
-            is_authorized: false,
-            account_id: IdForTests::pool_definition_id(),
-        }
+        Input::named(
+            IdForTests::pool_definition_id(),
+            false,
+            TOKEN_PROGRAM_ID,
+            Slot::default(),
+        )
     }
 
     fn holding_account_init() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenHolding::Fungible {
+        Input::named(
+            IdForTests::holding_id(),
+            true,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::init_supply(),
-            }))),
-            is_authorized: true,
-            account_id: IdForTests::holding_id(),
-        }
+            })),
+        )
     }
 
     fn definition_account_new() -> Slot {
@@ -216,14 +228,15 @@ impl AccountForTests {
     }
 
     fn holding_account2_init() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenHolding::Fungible {
+        Input::named(
+            IdForTests::holding_id_2(),
+            true,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::init_supply(),
-            }))),
-            is_authorized: true,
-            account_id: IdForTests::holding_id_2(),
-        }
+            })),
+        )
     }
 
     fn holding_account2_init_post_transfer() -> Slot {
@@ -241,25 +254,27 @@ impl AccountForTests {
     }
 
     fn holding_account_master_nft() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenHolding::NftMaster {
+        Input::named(
+            IdForTests::holding_id(),
+            true,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenHolding::NftMaster {
                 definition_id: IdForTests::pool_definition_id(),
                 print_balance: BalanceForTests::printable_copies(),
-            }))),
-            is_authorized: true,
-            account_id: IdForTests::holding_id(),
-        }
+            })),
+        )
     }
 
     fn holding_account_master_nft_insufficient_balance() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenHolding::NftMaster {
+        Input::named(
+            IdForTests::holding_id(),
+            true,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenHolding::NftMaster {
                 definition_id: IdForTests::pool_definition_id(),
                 print_balance: 1,
-            }))),
-            is_authorized: true,
-            account_id: IdForTests::holding_id(),
-        }
+            })),
+        )
     }
 
     fn holding_account_master_nft_after_print() -> Slot {
@@ -277,14 +292,15 @@ impl AccountForTests {
     }
 
     fn holding_account_with_master_nft_transferred_to() -> Input {
-        Input {
-            slot: named(token_account(Data::from(&TokenHolding::NftMaster {
+        Input::named(
+            IdForTests::holding_id_2(),
+            true,
+            TOKEN_PROGRAM_ID,
+            token_account(Data::from(&TokenHolding::NftMaster {
                 definition_id: IdForTests::pool_definition_id(),
                 print_balance: BalanceForTests::printable_copies(),
-            }))),
-            is_authorized: true,
-            account_id: IdForTests::holding_id_2(),
-        }
+            })),
+        )
     }
 
     fn holding_account_master_nft_post_transfer() -> Slot {
@@ -376,23 +392,16 @@ fn token_account(data: Data) -> Slot {
 }
 
 /// The slot fixture, named as this program's namespace, for an `Input` position.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the wrap is the point: this fills `Input::slot`"
-)]
-fn named(slot: Slot) -> Option<(AccountId, Slot)> {
-    Some((TOKEN_PROGRAM_ID.into(), slot))
-}
-
 #[should_panic(expected = "Definition target account must be uninitialized")]
 #[test]
 fn new_definition_initialized_first_account_should_fail() {
     let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = Input {
-        slot: named(Slot::default()),
-        is_authorized: true,
-        account_id: AccountId::new([2; 32]),
-    };
+    let holding_account = Input::named(
+        AccountId::new([2; 32]),
+        true,
+        TOKEN_PROGRAM_ID,
+        Slot::default(),
+    );
     let _post_states = new_fungible_definition(
         definition_account,
         holding_account,
@@ -405,11 +414,12 @@ fn new_definition_initialized_first_account_should_fail() {
 #[should_panic(expected = "Holding target account must be uninitialized")]
 #[test]
 fn new_definition_initialized_second_account_should_fail() {
-    let definition_account = Input {
-        slot: named(Slot::default()),
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
-    };
+    let definition_account = Input::named(
+        AccountId::new([1; 32]),
+        true,
+        TOKEN_PROGRAM_ID,
+        Slot::default(),
+    );
     let holding_account = AccountForTests::holding_account_init();
     let _post_states = new_fungible_definition(
         definition_account,
@@ -539,14 +549,15 @@ fn transfer_with_master_nft_invalid_recipient_balance() {
 #[test]
 fn transfer_between_mismatched_holding_types_should_fail() {
     let sender = AccountForTests::holding_account_master_nft();
-    let recipient = Input {
-        slot: named(token_account(Data::from(&TokenHolding::NftPrintedCopy {
+    let recipient = Input::named(
+        IdForTests::holding_id_2(),
+        true,
+        TOKEN_PROGRAM_ID,
+        token_account(Data::from(&TokenHolding::NftPrintedCopy {
             definition_id: IdForTests::pool_definition_id(),
             owned: false,
-        }))),
-        is_authorized: true,
-        account_id: IdForTests::holding_id_2(),
-    };
+        })),
+    );
     let _post_states = transfer(
         sender,
         recipient,
@@ -812,16 +823,18 @@ fn mint_cannot_mint_unmintable_tokens() {
 #[test]
 fn call_new_definition_metadata_with_init_definition() {
     let definition_account = AccountForTests::definition_account_auth();
-    let metadata_account = Input {
-        slot: named(Slot::default()),
-        is_authorized: true,
-        account_id: AccountId::new([2; 32]),
-    };
-    let holding_account = Input {
-        slot: named(Slot::default()),
-        is_authorized: true,
-        account_id: AccountId::new([3; 32]),
-    };
+    let metadata_account = Input::named(
+        AccountId::new([2; 32]),
+        true,
+        TOKEN_PROGRAM_ID,
+        Slot::default(),
+    );
+    let holding_account = Input::named(
+        AccountId::new([3; 32]),
+        true,
+        TOKEN_PROGRAM_ID,
+        Slot::default(),
+    );
     let new_definition = NewTokenDefinition::Fungible {
         name: String::from("test"),
         total_supply: 15_u128,
@@ -844,16 +857,18 @@ fn call_new_definition_metadata_with_init_definition() {
 #[should_panic(expected = "Metadata target account must be uninitialized")]
 #[test]
 fn call_new_definition_metadata_with_init_metadata() {
-    let definition_account = Input {
-        slot: named(Slot::default()),
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
-    };
-    let holding_account = Input {
-        slot: named(Slot::default()),
-        is_authorized: true,
-        account_id: AccountId::new([3; 32]),
-    };
+    let definition_account = Input::named(
+        AccountId::new([1; 32]),
+        true,
+        TOKEN_PROGRAM_ID,
+        Slot::default(),
+    );
+    let holding_account = Input::named(
+        AccountId::new([3; 32]),
+        true,
+        TOKEN_PROGRAM_ID,
+        Slot::default(),
+    );
     let metadata_account = AccountForTests::holding_account_same_definition_mint();
     let new_definition = NewTokenDefinition::Fungible {
         name: String::from("test"),
@@ -877,16 +892,18 @@ fn call_new_definition_metadata_with_init_metadata() {
 #[should_panic(expected = "Holding target account must be uninitialized")]
 #[test]
 fn call_new_definition_metadata_with_init_holding() {
-    let definition_account = Input {
-        slot: named(Slot::default()),
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
-    };
-    let metadata_account = Input {
-        slot: named(Slot::default()),
-        is_authorized: true,
-        account_id: AccountId::new([2; 32]),
-    };
+    let definition_account = Input::named(
+        AccountId::new([1; 32]),
+        true,
+        TOKEN_PROGRAM_ID,
+        Slot::default(),
+    );
+    let metadata_account = Input::named(
+        AccountId::new([2; 32]),
+        true,
+        TOKEN_PROGRAM_ID,
+        Slot::default(),
+    );
     let holding_account = AccountForTests::holding_account_same_definition_mint();
     let new_definition = NewTokenDefinition::Fungible {
         name: String::from("test"),
@@ -969,14 +986,15 @@ fn print_nft_success() {
 /// address reads as untouched again.
 #[test]
 fn close_holding_success() {
-    let holding = Input {
-        slot: named(token_account(Data::from(&TokenHolding::Fungible {
+    let holding = Input::named(
+        IdForTests::holding_id_2(),
+        true,
+        TOKEN_PROGRAM_ID,
+        token_account(Data::from(&TokenHolding::Fungible {
             definition_id: IdForTests::pool_definition_id(),
             balance: 0,
-        }))),
-        is_authorized: true,
-        account_id: IdForTests::holding_id_2(),
-    };
+        })),
+    );
 
     let [post] = <[_; 1]>::try_from(close_holding(holding, TOKEN_PROGRAM_ID)).unwrap();
 
@@ -987,24 +1005,21 @@ fn close_holding_success() {
 /// cleared, then initializes against the definition its holder wanted.
 #[test]
 fn a_holding_pinned_to_a_foreign_definition_can_be_cleared_and_reused() {
-    let squatted = Input {
-        slot: named(token_account(Data::from(&TokenHolding::Fungible {
+    let squatted = Input::named(
+        IdForTests::holding_id_2(),
+        true,
+        TOKEN_PROGRAM_ID,
+        token_account(Data::from(&TokenHolding::Fungible {
             definition_id: AccountId::new([99; 32]),
             balance: 0,
-        }))),
-        is_authorized: true,
-        account_id: IdForTests::holding_id_2(),
-    };
+        })),
+    );
 
     let [cleared] = <[_; 1]>::try_from(close_holding(squatted, TOKEN_PROGRAM_ID)).unwrap();
     let cleared = cleared.expect("close writes the slot back");
     assert!(cleared.data.is_empty(), "closing clears the holding");
 
-    let reused = Input {
-        slot: named(cleared),
-        is_authorized: false,
-        account_id: IdForTests::holding_id_2(),
-    };
+    let reused = Input::named(IdForTests::holding_id_2(), false, TOKEN_PROGRAM_ID, cleared);
     let post_states = initialize_account(
         &AccountForTests::definition_account_auth(),
         reused,
@@ -1023,14 +1038,15 @@ fn a_holding_pinned_to_a_foreign_definition_can_be_cleared_and_reused() {
 #[should_panic(expected = "Holding authorization is missing")]
 #[test]
 fn close_holding_without_authorization_should_fail() {
-    let holding = Input {
-        slot: named(token_account(Data::from(&TokenHolding::Fungible {
+    let holding = Input::named(
+        IdForTests::holding_id_2(),
+        false,
+        TOKEN_PROGRAM_ID,
+        token_account(Data::from(&TokenHolding::Fungible {
             definition_id: IdForTests::pool_definition_id(),
             balance: 0,
-        }))),
-        is_authorized: false,
-        account_id: IdForTests::holding_id_2(),
-    };
+        })),
+    );
 
     let _post_states = close_holding(holding, TOKEN_PROGRAM_ID);
 }
@@ -1038,14 +1054,15 @@ fn close_holding_without_authorization_should_fail() {
 #[should_panic(expected = "Only an empty holding can be closed")]
 #[test]
 fn close_holding_holding_value_should_fail() {
-    let holding = Input {
-        slot: named(token_account(Data::from(&TokenHolding::Fungible {
+    let holding = Input::named(
+        IdForTests::holding_id_2(),
+        true,
+        TOKEN_PROGRAM_ID,
+        token_account(Data::from(&TokenHolding::Fungible {
             definition_id: IdForTests::pool_definition_id(),
             balance: 1,
-        }))),
-        is_authorized: true,
-        account_id: IdForTests::holding_id_2(),
-    };
+        })),
+    );
 
     let _post_states = close_holding(holding, TOKEN_PROGRAM_ID);
 }
@@ -1059,11 +1076,12 @@ fn a_bare_credit_does_not_look_like_a_holding() {
         data: Data::empty(),
     };
 
-    let recipient = Input {
-        slot: named(squatted.clone()),
-        is_authorized: false,
-        account_id: IdForTests::holding_id_2(),
-    };
+    let recipient = Input::named(
+        IdForTests::holding_id_2(),
+        false,
+        TOKEN_PROGRAM_ID,
+        squatted.clone(),
+    );
     let post_states = transfer(
         AccountForTests::holding_account_init(),
         recipient,
@@ -1083,11 +1101,12 @@ fn a_bare_credit_does_not_look_like_a_holding() {
     assert_eq!(post_recipient.as_ref().unwrap().balance, 1);
 
     // And initializing over it still works.
-    let fresh = Input {
-        slot: named(squatted),
-        is_authorized: false,
-        account_id: IdForTests::holding_id_2(),
-    };
+    let fresh = Input::named(
+        IdForTests::holding_id_2(),
+        false,
+        TOKEN_PROGRAM_ID,
+        squatted,
+    );
     let post_states = initialize_account(
         &AccountForTests::definition_account_auth(),
         fresh,

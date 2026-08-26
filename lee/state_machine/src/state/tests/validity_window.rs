@@ -20,11 +20,10 @@ fn validity_window_works_in_public_transactions(
     let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_public_account_keys_1();
-    let pre = input_of(
-        &Account::default(),
+    let pre = Input::at(
+        SlotRef::new(account_keys.account_id(), validity_window_program.id()),
         false,
-        account_keys.account_id(),
-        validity_window_program.id(),
+        &Account::default(),
     );
     let mut state = V03State::new().with_test_programs();
     let tx = {
@@ -80,11 +79,10 @@ fn timestamp_validity_window_works_in_public_transactions(
     let timestamp_validity_window: TimestampValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_public_account_keys_1();
-    let pre = input_of(
-        &Account::default(),
+    let pre = Input::at(
+        SlotRef::new(account_keys.account_id(), validity_window_program.id()),
         false,
-        account_keys.account_id(),
-        validity_window_program.id(),
+        &Account::default(),
     );
     let mut state = V03State::new().with_test_programs();
     let tx = {
@@ -142,11 +140,13 @@ fn validity_window_works_in_privacy_preserving_transactions(
     let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_private_account_keys_1();
-    let pre = input_of(
-        &Account::default(),
+    let pre = Input::at(
+        SlotRef::new(
+            (&account_keys.npk(), &account_keys.vpk(), 0).into(),
+            validity_window_program.id(),
+        ),
         true,
-        (&account_keys.npk(), &account_keys.vpk(), 0).into(),
-        validity_window_program.id(),
+        &Account::default(),
     );
     let mut state = V03State::new().with_test_programs();
     let tx = {
@@ -214,11 +214,13 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
     let timestamp_validity_window: TimestampValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_private_account_keys_1();
-    let pre = input_of(
-        &Account::default(),
+    let pre = Input::at(
+        SlotRef::new(
+            (&account_keys.npk(), &account_keys.vpk(), 0).into(),
+            validity_window_program.id(),
+        ),
         true,
-        (&account_keys.npk(), &account_keys.vpk(), 0).into(),
-        validity_window_program.id(),
+        &Account::default(),
     );
     let mut state = V03State::new().with_test_programs();
     let tx = {

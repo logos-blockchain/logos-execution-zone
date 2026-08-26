@@ -254,11 +254,10 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
 fn burner_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::burner();
     let public_account_acc = Account::single(program.id(), 100, Data::default(), Nonce::default());
-    let public_account = input_of(
-        &public_account_acc,
+    let public_account = Input::at(
+        SlotRef::new(AccountId::new([0; 32]), program.id()),
         true,
-        AccountId::new([0; 32]),
-        program.id(),
+        &public_account_acc,
     );
 
     let result = execute_and_prove(
@@ -274,11 +273,10 @@ fn burner_program_should_fail_in_privacy_preserving_circuit() {
 #[test]
 fn minter_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::minter();
-    let public_account = input_of(
-        &Account::default(),
+    let public_account = Input::at(
+        SlotRef::new(AccountId::new([0; 32]), program.id()),
         true,
-        AccountId::new([0; 32]),
-        program.id(),
+        &Account::default(),
     );
 
     let result = execute_and_prove(
@@ -294,11 +292,10 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
 #[test]
 fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_circuit() {
     let program = crate::test_methods::data_changer();
-    let public_account = input_of(
-        &Account::default(),
+    let public_account = Input::at(
+        SlotRef::new(AccountId::new([0; 32]), program.id()),
         true,
-        AccountId::new([0; 32]),
-        program.id(),
+        &Account::default(),
     );
 
     let large_data: Vec<u8> =
@@ -322,11 +319,10 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
 #[test]
 fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::extra_output();
-    let public_account = input_of(
-        &Account::default(),
+    let public_account = Input::at(
+        SlotRef::new(AccountId::new([0; 32]), program.id()),
         true,
-        AccountId::new([0; 32]),
-        program.id(),
+        &Account::default(),
     );
 
     let result = execute_and_prove(
@@ -345,17 +341,15 @@ fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
 #[test]
 fn missing_output_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::missing_output();
-    let public_account_1 = input_of(
-        &Account::default(),
+    let public_account_1 = Input::at(
+        SlotRef::new(AccountId::new([0; 32]), program.id()),
         true,
-        AccountId::new([0; 32]),
-        program.id(),
+        &Account::default(),
     );
-    let public_account_2 = input_of(
-        &Account::default(),
+    let public_account_2 = Input::at(
+        SlotRef::new(AccountId::new([1; 32]), program.id()),
         true,
-        AccountId::new([1; 32]),
-        program.id(),
+        &Account::default(),
     );
 
     let result = execute_and_prove(
@@ -382,17 +376,15 @@ fn transfer_from_a_foreign_slot_should_fail_in_privacy_preserving_circuit() {
         Data::default(),
         Nonce::default(),
     );
-    let public_account_1 = input_of(
+    let public_account_1 = Input::at(
+        SlotRef::new(AccountId::new([0; 32]), program.id()),
+        true,
         &public_account_1_acc,
-        true,
-        AccountId::new([0; 32]),
-        program.id(),
     );
-    let public_account_2 = input_of(
-        &Account::default(),
+    let public_account_2 = Input::at(
+        SlotRef::new(AccountId::new([1; 32]), program.id()),
         true,
-        AccountId::new([1; 32]),
-        program.id(),
+        &Account::default(),
     );
 
     let result = execute_and_prove(
@@ -421,18 +413,19 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
     );
     // The balance lives in the transfer program's namespace, and that is the program the
     // chained call hands these positions to — the changer only orchestrates.
-    let sender_account = input_of(
-        &sender_account_acc,
+    let sender_account = Input::at(
+        SlotRef::new(sender_keys.account_id(), simple_transfers.id()),
         false,
-        sender_keys.account_id(),
-        simple_transfers.id(),
+        &sender_account_acc,
     );
     let recipient_account_acc = Account::default();
-    let recipient_account = input_of(
-        &recipient_account_acc,
+    let recipient_account = Input::at(
+        SlotRef::new(
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+            simple_transfers.id(),
+        ),
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
-        simple_transfers.id(),
+        &recipient_account_acc,
     );
 
     let recipient_account_id =
@@ -492,11 +485,10 @@ fn writing_a_foreign_slot_should_fail_in_privacy_preserving_circuit() {
     let foreign_program_id: lee_core::program::ProgramId = [0, 1, 2, 3, 4, 5, 6, 7];
     let account_acc = Account::single(foreign_program_id, 100, Data::default(), Nonce::default());
     // The position names the foreign namespace, which is the slot the writer then reaches for.
-    let account = input_of(
-        &account_acc,
+    let account = Input::at(
+        SlotRef::new(AccountId::new([0; 32]), foreign_program_id),
         true,
-        AccountId::new([0; 32]),
-        foreign_program_id,
+        &account_acc,
     );
 
     let result = execute_and_prove(
@@ -519,8 +511,12 @@ fn draining_a_foreign_slot_should_fail_in_privacy_preserving_circuit() {
     let account_id = AccountId::new([0; 32]);
     let account_acc = Account::single(foreign_program_id, 100, Data::default(), Nonce::default());
     // `[the foreign slot it drains, its own slot it drains into]`, both at one account.
-    let foreign = input_of(&account_acc, true, account_id, foreign_program_id);
-    let own = input_of(&account_acc, true, account_id, program.id());
+    let foreign = Input::at(
+        SlotRef::new(account_id, foreign_program_id),
+        true,
+        &account_acc,
+    );
+    let own = Input::at(SlotRef::new(account_id, program.id()), true, &account_acc);
 
     let result = execute_and_prove(
         vec![foreign, own],

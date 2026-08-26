@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    account::{Account, AccountId, Nonce, SlotRef, data::Data},
+    account::{Account, AccountId, Input, Nonce, SlotRef, data::Data},
     program::ProgramId,
 };
 
@@ -10,7 +10,7 @@ use crate::{
     error::{InvalidProgramBehaviorError, LeeError},
     program::Program,
     public_transaction::{Message, WitnessSet},
-    state::tests::{input_of, slots_of},
+    state::tests::slots_of,
     validated_state_diff::ValidatedStateDiff,
 };
 
@@ -144,11 +144,10 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         .expect("attacker commitment must be in the set");
 
     let attacker_pre_acc = attacker_account;
-    let attacker_pre = input_of(
-        &attacker_pre_acc,
+    let attacker_pre = Input::at(
+        SlotRef::new(attacker_id, crate::test_methods::malicious_injector().id()),
         true,
-        attacker_id,
-        crate::test_methods::malicious_injector().id(),
+        &attacker_pre_acc,
     );
 
     let victim_account = state.get_account_by_id(victim_id);
@@ -308,11 +307,10 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
         .expect("attacker commitment must be in the set");
 
     let attacker_pre_acc = attacker_account;
-    let attacker_pre = input_of(
-        &attacker_pre_acc,
+    let attacker_pre = Input::at(
+        SlotRef::new(attacker_id, crate::test_methods::malicious_injector().id()),
         true,
-        attacker_id,
-        crate::test_methods::malicious_injector().id(),
+        &attacker_pre_acc,
     );
 
     // The attacker supplies the victim's account data directly — it cannot be read from

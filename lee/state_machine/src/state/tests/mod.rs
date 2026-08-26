@@ -6,7 +6,7 @@ use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
     InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
     PrivateWitness, Timestamp, WitnessKind,
-    account::{Account, AccountId, Nonce, SlotRef, data::Data},
+    account::{Account, AccountId, Input, Nonce, SlotRef, data::Data},
     encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, ExecutionValidationError, PdaSeed, ProgramId, TimestampValidityWindow,
@@ -246,20 +246,6 @@ pub fn slots_of(program: ProgramId, ids: &[AccountId]) -> Vec<SlotRef> {
     ids.iter().map(|id| SlotRef::new(*id, program)).collect()
 }
 
-/// Narrows an account to the one namespace a test position names.
-pub fn input_of(
-    account: &Account,
-    is_authorized: bool,
-    account_id: AccountId,
-    program: ProgramId,
-) -> lee_core::account::Input {
-    lee_core::account::Input {
-        account_id,
-        is_authorized,
-        slot: Some((program.into(), account.slot_or_empty(program))),
-    }
-}
-
 fn test_public_account_keys_1() -> TestPublicKeys {
     TestPublicKeys {
         signing_key: PrivateKey::try_new([37; 32]).unwrap(),
@@ -316,13 +302,19 @@ fn shielded_balance_transfer_for_tests(
     let program_id = crate::test_methods::simple_balance_transfer().id();
     let sender_account = state.get_account_by_id(sender_keys.account_id());
     let sender_nonce = sender_account.nonce;
-    let sender = input_of(&sender_account, true, sender_keys.account_id(), program_id);
-
-    let recipient = input_of(
-        &Account::default(),
+    let sender = Input::at(
+        SlotRef::new(sender_keys.account_id(), program_id),
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
-        program_id,
+        &sender_account,
+    );
+
+    let recipient = Input::at(
+        SlotRef::new(
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+            program_id,
+        ),
+        true,
+        &Account::default(),
     );
 
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
@@ -366,18 +358,22 @@ fn private_balance_transfer_for_tests(
         AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
     let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
     let sender_pre_acc = sender_private_account.clone();
-    let sender_pre = input_of(
-        &sender_pre_acc,
+    let sender_pre = Input::at(
+        SlotRef::new(
+            (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
-        program.id(),
+        &sender_pre_acc,
     );
     let recipient_pre_acc = Account::default();
-    let recipient_pre = input_of(
-        &recipient_pre_acc,
+    let recipient_pre = Input::at(
+        SlotRef::new(
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0).into(),
-        program.id(),
+        &recipient_pre_acc,
     );
 
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
@@ -437,18 +433,19 @@ fn deshielded_balance_transfer_for_tests(
         AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
     let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
     let sender_pre_acc = sender_private_account.clone();
-    let sender_pre = input_of(
-        &sender_pre_acc,
+    let sender_pre = Input::at(
+        SlotRef::new(
+            (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
+            program.id(),
+        ),
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0).into(),
-        program.id(),
+        &sender_pre_acc,
     );
     let recipient_pre_acc = state.get_account_by_id(*recipient_account_id);
-    let recipient_pre = input_of(
-        &recipient_pre_acc,
+    let recipient_pre = Input::at(
+        SlotRef::new(*recipient_account_id, program.id()),
         false,
-        *recipient_account_id,
-        program.id(),
+        &recipient_pre_acc,
     );
 
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(

@@ -262,7 +262,14 @@ impl AccountManager {
                         .map_err(ExecutionFailureKind::SequencerError)?;
 
                     let sk = wallet.get_account_public_signing_key(account_id).cloned();
-                    let account = public_input(&acc, sk.is_some(), account_id, program);
+                    let account = Input::at(
+                        lee::SlotRef {
+                            account_id,
+                            program,
+                        },
+                        sk.is_some(),
+                        &acc,
+                    );
 
                     State::Public {
                         account,
@@ -277,7 +284,14 @@ impl AccountManager {
                         .map_err(ExecutionFailureKind::SequencerError)?;
 
                     let sk = None;
-                    let account = public_input(&acc, sk.is_some(), account_id, program);
+                    let account = Input::at(
+                        lee::SlotRef {
+                            account_id,
+                            program,
+                        },
+                        sk.is_some(),
+                        &acc,
+                    );
 
                     State::Public {
                         account,
@@ -294,7 +308,14 @@ impl AccountManager {
                         .await
                         .map_err(ExecutionFailureKind::SequencerError)?;
 
-                    let account = public_input(&acc, true, account_id, program);
+                    let account = Input::at(
+                        lee::SlotRef {
+                            account_id,
+                            program,
+                        },
+                        true,
+                        &acc,
+                    );
 
                     if pin.is_none() {
                         pin = Some(
@@ -651,7 +672,14 @@ fn private_key_tree_acc_preparation(
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
     let account = from_acc.account.clone();
-    let sender_pre = public_input(&account, ask.is_some(), account_id, program);
+    let sender_pre = Input::at(
+        lee::SlotRef {
+            account_id,
+            program,
+        },
+        ask.is_some(),
+        &account,
+    );
 
     let random_seed = random_bytes();
 
@@ -689,7 +717,14 @@ fn private_foreign_acc_preparation(
         npk,
         identifier,
         vpk,
-        pre_state: public_input(&Account::default(), false, account_id, program),
+        pre_state: Input::at(
+            lee::SlotRef {
+                account_id,
+                program,
+            },
+            false,
+            &Account::default(),
+        ),
         proof: None,
         random_seed: random_bytes(),
         view_tag: random_view_tag(),
@@ -715,7 +750,14 @@ fn private_shared_acc_preparation(
         .map(|e| e.account.clone())
         .unwrap_or_default();
 
-    let pre_state = public_input(&acc, ask.is_some(), account_id, program);
+    let pre_state = Input::at(
+        lee::SlotRef {
+            account_id,
+            program,
+        },
+        ask.is_some(),
+        &acc,
+    );
 
     let random_seed = random_bytes();
 
@@ -849,20 +891,6 @@ fn random_dummy_note() -> EncryptedAccountData {
     }
 }
 
-/// Narrows a fetched account to the one namespace this position names.
-fn public_input(
-    account: &Account,
-    is_authorized: bool,
-    account_id: AccountId,
-    program: Option<AccountId>,
-) -> Input {
-    Input {
-        account_id,
-        is_authorized,
-        slot: program.map(|program| (program, account.slot_or_empty(program))),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -882,11 +910,13 @@ mod tests {
     fn private_position(tag: u8, program: lee::AccountId, seed: [u8; 32]) -> State {
         let npk = NullifierPublicKey([tag; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let pre_state = public_input(
-            &Account::default(),
+        let pre_state = Input::at(
+            lee::SlotRef {
+                account_id: (&npk, &vpk, 0).into(),
+                program: Some(program),
+            },
             false,
-            (&npk, &vpk, 0).into(),
-            Some(program),
+            &Account::default(),
         );
         State::Private(Box::new(AccountPreparedData {
             ask: None,
@@ -931,13 +961,15 @@ mod tests {
     fn public_state() -> State {
         let npk = NullifierPublicKey([0; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let account = public_input(
-            &Account::default(),
+        let account = Input::at(
+            lee::SlotRef {
+                account_id: (&npk, &vpk, 0).into(),
+                program: Some(lee::AccountId::from(
+                    programs::authenticated_transfer().id(),
+                )),
+            },
             false,
-            (&npk, &vpk, 0).into(),
-            Some(lee::AccountId::from(
-                programs::authenticated_transfer().id(),
-            )),
+            &Account::default(),
         );
         State::Public {
             account,

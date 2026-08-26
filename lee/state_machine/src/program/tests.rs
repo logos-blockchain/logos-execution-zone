@@ -1,24 +1,7 @@
-use lee_core::{
-    account::{Account, AccountId, Input, Nonce, Slot, data::Data},
-    program::ProgramId,
-};
+use lee_core::account::{Account, AccountId, Input, Nonce, Slot, SlotRef, data::Data};
 use risc0_zkvm::{ExecutorEnv, default_executor};
 
 use crate::program::Program;
-
-/// Narrows an account to the one namespace a position names.
-fn input_of(
-    account: &Account,
-    is_authorized: bool,
-    account_id: AccountId,
-    program: ProgramId,
-) -> Input {
-    Input {
-        account_id,
-        is_authorized,
-        slot: Some((program.into(), account.slot_or_empty(program))),
-    }
-}
 
 #[test]
 fn program_execution() {
@@ -26,17 +9,15 @@ fn program_execution() {
     let balance_to_move: u128 = 11_223_344_556_677;
     let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
     let slot = program.id();
-    let sender = input_of(
-        &Account::single(slot, 77_665_544_332_211, Data::default(), Nonce::default()),
+    let sender = Input::at(
+        SlotRef::new(AccountId::new([0; 32]), program.id()),
         true,
-        AccountId::new([0; 32]),
-        program.id(),
+        &Account::single(slot, 77_665_544_332_211, Data::default(), Nonce::default()),
     );
-    let recipient = input_of(
-        &Account::default(),
+    let recipient = Input::at(
+        SlotRef::new(AccountId::new([1; 32]), program.id()),
         false,
-        AccountId::new([1; 32]),
-        program.id(),
+        &Account::default(),
     );
 
     let expected_sender_post = Some(Slot {
@@ -62,17 +43,15 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
     let program = crate::test_methods::simple_balance_transfer();
     let instruction_data = Program::serialize_instruction(7_u128).unwrap();
     let pre_states = [
-        input_of(
-            &Account::single(program.id(), 10, Data::default(), Nonce::default()),
+        Input::at(
+            SlotRef::new(AccountId::new([0; 32]), program.id()),
             true,
-            AccountId::new([0; 32]),
-            program.id(),
+            &Account::single(program.id(), 10, Data::default(), Nonce::default()),
         ),
-        input_of(
-            &Account::default(),
+        Input::at(
+            SlotRef::new(AccountId::new([1; 32]), program.id()),
             false,
-            AccountId::new([1; 32]),
-            program.id(),
+            &Account::default(),
         ),
     ];
 

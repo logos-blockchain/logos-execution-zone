@@ -4,7 +4,7 @@ use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
     Nullifier, NullifierPublicKey, NullifierWitness, PrivacyPreservingCircuitOutput,
     PrivateWitness, SharedSecretKey, WitnessKind,
-    account::{Account, AccountId, Input, Nonce, Slot, data::Data},
+    account::{Account, AccountId, Input, Nonce, Slot, SlotRef, data::Data},
     program::{PdaSeed, PrivateAccountKind, ProgramId},
 };
 
@@ -18,20 +18,6 @@ use crate::{
         tests::{init_pda_witness, test_private_account_keys_1, test_private_account_keys_2},
     },
 };
-
-/// Narrows an account to the one namespace a test position names.
-fn input_of(
-    account: &Account,
-    is_authorized: bool,
-    account_id: AccountId,
-    program: ProgramId,
-) -> Input {
-    Input {
-        account_id,
-        is_authorized,
-        slot: Some((program.into(), account.slot_or_empty(program))),
-    }
-}
 
 fn decrypt_kind(
     output: &PrivacyPreservingCircuitOutput,
@@ -63,12 +49,20 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     let recipient_keys = test_private_account_keys_1();
     let program = crate::test_methods::simple_balance_transfer();
     let sender_acc = Account::single(program.id(), 100, Data::default(), Nonce::default());
-    let sender = input_of(&sender_acc, true, AccountId::new([0; 32]), program.id());
+    let sender = Input::at(
+        SlotRef::new(AccountId::new([0; 32]), program.id()),
+        true,
+        &sender_acc,
+    );
 
     let recipient_account_id =
         AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
     let recipient_acc = Account::default();
-    let recipient = input_of(&recipient_acc, true, recipient_account_id, program.id());
+    let recipient = Input::at(
+        SlotRef::new(recipient_account_id, program.id()),
+        true,
+        &recipient_acc,
+    );
 
     let balance_to_move: u128 = 37;
 
@@ -138,11 +132,13 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
 
     let sender_nonce = Nonce(0xdead_beef);
     let sender_pre_acc = Account::single(program.id(), 100, Data::default(), sender_nonce);
-    let sender_pre = input_of(
-        &sender_pre_acc,
+    let sender_pre = Input::at(
+        SlotRef::new(
+            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0),
+            program.id(),
+        ),
         true,
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0),
-        program.id(),
+        &sender_pre_acc,
     );
     let sender_account_id =
         AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
@@ -151,7 +147,11 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     let recipient_account_id =
         AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
     let recipient_acc = Account::default();
-    let recipient = input_of(&recipient_acc, true, recipient_account_id, program.id());
+    let recipient = Input::at(
+        SlotRef::new(recipient_account_id, program.id()),
+        true,
+        &recipient_acc,
+    );
     let balance_to_move: u128 = 37;
 
     let mut commitment_set = CommitmentSet::with_capacity(2);
@@ -289,7 +289,7 @@ fn init_note_view_tag_is_derived_from_account_keys() {
     let identifier: u128 = 0;
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let account_acc = Account::default();
-    let account = input_of(&account_acc, true, account_id, program.id());
+    let account = Input::at(SlotRef::new(account_id, program.id()), true, &account_acc);
 
     let (output, proof) = execute_and_prove(
         vec![account],
@@ -330,7 +330,7 @@ fn update_note_view_tag_is_the_supplied_value() {
     let mut commitment_set = CommitmentSet::with_capacity(1);
     commitment_set.extend(std::slice::from_ref(&commitment));
     let sender_acc = account;
-    let sender = input_of(&sender_acc, true, account_id, program.id());
+    let sender = Input::at(SlotRef::new(account_id, program.id()), true, &sender_acc);
 
     // A tag deliberately different from the address-derived one, so a passthrough is
     // distinguishable from re-derivation.
@@ -372,11 +372,13 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     let validity_window = crate::test_methods::validity_window();
 
     let pre_acc = Account::default();
-    let pre = input_of(
-        &pre_acc,
+    let pre = Input::at(
+        SlotRef::new(
+            AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0),
+            validity_window_chain_caller.id(),
+        ),
         true,
-        AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0),
-        validity_window_chain_caller.id(),
+        &pre_acc,
     );
 
     let instruction = Program::serialize_instruction((
@@ -430,7 +432,11 @@ fn private_pda_init_with_custom_identifier_encrypts_correct_kind() {
     let shared_secret = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
 
     let pre_state_acc = Account::default();
-    let pre_state = input_of(&pre_state_acc, false, account_id, program.id());
+    let pre_state = Input::at(
+        SlotRef::new(account_id, program.id()),
+        false,
+        &pre_state_acc,
+    );
 
     let (output, _proof) = execute_and_prove(
         vec![pre_state],
@@ -465,12 +471,16 @@ fn shared_account_receives_via_simple_transfer() {
     // Sender: public account with balance in the transfer program's slot
     let sender_id = AccountId::new([99; 32]);
     let sender_acc = Account::single(program.id(), 1000, Data::default(), Nonce::default());
-    let sender = input_of(&sender_acc, true, sender_id, program.id());
+    let sender = Input::at(SlotRef::new(sender_id, program.id()), true, &sender_acc);
 
     // Recipient: shared private account (new, foreign)
     let shared_account_id = AccountId::from((&shared_npk, &shared_keys.vpk(), shared_identifier));
     let recipient_acc = Account::default();
-    let recipient = input_of(&recipient_acc, true, shared_account_id, program.id());
+    let recipient = Input::at(
+        SlotRef::new(shared_account_id, program.id()),
+        true,
+        &recipient_acc,
+    );
 
     let balance_to_move: u128 = 100;
     let instruction = Program::serialize_instruction(balance_to_move).unwrap();
@@ -518,7 +528,7 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
     );
     let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
     let pre_acc = Account::default();
-    let pre = input_of(&pre_acc, true, account_id, program.id());
+    let pre = Input::at(SlotRef::new(account_id, program.id()), true, &pre_acc);
 
     let (output, _) = execute_and_prove(
         vec![pre],
@@ -562,7 +572,11 @@ fn private_foreign_init_encrypts_regular_kind_with_identifier() {
     );
     let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
     let recipient_acc = Account::default();
-    let recipient = input_of(&recipient_acc, true, recipient_id, program.id());
+    let recipient = Input::at(
+        SlotRef::new(recipient_id, program.id()),
+        true,
+        &recipient_acc,
+    );
 
     let (output, _) = execute_and_prove(
         vec![recipient],
@@ -610,7 +624,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
     commitment_set.extend(std::slice::from_ref(&commitment));
 
     let sender_acc = account;
-    let sender = input_of(&sender_acc, true, account_id, program.id());
+    let sender = Input::at(SlotRef::new(account_id, program.id()), true, &sender_acc);
 
     let (output, _) = execute_and_prove(
         vec![sender],
@@ -652,7 +666,7 @@ fn seeded_regular_account(
     let mut commitment_set = CommitmentSet::with_capacity(1);
     commitment_set.extend(std::slice::from_ref(&commitment));
     let proof = commitment_set.get_proof_for(&commitment).unwrap();
-    let pre = input_of(&account, false, account_id, program.id());
+    let pre = Input::at(SlotRef::new(account_id, program.id()), false, &account);
     (account_id, account, pre, proof)
 }
 
@@ -755,7 +769,7 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
     let foreign = test_private_account_keys_2();
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
     let pre_acc = Account::default();
-    let pre = input_of(&pre_acc, true, account_id, program.id());
+    let pre = Input::at(SlotRef::new(account_id, program.id()), true, &pre_acc);
 
     let result = execute_and_prove(
         vec![pre],
@@ -838,13 +852,16 @@ fn pda_update_attempt(
     commitment_set.extend(std::slice::from_ref(&pda_commitment));
 
     let pda_pre_acc = pda_account;
-    let pda_pre = input_of(&pda_pre_acc, declare_authorized, pda_id, program.id());
+    let pda_pre = Input::at(
+        SlotRef::new(pda_id, program.id()),
+        declare_authorized,
+        &pda_pre_acc,
+    );
     let recipient_pre_acc = Account::default();
-    let recipient_pre = input_of(
-        &recipient_pre_acc,
+    let recipient_pre = Input::at(
+        SlotRef::new(AccountId::new([0; 32]), program.id()),
         true,
-        AccountId::new([0; 32]),
-        program.id(),
+        &recipient_pre_acc,
     );
 
     execute_and_prove(
@@ -914,7 +931,11 @@ fn private_pda_init_identifier_mismatch_fails() {
     let account_id =
         AccountId::for_private_pda(&binding.0, &binding.1, &keys.npk(), &keys.vpk(), 5);
     let pre_state_acc = Account::default();
-    let pre_state = input_of(&pre_state_acc, false, account_id, program.id());
+    let pre_state = Input::at(
+        SlotRef::new(account_id, program.id()),
+        false,
+        &pre_state_acc,
+    );
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -935,7 +956,7 @@ fn private_pda_init_at_root_call_may_not_declare_authorization() {
     let account_id =
         AccountId::for_private_pda(&binding.0, &binding.1, &keys.npk(), &keys.vpk(), identifier);
     let pre_state_acc = Account::default();
-    let pre_state = input_of(&pre_state_acc, true, account_id, program.id());
+    let pre_state = Input::at(SlotRef::new(account_id, program.id()), true, &pre_state_acc);
 
     let result = execute_and_prove(
         vec![pre_state],

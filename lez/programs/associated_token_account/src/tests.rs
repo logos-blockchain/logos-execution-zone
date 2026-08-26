@@ -7,12 +7,6 @@ use token_core::{TokenDefinition, TokenHolding};
 const ATA_PROGRAM_ID: lee_core::program::ProgramId = [1u32; 8];
 const TOKEN_PROGRAM_ID: lee_core::program::ProgramId = [2u32; 8];
 
-/// A position naming the token program's namespace, which is the only slot the ATA
-/// program ever reads.
-fn named(slot: Slot) -> Option<(AccountId, Slot)> {
-    Some((TOKEN_PROGRAM_ID.into(), slot))
-}
-
 fn owner_id() -> AccountId {
     AccountId::new([0x01u8; 32])
 }
@@ -29,48 +23,42 @@ fn ata_id() -> AccountId {
 }
 
 fn owner_account() -> Input {
-    Input {
-        slot: named(Slot::default()),
-        is_authorized: true,
-        account_id: owner_id(),
-    }
+    Input::named(owner_id(), true, TOKEN_PROGRAM_ID, Slot::default())
 }
 
 fn definition_account() -> Input {
-    Input {
-        slot: named(Slot {
+    Input::named(
+        definition_id(),
+        false,
+        TOKEN_PROGRAM_ID,
+        Slot {
             balance: 0,
             data: Data::from(&TokenDefinition::Fungible {
                 name: "TEST".to_string(),
                 total_supply: 1000,
                 metadata_id: None,
             }),
-        }),
-        is_authorized: false,
-        account_id: definition_id(),
-    }
+        },
+    )
 }
 
 fn uninitialized_ata_account() -> Input {
-    Input {
-        slot: named(Slot::default()),
-        is_authorized: false,
-        account_id: ata_id(),
-    }
+    Input::named(ata_id(), false, TOKEN_PROGRAM_ID, Slot::default())
 }
 
 fn initialized_ata_account() -> Input {
-    Input {
-        slot: named(Slot {
+    Input::named(
+        ata_id(),
+        false,
+        TOKEN_PROGRAM_ID,
+        Slot {
             balance: 0,
             data: Data::from(&TokenHolding::Fungible {
                 definition_id: definition_id(),
                 balance: 100,
             }),
-        }),
-        is_authorized: false,
-        account_id: ata_id(),
-    }
+        },
+    )
 }
 
 #[test]
@@ -108,11 +96,12 @@ fn create_is_idempotent_for_initialized_ata() {
 #[test]
 #[should_panic(expected = "ATA account ID does not match expected derivation")]
 fn create_panics_on_wrong_ata_address() {
-    let wrong_ata = Input {
-        slot: named(Slot::default()),
-        is_authorized: false,
-        account_id: AccountId::new([0xFFu8; 32]),
-    };
+    let wrong_ata = Input::named(
+        AccountId::new([0xFFu8; 32]),
+        false,
+        TOKEN_PROGRAM_ID,
+        Slot::default(),
+    );
 
     crate::create::create_associated_token_account(
         owner_account(),
@@ -162,17 +151,18 @@ fn get_associated_token_account_id_differs_by_definition() {
 /// which is what makes a stranger's mismatched holding clearable.
 #[test]
 fn close_delegates_the_ata_seed_for_a_foreign_definition() {
-    let squatted = Input {
-        slot: named(Slot {
+    let squatted = Input::named(
+        ata_id(),
+        false,
+        TOKEN_PROGRAM_ID,
+        Slot {
             balance: 0,
             data: Data::from(&TokenHolding::Fungible {
                 definition_id: AccountId::new([0xEEu8; 32]),
                 balance: 0,
             }),
-        }),
-        is_authorized: false,
-        account_id: ata_id(),
-    };
+        },
+    );
 
     let (_post_states, chained_calls) = crate::close::close_associated_token_account(
         owner_account(),
@@ -198,11 +188,7 @@ fn close_without_owner_authorization_should_fail() {
         is_authorized: false,
         ..owner_account()
     };
-    let ata = Input {
-        slot: named(Slot::default()),
-        is_authorized: false,
-        account_id: ata_id(),
-    };
+    let ata = Input::named(ata_id(), false, TOKEN_PROGRAM_ID, Slot::default());
 
     let _ = crate::close::close_associated_token_account(
         owner,
@@ -216,11 +202,12 @@ fn close_without_owner_authorization_should_fail() {
 #[should_panic(expected = "ATA account ID does not match expected derivation")]
 #[test]
 fn close_at_a_non_ata_address_should_fail() {
-    let not_an_ata = Input {
-        slot: named(Slot::default()),
-        is_authorized: false,
-        account_id: AccountId::new([0x77u8; 32]),
-    };
+    let not_an_ata = Input::named(
+        AccountId::new([0x77u8; 32]),
+        false,
+        TOKEN_PROGRAM_ID,
+        Slot::default(),
+    );
 
     let _ = crate::close::close_associated_token_account(
         owner_account(),
@@ -235,14 +222,15 @@ fn close_at_a_non_ata_address_should_fail() {
 /// chain `InitializeAccount` rather than treating the address as already in use.
 #[test]
 fn create_is_not_suppressed_by_a_bare_credit() {
-    let ata = Input {
-        slot: named(Slot {
+    let ata = Input::named(
+        ata_id(),
+        false,
+        TOKEN_PROGRAM_ID,
+        Slot {
             balance: 1,
             data: Data::empty(),
-        }),
-        is_authorized: false,
-        account_id: ata_id(),
-    };
+        },
+    );
 
     let (_post_states, chained_calls) = crate::create::create_associated_token_account(
         owner_account(),
@@ -259,14 +247,15 @@ fn create_is_not_suppressed_by_a_bare_credit() {
 /// carries no data.
 #[test]
 fn close_clears_a_bare_credit() {
-    let ata = Input {
-        slot: named(Slot {
+    let ata = Input::named(
+        ata_id(),
+        false,
+        TOKEN_PROGRAM_ID,
+        Slot {
             balance: 1,
             data: Data::empty(),
-        }),
-        is_authorized: false,
-        account_id: ata_id(),
-    };
+        },
+    );
 
     let (_post_states, chained_calls) = crate::close::close_associated_token_account(
         owner_account(),
