@@ -6,10 +6,11 @@
 //! every target program under test.
 
 use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_inputs,
 };
 
-type Instruction = (ProgramId, Vec<u32>);
+type Instruction = (ProgramId, InstructionData);
 
 fn main() {
     let (
@@ -17,9 +18,9 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (target_program_id, instruction_data),
+            instruction: (target_program_id, target_instruction_data),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let post_states = pre_states
@@ -29,7 +30,7 @@ fn main() {
 
     let chained_call = ChainedCall {
         program_account_id: target_program_id.into(),
-        instruction_data,
+        instruction_data: target_instruction_data,
         pre_states: pre_states.clone(),
         pda_seeds: vec![],
     };
@@ -37,7 +38,7 @@ fn main() {
     ProgramOutput::new(
         self_account_id,
         caller_account_id,
-        instruction_words,
+        instruction_data,
         pre_states,
         post_states,
     )

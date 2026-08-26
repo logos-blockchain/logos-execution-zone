@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use hex_literal::hex;
-use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
+use risc0_zkvm::guest::env;
 use serde::{Deserialize, Serialize};
 
 use crate::{
