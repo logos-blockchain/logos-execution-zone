@@ -270,14 +270,21 @@ impl From<PublicActionWithID> for FfiPublicAction {
                 account_id: value.slot.account_id.into(),
                 program: ffi_program(program),
             },
-            post_state: match (value.post_state, program) {
-                (Some(slot), Some(program)) => {
+            post_state: match value.post_state {
+                None => FfiOption::from_none(),
+                Some(slot) => {
+                    // Only a malformed reconstruction names no slot yet carries a post state:
+                    // the rulebook makes the two present together. Dropping the post state
+                    // silently would rewrite an untrusted action, and with it the message hash.
+                    let namespace = program.expect(
+                        "Public action: a position naming no slot cannot carry a post state",
+                    );
                     let data: lee::Data =
                         slot.data.try_into().expect("Source is in blocks, must fit");
                     let (data, data_len, data_cap) = data.into_inner().into_raw_parts();
                     FfiOption::from_value(FfiAccountSlot {
                         program_id: FfiProgramId {
-                            data: lee::ProgramId::from(lee::AccountId::new(program.value)),
+                            data: lee::ProgramId::from(lee::AccountId::new(namespace.value)),
                         },
                         balance: slot.balance.into(),
                         data,
@@ -285,7 +292,6 @@ impl From<PublicActionWithID> for FfiPublicAction {
                         data_cap,
                     })
                 }
-                _ => FfiOption::from_none(),
             },
         }
     }
