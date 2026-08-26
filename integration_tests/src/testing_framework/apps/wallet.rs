@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use common::HashType;
 use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::program::{InstructionData, ProgramId};
+use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use tempfile::TempDir;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
 use testing_framework_core::scenario::DynError;
@@ -22,7 +23,7 @@ use wallet::{
         programs::native_token_transfer::AuthTransferSubcommand,
     },
     config::WalletConfigOverrides,
-    program_facades::native_token_transfer::NativeTokenTransfer,
+    program_facades::{native_token_transfer::NativeTokenTransfer, program_loader::ProgramLoader},
 };
 
 use super::LezSequencerClient;
@@ -103,8 +104,14 @@ enum WalletRequest {
     SendProgramTransaction {
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program_id: ProgramId,
+        program_account_id: AccountId,
+        payer: Option<AccountId>,
         response: oneshot::Sender<Result<HashType, String>>,
+    },
+    DeployProgram {
+        bytecode: Vec<u8>,
+        payer: AccountId,
+        response: oneshot::Sender<Result<AccountId, String>>,
     },
     WalletPassword {
         response: oneshot::Sender<Result<String, String>>,
@@ -401,14 +408,57 @@ impl WalletActor {
                             WalletRequest::SendProgramTransaction {
                                 accounts,
                                 instruction_data,
-                                program_id,
+                                program_account_id,
+                                payer,
                                 response,
                             } => {
                                 let result = components
                                     .wallet
-                                    .send_pub_tx(accounts, instruction_data, program_id.into())
+                                    .send_pub_tx_paid_by(
+                                        accounts,
+                                        instruction_data,
+                                        program_account_id,
+                                        payer,
+                                    )
                                     .await
                                     .map_err(|error| format!("{error:?}"));
+                                let _unused = response.send(result);
+                            }
+                            WalletRequest::DeployProgram {
+                                bytecode,
+                                payer,
+                                response,
+                            } => {
+                                let result = async {
+                                    // A deploy claims every account it names: one
+                                    // header plus one segment per bytecode chunk,
+                                    // all fresh wallet accounts. None of them holds
+                                    // a balance, so `payer` covers the fees.
+                                    let segment_count =
+                                        bytecode.chunks(MAX_SEGMENT_DATA_LEN).count();
+                                    let (header_id, _) =
+                                        components.wallet.create_new_account_public(None);
+                                    let segment_ids = std::iter::repeat_with(|| {
+                                        components.wallet.create_new_account_public(None).0
+                                    })
+                                    .take(segment_count)
+                                    .collect::<Vec<_>>();
+                                    components
+                                        .wallet
+                                        .store_persistent_data()
+                                        .map_err(|error| anyhow!(error.to_string()))?;
+                                    ProgramLoader(&components.wallet)
+                                        .deploy(
+                                            header_id,
+                                            &segment_ids,
+                                            bytecode,
+                                            true,
+                                            Some(payer),
+                                        )
+                                        .await
+                                }
+                                .await
+                                .map_err(|error: anyhow::Error| format!("{error:?}"));
                                 let _unused = response.send(result);
                             }
                             WalletRequest::WalletPassword { response } => {
@@ -633,23 +683,57 @@ impl LezRuntime {
         .await
     }
 
-    /// Signs and submits a public transaction against an arbitrary program.
-    ///
-    /// `AccountIdentity::Public` entries are signed with the wallet's key for
-    /// that account; `AccountIdentity::PublicNoSign` entries are carried as
-    /// unsigned pre-state accounts. The returned hash only means the
-    /// sequencer's mempool admitted the transaction; whether it executes is
-    /// decided during block building.
+    /// Signs and submits a public transaction against a compiled-in program,
+    /// with the wallet picking the fee payer, if any, from the signing
+    /// accounts. See [`Self::send_program_account_transaction`].
     pub async fn send_program_transaction(
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program_id: ProgramId,
     ) -> Result<HashType, DynError> {
+        self.send_program_account_transaction(accounts, instruction_data, program_id.into(), None)
+            .await
+    }
+
+    /// Signs and submits a public transaction against the program at
+    /// `program_account_id`: a compiled-in program's id mapped to an account,
+    /// or the header account a runtime deployment claimed.
+    ///
+    /// `AccountIdentity::Public` entries are signed with the wallet's key for
+    /// that account; `AccountIdentity::PublicNoSign` entries are carried as
+    /// unsigned pre-state accounts. `payer`, if given, covers the fee by
+    /// co-signing without joining the pre-state list. The returned hash only
+    /// means the sequencer's mempool admitted the transaction; whether it
+    /// executes is decided during block building.
+    pub async fn send_program_account_transaction(
+        &self,
+        accounts: Vec<AccountIdentity>,
+        instruction_data: InstructionData,
+        program_account_id: AccountId,
+        payer: Option<AccountId>,
+    ) -> Result<HashType, DynError> {
         self.request(|response| WalletRequest::SendProgramTransaction {
             accounts,
             instruction_data,
-            program_id,
+            program_account_id,
+            payer,
+            response,
+        })
+        .await
+    }
+
+    /// Deploys a program at runtime through `program_loader`, paid by `payer`,
+    /// waiting for every deployment transaction to land. Returns the header
+    /// account the deployment claimed, which the program is addressed by.
+    pub async fn deploy_program(
+        &self,
+        bytecode: Vec<u8>,
+        payer: AccountId,
+    ) -> Result<AccountId, DynError> {
+        self.request(|response| WalletRequest::DeployProgram {
+            bytecode,
+            payer,
             response,
         })
         .await

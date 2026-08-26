@@ -20,6 +20,23 @@ pub const RUST_LOG: &str = "RUST_LOG";
 pub const CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: &str = "CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL";
 /// Environment variable selecting an existing node deployment configuration.
 pub const CUCUMBER_NODE_CONFIG_OVERRIDE: &str = "CUCUMBER_NODE_CONFIG_OVERRIDE";
+/// Environment variable restricting the run to scenarios carrying one of a
+/// comma-separated list of tags (a leading `@` is optional). Unset runs every
+/// scenario. Example: `CUCUMBER_TAGS=@P-17,@P-21`.
+pub const CUCUMBER_TAGS: &str = "CUCUMBER_TAGS";
+
+/// Parses [`CUCUMBER_TAGS`] into the tags to keep (leading `@` stripped);
+/// `None` when unset or empty, meaning run every scenario.
+#[must_use]
+pub fn get_tag_filter() -> Option<Vec<String>> {
+    let tags: Vec<String> = std::env::var(CUCUMBER_TAGS)
+        .ok()?
+        .split(',')
+        .map(|tag| tag.trim().trim_start_matches('@').to_owned())
+        .filter(|tag| !tag.is_empty())
+        .collect();
+    (!tags.is_empty()).then_some(tags)
+}
 
 /// Installs the Cucumber tracing subscriber using `RUST_LOG` or an `info` default.
 pub fn init_tracing() {

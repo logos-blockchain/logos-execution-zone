@@ -16,6 +16,7 @@ use integration_tests::cucumber::{
     default::{
         ARTEFACTS, CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL, MAX_CUCUMBER_CONCURRENT_SCENARIOS,
         RUST_LOG, TF_KEEP_LOGS, create_scenario_output_dir, get_feature_path, get_retries,
+        get_tag_filter,
     },
     world::CucumberWorld,
 };
@@ -104,54 +105,67 @@ async fn async_main() -> anyhow::Result<()> {
     }
 
     let teardown_failure_flag = Arc::clone(&teardown_failed);
-    let failed = world
-        .after(move |feature, _rule, scenario, scenario_finished, world| {
-            let teardown_failure_flag = Arc::clone(&teardown_failure_flag);
-            Box::pin(async move {
-                // Runs after the scenario has completed; useful for capturing final state/logs.
-                info!(target: TARGET,
-                    "\nFinished - {}: {} ({}: {})\n",
-                    scenario.keyword, scenario.name, feature.keyword, feature.name,
-                );
+    let runner = world.after(move |feature, _rule, scenario, scenario_finished, world| {
+        let teardown_failure_flag = Arc::clone(&teardown_failure_flag);
+        Box::pin(async move {
+            // Runs after the scenario has completed; useful for capturing final state/logs.
+            info!(target: TARGET,
+                "\nFinished - {}: {} ({}: {})\n",
+                scenario.keyword, scenario.name, feature.keyword, feature.name,
+            );
 
-                if let Some(world) = world {
-                    let path = world.scenario_base_dir.join("debug_dump_file.log");
-                    if let Some(parent) = path.parent() {
-                        let _unused = std::fs::create_dir_all(parent);
-                    }
-                    let _initial_debug_write = std::fs::write(&path, world.full_debug_info_string());
+            if let Some(world) = world {
+                let path = world.scenario_base_dir.join("debug_dump_file.log");
+                if let Some(parent) = path.parent() {
+                    let _unused = std::fs::create_dir_all(parent);
+                }
+                let _initial_debug_write = std::fs::write(&path, world.full_debug_info_string());
 
-                    let teardown_result = world.stop_runtime().await;
-                    if let Err(error) = &teardown_result {
-                        teardown_failure_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                        warn!(target: TARGET, "Cucumber runtime teardown failed: {error}");
-                    }
+                let teardown_result = world.stop_runtime().await;
+                if let Err(error) = &teardown_result {
+                    teardown_failure_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    warn!(target: TARGET, "Cucumber runtime teardown failed: {error}");
+                }
 
-                    // Rewrite the dump after teardown so teardown state and
-                    // any teardown error are retained for diagnostics. The
-                    // first write above deliberately captures the live
-                    // runtime state before handles are released.
-                    let _final_debug_write = std::fs::write(&path, world.full_debug_info_string());
+                // Rewrite the dump after teardown so teardown state and
+                // any teardown error are retained for diagnostics. The
+                // first write above deliberately captures the live
+                // runtime state before handles are released.
+                let _final_debug_write = std::fs::write(&path, world.full_debug_info_string());
 
-                    if teardown_result.is_ok()
-                        && matches!(scenario_finished, ScenarioFinished::StepPassed)
-                        && is_truthy_env(CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL)
-                    {
-                        info!(target: TARGET,
-                            "Env var '{CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL}' set, removing all \
-                            artefacts\n"
-                        );
-                        if let Err(e) = world.clear_scenario_artifacts() {
-                            warn!(target: TARGET, "{e}");
-                        }
+                if teardown_result.is_ok()
+                    && matches!(scenario_finished, ScenarioFinished::StepPassed)
+                    && is_truthy_env(CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL)
+                {
+                    info!(target: TARGET,
+                        "Env var '{CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL}' set, removing all \
+                        artefacts\n"
+                    );
+                    if let Err(e) = world.clear_scenario_artifacts() {
+                        warn!(target: TARGET, "{e}");
                     }
                 }
-            })
+            }
         })
-        // Runs Cucumber. Features sourced from a Parser are fed to a Runner, which
-        // produces events handled by a Writer.
-        .run(get_feature_path()?)
-        .await;
+    });
+
+    // Runs Cucumber. Features sourced from a Parser are fed to a Runner, which
+    // produces events handled by a Writer. `CUCUMBER_TAGS`, when set, restricts
+    // the run to scenarios carrying one of the listed tags.
+    let feature_path = get_feature_path()?;
+    let failed = if let Some(tags) = get_tag_filter() {
+        info!(target: TARGET, "Restricting run to scenarios tagged: {tags:?}");
+        runner
+            .filter_run(feature_path, move |feature, rule, scenario| {
+                let matches = |candidate: &String| tags.iter().any(|wanted| wanted == candidate);
+                scenario.tags.iter().any(&matches)
+                    || feature.tags.iter().any(&matches)
+                    || rule.is_some_and(|rule| rule.tags.iter().any(&matches))
+            })
+            .await
+    } else {
+        runner.run(feature_path).await
+    };
 
     // Clean up manually reserved handshake port block files for this process
     release_reserved_port_block();
