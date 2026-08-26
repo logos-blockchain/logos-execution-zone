@@ -93,11 +93,13 @@ pub fn burn(
         _ => panic!("Mismatched Token Definition and Token Holding types"),
     }
 
-    let mut definition_post = definition_account.into_slot_of(self_program_id);
-    definition_post.data = Data::from(&definition);
+    let definition_post = definition_account
+        .into_slot_of(self_program_id)
+        .with_data(Data::from(&definition));
 
-    let mut holding_post = user_holding_account.into_slot_of(self_program_id);
-    holding_post.data = Data::from(&holding);
+    let holding_post = user_holding_account
+        .into_slot_of(self_program_id)
+        .with_data(Data::from(&holding));
 
     vec![Some(definition_post), Some(holding_post)]
 }

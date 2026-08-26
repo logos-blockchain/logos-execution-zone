@@ -103,6 +103,14 @@ impl Slot {
     pub fn is_empty(&self) -> bool {
         self == &Self::default()
     }
+
+    /// The same slot holding different data. Writing a whole `Slot` instead would zero the
+    /// balance; this keeps it, which is what a program replacing its own record wants.
+    #[must_use]
+    pub fn with_data(mut self, data: Data) -> Self {
+        self.data = data;
+        self
+    }
 }
 
 /// Account to be used both in public and private contexts.

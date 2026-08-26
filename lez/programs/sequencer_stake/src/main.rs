@@ -189,11 +189,12 @@ fn stake(
     .try_into()
     .expect("StakeRecord should fit in account data");
 
-    let mut config_account_post = config_account.into_slot_of(self_program_id);
-    config_account_post.data = config
-        .to_bytes()
-        .try_into()
-        .expect("SequencerStakeConfig should fit in account data");
+    let config_account_post = config_account.into_slot_of(self_program_id).with_data(
+        config
+            .to_bytes()
+            .try_into()
+            .expect("SequencerStakeConfig should fit in account data"),
+    );
 
     // chained-call pre-states reflect state as of when each call runs
     let ownership_account_recorded = ownership_account.with_slot(ownership_account_post.clone());
@@ -297,17 +298,19 @@ fn unstake_request(
         .expect("total pending unstake overflow");
 
     // only data changes here; transfer happens in FinalizeUnstake
-    let mut ownership_account_post = ownership_account.into_slot_of(self_program_id);
-    ownership_account_post.data = record
-        .to_bytes()
-        .try_into()
-        .expect("StakeRecord should fit in account data");
+    let ownership_account_post = ownership_account.into_slot_of(self_program_id).with_data(
+        record
+            .to_bytes()
+            .try_into()
+            .expect("StakeRecord should fit in account data"),
+    );
 
-    let mut config_account_post = config_account.into_slot_of(self_program_id);
-    config_account_post.data = config
-        .to_bytes()
-        .try_into()
-        .expect("SequencerStakeConfig should fit in account data");
+    let config_account_post = config_account.into_slot_of(self_program_id).with_data(
+        config
+            .to_bytes()
+            .try_into()
+            .expect("SequencerStakeConfig should fit in account data"),
+    );
 
     vec![Some(ownership_account_post), Some(config_account_post)]
 }
@@ -371,11 +374,12 @@ fn finalize_unstake(self_program_id: ProgramId, pre_states: Vec<Input>) -> Vec<O
         config.entries.remove(&record.sequencer_key);
     }
 
-    let mut config_account_post = config_account.into_slot_of(self_program_id);
-    config_account_post.data = config
-        .to_bytes()
-        .try_into()
-        .expect("SequencerStakeConfig should fit in account data");
+    let config_account_post = config_account.into_slot_of(self_program_id).with_data(
+        config
+            .to_bytes()
+            .try_into()
+            .expect("SequencerStakeConfig should fit in account data"),
+    );
 
     vec![
         Some(ownership_account_post),

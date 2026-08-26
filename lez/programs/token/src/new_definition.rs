@@ -38,8 +38,9 @@ pub fn new_fungible_definition(
         definition_target_account.into_slot_of(self_program_id);
     definition_target_account_post.data = Data::from(&token_definition);
 
-    let mut holding_target_account_post = holding_target_account.into_slot_of(self_program_id);
-    holding_target_account_post.data = Data::from(&token_holding);
+    let holding_target_account_post = holding_target_account
+        .into_slot_of(self_program_id)
+        .with_data(Data::from(&token_holding));
 
     vec![
         Some(definition_target_account_post),
@@ -111,11 +112,13 @@ pub fn new_definition_with_metadata(
         definition_target_account.into_slot_of(self_program_id);
     definition_target_account_post.data = Data::from(&token_definition);
 
-    let mut holding_target_account_post = holding_target_account.into_slot_of(self_program_id);
-    holding_target_account_post.data = Data::from(&token_holding);
+    let holding_target_account_post = holding_target_account
+        .into_slot_of(self_program_id)
+        .with_data(Data::from(&token_holding));
 
-    let mut metadata_target_account_post = metadata_target_account.into_slot_of(self_program_id);
-    metadata_target_account_post.data = Data::from(&token_metadata);
+    let metadata_target_account_post = metadata_target_account
+        .into_slot_of(self_program_id)
+        .with_data(Data::from(&token_metadata));
 
     vec![
         Some(definition_target_account_post),

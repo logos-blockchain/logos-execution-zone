@@ -39,14 +39,16 @@ pub fn print_nft(
     );
     *print_balance = print_balance.checked_sub(1).expect("Checked above");
 
-    let mut master_account_post = master_account.into_slot_of(self_program_id);
-    master_account_post.data = Data::from(&master_account_data);
+    let master_account_post = master_account
+        .into_slot_of(self_program_id)
+        .with_data(Data::from(&master_account_data));
 
-    let mut printed_account_post = printed_account.into_slot_of(self_program_id);
-    printed_account_post.data = Data::from(&TokenHolding::NftPrintedCopy {
-        definition_id,
-        owned: true,
-    });
+    let printed_account_post = printed_account
+        .into_slot_of(self_program_id)
+        .with_data(Data::from(&TokenHolding::NftPrintedCopy {
+            definition_id,
+            owned: true,
+        }));
 
     vec![Some(master_account_post), Some(printed_account_post)]
 }

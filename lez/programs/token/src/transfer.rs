@@ -86,11 +86,13 @@ pub fn transfer(
     debit(&mut sender_holding, balance_to_move);
     credit(&mut recipient_holding, balance_to_move);
 
-    let mut sender_post = sender.into_slot_of(self_program_id);
-    sender_post.data = Data::from(&sender_holding);
+    let sender_post = sender
+        .into_slot_of(self_program_id)
+        .with_data(Data::from(&sender_holding));
 
-    let mut recipient_post = recipient.into_slot_of(self_program_id);
-    recipient_post.data = Data::from(&recipient_holding);
+    let recipient_post = recipient
+        .into_slot_of(self_program_id)
+        .with_data(Data::from(&recipient_holding));
 
     vec![Some(sender_post), Some(recipient_post)]
 }

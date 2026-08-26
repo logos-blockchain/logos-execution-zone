@@ -73,10 +73,11 @@ fn main() {
             // marker is the only on-chain signal. Relevant once the explorer
             // surfaces deposits.
             if receipt.data(self_program_id).is_empty() {
-                let mut receipt_post = receipt.into_slot_of(self_program_id);
-                receipt_post.data = vec![RECEIPT_MARKER]
-                    .try_into()
-                    .expect("marker fits in account data");
+                let receipt_post = receipt.into_slot_of(self_program_id).with_data(
+                    vec![RECEIPT_MARKER]
+                        .try_into()
+                        .expect("marker fits in account data"),
+                );
 
                 let mut bridge_post = bridge.into_slot_of(self_program_id);
                 bridge_post.balance = bridge_post

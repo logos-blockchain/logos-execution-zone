@@ -19,8 +19,9 @@ pub fn close_holding(holding_account: Input, self_program_id: ProgramId) -> Vec<
         assert!(holding.is_empty(), "Only an empty holding can be closed");
     }
 
-    let mut holding_post = holding_account.into_slot_of(self_program_id);
-    holding_post.data = Data::default();
+    let holding_post = holding_account
+        .into_slot_of(self_program_id)
+        .with_data(Data::default());
 
     vec![Some(holding_post)]
 }

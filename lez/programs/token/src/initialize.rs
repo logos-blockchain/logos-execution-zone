@@ -20,8 +20,9 @@ pub fn initialize_account(
     let holding =
         TokenHolding::zeroized_from_definition(definition_account.account_id, &definition);
 
-    let mut account_to_initialize_post = account_to_initialize.into_slot_of(self_program_id);
-    account_to_initialize_post.data = Data::from(&holding);
+    let account_to_initialize_post = account_to_initialize
+        .into_slot_of(self_program_id)
+        .with_data(Data::from(&holding));
 
     vec![
         definition_account.unchanged(),
