@@ -58,9 +58,7 @@ fn main() {
             // checking whether its marker existed before this block — that
             // marker is the only on-chain signal. Relevant once the explorer
             // surfaces deposits.
-            if !receipt.account.data(self_program_id).is_empty() {
-                pre_states.iter().map(|pre| pre.account.clone()).collect()
-            } else {
+            if receipt.account.data(self_program_id).is_empty() {
                 let mut receipt_post = receipt.account;
                 receipt_post.slot_mut(self_program_id).data = vec![RECEIPT_MARKER]
                     .try_into()
@@ -83,6 +81,8 @@ fn main() {
                 recipient_post.prune();
 
                 vec![bridge_post, recipient_post, receipt_post]
+            } else {
+                pre_states.iter().map(|pre| pre.account.clone()).collect()
             }
         }
         Instruction::Withdraw {

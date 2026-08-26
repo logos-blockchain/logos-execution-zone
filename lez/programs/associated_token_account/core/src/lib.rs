@@ -17,7 +17,7 @@ pub enum Instruction {
     Create { token_program_id: ProgramId },
 
     /// Transfer tokens FROM owner's ATA to a recipient holding account.
-    /// Passes the ATA's seed to the chained Token::Transfer call to authorize it.
+    /// Passes the ATA's seed to the chained `Token::Transfer` call to authorize it.
     ///
     /// Required accounts (3):
     /// - Owner account (authorized)
@@ -29,7 +29,7 @@ pub enum Instruction {
     },
 
     /// Burn tokens FROM owner's ATA.
-    /// Passes the ATA's seed to the chained Token::Burn call to authorize it.
+    /// Passes the ATA's seed to the chained `Token::Burn` call to authorize it.
     ///
     /// Required accounts (3):
     /// - Owner account (authorized)
@@ -53,8 +53,9 @@ pub enum Instruction {
     Close { token_program_id: ProgramId },
 }
 
+#[must_use]
 pub fn compute_ata_seed(owner_id: AccountId, definition_id: AccountId) -> PdaSeed {
-    use risc0_zkvm::sha::{Impl, Sha256};
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
     let mut bytes = [0_u8; 64];
     bytes[0..32].copy_from_slice(&owner_id.to_bytes());
     bytes[32..64].copy_from_slice(&definition_id.to_bytes());
@@ -66,12 +67,14 @@ pub fn compute_ata_seed(owner_id: AccountId, definition_id: AccountId) -> PdaSee
     )
 }
 
+#[must_use]
 pub fn get_associated_token_account_id(ata_program_id: &ProgramId, seed: &PdaSeed) -> AccountId {
     AccountId::for_public_pda(ata_program_id, seed)
 }
 
 /// Verify the ATA's address matches `(ata_program_id, owner, definition)` and return
 /// the [`PdaSeed`] for use in chained calls.
+#[must_use]
 pub fn verify_ata_and_get_seed(
     ata_account: &AccountWithMetadata,
     owner: &AccountWithMetadata,

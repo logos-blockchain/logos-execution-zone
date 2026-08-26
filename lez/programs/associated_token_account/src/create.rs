@@ -11,7 +11,8 @@ pub fn create_associated_token_account(
     token_program_id: ProgramId,
 ) -> (Vec<Account>, Vec<ChainedCall>) {
     // No authorization check needed: create is idempotent, so anyone can call it safely.
-    associated_token_account_core::verify_ata_and_get_seed(
+    // Only the address check is wanted here; the chained call carries no PDA seeds.
+    let _ = associated_token_account_core::verify_ata_and_get_seed(
         &ata_account,
         &owner,
         token_definition.account_id,
