@@ -32,7 +32,7 @@ fn main() {
             program_id: simple_transfer_id,
             instruction_data: call_instruction_data.clone(),
             // Account order permuted here (sender before recipient).
-            pre_state_refs: vec![sender_pre.account_id, recipient_pre.account_id],
+            accounts: vec![sender_pre.account_id, recipient_pre.account_id],
             pda_seeds: pda_seed.iter().copied().collect(),
         };
         chained_calls.push(new_chained_call);

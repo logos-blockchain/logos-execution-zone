@@ -42,14 +42,14 @@ fn main() {
     let initialize_call = ChainedCall {
         program_id: claimer_id,
         instruction_data: to_vec(&()).unwrap(),
-        pre_state_refs: vec![recipient_pre.account_id],
+        accounts: vec![recipient_pre.account_id],
         pda_seeds: vec![],
     };
 
     let fund_call = ChainedCall {
         program_id: simple_transfer_id,
         instruction_data: to_vec(&balance).unwrap(),
-        pre_state_refs: vec![sender_pre.account_id, recipient_pre.account_id],
+        accounts: vec![sender_pre.account_id, recipient_pre.account_id],
         pda_seeds: vec![],
     };
 

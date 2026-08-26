@@ -110,7 +110,7 @@ pub fn execute_and_prove_with_padded_inputs(
         .iter()
         .map(|pre| (pre.account_id, pre.account.clone()))
         .collect();
-    let pre_state_refs: Vec<AccountId> = pre_states.iter().map(|pre| pre.account_id).collect();
+    let accounts: Vec<AccountId> = pre_states.iter().map(|pre| pre.account_id).collect();
 
     // Seeded from every top-level `is_authorized`, not just signer info — a private account's
     // authorization may come from a witnessed `ask` with no public-derivable equivalent.
@@ -132,7 +132,7 @@ pub fn execute_and_prove_with_padded_inputs(
     let initial_call = ChainedCall {
         program_id: initial_program.id(),
         instruction_data,
-        pre_state_refs,
+        accounts,
         pda_seeds: vec![],
     };
 
@@ -150,8 +150,8 @@ pub fn execute_and_prove_with_padded_inputs(
             let authorized_pdas =
                 compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
 
-            let mut resolved = Vec::with_capacity(chained_call.pre_state_refs.len());
-            for account_id in &chained_call.pre_state_refs {
+            let mut resolved = Vec::with_capacity(chained_call.accounts.len());
+            for account_id in &chained_call.accounts {
                 let account = materialized_state.get(account_id).cloned().ok_or(
                     InvalidProgramBehaviorError::UnknownChainedCallAccount {
                         account_id: *account_id,

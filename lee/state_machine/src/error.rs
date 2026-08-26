@@ -138,8 +138,8 @@ pub enum InvalidProgramBehaviorError {
     DeclaredAccountMissingFromOutput { account_id: AccountId },
 
     #[error(
-        "Chained call named account {account_id} in its pre_state_refs, but it isn't resolvable \
-         from the top-level pre_states or any earlier call's materialized diff in this transaction"
+        "Chained call named account {account_id}, but it isn't resolvable from the top-level \
+         pre_states or any earlier call's materialized diff in this transaction"
     )]
     UnknownChainedCallAccount { account_id: AccountId },
 }

@@ -80,7 +80,7 @@ impl ValidatedStateDiff {
         let initial_call = ChainedCall {
             program_id: message.program_id,
             instruction_data: message.instruction_data.clone(),
-            pre_state_refs: message.account_ids.clone(),
+            accounts: message.account_ids.clone(),
             pda_seeds: vec![],
         };
 
@@ -117,10 +117,10 @@ impl ValidatedStateDiff {
                     || caller_data.authorized_accounts.contains(account_id)
             };
 
-            // The caller only names which accounts to call with (`pre_state_refs`); resolve their
+            // The caller only names which accounts to call with (`accounts`); resolve their
             // actual values from the protocol's own tracked state, not from anything it asserts.
             let real_pre_states: Vec<AccountWithMetadata> = chained_call
-                .pre_state_refs
+                .accounts
                 .iter()
                 .map(|account_id| {
                     let account = state_diff
@@ -262,7 +262,7 @@ impl ValidatedStateDiff {
             }
 
             // Source from `program_output.pre_states` (the callee's own checked echo), not
-            // `chained_call.pre_state_refs` (bare ids the caller supplied, carrying no
+            // `chained_call.accounts` (bare ids the caller supplied, carrying no
             // authorization claim at all) — the loop above already gates program_output's
             // `is_authorized` via the `!pre.is_authorized || is_indeed_authorized` check.
             //

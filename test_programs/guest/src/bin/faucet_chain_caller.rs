@@ -35,7 +35,7 @@ fn main() {
             amount,
         })
         .unwrap(),
-        pre_state_refs: vec![pre_states[0].account_id, pre_states[1].account_id],
+        accounts: vec![pre_states[0].account_id, pre_states[1].account_id],
         pda_seeds: vec![],
     }];
 

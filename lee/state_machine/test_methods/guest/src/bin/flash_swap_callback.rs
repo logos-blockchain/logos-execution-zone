@@ -63,7 +63,7 @@ fn main() {
 
         chained_calls.push(ChainedCall {
             program_id: instruction.token_program_id,
-            pre_state_refs: vec![receiver_pre.account_id, vault_pre.account_id],
+            accounts: vec![receiver_pre.account_id, vault_pre.account_id],
             instruction_data: transfer_instruction,
             pda_seeds: vec![PdaSeed::new([1_u8; 32])],
         });

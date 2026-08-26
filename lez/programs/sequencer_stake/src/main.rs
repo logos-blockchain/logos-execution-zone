@@ -208,7 +208,7 @@ fn stake(
 
     let mover_call = ChainedCall {
         program_id: mover_program_id,
-        pre_state_refs: vec![funding_account.account_id, ownership_account.account_id],
+        accounts: vec![funding_account.account_id, ownership_account.account_id],
         instruction_data: mover_instruction_data,
         pda_seeds: Vec::new(),
     };
