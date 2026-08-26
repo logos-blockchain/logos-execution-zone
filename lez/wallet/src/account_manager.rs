@@ -533,10 +533,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public { account, .. } | State::PublicKeycard { account, .. } => {
-                    Some(lee::SlotRef {
-                        account_id: account.account_id,
-                        program: account.slot.as_ref().map(|(program, _)| *program),
-                    })
+                    Some(lee::SlotRef::from(account))
                 }
                 State::Private(_) => None,
             })

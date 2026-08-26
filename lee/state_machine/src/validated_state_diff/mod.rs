@@ -6,7 +6,7 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, Input, Nonce},
+    account::{Account, AccountId, Input, Nonce, SlotRef},
     program::{CallerData, ChainedCall, compute_public_authorized_pdas, validate_execution},
 };
 use log::debug;
@@ -80,29 +80,13 @@ impl ValidatedStateDiff {
         );
 
         // Build pre_states for execution, loading only the named slot of each account
-        let input_pre_states: Vec<_> = message
-            .slots
-            .iter()
-            .map(|slot_ref| Input {
-                account_id: slot_ref.account_id,
-                is_authorized: signer_account_ids.contains(&slot_ref.account_id),
-                slot: slot_ref.program.map(|program| {
-                    // Read through the borrow: an account is unbounded across slots, and a
-                    // position needs exactly one of them.
-                    let slot = state
-                        .get_account_by_id_ref(slot_ref.account_id)
-                        .map(|account| account.slot_or_empty(program))
-                        .unwrap_or_default();
-                    (program, slot)
-                }),
-            })
-            .collect();
+        let input_pre_states = positions(&message.slots, &signer_account_ids, state);
 
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
         // Which declared positions a program actually received. A position naming no slot
         // produces no diff entry, so presence in the diff cannot stand in for having been
         // seen — and a marker's whole purpose is to be seen.
-        let mut positions_seen: HashSet<(AccountId, Option<AccountId>)> = HashSet::new();
+        let mut positions_seen: HashSet<SlotRef> = HashSet::new();
 
         let initial_call = ChainedCall {
             program_id: message.program_id,
@@ -158,7 +142,7 @@ impl ValidatedStateDiff {
 
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
-                positions_seen.insert((account_id, pre.slot.as_ref().map(|(p, _)| *p)));
+                positions_seen.insert(SlotRef::from(pre));
                 if let Some((namespace, slot)) = &pre.slot {
                     // Check that the program output pre_states coincide with the values in the
                     // public state or with any modifications to those values during the chain of
@@ -281,7 +265,7 @@ impl ValidatedStateDiff {
         // rather than the diff covers address-only positions, which never produce one.
         for slot in &message.slots {
             ensure!(
-                positions_seen.contains(&(slot.account_id, slot.program)),
+                positions_seen.contains(slot),
                 InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput {
                     account_id: slot.account_id
                 }
@@ -375,22 +359,7 @@ impl ValidatedStateDiff {
         );
 
         // Build pre_states for proof verification
-        let public_pre_states: Vec<_> = public_slots
-            .iter()
-            .map(|slot_ref| Input {
-                account_id: slot_ref.account_id,
-                is_authorized: signer_account_ids.contains(&slot_ref.account_id),
-                slot: slot_ref.program.map(|program| {
-                    // Read through the borrow: an account is unbounded across slots, and a
-                    // position needs exactly one of them.
-                    let slot = state
-                        .get_account_by_id_ref(slot_ref.account_id)
-                        .map(|account| account.slot_or_empty(program))
-                        .unwrap_or_default();
-                    (program, slot)
-                }),
-            })
-            .collect();
+        let public_pre_states = positions(&public_slots, &signer_account_ids, state);
 
         // 4. Proof verification
         check_privacy_preserving_circuit_proof_is_valid(
@@ -493,6 +462,30 @@ fn authenticate_public_transaction_signers(
     }
 
     Ok(signer_account_ids)
+}
+
+/// Reads the declared positions out of the state, loading only the named slot of each account
+/// and marking a position authorized when its account signed.
+///
+/// Both execution paths start here: the public one to feed the programs it executes, the private
+/// one to rebuild what the prover was handed. Keeping it one function is what makes them agree.
+fn positions(slots: &[SlotRef], signer_account_ids: &[AccountId], state: &V03State) -> Vec<Input> {
+    slots
+        .iter()
+        .map(|slot_ref| Input {
+            account_id: slot_ref.account_id,
+            is_authorized: signer_account_ids.contains(&slot_ref.account_id),
+            slot: slot_ref.program.map(|program| {
+                // Read through the borrow: an account is unbounded across slots, and a position
+                // needs exactly one of them.
+                let slot = state
+                    .get_account_by_id_ref(slot_ref.account_id)
+                    .map(|account| account.slot_or_empty(program))
+                    .unwrap_or_default();
+                (program, slot)
+            }),
+        })
+        .collect()
 }
 
 fn check_privacy_preserving_circuit_proof_is_valid(

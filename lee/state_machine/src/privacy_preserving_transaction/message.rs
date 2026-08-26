@@ -63,10 +63,7 @@ impl Message {
             .public_actions
             .into_iter()
             .map(|action| PublicActionWithID {
-                slot: SlotRef {
-                    account_id: action.pre.account_id,
-                    program: action.pre.slot.as_ref().map(|(program, _)| *program),
-                },
+                slot: SlotRef::from(&action.pre),
                 post_state: action.post,
             })
             .collect();

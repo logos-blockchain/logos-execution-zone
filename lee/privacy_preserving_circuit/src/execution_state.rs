@@ -5,7 +5,7 @@ use std::{
 
 use lee_core::{
     Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
-    account::{AccountId, Input, Slot},
+    account::{AccountId, Input, Slot, SlotRef},
     encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, CallerData, ChainedCall, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId,
@@ -23,7 +23,7 @@ pub struct ExecutionState {
     /// `positions_seen`. A first sighting is anchored to chain state and journalled; a later one
     /// is anchored to what an earlier frame wrote and must not be journalled again. Address-only
     /// positions leave no post behind, so post-presence cannot answer this for them.
-    journalled: HashSet<(AccountId, Option<AccountId>)>,
+    journalled: HashSet<SlotRef>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     /// Accounts declared authorized at their first sight, anywhere in the call tree.
@@ -208,11 +208,7 @@ impl ExecutionState {
         for pre in &output_pre_states {
             // A position is journalled once, at its first sight, and is anchored there to chain
             // state. Later sightings are anchored to what an earlier frame in this tree wrote.
-            let position = (
-                pre.account_id,
-                pre.slot.as_ref().map(|(program, _)| *program),
-            );
-            if self.journalled.insert(position) {
+            if self.journalled.insert(SlotRef::from(pre)) {
                 self.journal_first_sight(account_identities, &caller, caller_pda_seeds, pre);
             } else {
                 self.check_known_position(&caller, caller_pda_seeds, pre);
@@ -368,10 +364,7 @@ impl ExecutionState {
         let mut post_states = HashMap::new();
         let mut journalled = HashSet::new();
         for (pre, post) in positions {
-            journalled.insert((
-                pre.account_id,
-                pre.slot.as_ref().map(|(program, _)| *program),
-            ));
+            journalled.insert(SlotRef::from(&pre));
             if let (Some((program, _)), Some(post)) = (&pre.slot, post) {
                 post_states.insert((pre.account_id, *program), post);
             }

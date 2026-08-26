@@ -185,7 +185,16 @@ impl Account {
 /// The slot a transaction names, as it appears in the signed message. `program` is `None` for
 /// a position that carries only an address: a marker, an authority, a PDA-derivation input.
 #[derive(
-    Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
 )]
 pub struct SlotRef {
     pub account_id: AccountId,
@@ -208,6 +217,18 @@ impl SlotRef {
         Self {
             account_id,
             program: None,
+        }
+    }
+}
+
+/// The position an [`Input`] occupies, dropping what it holds there. The exact inverse of
+/// reading a `SlotRef` out of the state, and the key both validators use to tell one position
+/// from another.
+impl From<&Input> for SlotRef {
+    fn from(input: &Input) -> Self {
+        Self {
+            account_id: input.account_id,
+            program: input.slot.as_ref().map(|(program, _)| *program),
         }
     }
 }
