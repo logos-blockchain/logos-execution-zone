@@ -1,8 +1,10 @@
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use borsh::to_vec;
-use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{
+    ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+};
 
-type Instruction = (u128, ProgramId, u32);
+type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
 
 /// A program that calls another program `num_chain_calls` times.
 /// It permutes the order of the input accounts on the subsequent call
@@ -14,7 +16,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: (balance, auth_transfer_id, num_chain_calls),
+            instruction: (balance, auth_transfer_id, num_chain_calls, pda_seed),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -29,13 +31,18 @@ fn main() {
     let mut running_recipient_pre = recipient_pre.clone();
     let mut running_sender_pre = sender_pre.clone();
 
+    // A delegated seed authorizes the sender for the callee, as `pda_seeds` below.
+    if pda_seed.is_some() {
+        running_sender_pre.is_authorized = true;
+    }
+
     let mut chained_calls = Vec::new();
     for _i in 0..num_chain_calls {
         let new_chained_call = ChainedCall {
             program_id: auth_transfer_id,
             instruction_data: call_instruction_data.clone(),
             pre_states: vec![running_sender_pre.clone(), running_recipient_pre.clone()], /* <- Account order permutation here */
-            pda_seeds: vec![],
+            pda_seeds: pda_seed.iter().copied().collect(),
         };
         chained_calls.push(new_chained_call);
 
