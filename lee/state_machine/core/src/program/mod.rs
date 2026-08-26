@@ -411,7 +411,7 @@ impl AccountDiffOutput {
     }
 
     #[must_use]
-    pub const fn required_claim(&self) -> Option<Claim> {
+    pub const fn claim(&self) -> Option<Claim> {
         self.claim
     }
 
@@ -424,10 +424,11 @@ impl AccountDiffOutput {
     pub const fn diff_mut(&mut self) -> &mut AccountDiff {
         &mut self.diff
     }
+}
 
-    #[must_use]
-    pub fn into_diff(self) -> AccountDiff {
-        self.diff
+impl From<AccountDiffOutput> for AccountDiff {
+    fn from(output: AccountDiffOutput) -> Self {
+        output.diff
     }
 }
 
@@ -764,6 +765,9 @@ pub enum ExecutionValidationError {
 ///
 /// Currently only ever `Execute`; this exists so a future protocol upgrade can introduce
 /// additional entrypoints without changing the shape of a guest invocation's inputs.
+///
+/// Borsh-encodes by variant index. `Execute` must remain index 0. Future variants must only be
+/// appended at the end, never inserted or reordered.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum CallKind {
     Execute,
