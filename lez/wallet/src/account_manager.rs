@@ -376,6 +376,8 @@ impl AccountManager {
             states.push(state);
         }
 
+        align_private_seeds(&mut states);
+
         let dummy_commitment_root = fetch_private_proofs_and_root(wallet, &mut states).await?;
 
         Ok(Self {
@@ -411,15 +413,15 @@ impl AccountManager {
         local.chain(keycard).collect()
     }
 
-    pub fn private_account_keys(&self) -> Vec<PrivateAccountKeys> {
-        // One secret per note, and the circuit emits one note per account however many of its
-        // namespaces a transaction touches — so dedupe by address, in first-appearance order,
-        // to stay aligned with `private_actions`.
+    /// The private accounts this transaction touches, in first-appearance order. The circuit
+    /// emits one note per account however many of its namespaces the transaction names, so a
+    /// position is not a note: anything counted per note has to come through here.
+    fn private_accounts(&self) -> Vec<&AccountPreparedData> {
         let mut seen = Vec::new();
         self.states
             .iter()
             .filter_map(|state| match state {
-                State::Private(pre) => Some(pre),
+                State::Private(pre) => Some(pre.as_ref()),
                 State::Public { .. } | State::PublicKeycard { .. } => None,
             })
             .filter(|pre| {
@@ -430,6 +432,12 @@ impl AccountManager {
                 }
                 fresh
             })
+            .collect()
+    }
+
+    pub fn private_account_keys(&self) -> Vec<PrivateAccountKeys> {
+        self.private_accounts()
+            .into_iter()
             .map(|pre| {
                 let nonce = if pre.proof.is_some() {
                     pre.account.nonce.private_account_nonce_increment(
@@ -466,11 +474,7 @@ impl AccountManager {
     /// Generate the dummy inputs that pad this transaction's private-account count up to
     /// `MAX_PRIVATE_ACCOUNTS`.
     pub fn dummy_inputs_default(&self) -> Vec<DummyInput> {
-        let private_count = self
-            .states
-            .iter()
-            .filter(|state| matches!(state, State::Private(_)))
-            .count();
+        let private_count = self.private_accounts().len();
         if private_count > Self::MAX_PRIVATE_ACCOUNTS {
             log::warn!(
                 "private account count {private_count} exceeds MAX_PRIVATE_ACCOUNTS ({}); \
@@ -727,6 +731,24 @@ fn private_shared_acc_preparation(
     }
 }
 
+/// One account, one note: the circuit emits a single commitment per private account however
+/// many of its namespaces a transaction touches, and rejects positions whose witnesses disagree.
+/// Every witness field but the seed is derived from the identity or the wallet store, so aligning
+/// later positions on the first one's seed is what makes two namespaces at one account provable.
+fn align_private_seeds(states: &mut [State]) {
+    let mut seen: Vec<(AccountId, [u8; 32])> = Vec::new();
+    for state in states {
+        let State::Private(pre) = state else {
+            continue;
+        };
+        let account_id = pre.pre_state.account_id;
+        match seen.iter().find(|(id, _)| *id == account_id) {
+            Some((_, seed)) => pre.random_seed = *seed,
+            None => seen.push((account_id, pre.random_seed)),
+        }
+    }
+}
+
 async fn fetch_private_proofs_and_root(
     wallet: &WalletCore,
     states: &mut [State],
@@ -849,16 +871,15 @@ mod tests {
         assert!(!acc.is_public());
     }
 
-    fn private_state() -> State {
-        let npk = NullifierPublicKey([0; 32]);
+    /// A private position at the account `tag` names, reading `program`'s namespace.
+    fn private_position(tag: u8, program: lee::AccountId, seed: [u8; 32]) -> State {
+        let npk = NullifierPublicKey([tag; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
         let pre_state = public_input(
             &Account::default(),
             false,
             (&npk, &vpk, 0).into(),
-            Some(lee::AccountId::from(
-                programs::authenticated_transfer().id(),
-            )),
+            Some(program),
         );
         State::Private(Box::new(AccountPreparedData {
             ask: None,
@@ -869,9 +890,17 @@ mod tests {
             vpk,
             pre_state,
             proof: None,
-            random_seed: [0; 32],
+            random_seed: seed,
             pda_binding: None,
         }))
+    }
+
+    fn private_state(tag: u8) -> State {
+        private_position(
+            tag,
+            lee::AccountId::from(programs::authenticated_transfer().id()),
+            [0; 32],
+        )
     }
 
     fn public_state() -> State {
@@ -935,13 +964,13 @@ mod tests {
         // In a padded transaction, the padding amount depends on
         // the amount of private accounts used.
         assert_eq!(
-            manager(vec![private_state(), private_state()])
+            manager(vec![private_state(1), private_state(2)])
                 .dummy_inputs_default()
                 .len(),
             max - 2
         );
         assert_eq!(
-            manager(vec![private_state(), public_state(), private_state()])
+            manager(vec![private_state(1), public_state(), private_state(2)])
                 .dummy_inputs_default()
                 .len(),
             max - 2
@@ -949,11 +978,53 @@ mod tests {
 
         // If the private accounts in the transaction exceed the max, no padding
         // is done.
-        let full: Vec<State> = std::iter::repeat_with(private_state).take(max).collect();
+        let max_tag = u8::try_from(max).expect("the padding max fits in a tag");
+        let full: Vec<State> = (0..max_tag).map(private_state).collect();
         assert_eq!(manager(full).dummy_inputs_default().len(), 0);
-        let over: Vec<State> = std::iter::repeat_with(private_state)
-            .take(max + 2)
-            .collect();
+        let over: Vec<State> = (0..max_tag.saturating_add(2)).map(private_state).collect();
         assert_eq!(manager(over).dummy_inputs_default().len(), 0);
+    }
+
+    /// Two namespaces at one account are one note, so they consume one padding slot, not two.
+    /// Counting positions would leave the transaction one note short of the anonymity set.
+    #[test]
+    fn two_namespaces_at_one_account_pad_as_one_note() {
+        let other = lee::AccountId::from(programs::faucet().id());
+        let states = vec![
+            private_state(1),
+            private_position(1, other, [0; 32]),
+            private_state(2),
+        ];
+        let manager = manager(states);
+
+        assert_eq!(manager.private_account_keys().len(), 2);
+        assert_eq!(
+            manager.dummy_inputs_default().len(),
+            AccountManager::MAX_PRIVATE_ACCOUNTS - 2
+        );
+    }
+
+    /// The circuit rejects positions of one account whose witnesses disagree, and the seed is
+    /// the only witness field the wallet draws fresh per position.
+    #[test]
+    fn positions_of_one_account_share_a_seed() {
+        let other = lee::AccountId::from(programs::faucet().id());
+        let mut states = vec![
+            private_state(1),
+            private_position(1, other, [9; 32]),
+            private_position(2, other, [4; 32]),
+        ];
+
+        align_private_seeds(&mut states);
+
+        let seeds: Vec<[u8; 32]> = states
+            .iter()
+            .map(|state| match state {
+                State::Private(pre) => pre.random_seed,
+                State::Public { .. } | State::PublicKeycard { .. } => unreachable!(),
+            })
+            .collect();
+        assert_eq!(seeds[0], seeds[1], "one account, one seed");
+        assert_eq!(seeds[2], [4; 32], "a different account keeps its own");
     }
 }
