@@ -26,7 +26,6 @@ fn main() {
     let post_states = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
-            recipient_id,
             amount,
         } => {
             let [bridge, recipient, receipt] = <[_; 3]>::try_from(pre_states.clone())
@@ -36,11 +35,6 @@ fn main() {
                 bridge.account_id,
                 bridge_core::compute_bridge_account_id(self_program_id),
                 "First account must be bridge PDA"
-            );
-
-            assert_eq!(
-                recipient.account_id, recipient_id,
-                "Second account must be the recipient"
             );
 
             assert_eq!(
