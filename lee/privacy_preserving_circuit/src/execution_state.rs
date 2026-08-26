@@ -19,6 +19,11 @@ pub struct ExecutionState {
     pre_states: Vec<Input>,
     /// Keyed by the position, not the account: a slot's effect is its own.
     post_states: HashMap<(AccountId, AccountId), Slot>,
+    /// The positions already written to `pre_states`, keyed exactly as the public path keys
+    /// `positions_seen`. A first sighting is anchored to chain state and journalled; a later one
+    /// is anchored to what an earlier frame wrote and must not be journalled again. Address-only
+    /// positions leave no post behind, so post-presence cannot answer this for them.
+    journalled: HashSet<(AccountId, Option<AccountId>)>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     /// Accounts declared authorized at their first sight, anywhere in the call tree.
@@ -71,6 +76,7 @@ impl ExecutionState {
         let mut execution_state = Self {
             pre_states: Vec::new(),
             post_states: HashMap::new(),
+            journalled: HashSet::new(),
             block_validity_window,
             timestamp_validity_window,
             globally_authorized: HashSet::new(),
@@ -198,7 +204,7 @@ impl ExecutionState {
         // Two passes, mirroring the public path: every pre state is checked against the
         // state as of the PREVIOUS frame before any of this frame's posts land. Every
         // position is visited — `validate_execution` has already rejected two positions
-        // naming the same slot, and one account may legitimately hold two namespaces.
+        // naming the same one, and one account may legitimately hold two namespaces.
         for pre in &output_pre_states {
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
@@ -223,33 +229,12 @@ impl ExecutionState {
                     })
                 };
 
-            if let Some((program, slot)) = pre_slot
-                && let Some(known_post) = self.post_states.get(&(pre_account_id, program))
-            {
-                // Ensure that new pre state is the same as known post state
-                assert_eq!(
-                    known_post, slot,
-                    "Inconsistent pre state for account {pre_account_id}",
-                );
-
-                let granted = seed_granted(self.private_pda_keys.get(&pre_account_id));
-                if let Some((program_id, seed)) = granted {
-                    assert_family_binding(
-                        &mut self.pda_family_binding,
-                        program_id,
-                        seed,
-                        pre_account_id,
-                    );
-                }
-                let is_authorized = granted.is_some()
-                    || self.globally_authorized.contains(&pre_account_id)
-                    || caller.authorized_accounts.contains(&pre_account_id);
-                assert_eq!(
-                    pre_is_authorized, is_authorized,
-                    "Inconsistent authorization for account {pre_account_id}",
-                );
-            } else {
-                // Pre state for the initial call
+            // A position is journalled once, at its first sight. Later sightings are anchored to
+            // what an earlier frame in this tree wrote, so they are checked here instead.
+            let position = (pre_account_id, pre_slot.map(|(program, _)| program));
+            if self.journalled.insert(position) {
+                // First sight: anchored to chain state, so this is the entry the verifier
+                // reconciles with the message.
                 let pre_state_position = self.pre_states.len();
                 let mut journal_pre = pre.clone();
                 match account_identities.get(pre_state_position) {
@@ -320,6 +305,35 @@ impl ExecutionState {
                     }
                 }
                 self.pre_states.push(journal_pre);
+            } else {
+                if let Some((program, slot)) = pre_slot {
+                    // Ensure that new pre state is the same as known post state
+                    let known_post = self
+                        .post_states
+                        .get(&(pre_account_id, program))
+                        .expect("a journalled slot position has left a post behind");
+                    assert_eq!(
+                        known_post, slot,
+                        "Inconsistent pre state for account {pre_account_id}",
+                    );
+                }
+
+                let granted = seed_granted(self.private_pda_keys.get(&pre_account_id));
+                if let Some((program_id, seed)) = granted {
+                    assert_family_binding(
+                        &mut self.pda_family_binding,
+                        program_id,
+                        seed,
+                        pre_account_id,
+                    );
+                }
+                let is_authorized = granted.is_some()
+                    || self.globally_authorized.contains(&pre_account_id)
+                    || caller.authorized_accounts.contains(&pre_account_id);
+                assert_eq!(
+                    pre_is_authorized, is_authorized,
+                    "Inconsistent authorization for account {pre_account_id}",
+                );
             }
 
             // If an account it authorized, push it to the autorized set.
@@ -346,7 +360,12 @@ impl ExecutionState {
     pub(crate) fn from_positions(positions: Vec<(Input, Option<Slot>)>) -> Self {
         let mut pre_states = Vec::new();
         let mut post_states = HashMap::new();
+        let mut journalled = HashSet::new();
         for (pre, post) in positions {
+            journalled.insert((
+                pre.account_id,
+                pre.slot.as_ref().map(|(program, _)| *program),
+            ));
             if let (Some((program, _)), Some(post)) = (&pre.slot, post) {
                 post_states.insert((pre.account_id, *program), post);
             }
@@ -355,6 +374,7 @@ impl ExecutionState {
         Self {
             pre_states,
             post_states,
+            journalled,
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             globally_authorized: HashSet::new(),

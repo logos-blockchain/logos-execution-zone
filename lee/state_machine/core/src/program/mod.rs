@@ -532,10 +532,11 @@ impl From<u128> for WrappedBalanceSum {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExecutionValidationError {
-    #[error("Slot {slot_key} of account {account_id} is named by more than one position")]
-    DuplicateSlotPosition {
+    #[error("Account {account_id} is named by more than one position in namespace {namespace:?}")]
+    DuplicatePosition {
         account_id: AccountId,
-        slot_key: AccountId,
+        /// `None` for a position carrying only an address.
+        namespace: Option<AccountId>,
     },
 
     #[error("Position for account {account_id} names a slot in exactly one of pre and post")]
@@ -650,7 +651,18 @@ pub fn validate_execution(
     let mut named = HashSet::new();
 
     for (pre, post) in pre_states.iter().zip(post_states) {
-        // 2. A position carrying only an address has nothing to write back; one naming a slot must
+        // 2. Positions are distinct, so every one has a well-defined effect and the conservation
+        //    check below counts it once. Keyed on the whole position, address-only included: a
+        //    marker named twice is as ill-defined as a slot named twice.
+        let namespace = pre.slot.as_ref().map(|(slot_key, _)| *slot_key);
+        if !named.insert((pre.account_id, namespace)) {
+            return Err(ExecutionValidationError::DuplicatePosition {
+                account_id: pre.account_id,
+                namespace,
+            });
+        }
+
+        // 3. A position carrying only an address has nothing to write back; one naming a slot must
         //    say what it left there.
         let (Some((slot_key, pre_slot)), Some(post_slot)) = (pre.slot.as_ref(), post.as_ref())
         else {
@@ -661,15 +673,6 @@ pub fn validate_execution(
                 account_id: pre.account_id,
             });
         };
-
-        // 3. Positions name distinct slots, so every slot has one well-defined effect and the
-        //    conservation check below counts it once.
-        if !named.insert((pre.account_id, *slot_key)) {
-            return Err(ExecutionValidationError::DuplicateSlotPosition {
-                account_id: pre.account_id,
-                slot_key: *slot_key,
-            });
-        }
 
         // 4. A program may debit only its own slot: a foreign slot keeps its data and may only gain
         //    balance. This mirrors the account-level law, transposed to slots.

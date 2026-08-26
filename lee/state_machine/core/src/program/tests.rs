@@ -448,8 +448,34 @@ fn positions_may_not_name_the_same_slot_twice() {
             &[Some(slot(100, b"")), Some(slot(100, b""))],
             P,
         ),
-        Err(ExecutionValidationError::DuplicateSlotPosition { .. })
+        Err(ExecutionValidationError::DuplicatePosition { .. })
     ));
+}
+
+/// Both message-level checks reject a repeated address-only position, so the rulebook has to
+/// as well: the circuit journals one entry per position and cannot journal this one twice.
+#[test]
+fn positions_may_not_name_the_same_address_twice() {
+    assert!(matches!(
+        validate_execution(&[address_only(1), address_only(1)], &[None, None], P),
+        Err(ExecutionValidationError::DuplicatePosition {
+            namespace: None,
+            ..
+        })
+    ));
+}
+
+/// An address-only position and a slot at the same account are different positions.
+#[test]
+fn an_address_only_position_does_not_collide_with_a_slot() {
+    assert!(
+        validate_execution(
+            &[address_only(1), at(1, P, slot(1, b""))],
+            &[None, Some(slot(1, b""))],
+            P
+        )
+        .is_ok()
+    );
 }
 
 #[test]
