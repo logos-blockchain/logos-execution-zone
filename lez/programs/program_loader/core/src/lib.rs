@@ -1,4 +1,5 @@
 pub use lee_core::program::{PdaSeed, ProgramData};
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
     program::{AccountPostState, Claim, ProgramId},
@@ -9,7 +10,7 @@ const DEPLOY_HEADER_SEED_DOMAIN_SEPARATOR: AccountId =
 const DEPLOY_SEGMENT_SEED_DOMAIN_SEPARATOR: AccountId =
     AccountId::new(*b"/LEZ/v0.3/LoaderDeploySegmentSee");
 
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Deploys a new program: writes its `ProgramData` header and one bytecode segment, each
     /// claimed as a PDA of the loader.

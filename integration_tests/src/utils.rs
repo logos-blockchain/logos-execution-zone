@@ -367,12 +367,6 @@ pub fn deploy_transaction(
 
 /// The exact wire size the sequencer measures a transaction by (see
 /// `sequencer_rpc_server_actor::actor::service`'s `send_transaction`).
-///
-/// A `Deploy`'s bytecode is transported through `instruction_data` (`Vec<u32>`), and RISC0's
-/// word-oriented serde doesn't pack `Vec<u8>` efficiently: each byte becomes its own 4-byte word,
-/// so a `Deploy` transaction's wire size runs ~4x its raw bytecode length. Measuring the real
-/// encoded size here (rather than guessing from bytecode length) keeps size-sensitive tests
-/// correct regardless of that encoding overhead.
 #[must_use]
 pub fn encoded_tx_size(tx: &common::transaction::LeeTransaction) -> u64 {
     u64::try_from(

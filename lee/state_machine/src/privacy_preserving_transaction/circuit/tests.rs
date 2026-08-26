@@ -975,7 +975,7 @@ fn pda_update_attempt(
 
     execute_and_prove(
         vec![pda_pre, recipient_pre],
-        Program::serialize_instruction((seed, 1_u128, simple_transfer_account_id, false)).unwrap(),
+        Program::serialize_instruction((seed, 1_u128, simple_transfer_account_id)).unwrap(),
         vec![
             InputAccountIdentity::Private(PrivateWitness {
                 vpk: keys.vpk(),
