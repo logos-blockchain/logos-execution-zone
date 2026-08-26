@@ -112,10 +112,19 @@ impl ValidatedStateDiff {
         ))
     }
 
-    /// The settlement-shaped variant: the metered outcome survives a failed
-    /// execution, so a reverted transaction can still be charged for the
-    /// cycles it consumed. An out-of-gas failure is metered at the whole
-    /// budget.
+    /// The settlement-shaped variant: authenticate, execute under `cycle_budget`,
+    /// and return a diff that is always safe to apply.
+    ///
+    /// - `Ok` on success carries the transaction's full effects plus the signers' nonce advances.
+    /// - `Ok` on a *reverted* action (a program failure or out-of-gas) carries only the signers'
+    ///   nonce advances: the effects are discarded, but the charged transaction still burns its
+    ///   replay protection. The caller keeps the fee and applies whatever comes back.
+    /// - `Err` is reserved for a transaction that fails authentication (an invalid signature or
+    ///   replayed nonce) — malformed, not merely reverted — so the caller rejects the block instead
+    ///   of charging it.
+    ///
+    /// The metered outcome survives either path; an out-of-gas failure is metered
+    /// at the whole budget.
     pub fn from_public_transaction_metered(
         tx: &PublicTransaction,
         state: &V03State,
@@ -123,10 +132,22 @@ impl ValidatedStateDiff {
         timestamp: Timestamp,
         cycle_budget: u64,
     ) -> (ExecutionOutcome, Result<Self, LeeError>) {
+        // Authentication failure is a malformed transaction, not a revert: bail
+        // before executing so the caller can reject the block.
+        let signers = match authenticate_public_transaction_signers(tx, state) {
+            Ok(signers) => signers,
+            Err(err) => return (ExecutionOutcome::FREE, Err(err)),
+        };
+        let message = tx.message();
+        // Signers both authorize the execution and advance their replay nonces.
+        let authorized: HashSet<AccountId> = signers.iter().copied().collect();
         let mut cycles_used: u64 = 0;
-        // FIXME: why pass mut here, just return cycles as well?
-        let result = Self::execute_public_core(
-            tx,
+        let result = Self::execute_authorized(
+            message.program_id,
+            &message.account_ids,
+            &message.instruction_data,
+            &authorized,
+            signers.clone(),
             state,
             block_id,
             timestamp,
@@ -139,7 +160,18 @@ impl ValidatedStateDiff {
         } else {
             cycles_used
         };
-        (ExecutionOutcome { cycles }, result)
+        // A reverted action keeps no effects but still advances the signers'
+        // nonces, so what `apply_state_diff` receives is the nonce bumps alone.
+        let diff = result.unwrap_or_else(|_| {
+            Self(StateDiff {
+                signer_account_ids: signers,
+                public_diff: HashMap::new(),
+                new_commitments: Vec::new(),
+                new_nullifiers: Vec::new(),
+                program: None,
+            })
+        });
+        (ExecutionOutcome { cycles }, Ok(diff))
     }
 
     /// Executes a fee-settlement invocation (reserve or refund), authorized by
@@ -158,6 +190,7 @@ impl ValidatedStateDiff {
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
+        let mut cycles_used = 0; // dont care
         Self::execute_authorized(
             program_id,
             account_ids,
@@ -168,7 +201,7 @@ impl ValidatedStateDiff {
             block_id,
             timestamp,
             crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
-            &mut 0, // dont care
+            &mut cycles_used,
         )
     }
 
@@ -629,9 +662,8 @@ impl ValidatedStateDiff {
 }
 
 /// Validates the witness set and replay nonces of a public transaction against
-/// `state`, returning the signer account ids. Public so the charged transition
-/// can authenticate before reserving the fee.
-pub fn authenticate_public_transaction_signers(
+/// `state`, returning the signer account ids.
+fn authenticate_public_transaction_signers(
     tx: &PublicTransaction,
     state: &V03State,
 ) -> Result<Vec<AccountId>, LeeError> {

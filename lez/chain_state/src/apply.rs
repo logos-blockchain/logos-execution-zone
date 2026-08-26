@@ -321,9 +321,13 @@ pub fn settle_transaction(
 
 /// The reserve → action → refund cycle for one charged transaction.
 ///
-/// - A precondition failure (unaffordable reserve, missing authorization) invalidates the whole
-///   block
-/// - a failed *action* is instead a revert that keeps the fee and burns the signers' replay nonces.
+/// The two failure modes sit on opposite sides of the line on purpose:
+/// - A precondition failure (unaffordable reserve, missing authorization, malformed signatures)
+///   means the transaction should never have been *included* — a correct proposer would not build
+///   this block, so the whole block is invalid.
+/// - A failed *action* is ordinary execution semantics: the transaction was validly included and
+///   paid its fee, its effects just did not take. It reverts, keeping the fee and burning the
+///   signers' replay nonces.
 #[expect(
     clippy::too_many_arguments,
     reason = "the settlement threads exactly the block-transition context the spec names"
@@ -348,10 +352,6 @@ fn settle_charged_transaction(
             "designated payer's authorization is missing".into(),
         ));
     }
-    // Capture the signer set up front so a reverted action can still burn the
-    // replay nonces.
-    let signers = lee::authenticate_public_transaction_signers(public_tx, state)
-        .map_err(|err| fee_validity(err.to_string()))?;
 
     let payer = view.payer();
 
@@ -378,15 +378,15 @@ fn settle_charged_transaction(
 
     // Phase 2: Action
     //
-    // Runs the metered execution at `gas_limit`. The nonce advances here:
-    //
-    // - on success: through `apply_state_diff`
-    // - on revert: explicitly via `advance_nonces`, while the reserved fee stays committed either
-    //   way.
+    // Runs the metered execution at `gas_limit`. The returned diff carries the
+    // action's effects on success or only the signers' nonce advances on a
+    // revert; either way the reserved fee stays committed. An authentication
+    // failure is a malformed transaction that invalidates the whole block.
     let gas_limit = view.gas_limit();
     let (outcome, result) = lee::ValidatedStateDiff::from_public_transaction_metered(
         public_tx, state, block_id, timestamp, gas_limit,
     );
+    let action_diff = result.map_err(|err| fee_validity(format!("fee action failed: {err}")))?;
     // r0 cycle count can overshoot, clamp to `gas_limit`
     let charged_cycles = outcome.cycles.min(gas_limit);
 
@@ -405,20 +405,14 @@ fn settle_charged_transaction(
             }
         })?;
 
-    match result {
-        Ok(diff) => {
-            // A charged transaction whose program touches the fee/clock/faucet
-            // accounts is a drain attempt (the canonical fee invocation is the
-            // block tail, byte-compared separately). Reject the block rather
-            // than apply it — the guard the builder runs, enforced here so
-            // followers do not accept a leader's drain.
-            validate_no_restricted_account_modification(state, &diff)
-                .map_err(|err| fee_restricted(err.to_string()))?;
-            state.apply_state_diff(diff);
-        }
-        // Revert keeps the fee and consumes the replay protection.
-        Err(_) => state.advance_nonces(&signers),
-    }
+    // A charged transaction whose program touches the fee/clock/faucet accounts
+    // is a drain attempt (the canonical fee invocation is the block tail,
+    // byte-compared separately). A reverted action's diff is nonce-only and
+    // passes trivially; a successful one is guarded here so followers do not
+    // accept a leader's drain.
+    validate_no_restricted_account_modification(state, &action_diff)
+        .map_err(|err| fee_restricted(err.to_string()))?;
+    state.apply_state_diff(action_diff);
 
     // Phase 3: Refund
     //

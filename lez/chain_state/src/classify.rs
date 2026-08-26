@@ -71,7 +71,7 @@ pub fn classify(
         return Ok(FeeClass::Exempt);
     }
 
-    // TODO: this wont be needed when Vault sweeps are removed
+    // TODO: this won't be needed when Vault sweeps are removed
     if is_full_vault_sweep(tx, state) {
         return Ok(FeeClass::Exempt);
     }

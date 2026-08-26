@@ -214,22 +214,6 @@ impl V03State {
         }
     }
 
-    /// Advances the replay nonce of each given account by one. Used when a
-    /// charged transaction reverts: its fee is kept and its replay protection
-    /// is consumed even though its effects are discarded.
-    pub fn advance_nonces(&mut self, account_ids: &[AccountId]) {
-        for account_id in account_ids {
-            let account = self.get_account_by_id_mut(*account_id);
-            account.nonce = lee_core::account::Nonce(
-                account
-                    .nonce
-                    .0
-                    .checked_add(1)
-                    .expect("nonce increment overflow"),
-            );
-        }
-    }
-
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
         let StateDiff {
             signer_account_ids,

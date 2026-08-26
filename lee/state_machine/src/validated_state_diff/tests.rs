@@ -650,24 +650,37 @@ fn free_outcome_is_zero_cycles() {
 }
 
 #[test]
-fn metered_failure_still_reports_cycles() {
-    let (state, tx) = metering_transfer_fixture();
+fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
+    let (mut state, tx) = metering_transfer_fixture();
+    let from = AccountId::from(&PublicKey::new_from_private_key(
+        &PrivateKey::try_new([1_u8; 32]).unwrap(),
+    ));
+    let to = AccountId::from(&PublicKey::new_from_private_key(
+        &PrivateKey::try_new([2_u8; 32]).unwrap(),
+    ));
+    let from_before = state.get_account_by_id(from).balance;
+
+    // A budget too small to finish the transfer: the action runs out of gas.
     let (outcome, result) =
         ValidatedStateDiff::from_public_transaction_metered(&tx, &state, 1, 0, 1_024);
-    assert!(matches!(result, Err(LeeError::OutOfGas { .. })));
     assert_eq!(
         outcome.cycles, 1_024,
         "out-of-gas is metered at the whole budget"
     );
-}
 
-#[test]
-fn advance_nonces_bumps_exactly_the_given_accounts() {
-    let bumped = AccountId::new([6_u8; 32]);
-    let untouched = AccountId::new([7_u8; 32]);
-    let mut state = V03State::new().with_public_account_balances([(bumped, 1), (untouched, 1)]);
-
-    state.advance_nonces(&[bumped]);
-    assert_eq!(state.get_account_by_id(bumped).nonce.0, 1);
-    assert_eq!(state.get_account_by_id(untouched).nonce.0, 0);
+    // The revert is buried as a successful return: the diff carries no effects,
+    // only the signers' nonce advances, so the charged tx cannot be replayed.
+    let diff = result.expect("a reverted action still yields an applicable diff");
+    assert!(
+        diff.public_diff().is_empty(),
+        "a reverted action moves no balances"
+    );
+    state.apply_state_diff(diff);
+    assert_eq!(
+        state.get_account_by_id(from).balance,
+        from_before,
+        "the transfer was reverted"
+    );
+    assert_eq!(state.get_account_by_id(from).nonce.0, 1);
+    assert_eq!(state.get_account_by_id(to).nonce.0, 1);
 }
