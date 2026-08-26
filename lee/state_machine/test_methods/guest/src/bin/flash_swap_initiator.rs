@@ -98,18 +98,14 @@ fn main() {
             vault_slot.balance = min_vault_balance
                 .checked_sub(amount_out)
                 .expect("vault has insufficient balance for flash swap");
-            let vault_after_transfer = vault_pre
-                .clone()
-                .with_slot(token_program_id, vault_slot.clone());
+            let vault_after_transfer = vault_pre.clone().with_slot(vault_slot.clone());
 
             let mut receiver_slot = receiver_pre.slot_of(token_program_id).clone();
             receiver_slot.balance = receiver_pre
                 .balance(token_program_id)
                 .checked_add(amount_out)
                 .expect("receiver balance overflow");
-            let receiver_after_transfer = receiver_pre
-                .clone()
-                .with_slot(token_program_id, receiver_slot);
+            let receiver_after_transfer = receiver_pre.clone().with_slot(receiver_slot);
 
             let mut vault_slot_after_callback = vault_slot;
             vault_slot_after_callback.balance = vault_slot_after_callback
@@ -118,7 +114,7 @@ fn main() {
                 .expect("vault balance overflow after callback");
             let vault_after_callback = vault_after_transfer
                 .clone()
-                .with_slot(token_program_id, vault_slot_after_callback);
+                .with_slot(vault_slot_after_callback);
 
             // Chained call 1: Token transfer (vault → receiver).
             let transfer_instruction =

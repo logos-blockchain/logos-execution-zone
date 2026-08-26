@@ -196,8 +196,7 @@ fn stake(
         .expect("SequencerStakeConfig should fit in account data");
 
     // chained-call pre-states reflect state as of when each call runs
-    let ownership_account_recorded =
-        ownership_account.with_slot(self_program_id, ownership_account_post.clone());
+    let ownership_account_recorded = ownership_account.with_slot(ownership_account_post.clone());
 
     let mover_call = ChainedCall {
         program_id: mover_program_id,
@@ -209,8 +208,7 @@ fn stake(
     // expected balance after the mover call
     let mut after_mover_slot = ownership_account_post.clone();
     after_mover_slot.balance = expected_balance_after;
-    let ownership_account_after_mover =
-        ownership_account_recorded.with_slot(self_program_id, after_mover_slot);
+    let ownership_account_after_mover = ownership_account_recorded.with_slot(after_mover_slot);
 
     let confirm_call = ChainedCall::new(
         self_program_id,

@@ -51,14 +51,14 @@ fn main() {
             Some(new_balance) => new_balance,
             None => return,
         };
-        running_sender_pre = running_sender_pre.with_slot(auth_transfer_id, sender_slot);
+        running_sender_pre = running_sender_pre.with_slot(sender_slot);
 
         let mut recipient_slot = running_recipient_pre.slot_of(auth_transfer_id).clone();
         recipient_slot.balance = match recipient_slot.balance.checked_add(balance) {
             Some(new_balance) => new_balance,
             None => return,
         };
-        running_recipient_pre = running_recipient_pre.with_slot(auth_transfer_id, recipient_slot);
+        running_recipient_pre = running_recipient_pre.with_slot(recipient_slot);
     }
 
     ProgramOutput::new(

@@ -291,10 +291,12 @@ impl Input {
     }
 
     /// The same position carrying a different slot, for building the pre-state a chained call
-    /// will see once the calls before it have run.
+    /// will see once the calls before it have run. The namespace is the one this position
+    /// already names: a position may change what its slot holds, never which slot it is.
     #[must_use]
-    pub fn with_slot(mut self, program: impl Into<AccountId>, slot: Slot) -> Self {
-        self.slot = Some((program.into(), slot));
+    pub fn with_slot(mut self, slot: Slot) -> Self {
+        let (program, _) = self.slot.expect("Position names no slot");
+        self.slot = Some((program, slot));
         self
     }
 
