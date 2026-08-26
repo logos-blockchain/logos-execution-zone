@@ -447,6 +447,21 @@ impl AccountManager {
             .collect()
     }
 
+    /// The account that pays this transaction's fee: the first public signing
+    /// account. Its ordinary signature covers the message, so it is fee-authorized
+    /// without a separate fee witness. Non-signing public accounts (`sk: None`)
+    /// are skipped — an unsignable account could never authorize the fee.
+    pub fn fee_payer_account_id(&self) -> Option<AccountId> {
+        self.states.iter().find_map(|state| match state {
+            State::Public {
+                account,
+                sk: Some(_),
+            }
+            | State::PublicKeycard { account, .. } => Some(account.account_id),
+            State::Public { sk: None, .. } | State::Private(_) => None,
+        })
+    }
+
     pub fn public_account_ids(&self) -> Vec<AccountId> {
         self.states
             .iter()
@@ -739,12 +754,60 @@ mod tests {
         State::Public { account, sk: None }
     }
 
+    /// A public account the wallet can sign for.
+    fn public_signing_state(seed: u8) -> State {
+        let sk = lee::PrivateKey::try_new([seed; 32]).expect("valid key");
+        let account_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&sk));
+        let account = AccountWithMetadata::new(Account::default(), false, account_id);
+        State::Public {
+            account,
+            sk: Some(sk),
+        }
+    }
+
     fn manager(states: Vec<State>) -> AccountManager {
         AccountManager {
             states,
             pin: None,
             dummy_commitment_root: [0; 32],
         }
+    }
+
+    #[test]
+    fn fee_payer_is_the_first_public_signing_account() {
+        let manager = manager(vec![
+            private_state(),
+            public_signing_state(1),
+            public_signing_state(2),
+        ]);
+        let expected = manager.public_account_ids()[0];
+        assert_eq!(manager.fee_payer_account_id(), Some(expected));
+    }
+
+    #[test]
+    fn fee_payer_skips_a_non_signing_public_account() {
+        // A tracked but unsignable public account (sk: None, e.g. an AMM pool
+        // or definition PDA passed as a non-signing input) must not be
+        // designated payer — the first signing account is chosen instead.
+        let signing = public_signing_state(3);
+        let State::Public { account, .. } = &signing else {
+            unreachable!("public_signing_state builds a public account");
+        };
+        let signing_id = account.account_id;
+        let manager = manager(vec![public_state(), signing]);
+        assert_eq!(manager.fee_payer_account_id(), Some(signing_id));
+    }
+
+    #[test]
+    fn no_public_account_means_no_fee_payer() {
+        let manager = manager(vec![private_state()]);
+        assert_eq!(manager.fee_payer_account_id(), None);
+    }
+
+    #[test]
+    fn a_non_signing_public_account_alone_has_no_fee_payer() {
+        let manager = manager(vec![public_state()]);
+        assert_eq!(manager.fee_payer_account_id(), None);
     }
 
     #[test]

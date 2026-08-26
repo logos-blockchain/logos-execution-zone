@@ -57,6 +57,25 @@ pub const SUPPRESS_VERBOSE_PRINTS: &str = "SUPPRESS_VERBOSE_PRINTS";
 
 pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
 
+/// Default execution gas limit for wallet-built public transactions: roughly
+/// three times the widest measured program call, one fifth of the per-block cap.
+pub const DEFAULT_GAS_LIMIT: u64 = 2_000_000;
+
+/// Base fee the default `max_fee` is sized against: 8x the genesis minimum,
+/// so defaults survive early congestion without re-signing.
+const ASSUMED_BASE_FEE: u128 = 64;
+
+/// Serialized-size allowance the default `max_fee` is sized against.
+const ASSUMED_DATA_BYTES: u128 = 100_000;
+
+/// Default cap on the fee reservation for wallet-built public transactions.
+#[expect(
+    clippy::as_conversions,
+    reason = "u128::from is not const; the widening is lossless"
+)]
+pub const DEFAULT_MAX_FEE: u128 =
+    (DEFAULT_GAS_LIMIT as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE;
+
 pub enum AccDecodeData {
     Skip,
     Decode(lee_core::SharedSecretKey, AccountId),
@@ -859,11 +878,23 @@ impl WalletCore {
         let account_ids = acc_manager.public_account_ids();
         let nonces = acc_manager.public_account_nonces();
 
+        let payer = acc_manager.fee_payer_account_id().ok_or_else(|| {
+            ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                "Public transaction has no signing account to pay its fees".to_owned(),
+            ))
+        })?;
+
         let message = lee::public_transaction::Message::new_preserialized(
             program_id,
             account_ids,
             nonces,
             instruction_data,
+            Some(lee::FeeDeclaration::new(
+                payer,
+                DEFAULT_GAS_LIMIT,
+                0,
+                DEFAULT_MAX_FEE,
+            )),
         );
 
         let message_hash = message.hash();
