@@ -5,17 +5,18 @@
 
 use cucumber::{gherkin::Step, given};
 use lee::Account;
+use wallet::AccountIdentity;
 
 use super::{
     super::log_step,
     helpers::{
-        config_entry, first_configured_public_account, get_account, stake_config,
-        submit_accepted_stake,
+        config_entry, deploy_and_wait, first_configured_public_account, get_account, stake_config,
+        submit_accepted_stake, wait_for_inclusion,
     },
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
-    stake_scenario::StakeScenario,
+    stake_scenario::{StakeScenario, simple_balance_transfer_instruction, transfer_instruction},
     world::CucumberWorld,
 };
 
@@ -153,5 +154,77 @@ async fn stake_second_sequencer_key(world: &mut CucumberWorld, step: &Step) -> S
 fn off_curve_key_bytes(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
     world.stake_mut()?.set_off_curve_bytes(OFF_CURVE_BYTES);
+    Ok(())
+}
+
+#[given("the stake_chain_caller test program is deployed")]
+async fn deploy_stake_chain_caller(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    deploy_and_wait(world.lez()?, &test_programs::stake_chain_caller()).await
+}
+
+#[given("the simple_balance_transfer test program is deployed")]
+async fn deploy_simple_balance_transfer(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    deploy_and_wait(world.lez()?, &test_programs::simple_balance_transfer()).await
+}
+
+#[given(expr = "a funding account owned by the simple_balance_transfer program holding {string}")]
+async fn fund_account_owned_by_simple_mover(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expression: String,
+) -> StepResult {
+    log_step(step);
+    let balance = world.stake()?.amount(&expression)?;
+    let context = world.lez()?;
+    let simple_mover_id = test_programs::simple_balance_transfer().id();
+
+    // A fresh default account the scenario wallet can sign for.
+    let funding_id = context.new_public_account().await?;
+
+    // Claim it under simple_balance_transfer: its one-account branch claims a
+    // signed default account and ignores the instruction value.
+    let claim_hash = context
+        .send_program_transaction(
+            vec![AccountIdentity::Public(funding_id)],
+            simple_balance_transfer_instruction(0)?,
+            simple_mover_id,
+        )
+        .await?;
+    wait_for_inclusion(context, claim_hash).await?;
+    let owner = get_account(context, funding_id).await?.program_owner;
+    if owner != simple_mover_id.into() {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "the funding account is owned by {owner}, expected simple_balance_transfer"
+            ),
+        });
+    }
+
+    // Credit it from a genesis account. The account is already claimed, so the
+    // authenticated_transfer only moves balance and does not re-claim it —
+    // ownership stays with simple_balance_transfer, which is what lets it debit
+    // the account as the Stake mover.
+    let supply_id = first_configured_public_account(context).await?;
+    let fund_hash = context
+        .send_program_transaction(
+            vec![
+                AccountIdentity::Public(supply_id),
+                AccountIdentity::PublicNoSign(funding_id),
+            ],
+            transfer_instruction(balance)?,
+            programs::authenticated_transfer().id(),
+        )
+        .await?;
+    wait_for_inclusion(context, fund_hash).await?;
+    let funded = get_account(context, funding_id).await?.balance;
+    if funded != balance {
+        return Err(StepError::AssertionFailed {
+            message: format!("the funding account holds {funded}, expected {balance}"),
+        });
+    }
+
+    world.stake_mut()?.set_funding_id(funding_id);
     Ok(())
 }

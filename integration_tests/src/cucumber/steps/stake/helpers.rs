@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use common::HashType;
 use futures::future::try_join_all;
-use lee::{Account, AccountId, PublicKey};
+use lee::{Account, AccountId, PublicKey, program::Program};
 use lee_core::program::{InstructionData, ProgramId};
 use sequencer_service_rpc::RpcClient as _;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig};
@@ -151,6 +151,15 @@ pub(super) async fn submit_and_record(
         submitted_at_block,
     });
     Ok(())
+}
+
+/// Deploys `program`'s bytecode at runtime and waits until the deployment is
+/// included, so the program is registered in state and usable as the target of
+/// a later transaction. Test guests are not in the node's compiled-in program
+/// set, so scenarios that exercise one deploy it first.
+pub(super) async fn deploy_and_wait(context: &LezScenarioContext, program: &Program) -> StepResult {
+    let hash = context.deploy_program(program.elf().to_vec()).await?;
+    wait_for_inclusion(context, hash).await
 }
 
 /// Waits until `hash` appears in a block.

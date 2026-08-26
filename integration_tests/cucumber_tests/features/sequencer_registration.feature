@@ -24,11 +24,15 @@ Feature: Sequencer registration — a first Stake turns balance into stake
   # dropped with a reason), replace the two-block window with it.
   #
   # Registration cases not ported:
-  # - P-15, P-16 need a bad-mover guest
-  # - P-17, P-19 need a chained-caller guest
-  # - P-21 needs a second mover program fitting Stake's two-account slot
-  # - G-01..G-03 exercise genesis builders private to sequencer_core, where
-  #   G-01 and G-02 are already covered
+  # - P-15, P-16 need no new test program: the mover instruction data is
+  #   caller-controlled and opaque to sequencer_stake, so authenticated_transfer
+  #   can be told to move a different amount than the Stake declares
+  # - P-19 needs a ConfirmStake chained from another program, rejected by the
+  #   self-caller guard; the stake_chain_caller program supports it
+  # - G-01..G-03 exercise genesis builders private to sequencer_core
+  #
+  # P-17 and P-21 deploy a test program at runtime (a program deployment
+  # transaction), since test guests are not in the node's compiled-in set.
 
   Background:
     Given a LEZ stack with fast blocks and configured public accounts
@@ -118,6 +122,19 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     Then the stake transaction is not included in a block
     And the stake accounts are unchanged
 
+  @stake_registration_ci @P-17 @P1 @L3
+  # In-program reason: "Stake is only invoked as a top-level user
+  # transaction". The stake_chain_caller test program (deployed at runtime)
+  # forwards an otherwise well-formed Stake into sequencer_stake as a chained
+  # call, so the caller-is-none guard is the only assert that can reject it.
+  Scenario: Stake invoked as a chained call is rejected
+    Given the stake_chain_caller test program is deployed
+    When a Stake of "twice the minimum stake" is submitted as a chained call through the stake_chain_caller program
+    Then the stake transaction is not included in a block
+    And the ownership account is not claimed
+    And the config has no entry for the sequencer key
+    And the stake accounts are unchanged
+
   @stake_registration_ci @P-20 @P2 @L3
   # In-program reason: "Stake requires a funding account, an ownership
   # account, and the config account".
@@ -130,6 +147,20 @@ Feature: Sequencer registration — a first Stake turns balance into stake
       | count |
       | 2     |
       | 4     |
+
+  @stake_registration_ci @P-21 @P2 @L3
+  # Stake is generic over its mover. The simple_balance_transfer test program
+  # (deployed at runtime) is a native two-account transfer distinct from
+  # authenticated_transfer; the funding account is claimed under it so it may
+  # debit it.
+  Scenario: Registration through a second mover program is accepted
+    Given the simple_balance_transfer test program is deployed
+    And a funding account owned by the simple_balance_transfer program holding "twice the minimum stake"
+    When a Stake of "twice the minimum stake" is submitted with simple_balance_transfer as the mover
+    Then the stake transaction is accepted
+    And the config entry tracks the staked amount with no pending unstake
+    And the ownership account balance increased by the staked amount
+    And the funding account balance decreased by the staked amount
 
   @stake_registration_ci @P-23 @P1 @L3
   # ⚠️ Diverges further from the plan than the earlier L1 port did. The plan

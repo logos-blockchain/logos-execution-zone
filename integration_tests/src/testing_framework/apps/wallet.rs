@@ -103,6 +103,10 @@ enum WalletRequest {
         program_id: ProgramId,
         response: oneshot::Sender<Result<HashType, String>>,
     },
+    SendProgramDeployment {
+        bytecode: Vec<u8>,
+        response: oneshot::Sender<Result<HashType, String>>,
+    },
     WalletPassword {
         response: oneshot::Sender<Result<String, String>>,
     },
@@ -393,6 +397,14 @@ impl WalletActor {
                                     .map_err(|error| format!("{error:?}"));
                                 let _unused = response.send(result);
                             }
+                            WalletRequest::SendProgramDeployment { bytecode, response } => {
+                                let result = components
+                                    .wallet
+                                    .send_program_deployment_transaction(bytecode)
+                                    .await
+                                    .map_err(|error| format!("{error:?}"));
+                                let _unused = response.send(result);
+                            }
                             WalletRequest::WalletPassword { response } => {
                                 let _unused = response.send(Ok(components.password.clone()));
                             }
@@ -605,6 +617,16 @@ impl LezRuntime {
             response,
         })
         .await
+    }
+
+    /// Deploys a program at runtime by submitting its bytecode as a program
+    /// deployment transaction; returns the submission hash.
+    pub async fn send_program_deployment_transaction(
+        &self,
+        bytecode: Vec<u8>,
+    ) -> Result<HashType, DynError> {
+        self.request(|response| WalletRequest::SendProgramDeployment { bytecode, response })
+            .await
     }
 
     /// Executes an authenticated public transfer using wallet-resolved labels.

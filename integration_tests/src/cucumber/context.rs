@@ -272,6 +272,15 @@ impl LezScenarioContext {
             .map_err(StepError::query_failed_boxed)
     }
 
+    /// Deploys a program at runtime by submitting its bytecode through the
+    /// scenario wallet; returns the submission hash.
+    pub async fn deploy_program(&self, bytecode: Vec<u8>) -> Result<HashType, StepError> {
+        self.wallet()
+            .send_program_deployment_transaction(bytecode)
+            .await
+            .map_err(StepError::query_failed_boxed)
+    }
+
     /// Executes an authenticated public transfer using wallet-resolved labels.
     pub async fn public_transfer_by_labels(
         &self,

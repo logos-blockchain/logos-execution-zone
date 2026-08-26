@@ -38,6 +38,16 @@ pub const fn chain_caller() -> Program {
 
 #[must_use]
 #[inline]
+pub const fn stake_chain_caller() -> Program {
+    use guests::{STAKE_CHAIN_CALLER_ELF, STAKE_CHAIN_CALLER_ID, STAKE_CHAIN_CALLER_PATH};
+
+    let _unused = STAKE_CHAIN_CALLER_PATH;
+
+    Program::new_unchecked(STAKE_CHAIN_CALLER_ID, Cow::Borrowed(STAKE_CHAIN_CALLER_ELF))
+}
+
+#[must_use]
+#[inline]
 pub const fn authority_proxy() -> Program {
     use guests::{AUTHORITY_PROXY_ELF, AUTHORITY_PROXY_ID, AUTHORITY_PROXY_PATH};
 
