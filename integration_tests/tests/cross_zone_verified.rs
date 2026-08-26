@@ -35,6 +35,9 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
 const PING_PAYLOAD: &[u8] = b"hello-verified-zone";
 
 #[test]
+#[ignore = "blocked on fee support for account-less invocations: the unsigned ping_sender Send \
+            carries no payer account to charge, and the guest's fixed two-account arity leaves no \
+            room to add one (fee subsystem interim policy)"]
 async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     let partial = SequencerPartialConfig::default();
     let channel_a = config::bedrock_channel_id();

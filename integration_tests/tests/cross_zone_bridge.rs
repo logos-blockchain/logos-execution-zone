@@ -24,7 +24,7 @@ use integration_tests::{
     indexer_client::IndexerClient,
 };
 use lee::{
-    AccountId, PrivateKey, PublicKey, PublicTransaction,
+    AccountId, FeeDeclaration, PrivateKey, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
@@ -35,7 +35,9 @@ use test_fixtures::{
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
-const INITIAL_BALANCE: u128 = 100;
+// LGO-scale: the holder's balance also pays the lock's fee (reserve ≈ 16M+ at
+// wallet-like gas limits), so the bridgeable seed must dwarf it.
+const INITIAL_BALANCE: u128 = 10_000_000_000;
 const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
 
@@ -126,10 +128,15 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         "zone A escrow must hold the locked amount"
     );
     let remaining = seq_client_a.get_account(holder_id).await?.balance;
-    assert_eq!(
-        remaining,
-        INITIAL_BALANCE - LOCK_AMOUNT,
-        "zone A holder must be debited by the locked amount"
+    let fee = (INITIAL_BALANCE - LOCK_AMOUNT)
+        .checked_sub(remaining)
+        .expect("holder must be debited at least the locked amount");
+    // The lock builds its own FeeDeclaration with max_fee = 100_000_000
+    // (gas_limit 2_000_000, no tip), so the reserved fee is clamped to that
+    // ceiling.
+    assert!(
+        fee > 0 && fee <= 100_000_000,
+        "zone A holder must be debited by the locked amount plus a nonzero fee"
     );
     Ok(())
 }
@@ -171,9 +178,16 @@ fn build_lock_tx(
         bridge_lock_core::escrow_account_id(bridge_lock_id),
         outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
     ];
-    // One nonce per signature: the holder signs, at its genesis nonce 0.
-    let message = Message::try_new(bridge_lock_id, accounts, vec![0_u128.into()], lock)
-        .expect("build lock message");
+    // One nonce per signature: the holder signs, at its genesis nonce 0. The
+    // holder also pays the fee; its ordinary signature fee-authorizes.
+    let message = Message::try_new_with_fees(
+        bridge_lock_id,
+        accounts,
+        vec![0_u128.into()],
+        lock,
+        FeeDeclaration::new(holder_id, 2_000_000, 0, 100_000_000),
+    )
+    .expect("build lock message");
     let witness = WitnessSet::for_message(&message, &[holder_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness))
 }

@@ -16,8 +16,7 @@ const FEE_ESCROW_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Escrow/000000/";
 const FEE_INBOX_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Inbox/0000000/";
 
 /// Per-block fee summary carried as the fee invocation's instruction and
-/// validated byte-for-byte by the transition. All-zero until fee metering
-/// lands.
+/// validated byte-for-byte by the transition.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BlockFeeSummary {
     pub gas_used_exec: Gas,

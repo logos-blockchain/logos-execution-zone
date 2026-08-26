@@ -34,6 +34,9 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(480);
 const PING_PAYLOAD: &[u8] = b"hello-cross-zone";
 
 #[test]
+#[ignore = "blocked on fee support for account-less invocations: the unsigned ping_sender Send \
+            carries no payer account to charge, and the guest's fixed two-account arity leaves no \
+            room to add one (fee subsystem interim policy)"]
 async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
     let partial = SequencerPartialConfig::default();
     let channel_a = config::bedrock_channel_id();

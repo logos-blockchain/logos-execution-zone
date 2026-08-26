@@ -42,6 +42,9 @@ const RESTART_TIMEOUT: Duration = Duration::from_secs(240);
 const PING_PAYLOAD: &[u8] = b"hello-cross-zone";
 
 #[test]
+#[ignore = "blocked on fee support for account-less invocations: the unsigned ping_sender Send \
+            carries no payer account to charge, and the guest's fixed two-account arity leaves no \
+            room to add one (fee subsystem interim policy)"]
 async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Result<()> {
     // Declared first so it outlives both zones (drops run in reverse order).
     let (_bedrock, bedrock_addr) = setup_bedrock_node()

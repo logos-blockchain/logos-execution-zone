@@ -8,7 +8,8 @@ use std::time::Duration;
 use anyhow::Result;
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
+    config::INITIAL_PUBLIC_BALANCES_FOR_WALLET, private_mention, public_mention,
     utils::{
         account_balance, assert_private_commitment_in_state, get_account, send,
         wait_for_indexer_to_catch_up,
@@ -36,8 +37,16 @@ async fn indexer_state_consistency() -> Result<()> {
     log::info!("Balance of sender: {acc_1_balance:#?}");
     log::info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    // Charged transfer: the recipient gains exactly the amount; the sender
+    // pays the amount plus a positive fee within the protocol ceiling.
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[1] + 100);
+    let fee = (INITIAL_PUBLIC_BALANCES_FOR_WALLET[0] - 100)
+        .checked_sub(acc_1_balance)
+        .expect("sender must be debited at least the transferred amount");
+    assert!(
+        fee > 0 && fee <= wallet::DEFAULT_MAX_FEE,
+        "the sender must pay a positive fee within the protocol ceiling, got {fee}",
+    );
 
     let from: AccountId = ctx.existing_private_accounts()[0];
     let to: AccountId = ctx.existing_private_accounts()[1];

@@ -21,13 +21,15 @@ use std::{
 };
 
 use anyhow::Result;
-use integration_tests::{BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS};
+use integration_tests::{
+    BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+};
 use lee::{
     Account, AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::program::DEFAULT_PROGRAM_OWNER;
-use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
+use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount, program_facades::vault::Vault};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
     FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult, FfiU128,
@@ -599,7 +601,7 @@ fn test_wallet_ffi_get_balance_public() -> Result<()> {
         .unwrap();
         u128::from_le_bytes(out_balance)
     };
-    assert_eq!(balance, 10000);
+    assert_eq!(balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
 
     log::info!("Successfully retrieved account balance");
 
@@ -636,7 +638,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         account.program_owner,
         programs::authenticated_transfer().id().into()
     );
-    assert_eq!(account.balance, 10000);
+    assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
     assert!(account.data.is_empty());
     assert_eq!(account.nonce.0, 1);
 
@@ -676,7 +678,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         account.program_owner,
         programs::authenticated_transfer().id().into()
     );
-    assert_eq!(account.balance, 10000);
+    assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
     assert!(account.data.is_empty());
 
     unsafe {
@@ -955,6 +957,24 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     let to: FfiBytes32 = ctx.ctx().existing_public_accounts()[1].into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
 
+    let from_before = unsafe {
+        let mut out_balance: [u8; 16] = [0; 16];
+        wallet_ffi_get_balance(
+            wallet_ffi_handle,
+            &raw const from,
+            true,
+            &raw mut out_balance,
+        )
+        .unwrap();
+        u128::from_le_bytes(out_balance)
+    };
+    let to_before = unsafe {
+        let mut out_balance: [u8; 16] = [0; 16];
+        wallet_ffi_get_balance(wallet_ffi_handle, &raw const to, true, &raw mut out_balance)
+            .unwrap();
+        u128::from_le_bytes(out_balance)
+    };
+
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
         wallet_ffi_transfer_public(
@@ -989,8 +1009,21 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 20100);
+    // Charged public transfer: the recipient gains exactly the amount; the
+    // sender pays the amount plus a fee bounded by the protocol ceiling.
+    assert_eq!(
+        to_balance,
+        to_before + 100,
+        "recipient gains exactly the transferred amount"
+    );
+    let fee = from_before
+        .checked_sub(100)
+        .and_then(|rest| rest.checked_sub(from_balance))
+        .expect("sender must be debited at least the transferred amount");
+    assert!(
+        fee > 0 && fee <= DEFAULT_MAX_FEE,
+        "a charged transfer pays a positive fee within the ceiling, got {fee}"
+    );
 
     // Also check for transaction inclusion
     let hash_bytes = unsafe { transfer_result.tx_hash_bytes() };
@@ -1031,6 +1064,18 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         (to, out_keys)
     };
     let amount: [u8; 16] = 100_u128.to_le_bytes();
+
+    let from_before = unsafe {
+        let mut out_balance: [u8; 16] = [0; 16];
+        wallet_ffi_get_balance(
+            wallet_ffi_handle,
+            &raw const from,
+            true,
+            &raw mut out_balance,
+        )
+        .unwrap();
+        u128::from_le_bytes(out_balance)
+    };
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
@@ -1082,7 +1127,9 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
+    // A shield moves public funds into a private account and is fee-exempt, so
+    // the public sender is debited exactly the amount, with no fee.
+    assert_eq!(from_balance, from_before - 100);
     assert_eq!(to_balance, 100);
 
     unsafe {
@@ -1611,6 +1658,24 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let to: FfiBytes32 = ctx.ctx().existing_public_accounts()[1].into();
     let amount = 100_u128;
 
+    let from_before = unsafe {
+        let mut out_balance: [u8; 16] = [0; 16];
+        wallet_ffi_get_balance(
+            wallet_ffi_handle,
+            &raw const from,
+            true,
+            &raw mut out_balance,
+        )
+        .unwrap();
+        u128::from_le_bytes(out_balance)
+    };
+    let to_before = unsafe {
+        let mut out_balance: [u8; 16] = [0; 16];
+        wallet_ffi_get_balance(wallet_ffi_handle, &raw const to, true, &raw mut out_balance)
+            .unwrap();
+        u128::from_le_bytes(out_balance)
+    };
+
     let mut transaction_result = FfiTransactionResult::default();
 
     let mut from_account_identity = FfiAccountIdentity::default();
@@ -1674,8 +1739,21 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 20100);
+    // Charged public transfer: the recipient gains exactly the amount; the
+    // sender pays the amount plus a fee bounded by the protocol ceiling.
+    assert_eq!(
+        to_balance,
+        to_before + 100,
+        "recipient gains exactly the transferred amount"
+    );
+    let fee = from_before
+        .checked_sub(100)
+        .and_then(|rest| rest.checked_sub(from_balance))
+        .expect("sender must be debited at least the transferred amount");
+    assert!(
+        fee > 0 && fee <= DEFAULT_MAX_FEE,
+        "a charged transfer pays a positive fee within the ceiling, got {fee}"
+    );
 
     unsafe {
         let account_identities_mut = account_identities.cast_mut();

@@ -11,9 +11,9 @@ use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor};
 
 use crate::error::LeeError;
 
-/// The cycle budget applied to public execution paths that do not yet carry
-/// a transaction-specific budget. Enforcement of the fee spec's per-block cap
-/// replaces this in the charging transition.
+/// The cycle budget applied to public execution paths that do not carry a
+/// transaction-specific budget; charged transactions supply their own
+/// `gas_limit` instead.
 pub const DEFAULT_PUBLIC_CYCLE_BUDGET: Cycles = 1024 * 1024 * 32; // 32M cycles
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
