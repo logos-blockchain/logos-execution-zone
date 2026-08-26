@@ -350,7 +350,7 @@ mod tests {
         state.force_insert_account(
             vault_id,
             lee::Account {
-                program_owner: programs::vault().id(),
+                program_owner: programs::vault().id().into(),
                 balance: 500_000_000,
                 ..lee::Account::default()
             },

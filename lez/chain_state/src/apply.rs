@@ -251,7 +251,7 @@ pub fn derive_block_summary(
     timestamp: Timestamp,
 ) -> Result<BlockFeeSummary, BlockIngestError> {
     let mut scratch = state.clone();
-    let opening = opening_fee_state(state);
+    let opening = opening_fee_state(&scratch);
     let mut summary = BlockFeeSummary::default();
     for (tx_index, transaction) in transactions.iter().enumerate() {
         settle_transaction(

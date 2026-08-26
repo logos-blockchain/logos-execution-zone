@@ -1202,13 +1202,23 @@ async fn a_block_full_of_declared_gas_defers_the_rest() {
             .unwrap();
     }
 
-    let block_id = sequencer.produce_new_block().await.unwrap();
-    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_block_tail(&block, &transfers[..5]);
 
     // Deferred, not dropped: the sixth leads the next block.
-    let block_id = sequencer.produce_new_block().await.unwrap();
-    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_block_tail(&block, &transfers[5..]);
 }
 
@@ -1248,13 +1258,23 @@ async fn an_over_cap_transaction_is_dropped_not_deferred() {
 
     // The over-cap tx is dropped and the normal transfer still makes the block:
     // the builder did not stall behind the unfittable transaction.
-    let block_id = sequencer.produce_new_block().await.unwrap();
-    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_block_tail(&block, std::slice::from_ref(&normal));
 
     // Nothing was deferred: the next block carries no user transactions.
-    let block_id = sequencer.produce_new_block().await.unwrap();
-    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_block_tail(&block, &[]);
 }
 

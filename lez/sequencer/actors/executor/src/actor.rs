@@ -305,7 +305,10 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         GetFeeQuoteReply {
-            quote: self.sequencer.with_state(sequencer_core::fees::fee_quote).await,
+            quote: self
+                .sequencer
+                .with_state(sequencer_core::fees::fee_quote)
+                .await,
         }
     }
 }
