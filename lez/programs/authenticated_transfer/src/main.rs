@@ -85,3 +85,60 @@ fn main() {
     )
     .write();
 }
+
+#[cfg(test)]
+mod tests {
+    use lee_core::account::{AccountId, Data, Nonce};
+
+    use super::*;
+
+    const NATIVE: ProgramId = [1; 8];
+    const OTHER: ProgramId = [2; 8];
+
+    fn holder(balance: u128) -> AccountWithMetadata {
+        AccountWithMetadata {
+            account: Account::single(NATIVE, balance, Data::empty(), Nonce(0)),
+            is_authorized: true,
+            account_id: AccountId::new([0; 32]),
+        }
+    }
+
+    #[test]
+    fn self_transfer_within_one_slot_is_a_no_op() {
+        let holder = holder(100);
+
+        let posts = transfer(holder.clone(), holder, 30, NATIVE, NATIVE);
+
+        assert_eq!(
+            posts[0], posts[1],
+            "both roles must agree on the one account"
+        );
+        assert_eq!(posts[0].balance(NATIVE), 100);
+    }
+
+    #[test]
+    fn self_transfer_across_slots_leaves_two_slots_on_one_account() {
+        let holder = holder(100);
+
+        let posts = transfer(holder.clone(), holder, 30, NATIVE, OTHER);
+
+        assert_eq!(posts[0], posts[1]);
+        assert_eq!(posts[0].balance(NATIVE), 70);
+        assert_eq!(posts[0].balance(OTHER), 30);
+        assert_eq!(posts[0].slots.len(), 2);
+    }
+
+    #[test]
+    fn self_transfer_of_the_whole_balance_prunes_the_source_slot() {
+        let holder = holder(100);
+
+        let posts = transfer(holder.clone(), holder, 100, NATIVE, OTHER);
+
+        assert_eq!(posts[0].balance(OTHER), 100);
+        assert_eq!(
+            posts[0].slots.len(),
+            1,
+            "the emptied source slot must not be stored"
+        );
+    }
+}
