@@ -42,7 +42,6 @@ test_programs.workspace = true
 testnet_initial_state.workspace = true
 program_loader_core.workspace = true
 risc0-binfmt.workspace = true
-borsh.workspace = true
 
 logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true

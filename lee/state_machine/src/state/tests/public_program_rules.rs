@@ -305,13 +305,9 @@ fn program_should_fail_if_modifies_data_of_non_owned_account() {
         state.get_account_by_id(account_id).program_owner,
         program_id
     );
-    let message = public_transaction::Message::try_new(
-        program_id,
-        vec![account_id],
-        vec![],
-        vec![0_u8],
-    )
-    .unwrap();
+    let message =
+        public_transaction::Message::try_new(program_id, vec![account_id], vec![], vec![0_u8])
+            .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 

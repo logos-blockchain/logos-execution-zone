@@ -5,9 +5,7 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
     account::{Account, AccountId, Data},
-    program::{
-        PROGRAM_STORAGE_OWNER, ProgramData, ProgramId, DEPLOYMENT_PROGRAM_ACCOUNT_ID,
-    },
+    program::{DEPLOYMENT_PROGRAM_ACCOUNT_ID, PROGRAM_STORAGE_OWNER, ProgramData, ProgramId},
 };
 
 use crate::{
@@ -330,10 +328,10 @@ impl V03State {
     /// - Owned by [`PROGRAM_STORAGE_OWNER`]: the legacy `ProgramDeploymentTransaction` path, where
     ///   `account.data` is the raw ELF directly and `AccountId::from(image_id)` is the account's
     ///   address by construction.
-    /// - Owned by [`DEPLOYMENT_PROGRAM_ACCOUNT_ID`]: deployed via the native `Deploy`
-    ///   dispatch shortcut. `account.data` decodes as a [`ProgramData`] header holding the real
-    ///   `image_id`; the bytecode itself lives in a second, separately-addressed segment account
-    ///   derived from that header (see `program_loader_core::deploy_segment_account_id`).
+    /// - Owned by [`DEPLOYMENT_PROGRAM_ACCOUNT_ID`]: deployed via the native `Deploy` dispatch
+    ///   shortcut. `account.data` decodes as a [`ProgramData`] header holding the real `image_id`;
+    ///   the bytecode itself lives in a second, separately-addressed segment account derived from
+    ///   that header (see `program_loader_core::deploy_segment_account_id`).
     ///
     /// Returning the real `image_id` — rather than callers deriving one from the address, which
     /// is only valid for the legacy path — is what makes upgrading a `Deploy`-created program

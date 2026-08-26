@@ -169,7 +169,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
                     return None;
                 }
                 let program_loader_core::Instruction::Deploy { bytecode } =
-                    risc0_zkvm::serde::from_slice::<program_loader_core::Instruction, u32>(
+                    borsh::from_slice::<program_loader_core::Instruction>(
                         &public_tx.message.instruction_data,
                     )
                     .ok()?;

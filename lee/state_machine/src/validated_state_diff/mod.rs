@@ -129,7 +129,7 @@ impl ValidatedStateDiff {
                 // play the same role the zkVM executor plays for a real guest: converting a
                 // rejected input into a graceful `Err` instead of unwinding past this call.
                 let program_loader_core::Instruction::Deploy { bytecode } =
-                    risc0_zkvm::serde::from_slice(&chained_call.instruction_data).map_err(|e| {
+                    borsh::from_slice(&chained_call.instruction_data).map_err(|e| {
                         LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
                     })?;
                 let deploy_pre_states = chained_call.pre_states.clone();

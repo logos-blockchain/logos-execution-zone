@@ -1,16 +1,16 @@
 pub use lee_core::program::{PdaSeed, ProgramData};
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
     program::{AccountPostState, Claim, ProgramId},
 };
-use serde::{Deserialize, Serialize};
 
 const DEPLOY_HEADER_SEED_DOMAIN_SEPARATOR: AccountId =
     AccountId::new(*b"/LEZ/v0.3/LoaderDeployHeaderSeed");
 const DEPLOY_SEGMENT_SEED_DOMAIN_SEPARATOR: AccountId =
     AccountId::new(*b"/LEZ/v0.3/LoaderDeploySegmentSee");
 
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Deploys a new program: writes its `ProgramData` header and one bytecode segment, each
     /// claimed as a PDA of the loader.
@@ -129,10 +129,11 @@ pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
     )
 }
 
-/// Executes the `Deploy` instruction: verifies `bytecode` decodes as a valid RISC0 program
-/// binary, derives its header and segment PDAs, and claims both. Called natively from
-/// dispatch's `DEPLOYMENT_PROGRAM_ACCOUNT_ID` shortcut (see that constant's doc
-/// comment in `lee_core::program`).
+/// Executes the `Deploy` instruction.
+///
+/// Verifies `bytecode` decodes as a valid RISC0 program binary, derives its header and segment
+/// PDAs, and claims both. Called natively from dispatch's `DEPLOYMENT_PROGRAM_ACCOUNT_ID`
+/// shortcut (see that constant's doc comment in `lee_core::program`).
 #[must_use]
 pub fn execute_deploy(
     self_account_id: AccountId,

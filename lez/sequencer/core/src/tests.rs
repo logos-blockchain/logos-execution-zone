@@ -14,7 +14,7 @@ use lee::{
 };
 use lee_core::{
     account::Nonce,
-    program::{PdaSeed, ProgramId, DEPLOYMENT_PROGRAM_ACCOUNT_ID},
+    program::{DEPLOYMENT_PROGRAM_ACCOUNT_ID, PdaSeed, ProgramId},
 };
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
@@ -3738,10 +3738,7 @@ fn loader_deploys_program() {
         .expect("Deploy should succeed against unclaimed targets");
 
     let deployed_header = state.get_account_by_id(header);
-    assert_eq!(
-        deployed_header.program_owner,
-        DEPLOYMENT_PROGRAM_ACCOUNT_ID
-    );
+    assert_eq!(deployed_header.program_owner, DEPLOYMENT_PROGRAM_ACCOUNT_ID);
     let program_data = program_loader_core::ProgramData::try_from(&deployed_header.data)
         .expect("deployed header account data should decode as ProgramData");
     assert_eq!(program_data.image_id, image_id);
@@ -3921,10 +3918,7 @@ fn loader_deploys_program_via_chained_call() {
         .expect("Deploy via chained call should succeed");
 
     let deployed_header = state.get_account_by_id(header);
-    assert_eq!(
-        deployed_header.program_owner,
-        DEPLOYMENT_PROGRAM_ACCOUNT_ID
-    );
+    assert_eq!(deployed_header.program_owner, DEPLOYMENT_PROGRAM_ACCOUNT_ID);
 
     let program_data = program_loader_core::ProgramData::try_from(&deployed_header.data)
         .expect("deployed header account data should decode as ProgramData");
