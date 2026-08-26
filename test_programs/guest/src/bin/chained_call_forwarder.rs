@@ -18,9 +18,9 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (target_program_id, instruction_data),
+            instruction: (target_program_id, target_instruction_data),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let post_states = pre_states
@@ -30,7 +30,7 @@ fn main() {
 
     let chained_call = ChainedCall {
         program_account_id: target_program_id.into(),
-        instruction_data,
+        instruction_data: target_instruction_data,
         pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
         pda_seeds: vec![],
     };
@@ -38,7 +38,7 @@ fn main() {
     ProgramOutput::new(
         self_account_id,
         caller_account_id,
-        instruction_words,
+        instruction_data,
         pre_states,
         post_states,
     )
