@@ -125,9 +125,25 @@ impl Account {
         self.slots.get(&program.into())
     }
 
+    /// The slot a program reads through, detached from the account. Vacant slots read as empty.
+    #[must_use]
+    pub fn slot_or_empty(&self, program: impl Into<AccountId>) -> Slot {
+        self.slot(program).cloned().unwrap_or_default()
+    }
+
     /// The slot a program writes through. Vacant slots materialize as empty.
     pub fn slot_mut(&mut self, program: impl Into<AccountId>) -> &mut Slot {
         self.slots.entry(program.into()).or_default()
+    }
+
+    /// Writes a slot back, dropping it if it emptied so the encoding stays canonical.
+    pub fn set_slot(&mut self, program: impl Into<AccountId>, slot: Slot) {
+        let program = program.into();
+        if slot.is_empty() {
+            self.slots.remove(&program);
+        } else {
+            self.slots.insert(program, slot);
+        }
     }
 
     #[must_use]
@@ -290,6 +306,46 @@ mod tests {
         let new_acc = Account::default();
 
         assert!(new_acc.slots.is_empty());
+    }
+
+    #[test]
+    fn vacant_slot_reads_as_empty() {
+        assert!(
+            Account::default()
+                .slot_or_empty(DEFAULT_PROGRAM_ID)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn slot_round_trips_through_set_slot() {
+        let slot = Slot {
+            balance: 7,
+            data: b"round_trip".to_vec().try_into().unwrap(),
+        };
+        let mut account = Account::default();
+
+        account.set_slot(DEFAULT_PROGRAM_ID, slot.clone());
+
+        assert_eq!(account.slot_or_empty(DEFAULT_PROGRAM_ID), slot);
+    }
+
+    #[test]
+    fn set_slot_drops_a_slot_that_emptied() {
+        let mut account = Account::single(DEFAULT_PROGRAM_ID, 5, Data::empty(), Nonce(0));
+
+        account.set_slot(DEFAULT_PROGRAM_ID, Slot::default());
+
+        assert!(account.slots.is_empty());
+    }
+
+    #[test]
+    fn set_slot_never_stores_an_empty_slot() {
+        let mut account = Account::default();
+
+        account.set_slot(DEFAULT_PROGRAM_ID, Slot::default());
+
+        assert!(account.slots.is_empty());
     }
 
     #[cfg(feature = "host")]
