@@ -340,6 +340,29 @@ impl ExecutionState {
         authorized_accounts
     }
 
+    /// The state a completed call tree leaves behind, built directly. Lets the output stage be
+    /// tested against the host without a guest ELF to replay the tree through.
+    #[cfg(test)]
+    pub(crate) fn from_positions(positions: Vec<(Input, Option<Slot>)>) -> Self {
+        let mut pre_states = Vec::new();
+        let mut post_states = HashMap::new();
+        for (pre, post) in positions {
+            if let (Some((program, _)), Some(post)) = (&pre.slot, post) {
+                post_states.insert((pre.account_id, *program), post);
+            }
+            pre_states.push(pre);
+        }
+        Self {
+            pre_states,
+            post_states,
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            globally_authorized: HashSet::new(),
+            private_pda_keys: HashMap::new(),
+            pda_family_binding: HashMap::new(),
+        }
+    }
+
     /// Consume self and yield the validity windows and an iterator over pre and post states of
     /// each account involved in the execution. Returning everything together keeps the
     /// fields module-private rather than forcing them visible to downstream consumers.

@@ -308,9 +308,211 @@ fn compute_update_nullifier_and_set_digest(
 mod tests {
     use std::collections::HashMap;
 
-    use lee_core::{DUMMY_COMMITMENT_HASH, EphemeralPublicKey};
+    use lee_core::{
+        AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, EphemeralPublicKey,
+        account::{Data, Input, Slot},
+        program::ProgramId,
+    };
 
     use super::*;
+    use crate::execution_state::ExecutionState;
+
+    const NATIVE: ProgramId = [1; 8];
+    const OTHER: ProgramId = [2; 8];
+
+    /// A private account with a spendable credential, addressed the way the circuit derives it.
+    struct Owner {
+        ask: AuthorizationSecretKey,
+        vpk: ViewingPublicKey,
+    }
+
+    impl Owner {
+        fn new(tag: u8) -> Self {
+            Self {
+                ask: AuthorizationSecretKey([tag; 32]),
+                vpk: ViewingPublicKey::from_seed(&[tag; 32], &[tag; 32]),
+            }
+        }
+
+        fn npk(&self) -> NullifierPublicKey {
+            NullifierPublicKey::from(&NullifierSecretKey::from(&self.ask))
+        }
+
+        fn account_id(&self) -> AccountId {
+            AccountId::for_regular_private_account(&self.npk(), &self.vpk, 0)
+        }
+
+        /// An init witness: the account is claimed for the first time, so it starts out default.
+        fn witness(&self, account: Account) -> PrivateWitness {
+            PrivateWitness {
+                nullifier: NullifierWitness::Init {
+                    npk: self.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+                ..self.update_witness(account)
+            }
+        }
+
+        /// An update witness over an account that already exists, which is what a funded
+        /// account is spent by. The membership proof is only hashed into the emitted root here;
+        /// the verifier is what checks that root against the set.
+        fn update_witness(&self, account: Account) -> PrivateWitness {
+            PrivateWitness {
+                account,
+                vpk: self.vpk.clone(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular {
+                    ask: Some(self.ask),
+                },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: NullifierSecretKey::from(&self.ask),
+                    membership_proof: (0, Vec::new()),
+                },
+            }
+        }
+    }
+
+    fn slot(balance: u128) -> Slot {
+        Slot {
+            balance,
+            data: Data::default(),
+        }
+    }
+
+    /// A position at `owner`'s account naming `program`'s slot.
+    fn position(owner: &Owner, program: ProgramId, pre: Slot, post: Slot) -> (Input, Option<Slot>) {
+        (
+            Input {
+                account_id: owner.account_id(),
+                is_authorized: true,
+                slot: Some((program.into(), pre)),
+            },
+            Some(post),
+        )
+    }
+
+    fn emit(
+        positions: Vec<(Input, Option<Slot>)>,
+        identities: &[InputAccountIdentity],
+    ) -> PrivacyPreservingCircuitOutput {
+        compute_circuit_output(
+            ExecutionState::from_positions(positions),
+            identities,
+            Vec::new(),
+        )
+    }
+
+    /// A commitment covers the whole account, so touching two of its namespaces still spends and
+    /// re-creates it once. Two notes would let the second overwrite the first's writes.
+    #[test]
+    fn two_namespaces_of_one_account_emit_one_note() {
+        let owner = Owner::new(3);
+        let mut account = Account::default();
+        account.set_slot(AccountId::from(NATIVE), slot(100));
+        account.set_slot(AccountId::from(OTHER), slot(5));
+
+        let output = emit(
+            vec![
+                position(&owner, NATIVE, slot(100), slot(60)),
+                position(&owner, OTHER, slot(5), slot(45)),
+            ],
+            &[
+                InputAccountIdentity::Private(owner.update_witness(account.clone())),
+                InputAccountIdentity::Private(owner.update_witness(account.clone())),
+            ],
+        );
+
+        assert_eq!(output.private_actions.len(), 1, "one account, one note");
+
+        let mut expected = account.clone();
+        expected.set_slot(AccountId::from(NATIVE), slot(60));
+        expected.set_slot(AccountId::from(OTHER), slot(45));
+        expected.nonce = account
+            .nonce
+            .private_account_nonce_increment(&NullifierSecretKey::from(&owner.ask));
+        assert_eq!(
+            output.private_actions[0].commitment,
+            Commitment::new(&owner.account_id(), &expected),
+            "the note must carry both namespaces' writes"
+        );
+    }
+
+    /// The witness is what the commitment is computed over; the slot is what the program spent.
+    /// Without binding the two, a prover commits to an honest account while spending a slot it
+    /// invented, minting balance from nothing.
+    #[test]
+    #[should_panic(expected = "Witness account does not carry the slot the program executed on")]
+    fn a_witness_missing_the_executed_slot_is_rejected() {
+        let owner = Owner::new(4);
+
+        // The account holds nothing; the position claims a funded slot at it.
+        let output = emit(
+            vec![position(&owner, NATIVE, slot(100), slot(0))],
+            &[InputAccountIdentity::Private(
+                owner.witness(Account::default()),
+            )],
+        );
+
+        unreachable!("a slot the witness does not carry must panic, got {output:?}");
+    }
+
+    /// One account, one witness: describing it two ways would let the commitment take the
+    /// flattering account while each position's slot was bound to the other.
+    #[test]
+    #[should_panic(expected = "Positions of one private account carry disagreeing witnesses")]
+    fn positions_of_one_account_carrying_different_witnesses_are_rejected() {
+        let owner = Owner::new(5);
+        let mut honest = Account::default();
+        honest.set_slot(AccountId::from(NATIVE), slot(100));
+        let mut inflated = honest.clone();
+        inflated.set_slot(AccountId::from(OTHER), slot(1_000));
+
+        let output = emit(
+            vec![
+                position(&owner, NATIVE, slot(100), slot(100)),
+                position(&owner, OTHER, slot(1_000), slot(1_000)),
+            ],
+            &[
+                InputAccountIdentity::Private(owner.update_witness(honest)),
+                InputAccountIdentity::Private(owner.update_witness(inflated)),
+            ],
+        );
+
+        unreachable!("disagreeing witnesses must panic, got {output:?}");
+    }
+
+    /// An address-only private position names no slot, so it writes nothing — but it is still
+    /// the account being spent, and must produce its note.
+    #[test]
+    fn an_address_only_private_position_still_emits_its_note() {
+        let owner = Owner::new(6);
+
+        let output = emit(
+            vec![(
+                Input {
+                    account_id: owner.account_id(),
+                    is_authorized: true,
+                    slot: None,
+                },
+                None,
+            )],
+            &[InputAccountIdentity::Private(
+                owner.witness(Account::default()),
+            )],
+        );
+
+        assert_eq!(output.private_actions.len(), 1);
+        let expected = Account {
+            nonce: Nonce::private_account_nonce_init(&owner.account_id()),
+            ..Account::default()
+        };
+        assert_eq!(
+            output.private_actions[0].commitment,
+            Commitment::new(&owner.account_id(), &expected)
+        );
+    }
 
     fn note(tag: u8) -> PrivateAction {
         let nullifier = Nullifier::for_dummy(&[tag; 32]);
