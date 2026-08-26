@@ -120,9 +120,8 @@ pub fn compute_circuit_output(
                     // One account, one witness. Without this a prover could describe the
                     // same account two ways and have the commitment take the flattering
                     // one while each position's slot was bound to the other.
-                    assert_eq!(
-                        borsh::to_vec(*first).expect("borsh serialization is infallible"),
-                        borsh::to_vec(witness).expect("borsh serialization is infallible"),
+                    assert!(
+                        *first == witness,
                         "Positions of one private account carry disagreeing witnesses"
                     );
                     write(post_account);

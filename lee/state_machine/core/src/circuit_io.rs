@@ -34,7 +34,7 @@ pub enum InputAccountIdentity {
     Private(PrivateWitness),
 }
 
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PrivateWitness {
     /// The account's full pre-state. A program is handed only the one slot it names, but a
     /// commitment covers the whole account, so the private side carries it here rather than
@@ -47,7 +47,7 @@ pub struct PrivateWitness {
     pub nullifier: NullifierWitness,
 }
 
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum WitnessKind {
     /// Standalone private account. The `account_id` is derived as
     /// `AccountId::for_regular_private_account(&npk, vpk, identifier)` and matched against
@@ -61,7 +61,7 @@ pub enum WitnessKind {
     Pda { binding: (ProgramId, PdaSeed) },
 }
 
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum NullifierWitness {
     /// Init of a private account: no membership proof. The `pre_state` must be
     /// `Account::default()`. `npk` is supplied directly, so the caller need not own the account
