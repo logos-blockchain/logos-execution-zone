@@ -182,24 +182,6 @@ impl Account {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct AccountWithMetadata {
-    pub account: Account,
-    pub is_authorized: bool,
-    pub account_id: AccountId,
-}
-
-#[cfg(feature = "host")]
-impl AccountWithMetadata {
-    pub fn new(account: Account, is_authorized: bool, account_id: impl Into<AccountId>) -> Self {
-        Self {
-            account,
-            is_authorized,
-            account_id: account_id.into(),
-        }
-    }
-}
-
 /// The slot a transaction names, as it appears in the signed message. `program` is `None` for
 /// a position that carries only an address: a marker, an authority, a PDA-derivation input.
 #[derive(
@@ -505,25 +487,6 @@ mod tests {
         account.set_slot(DEFAULT_PROGRAM_ID, Slot::default());
 
         assert!(account.slots.is_empty());
-    }
-
-    #[cfg(feature = "host")]
-    #[test]
-    fn account_with_metadata_constructor() {
-        let account = Account::single(
-            [1, 2, 3, 4, 5, 6, 7, 8],
-            1337,
-            b"testing_account_with_metadata_constructor"
-                .to_vec()
-                .try_into()
-                .unwrap(),
-            Nonce(0xdead_beef),
-        );
-        let fingerprint = AccountId::new([8; 32]);
-        let new_acc_with_metadata = AccountWithMetadata::new(account.clone(), true, fingerprint);
-        assert_eq!(new_acc_with_metadata.account, account);
-        assert!(new_acc_with_metadata.is_authorized);
-        assert_eq!(new_acc_with_metadata.account_id, fingerprint);
     }
 
     #[cfg(feature = "host")]
