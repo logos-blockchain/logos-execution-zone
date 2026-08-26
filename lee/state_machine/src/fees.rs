@@ -39,29 +39,25 @@ pub trait SignedMessage {
     fn payer(&self) -> Option<AccountId>;
 }
 
-/// The accounts whose valid signature over `message` accompanies the
-/// transaction.
+/// Whether the transaction's fee is authorized: a fee-exempt message always is;
+/// a charged message requires a valid signature by its designated payer.
+///
+/// Scans for the payer's signature directly — checking the account id before
+/// verifying the signature, so only the payer's signature is verified, not
+/// every signer's.
 #[must_use]
-pub fn fee_authorized_account_ids<M: SignedMessage>(
-    message: &M,
-    witness_set: &WitnessSet,
-) -> Vec<AccountId> {
+pub fn is_fee_authorized<M: SignedMessage>(message: &M, witness_set: &WitnessSet) -> bool {
+    let Some(payer) = message.payer() else {
+        return true;
+    };
     let message_hash = message.signing_hash();
     witness_set
         .signatures_and_public_keys()
         .iter()
-        .filter(|(signature, public_key)| signature.is_valid_for(&message_hash, public_key))
-        .map(|(_, public_key)| AccountId::from(public_key))
-        .collect()
-}
-
-/// Whether the transaction's fee is authorized: a fee-exempt message always is;
-/// a charged message requires its designated payer to be among the signers.
-#[must_use]
-pub fn is_fee_authorized<M: SignedMessage>(message: &M, witness_set: &WitnessSet) -> bool {
-    message
-        .payer()
-        .is_none_or(|payer| fee_authorized_account_ids(message, witness_set).contains(&payer))
+        .any(|(signature, public_key)| {
+            AccountId::from(public_key) == payer
+                && signature.is_valid_for(&message_hash, public_key)
+        })
 }
 
 #[cfg(test)]

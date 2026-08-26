@@ -156,8 +156,8 @@ mod tests {
         )
     }
 
-    /// Pins the borsh wire order (program_id ++ account_ids ++ nonces ++
-    /// instruction_data ++ fee) and the prefixed hash. Any layout change trips this.
+    /// Pins the borsh wire order (`program_id` ++ `account_ids` ++ `nonces` ++
+    /// `instruction_data` ++ `fee`) and the prefixed hash. Any layout change trips this.
     fn assert_hash_pinned(msg: &Message, instruction_bytes: &[u8], fee_bytes: &[u8]) {
         let expected_borsh: Vec<u8> = [
             PROGRAM_ID_BYTES,
