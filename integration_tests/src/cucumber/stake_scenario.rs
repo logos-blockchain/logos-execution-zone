@@ -254,14 +254,57 @@ pub fn stake_instruction(
     sequencer_key: SequencerKey,
     amount: u128,
 ) -> Result<InstructionData, StepError> {
+    stake_instruction_with_mover(
+        sequencer_key,
+        amount,
+        programs::authenticated_transfer().id(),
+        transfer_instruction(amount)?,
+    )
+}
+
+/// Serialized `sequencer_stake::Stake` for `sequencer_key` driven by an
+/// arbitrary mover.
+///
+/// The mover is the program `Stake` chains into to move `amount` into the
+/// ownership account; `authenticated_transfer` is the default, but `Stake` is
+/// generic over it.
+pub fn stake_instruction_with_mover(
+    sequencer_key: SequencerKey,
+    amount: u128,
+    mover_program_id: lee_core::program::ProgramId,
+    mover_instruction_data: InstructionData,
+) -> Result<InstructionData, StepError> {
     Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
         sequencer_key,
         amount,
-        mover_program_id: programs::authenticated_transfer().id(),
-        mover_instruction_data: transfer_instruction(amount)?,
+        mover_program_id,
+        mover_instruction_data,
     })
     .map_err(|error| StepError::LogicalError {
         message: format!("failed to serialize the Stake instruction: {error}"),
+    })
+}
+
+/// Serialized instruction for the `stake_chain_caller` test program: forward
+/// `forwarded_instruction_data` to `target_program_id` as a chained call.
+pub fn chain_caller_instruction(
+    target_program_id: lee_core::program::ProgramId,
+    forwarded_instruction_data: InstructionData,
+) -> Result<InstructionData, StepError> {
+    Program::serialize_instruction((target_program_id, forwarded_instruction_data)).map_err(
+        |error| StepError::LogicalError {
+            message: format!("failed to serialize the chain-caller instruction: {error}"),
+        },
+    )
+}
+
+/// Serialized instruction for the `simple_balance_transfer` test program.
+///
+/// Its instruction is a bare `u128` amount. Used both to move `amount` as a
+/// Stake mover and (with any value) to claim a fresh account under the program.
+pub fn simple_balance_transfer_instruction(amount: u128) -> Result<InstructionData, StepError> {
+    Program::serialize_instruction(amount).map_err(|error| StepError::LogicalError {
+        message: format!("failed to serialize the simple_balance_transfer instruction: {error}"),
     })
 }
 

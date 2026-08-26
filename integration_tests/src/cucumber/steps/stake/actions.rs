@@ -9,7 +9,9 @@ use super::{
 use crate::cucumber::{
     error::{StepError, StepResult},
     stake_scenario::{
-        confirm_stake_instruction, raw_stake_instruction, stake_instruction, transfer_instruction,
+        chain_caller_instruction, confirm_stake_instruction, raw_stake_instruction,
+        simple_balance_transfer_instruction, stake_instruction, stake_instruction_with_mover,
+        transfer_instruction,
     },
     world::CucumberWorld,
 };
@@ -50,6 +52,63 @@ async fn submit_stake(world: &mut CucumberWorld, step: &Step, expression: String
     let scenario = world.stake()?;
     let accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
     submit_stake_with_accounts(world, &expression, accounts).await
+}
+
+#[when(
+    expr = "a Stake of {string} is submitted as a chained call through the stake_chain_caller \
+            program"
+)]
+async fn submit_stake_as_chained_call(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expression: String,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let amount = scenario.amount(&expression)?;
+    // A well-formed Stake, submitted to the chain-caller program instead of
+    // top-level: sequencer_stake's `caller_program_id.is_none()` guard is the
+    // only thing that can reject it.
+    let forwarded = stake_instruction(scenario.sequencer_key(), amount)?;
+    let instruction = chain_caller_instruction(programs::sequencer_stake().id(), forwarded)?;
+    let accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
+    submit_and_record(
+        world,
+        accounts,
+        instruction,
+        test_programs::stake_chain_caller().id(),
+        amount,
+    )
+    .await
+}
+
+#[when(expr = "a Stake of {string} is submitted with simple_balance_transfer as the mover")]
+async fn submit_stake_with_simple_mover(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expression: String,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let amount = scenario.amount(&expression)?;
+    // simple_balance_transfer moves `amount` from the (mover-owned) funding
+    // account into the ownership account, standing in for authenticated_transfer
+    // as a different mover.
+    let instruction = stake_instruction_with_mover(
+        scenario.sequencer_key(),
+        amount,
+        test_programs::simple_balance_transfer().id(),
+        simple_balance_transfer_instruction(amount)?,
+    )?;
+    let accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
+    submit_and_record(
+        world,
+        accounts,
+        instruction,
+        programs::sequencer_stake().id(),
+        amount,
+    )
+    .await
 }
 
 #[when(expr = "a Stake of {string} is submitted without the ownership account's signature")]
