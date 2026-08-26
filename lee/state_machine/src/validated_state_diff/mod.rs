@@ -8,8 +8,8 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramOutput,
-        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, compute_public_authorized_pdas, validate_execution,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        ProgramId, ProgramOutput, compute_public_authorized_pdas, validate_execution,
     },
 };
 use log::debug;
@@ -98,7 +98,7 @@ impl ValidatedStateDiff {
         };
 
         let initial_caller_data = CallerData {
-            caller_account_id: None,
+            account_id: None,
             authorized_accounts: signer_account_ids.iter().copied().collect(),
         };
 
@@ -125,50 +125,15 @@ impl ValidatedStateDiff {
                 chained_call.instruction_data
             );
 
-            let mut program_output = if chained_call.program_account_id
-                == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
-            {
-                // Runs `Deploy` as native Rust instead of interpreting a guest ELF.
-                let program_loader_core::Instruction::Deploy { bytecode } =
-                    risc0_zkvm::serde::from_slice(&chained_call.instruction_data).map_err(|e| {
-                        LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
-                    })?;
-                let deploy_pre_states = chained_call.pre_states.clone();
-                let post_states = std::panic::catch_unwind(|| {
-                    program_loader_core::execute_deploy(program_id, deploy_pre_states, bytecode)
-                })
-                .map_err(|_panic_payload| {
-                    LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
-                })?;
-                ProgramOutput::new(
-                    chained_call.program_account_id,
-                    caller_data.caller_account_id,
-                    chained_call.instruction_data.clone(),
-                    chained_call.pre_states.clone(),
-                    post_states,
-                )
-            } else {
-                let Some(program_account) = state.get_program(chained_call.program_account_id)
-                else {
-                    return Err(LeeError::InvalidInput("Unknown program".into()));
-                };
-                let program =
-                    Program::new_unchecked(program_id, Cow::Owned(program_account.data.to_vec()));
-                program.execute(
-                    caller_data.caller_account_id,
-                    &chained_call.pre_states,
-                    &chained_call.instruction_data,
-                )?
-            };
+            let mut program_output =
+                execute_chained_call(state, program_id, &chained_call, caller_data.account_id)?;
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_account_id, program_output
             );
 
-            let authorized_pdas = compute_public_authorized_pdas(
-                caller_data.caller_account_id,
-                &chained_call.pda_seeds,
-            );
+            let authorized_pdas =
+                compute_public_authorized_pdas(caller_data.account_id, &chained_call.pda_seeds);
 
             // Account is authorized if it is either in the caller's authorized accounts or in the
             // list of PDAs the caller has authorized.
@@ -220,9 +185,9 @@ impl ValidatedStateDiff {
 
             // Verify that the program output's caller_account_id matches the actual caller.
             ensure!(
-                program_output.caller_account_id == caller_data.caller_account_id,
+                program_output.caller_account_id == caller_data.account_id,
                 InvalidProgramBehaviorError::MismatchedCallerProgramId {
-                    expected: caller_data.caller_account_id,
+                    expected: caller_data.account_id,
                     actual: program_output.caller_account_id,
                 }
             );
@@ -313,7 +278,7 @@ impl ValidatedStateDiff {
                 chained_calls.push_front((
                     new_call,
                     CallerData {
-                        caller_account_id: Some(chained_call.program_account_id),
+                        account_id: Some(chained_call.program_account_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
@@ -501,6 +466,48 @@ impl ValidatedStateDiff {
 
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
+    }
+}
+
+/// Executes a chained call, dispatching to the native `Deploy` fast path when the call
+/// targets [`DEPLOYMENT_PROGRAM_ACCOUNT_ID`], or interpreting the target's guest ELF otherwise.
+fn execute_chained_call(
+    state: &V03State,
+    program_id: ProgramId,
+    chained_call: &ChainedCall,
+    caller_account_id: Option<AccountId>,
+) -> Result<ProgramOutput, LeeError> {
+    if chained_call.program_account_id == DEPLOYMENT_PROGRAM_ACCOUNT_ID {
+        // Runs `Deploy` as native Rust instead of interpreting a guest ELF.
+        let program_loader_core::Instruction::Deploy { bytecode } =
+            risc0_zkvm::serde::from_slice(&chained_call.instruction_data)
+                .map_err(|e| LeeError::InvalidInput(format!("invalid Deploy instruction: {e}")))?;
+        let deploy_pre_states = chained_call.pre_states.clone();
+        // FIXME: catch_unwind won't catch aborts; remove once lez programs have better
+        // error handling than panicking on invalid input.
+        let post_states = std::panic::catch_unwind(|| {
+            program_loader_core::execute_deploy(program_id, deploy_pre_states, bytecode)
+        })
+        .map_err(|_panic_payload| {
+            LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
+        })?;
+        Ok(ProgramOutput::new(
+            chained_call.program_account_id,
+            caller_account_id,
+            chained_call.instruction_data.clone(),
+            chained_call.pre_states.clone(),
+            post_states,
+        ))
+    } else {
+        let Some(program_account) = state.get_program(chained_call.program_account_id) else {
+            return Err(LeeError::InvalidInput("Unknown program".into()));
+        };
+        let program = Program::new_unchecked(program_id, Cow::Owned(program_account.data.to_vec()));
+        program.execute(
+            caller_account_id,
+            &chained_call.pre_states,
+            &chained_call.instruction_data,
+        )
     }
 }
 

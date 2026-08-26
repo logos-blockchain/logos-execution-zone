@@ -23,7 +23,7 @@ pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
 /// Reserved `AccountId` for the native "Deploy" dispatch shortcut.
 ///
 /// `SHA256("/LEE/v0.3/AccountId/State/" || "DeploymentProgram")`, each padded to 32 bytes.
-pub const RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new(hex!(
+pub const DEPLOYMENT_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new(hex!(
     "599e2c6c2b89ff39bc3094b3276f1fcaa7173800a71d9896a1ba9bd1458a91c9"
 ));
 
@@ -250,7 +250,7 @@ impl AccountId {
 
 #[derive(Debug)]
 pub struct CallerData {
-    pub caller_account_id: Option<AccountId>,
+    pub account_id: Option<AccountId>,
     pub authorized_accounts: HashSet<AccountId>,
 }
 

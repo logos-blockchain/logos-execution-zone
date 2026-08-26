@@ -14,7 +14,7 @@ use lee::{
 };
 use lee_core::{
     account::Nonce,
-    program::{PdaSeed, ProgramId, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID},
+    program::{DEPLOYMENT_PROGRAM_ACCOUNT_ID, PdaSeed, ProgramId},
 };
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
@@ -3664,7 +3664,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
 }
 
 fn deploy_transaction(target: AccountId, bytecode: Vec<u8>) -> PublicTransaction {
-    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let loader_id: ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let message = lee::public_transaction::Message::try_new(
         loader_id.into(),
         vec![target],
@@ -3678,7 +3678,7 @@ fn deploy_transaction(target: AccountId, bytecode: Vec<u8>) -> PublicTransaction
 
 #[test]
 fn loader_deploys_program() {
-    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let loader_id: ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
@@ -3694,10 +3694,7 @@ fn loader_deploys_program() {
         .expect("Deploy should succeed against an unclaimed target");
 
     let deployed = state.get_account_by_id(target);
-    assert_eq!(
-        deployed.program_owner,
-        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
-    );
+    assert_eq!(deployed.program_owner, DEPLOYMENT_PROGRAM_ACCOUNT_ID);
 
     let program_data = program_loader_core::ProgramData::try_from(&deployed.data)
         .expect("deployed account data should decode as ProgramData");
@@ -3709,7 +3706,7 @@ fn loader_deploys_program() {
 
 #[test]
 fn loader_rejects_redeploying_an_already_deployed_program() {
-    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let loader_id: ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
@@ -3768,7 +3765,7 @@ fn loader_rejects_wrong_target_account() {
 
 #[test]
 fn loader_rejects_wrong_number_of_accounts() {
-    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let loader_id: ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
@@ -3812,7 +3809,7 @@ fn loader_rejects_wrong_number_of_accounts() {
             entry point, natively emitting its own follow-up chained calls after deploying \
             (see loader_deploys_program)."]
 fn loader_deploys_program_via_chained_call() {
-    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let loader_id: ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
     let forwarder = test_programs::chained_call_forwarder();
     let mut state = V03State::new().with_programs([forwarder.clone()]);
 
@@ -3842,10 +3839,7 @@ fn loader_deploys_program_via_chained_call() {
         .expect("Deploy via chained call should succeed");
 
     let deployed = state.get_account_by_id(target);
-    assert_eq!(
-        deployed.program_owner,
-        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
-    );
+    assert_eq!(deployed.program_owner, DEPLOYMENT_PROGRAM_ACCOUNT_ID);
 
     let program_data = program_loader_core::ProgramData::try_from(&deployed.data)
         .expect("deployed account data should decode as ProgramData");
