@@ -279,7 +279,8 @@ pub fn inbox_seen_shard_account_id(
 /// One shard per peer block, so a peer cannot accumulate deliveries from many
 /// blocks into one account.
 #[must_use]
-pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
+/// Private: nothing outside the derivation needs the seed, only the address.
+fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 72];

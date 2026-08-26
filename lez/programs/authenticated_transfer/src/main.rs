@@ -78,7 +78,7 @@ mod tests {
                 program.into(),
                 Slot {
                     balance,
-                    data: Data::empty(),
+                    data: Data::default(),
                 },
             )),
         }

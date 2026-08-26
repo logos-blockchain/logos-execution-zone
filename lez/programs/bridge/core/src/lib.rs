@@ -51,7 +51,8 @@ pub fn compute_bridge_account_id(bridge_program_id: ProgramId) -> AccountId {
 /// Seed of the deposit-receipt PDA for `l1_deposit_op_id`. Domain-separated from
 /// [`compute_bridge_seed`].
 #[must_use]
-pub fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
+/// Private: nothing outside the derivation needs the seed, only the address.
+fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 64];

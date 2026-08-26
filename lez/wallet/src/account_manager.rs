@@ -868,7 +868,7 @@ fn random_dummy_note() -> EncryptedAccountData {
     // A real note always carries at least one occupied slot, so a default (slotless) account
     // would size dummies below every real note. Neither the program nor the balance affects the
     // encoded length; matching accounts with data or further slots is a separate issue.
-    let single_slot = Account::single(DEFAULT_PROGRAM_ID, 1, Data::empty(), Nonce::default());
+    let single_slot = Account::single(DEFAULT_PROGRAM_ID, 1, Data::default(), Nonce::default());
     let ciphertext_len = PrivateAccountKind::HEADER_LEN
         .checked_add(single_slot.to_bytes().len())
         .expect("dummy ciphertext length fits in usize");

@@ -118,7 +118,8 @@ pub fn holding_account_id(wrapped_token_id: ProgramId, recipient: &[u8; 32]) -> 
 }
 
 #[must_use]
-pub fn holding_seed(recipient: &[u8; 32]) -> PdaSeed {
+/// Private: nothing outside the derivation needs the seed, only the address.
+fn holding_seed(recipient: &[u8; 32]) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 64];

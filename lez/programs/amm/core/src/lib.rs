@@ -145,7 +145,8 @@ pub fn compute_pool_pda(
 }
 
 #[must_use]
-pub fn compute_pool_pda_seed(
+/// Private: nothing outside the derivation needs the seed, only the address.
+fn compute_pool_pda_seed(
     definition_token_a_id: AccountId,
     definition_token_b_id: AccountId,
 ) -> PdaSeed {

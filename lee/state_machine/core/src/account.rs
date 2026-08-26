@@ -109,8 +109,8 @@ impl Slot {
 ///
 /// There is no owner: an account is a map from program to that program's private namespace.
 /// `BTreeMap` rather than `HashMap` because the account is hashed into commitments, so its
-/// encoding must be canonical. Empty slots are never stored (see `validate_execution`), so
-/// equal accounts always encode identically.
+/// encoding must be canonical. Empty slots are never stored — `set_slot`, `prune` and
+/// [`Self::single`] all drop one that empties — so equal accounts always encode identically.
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn set_slot_drops_a_slot_that_emptied() {
-        let mut account = Account::single(DEFAULT_PROGRAM_ID, 5, Data::empty(), Nonce(0));
+        let mut account = Account::single(DEFAULT_PROGRAM_ID, 5, Data::default(), Nonce(0));
 
         account.set_slot(DEFAULT_PROGRAM_ID, Slot::default());
 
@@ -527,13 +527,13 @@ mod tests {
 
     #[test]
     fn set_slot_leaves_other_slots_alone() {
-        let mut account = Account::single(DEFAULT_PROGRAM_ID, 7, Data::empty(), Nonce(0));
+        let mut account = Account::single(DEFAULT_PROGRAM_ID, 7, Data::default(), Nonce(0));
 
         account.set_slot(
             OTHER_PROGRAM_ID,
             Slot {
                 balance: 1,
-                data: Data::empty(),
+                data: Data::default(),
             },
         );
 
@@ -628,8 +628,8 @@ mod tests {
 
     #[test]
     fn account_round_trips_through_json() {
-        // The wallet persists accounts as JSON, and `ProgramId` is `[u32; 8]`, which serde_json
-        // refuses as a map key. Serializing `slots` as pairs is what keeps that working.
+        // The wallet persists accounts as JSON. `slots` is keyed by `AccountId`, whose
+        // `SerializeDisplay` renders base58 — a string, and so a valid JSON map key.
         let account = Account::single(
             [1, 2, 3, 4, 5, 6, 7, 8],
             42,

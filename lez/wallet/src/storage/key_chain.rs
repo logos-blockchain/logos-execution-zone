@@ -900,7 +900,12 @@ mod tests {
 
     /// An account holding `balance` in a single slot.
     fn account_with_balance(balance: u128) -> Account {
-        Account::single(DEFAULT_PROGRAM_ID, balance, Data::empty(), Nonce::default())
+        Account::single(
+            DEFAULT_PROGRAM_ID,
+            balance,
+            Data::default(),
+            Nonce::default(),
+        )
     }
 
     #[test]

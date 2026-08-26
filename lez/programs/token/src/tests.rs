@@ -1073,7 +1073,7 @@ fn close_holding_holding_value_should_fail() {
 fn a_bare_credit_does_not_look_like_a_holding() {
     let squatted = Slot {
         balance: 1,
-        data: Data::empty(),
+        data: Data::default(),
     };
 
     let recipient = Input::named(

@@ -228,7 +228,7 @@ fn create_is_not_suppressed_by_a_bare_credit() {
         TOKEN_PROGRAM_ID,
         Slot {
             balance: 1,
-            data: Data::empty(),
+            data: Data::default(),
         },
     );
 
@@ -253,7 +253,7 @@ fn close_clears_a_bare_credit() {
         TOKEN_PROGRAM_ID,
         Slot {
             balance: 1,
-            data: Data::empty(),
+            data: Data::default(),
         },
     );
 
