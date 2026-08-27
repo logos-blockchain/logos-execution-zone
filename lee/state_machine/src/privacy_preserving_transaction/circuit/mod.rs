@@ -164,7 +164,7 @@ pub fn execute_and_prove_with_padded_inputs(
     // The accounts the walk has already reached. A plain account's attested credential is
     // consulted at its first sight only; every later sight derives its authorization instead.
     let mut sighted: HashSet<AccountId> = HashSet::new();
-    let mut top_level_pre_state_refs: Vec<AccountId> = Vec::new();
+    let mut top_level_accounts: Vec<AccountId> = Vec::new();
 
     let top_level_program_id = initial_program.id();
     let top_level_instruction_data = instruction_data.clone();
@@ -260,7 +260,7 @@ pub fn execute_and_prove_with_padded_inputs(
             // The top-level program is handed the transaction's own accounts and may commit them
             // in an order of its own choosing; nothing else names them, so its order is the one
             // the circuit walks.
-            top_level_pre_state_refs = program_output
+            top_level_accounts = program_output
                 .pre_states
                 .iter()
                 .map(|pre| pre.account_id)
@@ -345,7 +345,7 @@ pub fn execute_and_prove_with_padded_inputs(
         program_effects,
         top_level_program_id,
         top_level_instruction_data,
-        top_level_pre_state_refs,
+        top_level_accounts,
         input_accounts,
         dummy_inputs,
     };

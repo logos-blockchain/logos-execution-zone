@@ -23,7 +23,7 @@ pub struct PrivacyPreservingCircuitInput {
     /// The accounts the top-level program ran on, in the order it commits them. Nothing else
     /// names them, and a program is free to commit the accounts it was handed in an order of its
     /// own.
-    pub top_level_pre_state_refs: Vec<AccountId>,
+    pub top_level_accounts: Vec<AccountId>,
     /// One entry per account the walk resolves, each naming the account it describes. Order
     /// carries no meaning: the circuit indexes these by `AccountId`, so a caller need not
     /// predict the traversal.

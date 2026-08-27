@@ -839,7 +839,7 @@ fn a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named() {
         program_effects: vec![forwarder_output.effects, transfer_output.effects],
         top_level_program_id: forwarder_id,
         top_level_instruction_data: forwarder_instruction,
-        top_level_pre_state_refs: vec![sender.account_id, recipient.account_id],
+        top_level_accounts: vec![sender.account_id, recipient.account_id],
         input_accounts: [&sender, &recipient, &attacker]
             .into_iter()
             .map(|pre| lee_core::InputAccount {

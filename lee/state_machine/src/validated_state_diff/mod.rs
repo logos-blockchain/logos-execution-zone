@@ -146,10 +146,13 @@ impl ValidatedStateDiff {
             // the only evidence of what it ran on, so it must account for exactly the named
             // accounts, in order. Only a real caller->callee edge is bound: the entry program is
             // free to commit its own order or subset of what the transaction declared, which is
-            // what the circuit's `top_level_pre_state_refs` encodes.
+            // what the circuit's `top_level_accounts` encodes.
             ensure!(
                 caller_data.program_id.is_none()
-                    || pre_states_match_refs(&chained_call.accounts, &program_output.pre_states),
+                    || pre_states_match_accounts(
+                        &chained_call.accounts,
+                        &program_output.pre_states
+                    ),
                 InvalidProgramBehaviorError::ChainedCallAccountsMismatch {
                     program_id: chained_call.program_id
                 }
@@ -577,8 +580,8 @@ fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
     set.len()
 }
 
-fn pre_states_match_refs(pre_state_refs: &[AccountId], pre_states: &[AccountWithMetadata]) -> bool {
-    pre_state_refs
+fn pre_states_match_accounts(accounts: &[AccountId], pre_states: &[AccountWithMetadata]) -> bool {
+    accounts
         .iter()
         .eq(pre_states.iter().map(|pre| &pre.account_id))
 }

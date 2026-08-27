@@ -12,7 +12,7 @@ fn main() {
         program_effects,
         top_level_program_id,
         top_level_instruction_data,
-        top_level_pre_state_refs,
+        top_level_accounts,
         input_accounts,
         dummy_inputs,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
@@ -25,7 +25,7 @@ fn main() {
         ChainedCall {
             program_id: top_level_program_id,
             instruction_data: top_level_instruction_data,
-            accounts: top_level_pre_state_refs,
+            accounts: top_level_accounts,
             pda_seeds: Vec::new(),
         },
     );
