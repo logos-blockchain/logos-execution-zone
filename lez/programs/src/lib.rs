@@ -193,10 +193,13 @@ mod inner {
 
             assert_eq!(events.len(), 1);
             assert_eq!(events[0].program_id, bridge().id());
-            assert_eq!(events[0].event.selector, bridge_core::Deposit::SELECTOR);
             assert_eq!(
-                bridge_core::Deposit::from_bytes(&events[0].event.data).unwrap(),
-                bridge_core::Deposit {
+                events[0].event.selector,
+                bridge_core::event::Deposit::SELECTOR
+            );
+            assert_eq!(
+                bridge_core::event::Deposit::from_bytes(&events[0].event.data).unwrap(),
+                bridge_core::event::Deposit {
                     l1_deposit_op_id: op_id,
                     vault_program_id: vault().id(),
                     recipient_id,
