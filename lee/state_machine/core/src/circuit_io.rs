@@ -6,75 +6,29 @@ use crate::{
     account::{Account, AccountId, AccountWithMetadata},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     program::{
-        AccountDiffOutput, BlockValidityWindow, ChainedCall, InstructionData, PdaSeed, ProgramId,
-        ProgramOutput, TimestampValidityWindow,
+        BlockValidityWindow, InstructionData, PdaSeed, ProgramEffects, ProgramId,
+        TimestampValidityWindow,
     },
 };
 
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
-    /// Outputs of the program execution, stripped of the `pre_states` each program committed.
-    pub program_outputs: Vec<BareProgramOutput>,
+    /// What each program in the walk decided, in call order. Everything else about a call the
+    /// circuit derives for itself — see [`crate::program::ProgramOutput`].
+    pub program_effects: Vec<ProgramEffects>,
+    /// The entry call. It has no caller, so there is no `pda_seeds` to go with it: nothing can be
+    /// delegated to it and nothing may pretend to be.
+    pub top_level_program_id: ProgramId,
+    pub top_level_instruction_data: InstructionData,
     /// The accounts the top-level program ran on, in the order it commits them. Nothing else
-    /// names them: the bootstrap call has no caller, and a program is free to commit the
-    /// accounts it was handed in an order of its own.
+    /// names them, and a program is free to commit the accounts it was handed in an order of its
+    /// own.
     pub top_level_pre_state_refs: Vec<AccountId>,
     /// One entry per account the walk resolves, each naming the account it describes. Order
     /// carries no meaning: the circuit indexes these by `AccountId`, so a caller need not
     /// predict the traversal.
     pub input_accounts: Vec<InputAccount>,
-    /// Program ID.
-    pub program_id: ProgramId,
     pub dummy_inputs: Vec<DummyInput>,
-}
-
-/// A `ProgramOutput` without the `pre_states`.
-///
-/// A risc0 receipt binds a program's image and its journal, never its inputs, so a program's own
-/// record of what it ran on is worth nothing on its own. The circuit resolves those accounts
-/// itself and calls `into_program_output` to rebuild the journal an honest run must have
-/// produced; `env::verify` then rejects everything else.
-#[derive(BorshSerialize, BorshDeserialize)]
-pub struct BareProgramOutput {
-    pub self_program_id: ProgramId,
-    pub caller_program_id: Option<ProgramId>,
-    pub instruction_data: InstructionData,
-    pub post_states: Vec<AccountDiffOutput>,
-    pub chained_calls: Vec<ChainedCall>,
-    pub block_validity_window: BlockValidityWindow,
-    pub timestamp_validity_window: TimestampValidityWindow,
-}
-
-impl BareProgramOutput {
-    /// Builds the real `ProgramOutput` so its encoding stays the one the program committed,
-    /// rather than one this type gets to define.
-    pub fn into_program_output(self, pre_states: Vec<AccountWithMetadata>) -> ProgramOutput {
-        ProgramOutput {
-            self_program_id: self.self_program_id,
-            caller_program_id: self.caller_program_id,
-            instruction_data: self.instruction_data,
-            pre_states,
-            post_states: self.post_states,
-            chained_calls: self.chained_calls,
-            block_validity_window: self.block_validity_window,
-            timestamp_validity_window: self.timestamp_validity_window,
-        }
-    }
-}
-
-#[cfg(feature = "host")]
-impl From<ProgramOutput> for BareProgramOutput {
-    fn from(output: ProgramOutput) -> Self {
-        Self {
-            self_program_id: output.self_program_id,
-            caller_program_id: output.caller_program_id,
-            instruction_data: output.instruction_data,
-            post_states: output.post_states,
-            chained_calls: output.chained_calls,
-            block_validity_window: output.block_validity_window,
-            timestamp_validity_window: output.timestamp_validity_window,
-        }
-    }
 }
 
 /// Everything the circuit is told about one account, alongside the id it is told it about.
@@ -84,8 +38,9 @@ pub struct InputAccount {
     /// What the account held when the walk first reached it. Every later sight is taken from the
     /// execution itself, so this is the only door this value comes through.
     pub account: Account,
-    /// The credential the host attests for a regular account. A PDA's authorization is always
-    /// derived from a claim or from a caller's seeds, so this bit is ignored there.
+    /// The credential the host attests for a regular account. A delegated PDA's authorization
+    /// is derived from a claim or a caller's seeds instead, so this bit is ignored there — but a
+    /// public PDA first sighted at the top level has no caller to derive from and does take it.
     pub is_authorized: bool,
     pub identity: InputAccountIdentity,
 }
@@ -96,7 +51,7 @@ pub struct InputAccount {
     reason = "Private carries the ML-KEM viewing key and dominates; boxing it would add a guest heap allocation per witness, and the footprint matches the pre-refactor enum"
 )]
 pub enum InputAccountIdentity {
-    /// Public account. The guest reads pre/post state from `program_outputs` and emits no
+    /// Public account. The guest reads pre/post state from the execution walk and emits no
     /// commitment, ciphertext, or nullifier.
     Public,
     Private(PrivateWitness),
@@ -122,7 +77,7 @@ pub enum WitnessKind {
     /// caller's `pda_seeds` match. The identifier diversifies the PDA within the
     /// `(program_id, seed, npk)` family: `AccountId::for_private_pda` uses it as the 4th input.
     Pda {
-        /// When `Some((authority_program_id, seed))`, the circuit binds this position via the
+        /// When `Some((authority_program_id, seed))`, the circuit binds this account via the
         /// external derivation check
         /// `AccountId::for_private_pda(authority_program_id, seed, npk, vpk, identifier) ==
         /// pre_state.account_id` rather than requiring a `Claim::Pda` or caller
@@ -167,17 +122,6 @@ impl InputAccountIdentity {
     #[must_use]
     pub const fn is_public(&self) -> bool {
         matches!(self, Self::Public)
-    }
-
-    #[must_use]
-    pub const fn is_private_pda(&self) -> bool {
-        matches!(
-            self,
-            Self::Private(PrivateWitness {
-                kind: WitnessKind::Pda { .. },
-                ..
-            })
-        )
     }
 
     #[must_use]

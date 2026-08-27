@@ -9,7 +9,7 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     program::{
         CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
-        pre_states_match_refs, validate_execution,
+        validate_execution,
     },
 };
 use log::debug;
@@ -147,9 +147,9 @@ impl ValidatedStateDiff {
 
             // The caller only names accounts; the protocol delivers them. The callee's journal is
             // the only evidence of what it ran on, so it must account for exactly the named
-            // accounts, in order. Only a real caller->callee edge is bound: the synthetic
-            // top-level call's refs are the transaction's own declared accounts, already covered
-            // by `DeclaredAccountMissingFromOutput`.
+            // accounts, in order. Only a real caller->callee edge is bound: the entry program is
+            // free to commit its own order or subset of what the transaction declared, which is
+            // what the circuit's `top_level_pre_state_refs` encodes.
             ensure!(
                 caller_data.program_id.is_none()
                     || pre_states_match_refs(&chained_call.accounts, &program_output.pre_states),
@@ -192,19 +192,19 @@ impl ValidatedStateDiff {
 
             // Verify that the program output's self_program_id matches the expected program ID.
             ensure!(
-                program_output.self_program_id == chained_call.program_id,
+                program_output.call.self_program_id == chained_call.program_id,
                 InvalidProgramBehaviorError::MismatchedProgramId {
                     expected: chained_call.program_id,
-                    actual: program_output.self_program_id
+                    actual: program_output.call.self_program_id
                 }
             );
 
             // Verify that the program output's caller_program_id matches the actual caller.
             ensure!(
-                program_output.caller_program_id == caller_data.program_id,
+                program_output.call.caller_program_id == caller_data.program_id,
                 InvalidProgramBehaviorError::MismatchedCallerProgramId {
                     expected: caller_data.program_id,
-                    actual: program_output.caller_program_id,
+                    actual: program_output.call.caller_program_id,
                 }
             );
 
@@ -212,15 +212,19 @@ impl ValidatedStateDiff {
             // See the # Programs section for the definition of the `validate_execution` method.
             validate_execution(
                 &program_output.pre_states,
-                &program_output.post_states,
+                &program_output.effects.post_states,
                 chained_call.program_id,
             )
             .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
 
             // Verify validity window
             ensure!(
-                program_output.block_validity_window.is_valid_for(block_id)
+                program_output
+                    .effects
+                    .block_validity_window
+                    .is_valid_for(block_id)
                     && program_output
+                        .effects
                         .timestamp_validity_window
                         .is_valid_for(timestamp),
                 LeeError::OutOfValidityWindow
@@ -229,7 +233,7 @@ impl ValidatedStateDiff {
             for (pre, diff_output) in program_output
                 .pre_states
                 .iter()
-                .zip(&program_output.post_states)
+                .zip(&program_output.effects.post_states)
             {
                 let account_id = pre.account_id;
                 let diff = diff_output.diff();
@@ -309,7 +313,7 @@ impl ValidatedStateDiff {
                     .filter(|pre| pre.is_authorized)
                     .map(|pre| pre.account_id),
             );
-            for new_call in program_output.chained_calls.into_iter().rev() {
+            for new_call in program_output.effects.chained_calls.into_iter().rev() {
                 chained_calls.push_front((
                     new_call,
                     CallerData {
@@ -563,6 +567,12 @@ fn check_privacy_preserving_circuit_proof_is_valid(
 fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
     let set: HashSet<&T> = data.iter().collect();
     set.len()
+}
+
+fn pre_states_match_refs(pre_state_refs: &[AccountId], pre_states: &[AccountWithMetadata]) -> bool {
+    pre_state_refs
+        .iter()
+        .eq(pre_states.iter().map(|pre| &pre.account_id))
 }
 
 #[cfg(test)]

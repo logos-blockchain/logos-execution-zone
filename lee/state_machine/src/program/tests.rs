@@ -22,7 +22,7 @@ fn program_execution() {
         .execute(None, &[sender, recipient], &instruction_data)
         .unwrap();
 
-    let [sender_post, recipient_post] = program_output.post_states.try_into().unwrap();
+    let [sender_post, recipient_post] = program_output.effects.post_states.try_into().unwrap();
 
     assert_eq!(
         sender_post.diff().diff_balance,
@@ -69,8 +69,9 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
         session_info.journal.bytes,
         lee_core::to_frame(&borsh::to_vec(&output).unwrap())
     );
-    // The guest must echo the instruction bytes verbatim: chained-call binding compares them.
-    assert_eq!(output.instruction_data, instruction_data);
+    // The guest must echo the instruction bytes verbatim: the circuit splices its own copy of
+    // them into the journal it verifies.
+    assert_eq!(output.call.instruction_data, instruction_data);
 }
 
 #[test]

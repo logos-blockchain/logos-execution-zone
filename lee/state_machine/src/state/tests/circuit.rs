@@ -394,7 +394,7 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
 /// A private PDA account that no program claims via `Claim::Pda` and no caller authorizes via
 /// `ChainedCall.pda_seeds` has no binding between its supplied npk and its `account_id`,
 /// so the circuit must reject. Here `simple_balance_transfer` emits no claim for the
-/// second account, leaving position 1 unbound.
+/// second account, leaving it unbound.
 #[test]
 fn private_pda_without_binding_fails() {
     let program = crate::test_methods::simple_balance_transfer();
@@ -425,8 +425,8 @@ fn private_pda_without_binding_fails() {
 }
 
 /// Happy path: a program claims a new private PDA via `Claim::Pda(seed)`. The circuit
-/// reads the npk for that `pre_state` from `private_account_keys` at the `pre_state`'s
-/// position, derives `AccountId` via `AccountId::for_private_pda(program_id, seed, npk)`, and
+/// reads the npk for that `pre_state` from `private_account_keys`, derives `AccountId` via
+/// `AccountId::for_private_pda(program_id, seed, npk)`, and
 /// asserts it equals the `pre_state`'s `account_id`. The equality both validates the claim
 /// and binds the supplied npk to the `account_id`.
 #[test]
@@ -637,7 +637,7 @@ fn holder_authorization_survives_across_sibling_calls() {
 }
 
 #[test]
-fn inherited_scope_passes_through_nested_intermediate_calls() {
+fn nested_callee_that_omits_its_named_accounts_cannot_prove() {
     let delegator = crate::test_methods::selective_pda_delegator();
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let callee = crate::test_methods::auth_asserting_noop();
@@ -660,14 +660,14 @@ fn inherited_scope_passes_through_nested_intermediate_calls() {
         Program::serialize_instruction((
             callee_id,
             Program::serialize_instruction(()).unwrap(),
-            true,
+            false,
         ))
         .unwrap(),
         true,
     ))
     .unwrap();
 
-    execute_and_prove(
+    let error = execute_and_prove(
         vec![pre_state],
         Program::serialize_instruction((
             seed,
@@ -680,7 +680,19 @@ fn inherited_scope_passes_through_nested_intermediate_calls() {
         vec![init_pda_witness(&keys, 0, None)],
         &program_with_deps,
     )
-    .expect("an account authorized in an ancestor's output stays authorized two calls below it");
+    .expect_err("a callee that journals none of the accounts its caller named must not prove");
+
+    // The middle forwarder is handed `[pda]` and journals nothing, but the circuit rebuilds
+    // `[pda]` from its caller's refs and splices that in, so its receipt covers other bytes.
+    // `CircuitProvingError`'s Display drops the payload, hence the match on the inner string.
+    assert!(
+        matches!(
+            &error,
+            LeeError::CircuitProvingError(msg)
+                if msg.contains("no receipt found to resolve assumption")
+        ),
+        "expected the spliced journal to resolve no receipt, got: {error:?}"
+    );
 }
 
 /// The circuit tracks accounts by `AccountId` across the whole call tree, not per-step: a
@@ -786,18 +798,19 @@ fn a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named() {
     let attacker = AccountWithMetadata::new(held(0), false, AccountId::new([3; 32]));
 
     // 1. The honest forwarder, run honestly: it names `[sender, recipient]` for the transfer.
+    let forwarder_instruction = Program::serialize_instruction((
+        transfer_id,
+        Program::serialize_instruction(TRANSFER).unwrap(),
+        true,
+    ))
+    .unwrap();
     let (forwarder_receipt, forwarder_output) = run(
         &forwarder,
         None,
         &[sender.clone(), recipient.clone()],
-        &Program::serialize_instruction((
-            transfer_id,
-            Program::serialize_instruction(TRANSFER).unwrap(),
-            true,
-        ))
-        .unwrap(),
+        &forwarder_instruction,
     );
-    let chained_call = &forwarder_output.chained_calls[0];
+    let chained_call = &forwarder_output.effects.chained_calls[0];
     assert_eq!(
         chained_call.accounts,
         vec![sender.account_id, recipient.account_id]
@@ -821,9 +834,11 @@ fn a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named() {
         "the callee ran on accounts the chained call never named"
     );
 
-    // 3. The circuit accepts the pair anyway.
+    // 3. The circuit input a lying prover would submit for the pair.
     let circuit_input = lee_core::PrivacyPreservingCircuitInput {
-        program_outputs: vec![forwarder_output.clone().into(), transfer_output.into()],
+        program_effects: vec![forwarder_output.effects, transfer_output.effects],
+        top_level_program_id: forwarder_id,
+        top_level_instruction_data: forwarder_instruction,
         top_level_pre_state_refs: vec![sender.account_id, recipient.account_id],
         input_accounts: [&sender, &recipient, &attacker]
             .into_iter()
@@ -834,7 +849,6 @@ fn a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named() {
                 identity: InputAccountIdentity::Public,
             })
             .collect(),
-        program_id: forwarder_id,
         dummy_inputs: vec![],
     };
     let mut env_builder = risc0_zkvm::ExecutorEnv::builder();
@@ -907,7 +921,7 @@ fn two_private_pda_claims_under_same_seed_are_rejected() {
 
 /// A private PDA that is reused at top level without an external seed in the identity still
 /// fails binding. The noop program emits no `Claim::Pda` and there is no caller
-/// `ChainedCall.pda_seeds`, so position 0 is never bound and the assertion fires.
+/// `ChainedCall.pda_seeds`, so the account is never bound and the assertion fires.
 /// Supplying `binding: Some((owner_program_id, seed))` in the witness's `WitnessKind::Pda` is
 /// the correct path for top-level reuse; this test pins the failure when no seed is provided.
 #[test]

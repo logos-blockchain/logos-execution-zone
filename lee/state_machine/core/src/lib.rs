@@ -4,7 +4,7 @@
 )]
 
 pub use circuit_io::{
-    BareProgramOutput, DummyInput, InputAccount, InputAccountIdentity, NullifierWitness,
+    DummyInput, InputAccount, InputAccountIdentity, NullifierWitness,
     PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateAction, PrivateWitness,
     PublicAction, WitnessKind,
 };

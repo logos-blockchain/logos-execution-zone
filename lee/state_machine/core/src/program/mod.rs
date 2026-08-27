@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::guest::env;
@@ -462,27 +462,52 @@ impl<T> From<std::ops::RangeFull> for ValidityWindow<T> {
 #[error("Invalid window")]
 pub struct InvalidWindow;
 
+/// The call a program was posed, as opposed to what it made of it.
 #[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-#[must_use = "ProgramOutput does nothing unless written"]
-pub struct ProgramOutput {
-    /// The program ID of the program that produced this output.
+pub struct CallContext {
+    /// The program ID of the program this call ran.
     pub self_program_id: ProgramId,
     /// The program ID of the caller that invoked this program via a chained call,
     /// or `None` if this is a top-level call.
     pub caller_program_id: Option<ProgramId>,
-    /// The instruction data the program received to produce this output.
+    /// The instruction data the program was called with.
     pub instruction_data: InstructionData,
-    /// The account pre states the program received to produce this output.
-    pub pre_states: Vec<AccountWithMetadata>,
+}
+
+/// What the program decided. Nothing here follows from the call, so it is the only part of a
+/// journal the privacy circuit has to be told.
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct ProgramEffects {
     /// The account diffs the program execution produced.
     pub post_states: Vec<AccountDiffOutput>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
-    /// The block ID window where the program output is valid.
+    /// The block ID window these effects are valid in.
     pub block_validity_window: BlockValidityWindow,
-    /// The timestamp window where the program output is valid.
+    /// The timestamp window these effects are valid in.
     pub timestamp_validity_window: TimestampValidityWindow,
+}
+
+/// The journal a program commits.
+///
+/// A risc0 receipt binds a program's image and its journal, never its inputs, so a program's own
+/// account of the call it served is worth nothing on its own. The split runs along that seam: the
+/// privacy circuit derives [`CallContext`] and `pre_states` from the chained call it is walking
+/// and verifies the journal it assembles from them, leaving the program a say only over
+/// [`ProgramEffects`].
+///
+/// The nested fields are serialized inline, so the encoding is the flat one programs have always
+/// committed.
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+#[must_use = "ProgramOutput does nothing unless written"]
+pub struct ProgramOutput {
+    pub call: CallContext,
+    /// The account pre states the program received to produce this output.
+    pub pre_states: Vec<AccountWithMetadata>,
+    pub effects: ProgramEffects,
 }
 
 impl ProgramOutput {
@@ -494,14 +519,18 @@ impl ProgramOutput {
         post_states: Vec<AccountDiffOutput>,
     ) -> Self {
         Self {
-            self_program_id,
-            caller_program_id,
-            instruction_data,
+            call: CallContext {
+                self_program_id,
+                caller_program_id,
+                instruction_data,
+            },
             pre_states,
-            post_states,
-            chained_calls: Vec::new(),
-            block_validity_window: ValidityWindow::new_unbounded(),
-            timestamp_validity_window: ValidityWindow::new_unbounded(),
+            effects: ProgramEffects {
+                post_states,
+                chained_calls: Vec::new(),
+                block_validity_window: ValidityWindow::new_unbounded(),
+                timestamp_validity_window: ValidityWindow::new_unbounded(),
+            },
         }
     }
 
@@ -510,13 +539,13 @@ impl ProgramOutput {
     }
 
     pub fn with_chained_calls(mut self, chained_calls: Vec<ChainedCall>) -> Self {
-        self.chained_calls = chained_calls;
+        self.effects.chained_calls = chained_calls;
         self
     }
 
     /// Sets the block ID validity window from an infallible range conversion (`1..`, `..5`, `..`).
     pub fn with_block_validity_window<W: Into<BlockValidityWindow>>(mut self, window: W) -> Self {
-        self.block_validity_window = window.into();
+        self.effects.block_validity_window = window.into();
         self
     }
 
@@ -528,7 +557,7 @@ impl ProgramOutput {
         mut self,
         window: W,
     ) -> Result<Self, InvalidWindow> {
-        self.block_validity_window = window.try_into()?;
+        self.effects.block_validity_window = window.try_into()?;
         Ok(self)
     }
 
@@ -537,7 +566,7 @@ impl ProgramOutput {
         mut self,
         window: W,
     ) -> Self {
-        self.timestamp_validity_window = window.into();
+        self.effects.timestamp_validity_window = window.into();
         self
     }
 
@@ -549,17 +578,19 @@ impl ProgramOutput {
         mut self,
         window: W,
     ) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = window.try_into()?;
+        self.effects.timestamp_validity_window = window.try_into()?;
         Ok(self)
     }
 
     pub fn valid_from_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (ts, self.timestamp_validity_window.end()).try_into()?;
+        self.effects.timestamp_validity_window =
+            (ts, self.effects.timestamp_validity_window.end()).try_into()?;
         Ok(self)
     }
 
     pub fn valid_until_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (self.timestamp_validity_window.start(), ts).try_into()?;
+        self.effects.timestamp_validity_window =
+            (self.effects.timestamp_validity_window.start(), ts).try_into()?;
         Ok(self)
     }
 }
@@ -667,6 +698,31 @@ pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
 }
 
+/// Match `account_id` against the caller's seeds interpreted as private-PDA derivations, using
+/// the (npk, vpk, identifier) supplied for it. `None` when the account carries no private-PDA
+/// witness.
+///
+/// Shared with the shielded prover host: under splice-and-verify a disagreement there is not a
+/// named error but an `env::verify` mismatch, so both sides must run the same formula.
+#[must_use]
+pub fn match_caller_seed_as_private_pda(
+    private_pda_witnesses: &HashMap<AccountId, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
+    account_id: AccountId,
+) -> Option<(PdaSeed, ProgramId)> {
+    let (npk, vpk, identifier) = private_pda_witnesses.get(&account_id)?;
+    let caller_program_id = caller.program_id?;
+    // Costy for calls with multiple seeds in one call.
+    caller_pda_seeds.iter().find_map(|seed| {
+        if AccountId::for_private_pda(&caller_program_id, seed, npk, vpk, *identifier) == account_id
+        {
+            return Some((*seed, caller_program_id));
+        }
+        None
+    })
+}
+
 /// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
 ///
 /// Returns only public-form derivations, suitable for contexts where all accounts are public
@@ -731,25 +787,6 @@ pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
             )
         }
     }
-}
-
-/// Whether a callee's journalled `pre_states` name exactly the accounts its caller asked for,
-/// in order.
-///
-/// A `ChainedCall` only names accounts; the protocol resolves and delivers them. The callee's
-/// journal is the sole evidence of what it actually ran on, so binding a call to its inputs
-/// requires that journal to account for every named account and nothing else. Callees destructure
-/// positionally, so order is part of the contract.
-///
-/// Shared by both executors so the public and privacy-preserving paths cannot drift.
-#[must_use]
-pub fn pre_states_match_refs(
-    pre_state_refs: &[AccountId],
-    pre_states: &[AccountWithMetadata],
-) -> bool {
-    pre_state_refs
-        .iter()
-        .eq(pre_states.iter().map(|pre| &pre.account_id))
 }
 
 /// Validates well-behaved program execution.

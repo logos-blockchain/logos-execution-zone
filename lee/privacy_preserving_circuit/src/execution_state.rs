@@ -4,14 +4,15 @@ use std::{
 };
 
 use lee_core::{
-    BareProgramOutput, Identifier, InputAccount, InputAccountIdentity, NullifierPublicKey,
-    PrivateWitness, WitnessKind,
+    Identifier, InputAccount, InputAccountIdentity, NullifierPublicKey, PrivateWitness,
+    WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     encryption::ViewingPublicKey,
     program::{
-        AccountDiffOutput, BlockValidityWindow, CallerData, ChainedCall, Claim,
-        DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId,
-        TimestampValidityWindow, validate_execution,
+        AccountDiffOutput, BlockValidityWindow, CallContext, CallerData, ChainedCall, Claim,
+        DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEffects, ProgramId,
+        ProgramOutput, TimestampValidityWindow, match_caller_seed_as_private_pda,
+        validate_execution,
     },
 };
 use risc0_zkvm::guest::env;
@@ -45,7 +46,7 @@ pub struct ExecutionState {
     /// `(program, seed)` → one account per tx.
     pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
     /// The (npk, vpk, identifier) supplied for each private-PDA account. Built once in
-    /// `derive_from_outputs` by walking `input_accounts` and consulting `npk_vpk_if_private_pda`,
+    /// `derive` by walking `input_accounts` and consulting `npk_vpk_if_private_pda`,
     /// so the npk is derived from its `nsk` only once. Used later by the claim and caller-seeds
     /// authorization paths to verify `AccountId::for_private_pda(program_id, seed, npk, vpk,
     /// identifier) == pre_state.account_id`.
@@ -57,32 +58,31 @@ pub struct ExecutionState {
 
 impl ExecutionState {
     /// Validate program outputs and derive the overall execution state.
-    pub fn derive_from_outputs(
+    pub fn derive(
         input_accounts: &HashMap<AccountId, InputAccount>,
-        program_id: ProgramId,
-        program_outputs: Vec<BareProgramOutput>,
-        top_level_pre_state_refs: Vec<AccountId>,
+        program_effects: Vec<ProgramEffects>,
+        top_level_call: ChainedCall,
     ) -> Self {
         let private_pda_witnesses = input_accounts
             .values()
             .filter_map(|input| Some((input.account_id, input.identity.npk_vpk_if_private_pda()?)))
             .collect();
 
-        let block_valid_from = program_outputs
+        let block_valid_from = program_effects
             .iter()
-            .filter_map(|output| output.block_validity_window.start())
+            .filter_map(|effects| effects.block_validity_window.start())
             .max();
-        let block_valid_until = program_outputs
+        let block_valid_until = program_effects
             .iter()
-            .filter_map(|output| output.block_validity_window.end())
+            .filter_map(|effects| effects.block_validity_window.end())
             .min();
-        let ts_valid_from = program_outputs
+        let ts_valid_from = program_effects
             .iter()
-            .filter_map(|output| output.timestamp_validity_window.start())
+            .filter_map(|effects| effects.timestamp_validity_window.start())
             .max();
-        let ts_valid_until = program_outputs
+        let ts_valid_until = program_effects
             .iter()
-            .filter_map(|output| output.timestamp_validity_window.end())
+            .filter_map(|effects| effects.timestamp_validity_window.end())
             .min();
 
         let block_validity_window: BlockValidityWindow = (block_valid_from, block_valid_until)
@@ -108,26 +108,16 @@ impl ExecutionState {
             globally_authorized: HashSet::new(),
         };
 
-        let Some(first_output) = program_outputs.first() else {
-            panic!("No program outputs provided");
-        };
-
-        // The bootstrap call has no caller to name its accounts, so the ids come straight from
-        // the input; the splice below is what ties them to the program that ran.
-        let initial_call = ChainedCall {
-            program_id,
-            instruction_data: first_output.instruction_data.clone(),
-            accounts: top_level_pre_state_refs,
-            pda_seeds: Vec::new(),
-        };
         let initial_caller_data = CallerData {
             program_id: None,
             authorized_accounts: HashSet::new(),
         };
-        let mut chained_calls =
-            VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
+        let mut chained_calls = VecDeque::<(ChainedCall, CallerData)>::from_iter([(
+            top_level_call,
+            initial_caller_data,
+        )]);
 
-        let mut program_outputs_iter = program_outputs.into_iter();
+        let mut program_effects_iter = program_effects.into_iter();
         let mut chain_calls_counter = 0;
 
         while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
@@ -136,15 +126,9 @@ impl ExecutionState {
                 "Max chained calls depth is exceeded"
             );
 
-            let Some(bare_output) = program_outputs_iter.next() else {
-                panic!("Insufficient program outputs for chained calls");
-            };
-
-            // Check that instruction data in chained call is the instruction data in program output
-            assert_eq!(
-                chained_call.instruction_data, bare_output.instruction_data,
-                "Mismatched instruction data between chained call and program output"
-            );
+            let effects = program_effects_iter
+                .next()
+                .expect("Insufficient program effects for chained calls");
 
             // The caller only names accounts; the protocol delivers them. Rebuilding what this
             // call was owed and splicing it into the journal leaves the program no say in the
@@ -153,59 +137,51 @@ impl ExecutionState {
             // nothing and the proof fails.
             let pre_states =
                 execution_state.derive_pre_states(input_accounts, &caller_data, &chained_call);
+            let ChainedCall {
+                program_id,
+                instruction_data,
+                ..
+            } = chained_call;
 
-            // Check that `program_output` is consistent with the execution of the corresponding
-            // program.
-            let program_output = bare_output.into_program_output(pre_states);
+            let program_output = ProgramOutput {
+                call: CallContext {
+                    self_program_id: program_id,
+                    caller_program_id: caller_data.program_id,
+                    instruction_data,
+                },
+                pre_states,
+                effects,
+            };
             let program_output_frame = lee_core::to_borsh_frame(&program_output);
-            env::verify(chained_call.program_id, &program_output_frame).unwrap_or_else(
-                |_: Infallible| unreachable!("Infallible error is never constructed"),
-            );
-
-            // Verify that the program output's self_program_id matches the expected program ID.
-            // This ensures the proof commits to which program produced the output.
-            assert_eq!(
-                program_output.self_program_id, chained_call.program_id,
-                "Program output self_program_id does not match chained call program_id"
-            );
-
-            // Verify that the program output's caller_program_id matches the actual caller.
-            // This prevents a malicious user from privately executing an internal function
-            // by spoofing caller_program_id (e.g. passing caller_program_id = self_program_id
-            // to bypass access control checks).
-            assert_eq!(
-                program_output.caller_program_id, caller_data.program_id,
-                "Program output caller_program_id does not match actual caller"
-            );
+            env::verify(program_id, &program_output_frame).unwrap_or_else(|_: Infallible| {
+                unreachable!("Infallible error is never constructed")
+            });
 
             // Check that the program is well behaved.
             // See the # Programs section for the definition of the `validate_execution` method.
             let validated_execution = validate_execution(
                 &program_output.pre_states,
-                &program_output.post_states,
-                chained_call.program_id,
+                &program_output.effects.post_states,
+                program_id,
             );
             if let Err(err) = validated_execution {
-                panic!(
-                    "Invalid program behavior in program {:?}: {err}",
-                    chained_call.program_id
-                );
+                panic!("Invalid program behavior in program {program_id:?}: {err}");
             }
 
             let authorized_accounts = execution_state.apply_states(
                 input_accounts,
-                chained_call.program_id,
+                program_id,
                 caller_data.authorized_accounts,
                 program_output.pre_states,
-                program_output.post_states,
+                program_output.effects.post_states,
             );
 
-            for next_call in program_output.chained_calls.into_iter().rev() {
+            for next_call in program_output.effects.chained_calls.into_iter().rev() {
                 // Push the call with newly-authorized account set.
                 chained_calls.push_front((
                     next_call,
                     CallerData {
-                        program_id: Some(chained_call.program_id),
+                        program_id: Some(program_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
@@ -216,7 +192,7 @@ impl ExecutionState {
         }
 
         assert!(
-            program_outputs_iter.next().is_none(),
+            program_effects_iter.next().is_none(),
             "Inner call without a chained call found",
         );
 
@@ -225,7 +201,10 @@ impl ExecutionState {
         // matching the private derivation. An unbound private-PDA pre_state has no
         // cryptographic link between the supplied npk and the account_id, and must be rejected.
         for pre in &execution_state.pre_states {
-            if input_accounts[&pre.account_id].identity.is_private_pda() {
+            if execution_state
+                .private_pda_witnesses
+                .contains_key(&pre.account_id)
+            {
                 assert!(
                     execution_state
                         .private_pda_bindings
@@ -262,8 +241,7 @@ impl ExecutionState {
 
     /// Rebuild the `pre_states` a call was owed: the accounts its caller named, at the values
     /// the execution so far leaves them at, under the authorization the transaction can actually
-    /// establish. Nothing is read back from the program's own account of its inputs; splicing
-    /// this into its journal and verifying is what binds the two together.
+    /// establish.
     fn derive_pre_states(
         &mut self,
         input_accounts: &HashMap<AccountId, InputAccount>,
@@ -521,7 +499,7 @@ impl ExecutionState {
     }
 
     /// Consume self and yield the validity windows, the per-account PDA seed/program map
-    /// (recorded during `derive_from_outputs`), and an iterator over pre and post states of each
+    /// (recorded during `derive`), and an iterator over pre and post states of each
     /// account involved in the execution, in first-sight order. Returning everything together
     /// keeps the fields module-private rather than forcing them visible to downstream consumers.
     #[expect(
@@ -626,26 +604,6 @@ fn match_caller_seed_as_public_pda(
     // Costy for calls with multiple seeds in one call.
     caller_pda_seeds.iter().find_map(|seed| {
         if AccountId::for_public_pda(&caller_program_id, seed) == account_id {
-            return Some((*seed, caller_program_id));
-        }
-        None
-    })
-}
-
-/// Match `account_id` against the caller's seeds interpreted as private-PDA derivations, using the
-/// (npk, vpk, identifier) supplied for it. `None` when the account carries no private-PDA witness.
-fn match_caller_seed_as_private_pda(
-    private_pda_witnesses: &HashMap<AccountId, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
-    caller: &CallerData,
-    caller_pda_seeds: &[PdaSeed],
-    account_id: AccountId,
-) -> Option<(PdaSeed, ProgramId)> {
-    let (npk, vpk, identifier) = private_pda_witnesses.get(&account_id)?;
-    let caller_program_id = caller.program_id?;
-    // Costy for calls with multiple seeds in one call.
-    caller_pda_seeds.iter().find_map(|seed| {
-        if AccountId::for_private_pda(&caller_program_id, seed, npk, vpk, *identifier) == account_id
-        {
             return Some((*seed, caller_program_id));
         }
         None

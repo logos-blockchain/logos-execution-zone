@@ -102,24 +102,24 @@ fn program_output_try_with_block_validity_window_range() {
     let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
         .try_with_block_validity_window(10_u64..100)
         .unwrap();
-    assert_eq!(output.block_validity_window.start(), Some(10));
-    assert_eq!(output.block_validity_window.end(), Some(100));
+    assert_eq!(output.effects.block_validity_window.start(), Some(10));
+    assert_eq!(output.effects.block_validity_window.end(), Some(100));
 }
 
 #[test]
 fn program_output_with_block_validity_window_range_from() {
     let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
         .with_block_validity_window(10_u64..);
-    assert_eq!(output.block_validity_window.start(), Some(10));
-    assert_eq!(output.block_validity_window.end(), None);
+    assert_eq!(output.effects.block_validity_window.start(), Some(10));
+    assert_eq!(output.effects.block_validity_window.end(), None);
 }
 
 #[test]
 fn program_output_with_block_validity_window_range_to() {
     let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
         .with_block_validity_window(..100_u64);
-    assert_eq!(output.block_validity_window.start(), None);
-    assert_eq!(output.block_validity_window.end(), Some(100));
+    assert_eq!(output.effects.block_validity_window.start(), None);
+    assert_eq!(output.effects.block_validity_window.end(), Some(100));
 }
 
 #[test]
