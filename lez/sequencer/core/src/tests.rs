@@ -3814,7 +3814,12 @@ fn deploy_transactions(
                 )
             })
             .collect();
-        let header = program_loader_core::deploy_header_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+        let header = program_loader_core::deploy_header_account_id(
+            DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+            image_id,
+            0,
+            update_auth,
+        );
         let batch_byte_len = batch_len
             .checked_mul(program_loader_core::MAX_SEGMENT_DATA_LEN)
             .unwrap()
@@ -4034,9 +4039,21 @@ fn loader_deploys_program_across_multiple_transactions() {
     let key = PrivateKey::try_new([11; 32]).unwrap();
     let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-    let header = program_loader_core::deploy_header_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
     let segment_ids: Vec<AccountId> = (0..segment_count)
-        .map(|i| program_loader_core::deploy_segment_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, i, update_auth))
+        .map(|i| {
+            program_loader_core::deploy_segment_account_id(
+                DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+                image_id,
+                i,
+                update_auth,
+            )
+        })
         .collect();
 
     let remaining_segments = usize::try_from(segment_count.checked_sub(1).unwrap()).unwrap();
@@ -4083,9 +4100,21 @@ fn loader_deploy_batches_can_land_out_of_order() {
     let key = PrivateKey::try_new([12; 32]).unwrap();
     let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-    let header = program_loader_core::deploy_header_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
     let segment_ids: Vec<AccountId> = (0..segment_count)
-        .map(|i| program_loader_core::deploy_segment_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, i, update_auth))
+        .map(|i| {
+            program_loader_core::deploy_segment_account_id(
+                DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+                image_id,
+                i,
+                update_auth,
+            )
+        })
         .collect();
 
     // Batch covering segments [1..segment_count) lands first.
@@ -4149,7 +4178,12 @@ fn loader_get_program_returns_none_for_abandoned_multi_tx_deploy() {
     let txs = deploy_transactions(&bytecode, &[1, remaining_segments], update_auth, &key);
     let header = {
         let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-        program_loader_core::deploy_header_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth)
+        program_loader_core::deploy_header_account_id(
+            DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+            image_id,
+            0,
+            update_auth,
+        )
     };
 
     // Only the first batch ever lands — the deployer abandons the rest of the sequence.
@@ -4178,8 +4212,18 @@ fn loader_rejects_a_partial_deploy_batch_with_default_update_auth() {
 
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
     let update_auth = AccountId::default();
-    let header = program_loader_core::deploy_header_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
-    let segment0 = program_loader_core::deploy_segment_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+    let segment0 = program_loader_core::deploy_segment_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
 
     // Genuinely partial (first_segment 0, but fewer segments than declared segment_count), and
     // no update_auth to fall back on — this is exactly the griefing shape the account list
@@ -4218,8 +4262,18 @@ fn loader_rejects_a_partial_deploy_batch_without_a_valid_signature() {
     let key = PrivateKey::try_new([14; 32]).unwrap();
     let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-    let header = program_loader_core::deploy_header_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
-    let segment0 = program_loader_core::deploy_segment_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+    let segment0 = program_loader_core::deploy_segment_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
 
     // update_auth is real and declared correctly, but the transaction carries no witness for it.
     let tx = deploy_batch_transaction(
@@ -4258,9 +4312,24 @@ fn loader_rejects_header_racing_with_a_different_segment_count() {
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
     // The header PDA depends on (image_id, update_auth) only, not on segment_count — verified
     // separately by header_pda_is_independent_of_segment_count in loader_core.
-    let header = program_loader_core::deploy_header_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
-    let segment0 = program_loader_core::deploy_segment_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
-    let segment1 = program_loader_core::deploy_segment_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 1, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+    let segment0 = program_loader_core::deploy_segment_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+    let segment1 = program_loader_core::deploy_segment_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        1,
+        update_auth,
+    );
 
     let tx1 = deploy_batch_transaction(
         header,
@@ -4313,8 +4382,18 @@ fn loader_rejects_overlapping_segment_rewrite() {
     let key = PrivateKey::try_new([16; 32]).unwrap();
     let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-    let header = program_loader_core::deploy_header_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
-    let segment0 = program_loader_core::deploy_segment_account_id(DEPLOYMENT_PROGRAM_ACCOUNT_ID, image_id, 0, update_auth);
+    let header = program_loader_core::deploy_header_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+    let segment0 = program_loader_core::deploy_segment_account_id(
+        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
 
     let batch_bytes = &user_elf[..program_loader_core::MAX_SEGMENT_DATA_LEN.min(user_elf.len())];
     let tx1 = deploy_batch_transaction(
