@@ -111,17 +111,8 @@ pub enum InvalidProgramBehaviorError {
     #[error(transparent)]
     ExecutionValidationFailed(#[from] lee_core::program::ExecutionValidationError),
 
-    #[error("Trying to claim account {account_id} which is not default")]
-    ClaimedNonDefaultAccount { account_id: AccountId },
-
-    #[error("Trying to claim account {account_id} which is not authorized")]
-    ClaimedUnauthorizedAccount { account_id: AccountId },
-
-    #[error("PDA claim mismatch: expected {expected:?}, actual {actual:?}")]
-    MismatchedPdaClaim {
-        expected: AccountId,
-        actual: AccountId,
-    },
+    #[error(transparent)]
+    Claim(#[from] lee_core::program::ClaimError),
 
     #[error("Default account {account_id} was modified without being claimed")]
     DefaultAccountModifiedWithoutClaim { account_id: AccountId },

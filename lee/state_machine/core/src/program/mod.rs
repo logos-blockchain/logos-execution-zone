@@ -307,6 +307,21 @@ pub enum Claim {
     Pda(PdaSeed),
 }
 
+#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimError {
+    #[error("Trying to claim account {account_id} which is not default")]
+    ClaimedNonDefaultAccount { account_id: AccountId },
+
+    #[error("Trying to claim account {account_id} which is not authorized")]
+    ClaimedUnauthorizedAccount { account_id: AccountId },
+
+    #[error("PDA claim mismatch: expected {expected:?}, actual {actual:?}")]
+    MismatchedPdaClaim {
+        expected: AccountId,
+        actual: AccountId,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
 pub struct AccountDiffOutput {
@@ -730,6 +745,40 @@ pub enum CallKind {
 /// The guest-side view of a single invocation.
 pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
+}
+
+/// The rules a claim on a PUBLIC account must satisfy. Private accounts are deliberately exempt:
+/// unauthorized private claiming is allowed, so the circuit only runs this on its public arm.
+pub fn validate_public_claim(
+    claim: Claim,
+    pre: &AccountWithMetadata,
+    executing_program_id: ProgramId,
+) -> Result<(), ClaimError> {
+    let account_id = pre.account_id;
+    if pre.account.program_owner != DEFAULT_PROGRAM_OWNER {
+        return Err(ClaimError::ClaimedNonDefaultAccount { account_id });
+    }
+
+    match claim {
+        Claim::Authorized => {
+            if pre.is_authorized {
+                Ok(())
+            } else {
+                Err(ClaimError::ClaimedUnauthorizedAccount { account_id })
+            }
+        }
+        Claim::Pda(seed) => {
+            let expected = AccountId::for_public_pda(&executing_program_id, &seed);
+            if expected == account_id {
+                Ok(())
+            } else {
+                Err(ClaimError::MismatchedPdaClaim {
+                    expected,
+                    actual: account_id,
+                })
+            }
+        }
+    }
 }
 
 /// Match `account_id` against the caller's seeds under the public-PDA derivation. `None`

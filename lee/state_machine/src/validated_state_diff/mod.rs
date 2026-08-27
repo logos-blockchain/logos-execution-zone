@@ -8,8 +8,8 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Nonce},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS,
-        match_caller_seed_as_public_pda, validate_execution,
+        CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS,
+        match_caller_seed_as_public_pda, validate_execution, validate_public_claim,
     },
 };
 use log::debug;
@@ -231,38 +231,11 @@ impl ValidatedStateDiff {
             {
                 let account_id = pre.account_id;
 
+                // The public-execution path only sees public accounts, so the public claim
+                // rules are the whole story here.
                 if let Some(claim) = diff_output.claim() {
-                    // The invoked program can only claim accounts with default program id.
-                    ensure!(
-                        pre.account.program_owner == DEFAULT_PROGRAM_OWNER,
-                        InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
-                    );
-
-                    match claim {
-                        Claim::Authorized => {
-                            // The program can only claim accounts that were authorized by the
-                            // signer.
-                            ensure!(
-                                pre.is_authorized,
-                                InvalidProgramBehaviorError::ClaimedUnauthorizedAccount {
-                                    account_id
-                                }
-                            );
-                        }
-                        Claim::Pda(seed) => {
-                            // The program can only claim accounts that correspond to the PDAs it
-                            // is authorized to claim. The public-execution path only sees public
-                            // accounts, so the public-PDA derivation is the correct formula here.
-                            let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
-                            ensure!(
-                                account_id == pda,
-                                InvalidProgramBehaviorError::MismatchedPdaClaim {
-                                    expected: pda,
-                                    actual: account_id
-                                }
-                            );
-                        }
-                    }
+                    validate_public_claim(claim, pre, chained_call.program_id)
+                        .map_err(InvalidProgramBehaviorError::Claim)?;
                 }
 
                 state_diff.insert(

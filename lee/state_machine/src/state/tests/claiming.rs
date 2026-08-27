@@ -733,8 +733,8 @@ fn claiming_mechanism_cannot_claim_initialied_accounts() {
 
     assert!(matches!(
         result,
-        Err(LeeError::InvalidProgramBehavior(
-            InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id: err_account_id }
-        )) if err_account_id == account_id
+        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Claim(
+            ClaimError::ClaimedNonDefaultAccount { account_id: err_account_id }
+        ))) if err_account_id == account_id
     ));
 }

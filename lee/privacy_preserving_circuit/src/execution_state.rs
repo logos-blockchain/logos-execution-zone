@@ -12,7 +12,7 @@ use lee_core::{
         AccountDiffOutput, BlockValidityWindow, CallContext, CallerData, ChainedCall, Claim,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEffects, ProgramId,
         ProgramOutput, TimestampValidityWindow, match_caller_seed_as_private_pda,
-        match_caller_seed_as_public_pda, validate_execution,
+        match_caller_seed_as_public_pda, validate_execution, validate_public_claim,
     },
 };
 use risc0_zkvm::guest::env;
@@ -290,39 +290,14 @@ impl ExecutionState {
         // External seed is only consulted the first time the account is seen. Subsequent calls
         // need no re-check because the entry is already recorded on private_pda_bindings.
         if let InputAccountIdentity::Private(PrivateWitness {
-            vpk,
-            identifier,
             kind:
                 WitnessKind::Pda {
                     binding: Some((authority_program_id, seed)),
                 },
-            nullifier,
             ..
         }) = identity
         {
-            let expected = AccountId::for_private_pda(
-                authority_program_id,
-                seed,
-                &nullifier.npk(),
-                vpk,
-                *identifier,
-            );
-            assert_eq!(
-                account_id, expected,
-                "External seed mismatch for private PDA {account_id}"
-            );
-            bind_private_pda(
-                &mut self.private_pda_bindings,
-                account_id,
-                *authority_program_id,
-                *seed,
-            );
-            assert_family_binding(
-                &mut self.pda_family_binding,
-                *authority_program_id,
-                *seed,
-                account_id,
-            );
+            self.bind_verified_private_pda(*authority_program_id, *seed, account_id);
         }
 
         let (is_authorized, stored_is_authorized) =
@@ -369,6 +344,27 @@ impl ExecutionState {
         (account.clone(), is_authorized)
     }
 
+    /// Record `account_id` as the private PDA `program_id` derives from `seed`, having proven
+    /// that derivation against the account's own witnessed npk/vpk/identifier.
+    fn bind_verified_private_pda(
+        &mut self,
+        program_id: ProgramId,
+        seed: PdaSeed,
+        account_id: AccountId,
+    ) {
+        let (npk, vpk, identifier) = self
+            .private_pda_witnesses
+            .get(&account_id)
+            .expect("private PDA pre_state must have a witnessed npk");
+        let expected = AccountId::for_private_pda(&program_id, &seed, npk, vpk, *identifier);
+        assert_eq!(
+            account_id, expected,
+            "Private PDA {account_id} is not the account program {program_id:?} derives from its seed"
+        );
+        bind_private_pda(&mut self.private_pda_bindings, account_id, program_id, seed);
+        assert_family_binding(&mut self.pda_family_binding, program_id, seed, account_id);
+    }
+
     /// Settle a call's claims, carry its accounts forward, and return the set of accounts its own
     /// callees inherit as authorized.
     fn apply_states(
@@ -380,46 +376,31 @@ impl ExecutionState {
         post_states: Vec<AccountDiffOutput>,
     ) -> HashSet<AccountId> {
         for (pre, diff_output) in pre_states.into_iter().zip(post_states) {
-            let AccountWithMetadata {
-                account: pre_account,
-                is_authorized,
-                account_id,
-            } = pre;
+            let account_id = pre.account_id;
 
-            if is_authorized {
+            if pre.is_authorized {
                 authorized_accounts.insert(account_id);
             }
 
             if let Some(claim) = diff_output.claim() {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(
-                    pre_account.program_owner, DEFAULT_PROGRAM_OWNER,
+                    pre.account.program_owner, DEFAULT_PROGRAM_OWNER,
                     "Cannot claim an initialized account {account_id}"
                 );
 
                 if input_accounts[&account_id].identity.is_public() {
-                    match claim {
-                        Claim::Authorized => {
-                            // Note: no need to check authorized pdas because authorization was
-                            // already settled when the pre states were derived.
-                            assert!(
-                                is_authorized,
-                                "Cannot claim unauthorized account {account_id}"
-                            );
-                        }
-                        Claim::Pda(seed) => {
-                            let pda = AccountId::for_public_pda(&program_id, &seed);
-                            assert_eq!(
-                                account_id, pda,
-                                "Invalid PDA claim for account {account_id} which does not match derived PDA {pda}"
-                            );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                account_id,
-                            );
-                        }
+                    // Authorization itself was settled when the pre_states were derived, so the
+                    // `Authorized` rule reads the already-derived flag.
+                    validate_public_claim(claim, &pre, program_id)
+                        .unwrap_or_else(|e| panic!("{e} in program {program_id:?}"));
+                    if let Claim::Pda(seed) = claim {
+                        assert_family_binding(
+                            &mut self.pda_family_binding,
+                            program_id,
+                            seed,
+                            account_id,
+                        );
                     }
                 } else {
                     // Private accounts: don't enforce the claim semantics. Unauthorized private
@@ -427,33 +408,7 @@ impl ExecutionState {
                     match claim {
                         Claim::Authorized => {}
                         Claim::Pda(seed) => {
-                            let (npk, vpk, identifier) = self
-                                .private_pda_witnesses
-                                .get(&account_id)
-                                .expect("private PDA pre_state must have a witnessed npk");
-                            let pda = AccountId::for_private_pda(
-                                &program_id,
-                                &seed,
-                                npk,
-                                vpk,
-                                *identifier,
-                            );
-                            assert_eq!(
-                                account_id, pda,
-                                "Invalid private PDA claim for account {account_id}"
-                            );
-                            bind_private_pda(
-                                &mut self.private_pda_bindings,
-                                account_id,
-                                program_id,
-                                seed,
-                            );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                account_id,
-                            );
+                            self.bind_verified_private_pda(program_id, seed, account_id);
                         }
                     }
                 }
@@ -461,7 +416,7 @@ impl ExecutionState {
 
             self.post_states.insert(
                 account_id,
-                diff_output.materialize(&pre_account, program_id).expect(
+                diff_output.materialize(&pre.account, program_id).expect(
                     "balance diff must apply; this is the per-account sufficiency check that rejects the proof",
                 ),
             );

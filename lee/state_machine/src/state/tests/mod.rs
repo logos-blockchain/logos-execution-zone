@@ -13,8 +13,8 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
-        BlockValidityWindow, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
-        ProgramId, TimestampValidityWindow,
+        BlockValidityWindow, ClaimError, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS,
+        PdaSeed, ProgramId, TimestampValidityWindow,
     },
 };
 
