@@ -61,9 +61,9 @@ pub fn compute_circuit_output(
                     // The npk-to-account_id binding is established upstream in
                     // the execution-state walk via `Claim::Pda(seed)` or a caller `pda_seeds`
                     // match. Here we only enforce the lifecycle pre-conditions. The supplied npk
-                    // on the witness has been recorded into `private_pda_witnesses` and used
-                    // for the binding check; we use `pre_state.account_id` directly for nullifier
-                    // and commitment derivation.
+                    // on the witness has been recorded on the account's `private_pdas` entry and
+                    // used for the binding check; we use `pre_state.account_id`
+                    // directly for nullifier and commitment derivation.
                     WitnessKind::Pda { .. } => pre_state.account_id,
                 };
 

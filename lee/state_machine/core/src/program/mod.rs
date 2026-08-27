@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::guest::env;
@@ -809,31 +809,6 @@ pub fn match_caller_seed_as_public_pda(
     // Costy for calls with multiple seeds in one call.
     caller_pda_seeds.iter().find_map(|seed| {
         if AccountId::for_public_pda(&caller_program_id, seed) == account_id {
-            return Some((*seed, caller_program_id));
-        }
-        None
-    })
-}
-
-/// Match `account_id` against the caller's seeds interpreted as private-PDA derivations, using
-/// the (npk, vpk, identifier) supplied for it. `None` when the account carries no private-PDA
-/// witness.
-///
-/// Shared with the shielded prover host: under splice-and-verify a disagreement there is not a
-/// named error but an `env::verify` mismatch, so both sides must run the same formula.
-#[must_use]
-pub fn match_caller_seed_as_private_pda(
-    private_pda_witnesses: &HashMap<AccountId, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
-    caller: &CallerData,
-    caller_pda_seeds: &[PdaSeed],
-    account_id: AccountId,
-) -> Option<(PdaSeed, ProgramId)> {
-    let (npk, vpk, identifier) = private_pda_witnesses.get(&account_id)?;
-    let caller_program_id = caller.program_id?;
-    // Costy for calls with multiple seeds in one call.
-    caller_pda_seeds.iter().find_map(|seed| {
-        if AccountId::for_private_pda(&caller_program_id, seed, npk, vpk, *identifier) == account_id
-        {
             return Some((*seed, caller_program_id));
         }
         None
