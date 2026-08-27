@@ -111,6 +111,48 @@ async fn submit_stake_with_simple_mover(
     .await
 }
 
+#[when(expr = "a Stake of {string} is submitted with the mover told to deposit one coin {word}")]
+async fn submit_stake_with_skewed_mover(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expression: String,
+    direction: String,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let amount = scenario.amount(&expression)?;
+    // The mover instruction data is caller-controlled and opaque to
+    // sequencer_stake, so authenticated_transfer itself plays the bad mover:
+    // it deposits one coin off the amount the Stake declares.
+    let mover_amount = match direction.as_str() {
+        "less" => amount.checked_sub(1),
+        "more" => amount.checked_add(1),
+        other => {
+            return Err(StepError::InvalidArgument {
+                message: format!("unsupported mover skew '{other}', expected 'less' or 'more'"),
+            });
+        }
+    }
+    .ok_or_else(|| StepError::InvalidArgument {
+        message: format!("mover amount one coin {direction} than {amount} is out of range"),
+    })?;
+    let instruction = stake_instruction_with_mover(
+        scenario.sequencer_key(),
+        amount,
+        programs::authenticated_transfer().id(),
+        transfer_instruction(mover_amount)?,
+    )?;
+    let accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
+    submit_and_record(
+        world,
+        accounts,
+        instruction,
+        programs::sequencer_stake().id(),
+        amount,
+    )
+    .await
+}
+
 #[when(expr = "a Stake of {string} is submitted without the ownership account's signature")]
 async fn submit_stake_unsigned_ownership(
     world: &mut CucumberWorld,
@@ -196,6 +238,34 @@ async fn submit_confirm_stake_top_level(world: &mut CucumberWorld, step: &Step) 
         accounts,
         instruction,
         programs::sequencer_stake().id(),
+        0,
+    )
+    .await
+}
+
+#[when(
+    "a ConfirmStake matching the current ownership balance is submitted as a chained call \
+     through the stake_chain_caller program"
+)]
+async fn submit_confirm_stake_as_chained_call(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let ownership_id = scenario.ownership_id()?;
+    // The expected balance matches the current one, so ConfirmStake's caller
+    // check — the caller is stake_chain_caller, not sequencer_stake — is the
+    // only assert that can reject it.
+    let balance = get_account(world.lez()?, ownership_id).await?.balance;
+    let forwarded = confirm_stake_instruction(balance)?;
+    let instruction = chain_caller_instruction(programs::sequencer_stake().id(), forwarded)?;
+    let accounts = vec![AccountIdentity::Public(ownership_id)];
+    submit_and_record(
+        world,
+        accounts,
+        instruction,
+        test_programs::stake_chain_caller().id(),
         0,
     )
     .await

@@ -3619,3 +3619,78 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         Some(system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE)
     );
 }
+
+/// Every configured `GenesisAction::StakeSequencer` becomes a config entry at
+/// the minimum stake, each claiming its own distinct ownership account, and
+/// the faucet-funded pass-through account is drained to zero by the founding
+/// `Stake`s.
+#[test]
+fn genesis_stakes_every_founding_sequencer() {
+    const FOUNDERS: u8 = 3;
+    let mut config = setup_sequencer_config();
+    let founders: Vec<_> = (0..FOUNDERS)
+        .map(|index| {
+            let sequencer_key = test_sequencer_key(0x60 + index);
+            let ownership_key = PrivateKey::try_new([0x70 + index; 32]).unwrap();
+            (sequencer_key, ownership_key)
+        })
+        .collect();
+    config.genesis = founders
+        .iter()
+        .enumerate()
+        .map(
+            |(index, (sequencer_key, ownership_key))| GenesisAction::StakeSequencer {
+                sequencer_key: *sequencer_key,
+                ownership_public_key: PublicKey::new_from_private_key(ownership_key),
+                stake_signature: crate::sign_genesis_stake(index, *sequencer_key, ownership_key),
+            },
+        )
+        .collect();
+
+    // The founding stakes stand on their own; no bootstrap fallback key.
+    let (state, _genesis_txs) = build_genesis_state(&config, None);
+
+    let stake_config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
+        state
+            .get_account_by_id(system_accounts::sequencer_stake_config_account_id())
+            .data
+            .as_ref(),
+    )
+    .expect("genesis config account should decode");
+    assert_eq!(stake_config.entries.len(), usize::from(FOUNDERS));
+
+    let mut ownership_ids = std::collections::BTreeSet::new();
+    for (sequencer_key, ownership_key) in &founders {
+        let entry = &stake_config.entries[sequencer_key];
+        let ownership_id = AccountId::from(&PublicKey::new_from_private_key(ownership_key));
+        assert_eq!(entry.account_id, ownership_id);
+        assert_eq!(
+            entry.total_staked,
+            system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE
+        );
+        assert_eq!(entry.total_pending_unstake, 0);
+        assert!(
+            ownership_ids.insert(ownership_id),
+            "each entry points at a distinct ownership account"
+        );
+
+        let account = state.get_account_by_id(ownership_id);
+        assert_eq!(
+            account.balance,
+            system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE
+        );
+        assert_eq!(
+            account.program_owner,
+            programs::sequencer_stake().id().into()
+        );
+    }
+
+    // The faucet funded the pass-through account with exactly N × minimum and
+    // each founding Stake moved one minimum out.
+    assert_eq!(
+        state
+            .get_account_by_id(crate::genesis_stake_funding_account())
+            .balance,
+        0
+    );
+}
