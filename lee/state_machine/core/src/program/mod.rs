@@ -349,17 +349,6 @@ impl AccountDiffOutput {
     pub const fn diff(&self) -> &AccountDiff {
         &self.diff
     }
-
-    #[must_use]
-    pub const fn diff_mut(&mut self) -> &mut AccountDiff {
-        &mut self.diff
-    }
-}
-
-impl From<AccountDiffOutput> for AccountDiff {
-    fn from(output: AccountDiffOutput) -> Self {
-        output.diff
-    }
 }
 
 pub type BlockValidityWindow = ValidityWindow<BlockId>;

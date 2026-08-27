@@ -157,20 +157,6 @@ fn diff_output_new_without_claim_constructor() {
     assert!(diff_output.claim().is_none());
 }
 
-#[test]
-fn diff_output_diff_getter() {
-    let mut diff = AccountDiff {
-        id: AccountId::new([7; 32]),
-        diff_balance: BalanceDiff::Add(1337),
-        diff_data: Some(vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap()),
-    };
-
-    let mut diff_output = AccountDiffOutput::new(diff.clone());
-
-    assert_eq!(diff_output.diff(), &diff);
-    assert_eq!(diff_output.diff_mut(), &mut diff);
-}
-
 // ---- AccountId::for_private_pda tests ----
 
 /// Pins `AccountId::for_private_pda` against a hardcoded expected output for a specific

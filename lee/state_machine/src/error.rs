@@ -74,9 +74,6 @@ pub enum LeeError {
     #[error("Chain of calls is too long")]
     MaxChainedCallsDepthExceeded,
 
-    #[error("Max account nonce reached")]
-    MaxAccountNonceReached,
-
     #[error("Execution outside of the validity window")]
     OutOfValidityWindow,
 }
