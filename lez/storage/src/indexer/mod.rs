@@ -29,6 +29,8 @@ pub const DB_META_STALL_REASON_KEY: &str = "stall_reason";
 pub const DB_META_CROSS_ZONE_HALT_KEY: &str = "cross_zone_halt";
 /// Key base for storing the L1 inscription slot of the tip block.
 pub const DB_META_TIP_SLOT_KEY: &str = "tip_slot";
+/// Key base for storing the applied event-filter segments (opaque borsh bytes).
+pub const DB_META_EVENT_FILTER_SEGMENTS_KEY: &str = "event_filter_segments";
 
 /// Cell name for a breakpoint.
 pub const BREAKPOINT_CELL_NAME: &str = "breakpoint";

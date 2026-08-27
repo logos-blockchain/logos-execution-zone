@@ -9,9 +9,9 @@ use crate::{
     indexer::{
         ACC_NUM_CELL_NAME, BLOCK_EVENTS_CELL_NAME, BLOCK_HASH_CELL_NAME, BREAKPOINT_CELL_NAME,
         CF_ACC_META, CF_BREAKPOINT_NAME, CF_EVENTS, CF_HASH_TO_ID, CF_TX_TO_ID,
-        DB_META_CROSS_ZONE_HALT_KEY, DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY,
-        DB_META_STALL_REASON_KEY, DB_META_TIP_SLOT_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY,
-        TX_HASH_CELL_NAME,
+        DB_META_CROSS_ZONE_HALT_KEY, DB_META_EVENT_FILTER_SEGMENTS_KEY,
+        DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, DB_META_STALL_REASON_KEY,
+        DB_META_TIP_SLOT_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY, TX_HASH_CELL_NAME,
     },
 };
 
@@ -279,6 +279,40 @@ impl SimpleStorableCell for ZoneSdkIndexerCursorCellOwned {
 }
 
 impl SimpleReadableCell for ZoneSdkIndexerCursorCellOwned {}
+
+/// The caller serializes via `borsh` (the segment list type lives in `indexer_core`).
+#[derive(BorshDeserialize)]
+pub struct EventFilterSegmentsCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for EventFilterSegmentsCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_EVENT_FILTER_SEGMENTS_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for EventFilterSegmentsCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct EventFilterSegmentsCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for EventFilterSegmentsCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_EVENT_FILTER_SEGMENTS_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for EventFilterSegmentsCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize event-filter segments cell".to_owned()),
+            )
+        })
+    }
+}
 
 #[derive(BorshSerialize)]
 pub struct ZoneSdkIndexerCursorCellRef<'bytes>(pub &'bytes [u8]);

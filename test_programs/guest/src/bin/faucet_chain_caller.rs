@@ -1,10 +1,10 @@
+use borsh::to_vec;
 use lee_core::{
     account::AccountId,
     program::{
         AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
-use risc0_zkvm::serde::to_vec;
 
 type Instruction = (ProgramId, ProgramId, AccountId, u128);
 // (faucet_program_id, vault_program_id, recipient_id, amount)
@@ -17,7 +17,7 @@ fn main() {
             pre_states,
             instruction: (faucet_program_id, vault_program_id, recipient_id, amount),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let post_states: Vec<_> = pre_states
@@ -43,7 +43,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         pre_states,
         post_states,
     )

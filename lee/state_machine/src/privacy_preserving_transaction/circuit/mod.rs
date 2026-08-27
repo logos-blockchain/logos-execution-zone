@@ -5,7 +5,9 @@ use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
     account::AccountWithMetadata,
+    from_frame,
     program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
+    to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
 
@@ -115,9 +117,12 @@ pub fn execute_and_prove_with_padded_inputs(
             &chained_call.instruction_data,
         )?;
 
-        let program_output: ProgramOutput = inner_receipt
-            .journal
-            .decode()
+        let program_output: ProgramOutput =
+            borsh::from_slice(from_frame(&inner_receipt.journal.bytes).ok_or_else(|| {
+                LeeError::ProgramOutputDeserializationError(
+                    "malformed inner-receipt journal frame".to_owned(),
+                )
+            })?)
             .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
 
         // TODO: remove clone
@@ -147,7 +152,8 @@ pub fn execute_and_prove_with_padded_inputs(
         dummy_inputs,
     };
 
-    env_builder.write(&circuit_input).unwrap();
+    let circuit_input_payload = borsh::to_vec(&circuit_input)?;
+    env_builder.write_slice(&to_frame(&circuit_input_payload));
     let env = env_builder.build().unwrap();
     let prover = default_prover();
     let opts = ProverOpts::succinct();
@@ -157,11 +163,14 @@ pub fn execute_and_prove_with_padded_inputs(
 
     let proof = Proof(borsh::to_vec(&prove_info.receipt.inner)?);
 
-    let circuit_output: PrivacyPreservingCircuitOutput = prove_info
-        .receipt
-        .journal
-        .decode()
-        .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
+    let circuit_output: PrivacyPreservingCircuitOutput = borsh::from_slice(
+        from_frame(&prove_info.receipt.journal.bytes).ok_or_else(|| {
+            LeeError::CircuitOutputDeserializationError(
+                "malformed circuit journal frame".to_owned(),
+            )
+        })?,
+    )
+    .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
 
     Ok((circuit_output, proof))
 }
@@ -174,8 +183,7 @@ fn execute_and_prove_program(
 ) -> Result<Receipt, LeeError> {
     // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
-    Program::write_inputs(
-        program.id(),
+    program.write_inputs(
         caller_program_id,
         pre_states,
         instruction_data,

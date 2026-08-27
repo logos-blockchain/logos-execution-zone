@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, ensure};
 use chain_state::{
     AcceptOutcome, BlockIngestError, StallReason, Tip, apply_block_to_state, validate_against_tip,
 };
@@ -16,18 +16,23 @@ use logos_blockchain_zone_sdk::Slot;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
-use crate::status::CrossZoneHalt;
+use crate::{event_filter::EventFilter, status::CrossZoneHalt};
 
 #[derive(Clone)]
 pub struct IndexerStore {
     dbio: Arc<RocksDBIO>,
     current_state: Arc<RwLock<V03State>>,
+    filter_segments: Vec<(EventFilter, BlockId)>,
 }
 
 impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
-    pub fn open_db(location: &Path, genesis_seed: Vec<(AccountId, Account)>) -> Result<Self> {
+    pub fn open_db(
+        location: &Path,
+        genesis_seed: Vec<(AccountId, Account)>,
+        event_filter: EventFilter,
+    ) -> Result<Self> {
         #[cfg(not(feature = "testnet"))]
         let base = testnet_initial_state::initial_state();
 
@@ -42,11 +47,39 @@ impl IndexerStore {
         let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
 
         let current_state = dbio.final_state()?;
+        let filter_segments = reconcile_filter_segments(&dbio, event_filter)?;
+        if filter_segments
+            .last()
+            .is_some_and(|(filter, _)| filter.keeps_nothing())
+        {
+            warn!(
+                "Configured event filter keeps no events: none are captured and every event \
+                 query is rejected as uncovered"
+            );
+        }
 
         Ok(Self {
             dbio: Arc::new(dbio),
             current_state: Arc::new(RwLock::new(current_state)),
+            filter_segments,
         })
+    }
+
+    /// The filter ingest currently applies — the last recorded segment.
+    #[must_use]
+    pub fn live_filter(&self) -> &EventFilter {
+        &self
+            .filter_segments
+            .last()
+            .expect("reconcile seeds at least one segment")
+            .0
+    }
+
+    /// Applied filters with the height each took effect at, oldest first; the
+    /// events column only holds what the filter of its era kept.
+    #[must_use]
+    pub fn filter_segments(&self) -> &[(EventFilter, BlockId)] {
+        &self.filter_segments
     }
 
     pub fn last_observed_l1_lib_header(&self) -> Result<Option<HeaderId>> {
@@ -82,25 +115,20 @@ impl IndexerStore {
             .find(|enc_tx| enc_tx.hash().0 == tx_hash))
     }
 
-    pub fn get_events_for_block(&self, block_id: u64) -> Result<Option<Vec<TxEvents>>> {
+    pub fn get_events_for_block(&self, block_id: BlockId) -> Result<Option<Vec<TxEvents>>> {
         Ok(self.dbio.get_block_events(block_id)?)
     }
 
-    pub fn get_events_range(&self, from: u64, to: u64) -> Result<Vec<(u64, Vec<TxEvents>)>> {
+    pub fn get_events_range(
+        &self,
+        from: BlockId,
+        to: BlockId,
+    ) -> Result<Vec<(BlockId, Vec<TxEvents>)>> {
         Ok(self.dbio.get_block_events_range(from, to)?)
     }
 
-    pub fn get_events_by_tx_hash(&self, tx_hash: [u8; 32]) -> Result<Option<(u64, TxEvents)>> {
-        let Some(block_id) = self.dbio.get_block_id_by_tx_hash(tx_hash)? else {
-            return Ok(None);
-        };
-        let Some(groups) = self.dbio.get_block_events(block_id)? else {
-            return Ok(None);
-        };
-        Ok(groups
-            .into_iter()
-            .find(|group| group.tx_hash.0 == tx_hash)
-            .map(|group| (block_id, group)))
+    pub fn block_id_by_tx_hash(&self, tx_hash: [u8; 32]) -> Result<Option<BlockId>> {
+        Ok(self.dbio.get_block_id_by_tx_hash(tx_hash)?)
     }
 
     pub fn get_block_by_hash(&self, hash: [u8; 32]) -> Result<Option<Block>> {
@@ -270,8 +298,6 @@ impl IndexerStore {
 
         // TODO: we use scratch state to be atomic, but need to revisit how expensive a clone is
         let mut scratch = self.current_state.read().await.clone();
-        // The events come from the same application that produced `scratch`, and are
-        // written in the same `put_block` batch as the block and that state.
         let events = match apply_block_to_state(block, &mut scratch) {
             Ok(events) => events,
             Err(err) => {
@@ -282,6 +308,9 @@ impl IndexerStore {
                 return Ok(AcceptOutcome::Parked(err));
             }
         };
+        // The retained events come from the same application that produced `scratch`,
+        // and are written in the same `put_block` batch as the block and that state.
+        let events = self.live_filter().filter_block(events);
 
         let mut stored = block.clone();
         stored.bedrock_status = BedrockStatus::Finalized;
@@ -300,6 +329,55 @@ impl IndexerStore {
     }
 }
 
+// A filter change takes effect at the next ingested block: rows up to the old
+// tip were written under the previous filter and stay attributed to it.
+fn reconcile_filter_segments(
+    dbio: &RocksDBIO,
+    configured: EventFilter,
+) -> Result<Vec<(EventFilter, BlockId)>> {
+    let mut segments: Vec<(EventFilter, BlockId)> = match dbio.get_event_filter_segments_bytes()? {
+        Some(bytes) => borsh::from_slice(&bytes)?,
+        None => Vec::new(),
+    };
+    ensure!(
+        segments.is_sorted_by(|left, right| left.1 < right.1),
+        "persisted event-filter segments are not strictly ascending"
+    );
+    let seam = dbio
+        .get_meta_last_block_id_in_db()?
+        .map_or(0, |tip| tip.saturating_add(1));
+    ensure!(
+        segments.last().is_none_or(|(_, from)| *from <= seam),
+        "persisted event-filter segments start beyond the next block to ingest"
+    );
+    let change = match segments.last_mut() {
+        Some((filter, _)) if *filter == configured => None,
+        Some((filter, from)) if *from == seam => {
+            *filter = configured;
+            Some("replaced the last")
+        }
+        _ => {
+            segments.push((configured, seam));
+            Some("appended a new")
+        }
+    };
+    if let Some(change) = change {
+        dbio.put_event_filter_segments_bytes(&borsh::to_vec(&segments)?)?;
+        log::info!("Event filter changed: {change} segment, effective from block {seam}");
+    }
+    Ok(segments)
+}
+
+#[cfg(test)]
+fn open_default(home: &Path) -> IndexerStore {
+    open_with(home, EventFilter::default())
+}
+
+#[cfg(test)]
+fn open_with(home: &Path, filter: EventFilter) -> IndexerStore {
+    IndexerStore::open_db(home, Vec::new(), filter).expect("open store")
+}
+
 #[cfg(test)]
 mod stall_reason_tests {
     use common::HashType;
@@ -309,7 +387,7 @@ mod stall_reason_tests {
     #[tokio::test]
     async fn stall_reason_roundtrips_and_clears() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         assert!(store.get_stall_reason().expect("get").is_none());
 
@@ -346,7 +424,7 @@ mod stall_reason_tests {
     #[tokio::test]
     async fn cross_zone_halt_roundtrips_and_clears() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         assert!(store.get_cross_zone_halt().expect("get").is_none());
 
@@ -370,15 +448,19 @@ mod stall_reason_tests {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
     use lee_core::program::{InstructionData, ProgramEvent, ProgramId};
+    use storage::{DBIO as _, indexer::indexer_cells::EventFilterSegmentsCellOwned};
     use tempfile::tempdir;
     use testnet_initial_state::initial_pub_accounts_private_keys;
 
     use super::*;
+    use crate::event_filter::{SelectorFilter, covered_over_range};
 
     // Host-side mirror of the `event_emitter` test guest's instruction.
-    #[derive(serde::Serialize)]
+    #[derive(borsh::BorshSerialize)]
     struct EmitterInstruction {
         events: Vec<ProgramEvent>,
         chain: Vec<(ProgramId, InstructionData)>,
@@ -452,7 +534,7 @@ mod tests {
     fn correct_startup() {
         let home = tempdir().unwrap();
 
-        let storage = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let storage = open_default(home.as_ref());
 
         let final_id = storage.get_last_block_id().unwrap();
 
@@ -462,7 +544,7 @@ mod tests {
     #[tokio::test]
     async fn accept_block_applies_transfers_and_advances_tip() {
         let home = tempdir().unwrap();
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_default(home.as_ref());
 
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
@@ -504,7 +586,7 @@ mod tests {
     #[tokio::test]
     async fn account_state_at_block_reflects_history() {
         let home = tempdir().unwrap();
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_default(home.as_ref());
 
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
@@ -546,7 +628,7 @@ mod tests {
     #[tokio::test]
     async fn accept_block_captures_emitted_events() {
         let home = tempdir().unwrap();
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
 
         let invoke_hash = seed_emitted_events(&store).await;
 
@@ -574,11 +656,16 @@ mod tests {
             vec![(3, groups.clone())]
         );
 
-        let (block_id, group) = store
-            .get_events_by_tx_hash(invoke_hash.0)
+        let block_id = store
+            .block_id_by_tx_hash(invoke_hash.0)
             .unwrap()
-            .expect("tx-hash lookup must find the group");
+            .expect("the invoking tx must resolve its block");
         assert_eq!(block_id, 3);
+        let group = store
+            .get_events_for_block(block_id)
+            .unwrap()
+            .and_then(|rows| rows.into_iter().find(|row| row.tx_hash == invoke_hash))
+            .expect("tx-hash lookup must find the group");
         assert_eq!(group, groups[0]);
     }
 
@@ -586,12 +673,12 @@ mod tests {
     async fn events_survive_store_reopen() {
         let home = tempdir().unwrap();
         let invoke_hash = {
-            let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+            let store = open_with(home.as_ref(), EventFilter::Archival);
             seed_emitted_events(&store).await
         }; // drop releases the RocksDB lock
 
         // Reopening replays state from the breakpoints; the events rows must be untouched.
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
         let groups = store
             .get_events_for_block(3)
             .unwrap()
@@ -604,7 +691,7 @@ mod tests {
     #[tokio::test]
     async fn reaccepting_applied_block_does_not_duplicate_events() {
         let home = tempdir().unwrap();
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
 
         seed_emitted_events(&store).await;
         let before = store.get_events_for_block(3).unwrap().unwrap();
@@ -619,9 +706,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_filter_stores_no_events() {
+        let home = tempdir().unwrap();
+        let store = open_default(home.as_ref());
+
+        let invoke_hash = seed_emitted_events(&store).await;
+
+        // Nothing survives the filter, so block 3 gets no row at all — where the
+        // archival run stores both emitted events.
+        assert_eq!(store.get_events_for_block(3).unwrap(), None);
+        assert!(store.get_events_range(1, 3).unwrap().is_empty());
+        assert!(
+            store
+                .block_id_by_tx_hash(invoke_hash.0)
+                .unwrap()
+                .and_then(|block_id| store.get_events_for_block(block_id).unwrap())
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_source_filters_at_ingest() {
+        let home = tempdir().unwrap();
+        let filter = EventFilter::Sources(HashMap::from([(
+            test_methods::EVENT_EMITTER_ID,
+            SelectorFilter::Only(HashSet::from([emitted(1).selector])),
+        )]));
+        let store = open_with(home.as_ref(), filter);
+
+        let invoke_hash = seed_emitted_events(&store).await;
+
+        // The invoke emits `emitted(0)` and `emitted(1)`; only the declared selector lands.
+        let groups = store
+            .get_events_for_block(3)
+            .unwrap()
+            .expect("the retained event must still produce a row");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].tx_hash, invoke_hash);
+        assert_eq!(groups[0].events.len(), 1);
+        assert_eq!(
+            groups[0].events[0].program_id,
+            test_methods::EVENT_EMITTER_ID
+        );
+        assert_eq!(groups[0].events[0].event, emitted(1));
+    }
+
+    #[tokio::test]
     async fn blocks_without_events_have_no_row() {
         let home = tempdir().unwrap();
-        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let store = open_default(home.as_ref());
 
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
@@ -638,6 +771,259 @@ mod tests {
         assert_eq!(store.get_events_for_block(1).unwrap(), None);
         assert_eq!(store.get_events_for_block(2).unwrap(), None);
         assert!(store.get_events_range(1, 2).unwrap().is_empty());
+    }
+
+    #[test]
+    fn fresh_open_records_the_configured_filter_from_genesis() {
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
+
+        assert_eq!(store.filter_segments(), &[(EventFilter::Archival, 0)]);
+    }
+
+    #[tokio::test]
+    async fn a_db_with_blocks_but_no_segments_seams_at_the_tip() {
+        let home = tempdir().unwrap();
+        let tip = {
+            let store = open_with(home.as_ref(), EventFilter::Archival);
+            seed_emitted_events(&store).await;
+            store.get_last_block_id().unwrap().unwrap()
+        };
+
+        // What every upgrading deployment looks like: blocks already ingested, but no
+        // segment history, because filtering did not exist when they were written.
+        let initial_state = testnet_initial_state::initial_state();
+        let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
+        dbio.del::<EventFilterSegmentsCellOwned>(()).unwrap();
+        drop(dbio);
+
+        let reopened = open_with(home.as_ref(), EventFilter::Archival);
+
+        assert_eq!(
+            reopened.filter_segments(),
+            &[(EventFilter::Archival, tip.saturating_add(1))]
+        );
+        // Those blocks were never filtered, so no query may claim them as covered.
+        assert!(!covered_over_range(
+            reopened.filter_segments(),
+            1,
+            tip,
+            None,
+            None
+        ));
+    }
+
+    #[tokio::test]
+    async fn unchanged_filter_reopen_keeps_a_single_segment() {
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
+        seed_emitted_events(&store).await;
+        assert_eq!(store.get_last_block_id().unwrap(), Some(3));
+        drop(store);
+
+        let reopened = open_with(home.as_ref(), EventFilter::Archival);
+
+        assert_eq!(reopened.filter_segments(), &[(EventFilter::Archival, 0)]);
+    }
+
+    #[test]
+    fn same_seam_filter_change_replaces_the_last_segment() {
+        let home = tempdir().unwrap();
+        drop(open_with(home.as_ref(), EventFilter::Archival));
+        let reopened = open_default(home.as_ref());
+
+        assert_eq!(reopened.filter_segments(), &[(EventFilter::default(), 0)]);
+    }
+
+    #[tokio::test]
+    async fn filter_change_after_ingest_appends_a_segment_at_the_seam() {
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
+        seed_emitted_events(&store).await;
+        let tip = store.get_last_block_id().unwrap().unwrap();
+        drop(store);
+
+        let reopened = open_default(home.as_ref());
+
+        assert_eq!(
+            reopened.filter_segments(),
+            &[
+                (EventFilter::Archival, 0),
+                (EventFilter::default(), tip.saturating_add(1)),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn coverage_follows_the_segment_history_end_to_end() {
+        let home = tempdir().unwrap();
+        let tip = {
+            let store = open_with(home.as_ref(), EventFilter::Archival);
+            seed_emitted_events(&store).await;
+            store.get_last_block_id().unwrap().unwrap()
+        };
+
+        let reopened = open_default(home.as_ref());
+        let segments = reopened.filter_segments();
+
+        assert!(covered_over_range(segments, 1, tip, None, None));
+        assert!(!covered_over_range(
+            segments,
+            1,
+            tip.saturating_add(1),
+            None,
+            None
+        ));
+        assert!(!covered_over_range(
+            segments,
+            tip.saturating_add(1),
+            tip.saturating_add(1),
+            None,
+            None
+        ));
+    }
+
+    #[tokio::test]
+    async fn sources_segment_survives_reopen_regardless_of_insertion_order() {
+        let filter = |entries: Vec<(ProgramId, SelectorFilter)>| {
+            EventFilter::Sources(entries.into_iter().collect())
+        };
+        let a = ([1; 8], SelectorFilter::All);
+        let b = (
+            [2; 8],
+            SelectorFilter::Only(HashSet::from([[3; 8], [4; 8]])),
+        );
+
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), filter(vec![a.clone(), b.clone()]));
+        seed_emitted_events(&store).await;
+        drop(store);
+
+        let reopened = open_with(home.as_ref(), filter(vec![b.clone(), a.clone()]));
+
+        assert_eq!(reopened.filter_segments(), &[(filter(vec![a, b]), 0)]);
+    }
+
+    #[tokio::test]
+    async fn append_then_same_seam_change_replaces_only_the_appended_segment() {
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
+        seed_emitted_events(&store).await;
+        let seam = store
+            .get_last_block_id()
+            .unwrap()
+            .unwrap()
+            .saturating_add(1);
+        drop(store);
+
+        let widened = EventFilter::Sources(HashMap::from([([1; 8], SelectorFilter::All)]));
+        drop(open_with(home.as_ref(), widened));
+        let reopened = open_default(home.as_ref());
+
+        assert_eq!(
+            reopened.filter_segments(),
+            &[(EventFilter::Archival, 0), (EventFilter::default(), seam),]
+        );
+    }
+
+    #[tokio::test]
+    async fn wipe_resets_the_segment_history() {
+        let home = tempdir().unwrap();
+        let store = open_with(home.as_ref(), EventFilter::Archival);
+        seed_emitted_events(&store).await;
+        drop(store);
+
+        RocksDBIO::destroy(home.as_ref()).unwrap();
+
+        let reopened = open_with(home.as_ref(), EventFilter::Archival);
+
+        assert_eq!(reopened.filter_segments(), &[(EventFilter::Archival, 0)]);
+    }
+
+    #[tokio::test]
+    async fn reaccepted_block_after_filter_change_keeps_its_original_events() {
+        let home = tempdir().unwrap();
+        let before = {
+            let store = open_with(home.as_ref(), EventFilter::Archival);
+            seed_emitted_events(&store).await;
+            store.get_events_for_block(3).unwrap().unwrap()
+        };
+
+        let reopened = open_default(home.as_ref());
+        assert_eq!(
+            reopened.filter_segments(),
+            &[(EventFilter::Archival, 0), (EventFilter::default(), 4)]
+        );
+
+        let replayed = reopened.get_block_at_id(3).unwrap().unwrap();
+        assert!(matches!(
+            reopened
+                .accept_block(&replayed, Slot::from(0))
+                .await
+                .unwrap(),
+            AcceptOutcome::AlreadyApplied
+        ));
+
+        assert_eq!(reopened.get_events_for_block(3).unwrap().unwrap(), before);
+    }
+
+    #[test]
+    fn tampered_segment_bytes_refuse_to_open() {
+        let home = tempdir().unwrap();
+        drop(open_with(home.as_ref(), EventFilter::Archival));
+
+        let initial_state = testnet_initial_state::initial_state();
+        let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
+        dbio.put_event_filter_segments_bytes(b"garbage").unwrap();
+        drop(dbio);
+
+        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
+    }
+
+    #[test]
+    fn non_ascending_segments_refuse_to_open() {
+        let home = tempdir().unwrap();
+        drop(open_with(home.as_ref(), EventFilter::Archival));
+
+        let bad: Vec<(EventFilter, BlockId)> =
+            vec![(EventFilter::Archival, 5), (EventFilter::Archival, 0)];
+        let initial_state = testnet_initial_state::initial_state();
+        let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
+        dbio.put_event_filter_segments_bytes(&borsh::to_vec(&bad).unwrap())
+            .unwrap();
+        drop(dbio);
+
+        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
+    }
+
+    #[test]
+    fn segments_beyond_the_next_block_refuse_to_open() {
+        let home = tempdir().unwrap();
+        drop(open_with(home.as_ref(), EventFilter::Archival));
+
+        let ahead: Vec<(EventFilter, BlockId)> = vec![(EventFilter::Archival, 1)];
+        let initial_state = testnet_initial_state::initial_state();
+        let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
+        dbio.put_event_filter_segments_bytes(&borsh::to_vec(&ahead).unwrap())
+            .unwrap();
+        drop(dbio);
+
+        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
+    }
+
+    #[tokio::test]
+    async fn filtered_out_tx_still_resolves_its_block() {
+        let home = tempdir().unwrap();
+        let store = open_default(home.as_ref());
+        let invoke_hash = seed_emitted_events(&store).await;
+
+        // The events row was dropped by the filter, but the height is still known —
+        // which is what lets the query layer reject instead of serving `[]`.
+        let block_id = store
+            .block_id_by_tx_hash(invoke_hash.0)
+            .unwrap()
+            .expect("the filtered-out tx must still resolve its block");
+        assert_eq!(store.get_events_for_block(block_id).unwrap(), None);
     }
 }
 
@@ -666,7 +1052,7 @@ mod accept_tests {
     #[tokio::test]
     async fn non_genesis_first_block_parks_with_unexpected_id() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let block = valid_hash_block(2, HashType([0_u8; 32]));
         let outcome = store
@@ -689,7 +1075,7 @@ mod accept_tests {
     #[tokio::test]
     async fn hash_mismatch_parks() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let mut block = valid_hash_block(1, HashType([0_u8; 32]));
         block.header.timestamp = 999; // invalidates the stored hash
@@ -707,7 +1093,7 @@ mod accept_tests {
     #[tokio::test]
     async fn second_break_bumps_orphan_count_and_keeps_first() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let first = valid_hash_block(2, HashType([0_u8; 32]));
         store
@@ -728,7 +1114,7 @@ mod accept_tests {
     #[tokio::test]
     async fn deserialize_break_records_stall_without_header() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         store
             .record_stall(
@@ -746,7 +1132,7 @@ mod accept_tests {
     #[tokio::test]
     async fn parks_then_recovers_on_valid_continuation() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         // Genesis (block 1, clock-only) applies and advances the tip.
         let genesis = produce_dummy_block(1, None, vec![]);
@@ -794,7 +1180,7 @@ mod accept_tests {
     #[tokio::test]
     async fn accept_block_records_tip_inscription_slot() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         assert_eq!(store.get_tip_slot().expect("get"), None);
 
@@ -836,7 +1222,7 @@ mod accept_tests {
         use testnet_initial_state::initial_pub_accounts_private_keys;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
@@ -886,7 +1272,7 @@ mod accept_tests {
         use testnet_initial_state::initial_pub_accounts_private_keys;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
@@ -946,7 +1332,7 @@ mod accept_tests {
         use testnet_initial_state::initial_pub_accounts_private_keys;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
@@ -983,7 +1369,7 @@ mod accept_tests {
 
         // The #605 restart: reopening past the boundary must work.
         drop(store);
-        let reopened = IndexerStore::open_db(dir.path(), Vec::new()).expect("reopen");
+        let reopened = open_default(dir.path());
         assert_eq!(reopened.last_block().unwrap(), Some(101));
     }
 
@@ -992,7 +1378,7 @@ mod accept_tests {
         use testnet_initial_state::initial_pub_accounts_private_keys;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+        let store = open_default(dir.path());
 
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;

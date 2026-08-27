@@ -7,7 +7,6 @@ use lee_core::{
     account::AccountId,
     program::{PdaSeed, ProgramId},
 };
-use serde::{Deserialize, Serialize};
 
 /// The most one mint may credit.
 ///
@@ -26,7 +25,7 @@ const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenHold/00000";
 /// Raw 32-byte zone (channel) id, matching the inbox's.
 pub type ZoneId = [u8; 32];
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Credit `amount` wrapped tokens to `recipient`'s holding. Delivered only by
     /// the cross-zone inbox, and only for a peer source this token authorizes.
@@ -62,7 +61,7 @@ pub enum Instruction {
 /// The source list is what makes this token authorize its own inbound value
 /// rather than trusting a central route table to have done it. Borsh because the
 /// list is variable length.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WrappedTokenConfig {
     /// The program allowed to call `Mint`: the cross-zone inbox.
     pub minter: ProgramId,
@@ -170,15 +169,15 @@ mod tests {
     }
 
     /// The peer's `bridge_lock` serializes `Mint` into the emission payload, so
-    /// its tag word is wire format.
+    /// its tag byte is wire format.
     #[test]
     fn mint_is_the_first_variant() {
         let mint = Instruction::Mint {
             recipient: [3; 32],
             amount: 1,
         };
-        let words = risc0_zkvm::serde::to_vec(&mint).expect("Mint serializes");
-        assert_eq!(words[0], 0);
+        let bytes = borsh::to_vec(&mint).expect("Mint serializes");
+        assert_eq!(bytes[0], 0);
     }
 
     #[test]
