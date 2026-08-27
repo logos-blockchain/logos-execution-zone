@@ -306,21 +306,42 @@ fn for_private_account_dispatches_correctly() {
 }
 
 #[test]
-fn compute_public_authorized_pdas_with_seeds() {
-    let caller: ProgramId = [1; 8];
+fn match_caller_seed_as_public_pda_matches_the_seed_that_derives_the_account() {
+    let caller_program_id: ProgramId = [1; 8];
     let seed = PdaSeed::new([2; 32]);
-    let result = compute_public_authorized_pdas(Some(caller), &[seed]);
-    let expected = AccountId::for_public_pda(&caller, &seed);
-    assert!(result.contains(&expected));
-    assert_eq!(result.len(), 1);
+    let caller = CallerData {
+        program_id: Some(caller_program_id),
+        authorized_accounts: HashSet::new(),
+    };
+    let derived = AccountId::for_public_pda(&caller_program_id, &seed);
+
+    assert_eq!(
+        match_caller_seed_as_public_pda(&caller, &[PdaSeed::new([3; 32]), seed], derived),
+        Some((seed, caller_program_id))
+    );
+    assert!(
+        match_caller_seed_as_public_pda(&caller, &[seed], AccountId::new([4; 32])).is_none(),
+        "an account no seed derives is not authorized"
+    );
 }
 
-/// With no caller (top-level call), the result is always empty.
+/// With no caller (top-level call), no seed authorizes anything.
 #[test]
-fn compute_public_authorized_pdas_no_caller_returns_empty() {
+fn match_caller_seed_as_public_pda_without_a_caller_matches_nothing() {
     let seed = PdaSeed::new([2; 32]);
-    let result = compute_public_authorized_pdas(None, &[seed]);
-    assert!(result.is_empty());
+    let caller = CallerData {
+        program_id: None,
+        authorized_accounts: HashSet::new(),
+    };
+
+    assert!(
+        match_caller_seed_as_public_pda(
+            &caller,
+            &[seed],
+            AccountId::for_public_pda(&[1; 8], &seed)
+        )
+        .is_none()
+    );
 }
 
 #[test]

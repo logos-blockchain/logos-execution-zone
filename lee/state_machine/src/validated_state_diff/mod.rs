@@ -9,7 +9,7 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Nonce, apply_balance_diff},
     program::{
         CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS,
-        compute_public_authorized_pdas, validate_execution,
+        match_caller_seed_as_public_pda, validate_execution,
     },
 };
 use log::debug;
@@ -106,13 +106,11 @@ impl ValidatedStateDiff {
                 Cow::Owned(program_account.data.to_vec()),
             );
 
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
-
-            // Account is authorized if it is either in the caller's authorized accounts or in the
-            // list of PDAs the caller has authorized.
+            // Account is authorized if it is either in the caller's authorized accounts or
+            // derived from one of the seeds the caller delegated.
             let is_authorized = |account_id: &AccountId| {
-                authorized_pdas.contains(account_id)
+                match_caller_seed_as_public_pda(&caller_data, &chained_call.pda_seeds, *account_id)
+                    .is_some()
                     || caller_data.authorized_accounts.contains(account_id)
             };
 

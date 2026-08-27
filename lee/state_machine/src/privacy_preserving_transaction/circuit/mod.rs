@@ -8,7 +8,8 @@ use lee_core::{
     from_frame,
     program::{
         CallerData, ChainedCall, InstructionData, MAX_NUMBER_CHAINED_CALLS, ProgramEffects,
-        ProgramId, ProgramOutput, compute_public_authorized_pdas, match_caller_seed_as_private_pda,
+        ProgramId, ProgramOutput, match_caller_seed_as_private_pda,
+        match_caller_seed_as_public_pda,
     },
     to_frame,
 };
@@ -191,9 +192,6 @@ pub fn execute_and_prove_with_padded_inputs(
         // already carry the attested credentials, so there is nothing to resolve: no caller named
         // them and no seeds delegate them.
         let real_pre_states: Vec<AccountWithMetadata> = if caller.program_id.is_some() {
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller.program_id, &chained_call.pda_seeds);
-
             let mut resolved = Vec::with_capacity(chained_call.accounts.len());
             for account_id in &chained_call.accounts {
                 let account = materialized_state.get(account_id).cloned().ok_or(
@@ -204,7 +202,9 @@ pub fn execute_and_prove_with_padded_inputs(
 
                 let first_sight = sighted.insert(*account_id);
                 let private_pda_witness = private_pda_witnesses.get(account_id);
-                let public_pda_seed_match = authorized_pdas.contains(account_id);
+                let public_pda_seed_match =
+                    match_caller_seed_as_public_pda(&caller, &chained_call.pda_seeds, *account_id)
+                        .is_some();
 
                 let is_authorized =
                     if first_sight && private_pda_witness.is_none() && !public_pda_seed_match {

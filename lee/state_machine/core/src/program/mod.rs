@@ -706,6 +706,24 @@ pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
 }
 
+/// Match `account_id` against the caller's seeds under the public-PDA derivation. `None`
+/// if no appropriate authorization given.
+#[must_use]
+pub fn match_caller_seed_as_public_pda(
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
+    account_id: AccountId,
+) -> Option<(PdaSeed, ProgramId)> {
+    let caller_program_id = caller.program_id?;
+    // Costy for calls with multiple seeds in one call.
+    caller_pda_seeds.iter().find_map(|seed| {
+        if AccountId::for_public_pda(&caller_program_id, seed) == account_id {
+            return Some((*seed, caller_program_id));
+        }
+        None
+    })
+}
+
 /// Match `account_id` against the caller's seeds interpreted as private-PDA derivations, using
 /// the (npk, vpk, identifier) supplied for it. `None` when the account carries no private-PDA
 /// witness.
@@ -729,26 +747,6 @@ pub fn match_caller_seed_as_private_pda(
         }
         None
     })
-}
-
-/// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
-///
-/// Returns only public-form derivations, suitable for contexts where all accounts are public
-/// (e.g. the public-execution path). The privacy circuit must additionally check each mask-3
-/// `pre_state` against [`AccountId::for_private_pda`] with the supplied npk for that
-/// `pre_state`.
-#[must_use]
-pub fn compute_public_authorized_pdas(
-    caller_program_id: Option<ProgramId>,
-    pda_seeds: &[PdaSeed],
-) -> HashSet<AccountId> {
-    let Some(caller) = caller_program_id else {
-        return HashSet::new();
-    };
-    pda_seeds
-        .iter()
-        .map(|seed| AccountId::for_public_pda(&caller, seed))
-        .collect()
 }
 
 /// Reads first 4 bytes indicating the length in bytes of the program input bytes.

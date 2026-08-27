@@ -12,7 +12,7 @@ use lee_core::{
         AccountDiffOutput, BlockValidityWindow, CallContext, CallerData, ChainedCall, Claim,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEffects, ProgramId,
         ProgramOutput, TimestampValidityWindow, match_caller_seed_as_private_pda,
-        validate_execution,
+        match_caller_seed_as_public_pda, validate_execution,
     },
 };
 use risc0_zkvm::guest::env;
@@ -579,23 +579,6 @@ fn bind_private_pda(
             e.insert((program_id, seed));
         }
     }
-}
-
-/// Match `account_id` against the caller's seeds under the public-PDA derivation. `None`
-/// if no appropriate authorization given.
-fn match_caller_seed_as_public_pda(
-    caller: &CallerData,
-    caller_pda_seeds: &[PdaSeed],
-    account_id: AccountId,
-) -> Option<(PdaSeed, ProgramId)> {
-    let caller_program_id = caller.program_id?;
-    // Costy for calls with multiple seeds in one call.
-    caller_pda_seeds.iter().find_map(|seed| {
-        if AccountId::for_public_pda(&caller_program_id, seed) == account_id {
-            return Some((*seed, caller_program_id));
-        }
-        None
-    })
 }
 
 /// Whether this call is entitled to `account_id` as an authorized account. When a caller seed
