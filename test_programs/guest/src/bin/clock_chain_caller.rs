@@ -1,8 +1,10 @@
 use borsh::to_vec;
 use lee_core::{
     Timestamp,
+    account::AccountDiff,
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
     },
 };
 
@@ -12,7 +14,7 @@ type Instruction = (ProgramId, Timestamp); // (clock_program_id, timestamp)
 /// Used in tests to verify that user transactions cannot modify clock accounts, even indirectly
 /// via chain calls.
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -20,11 +22,11 @@ fn main() {
             instruction: (clock_program_id, timestamp),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let post_states: Vec<_> = pre_states
         .iter()
-        .map(|pre| AccountPostState::new(pre.account.clone()))
+        .map(|pre| AccountDiffOutput::new(AccountDiff::unchanged(pre.account_id)))
         .collect();
 
     let chained_call = ChainedCall {

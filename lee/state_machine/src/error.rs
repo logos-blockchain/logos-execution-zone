@@ -1,7 +1,7 @@
 use std::io;
 
 use lee_core::{
-    account::{Account, AccountId},
+    account::{Account, AccountId, BalanceDiffError},
     program::ProgramId,
 };
 use thiserror::Error;
@@ -142,6 +142,8 @@ pub enum InvalidProgramBehaviorError {
          pre_states or any earlier call's materialized diff in this transaction"
     )]
     UnknownChainedCallAccount { account_id: AccountId },
+    #[error(transparent)]
+    BalanceDiffFailed(#[from] BalanceDiffError),
 }
 
 #[cfg(test)]

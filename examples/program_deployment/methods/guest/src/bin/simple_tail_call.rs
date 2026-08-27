@@ -1,5 +1,9 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountDiff,
+    program::{
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
+    },
 };
 
 // Tail Call example program.
@@ -25,7 +29,7 @@ fn hello_world_program_id() -> ProgramId {
 
 fn main() {
     // Read inputs
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -33,7 +37,7 @@ fn main() {
             instruction: (),
         },
         instruction_data,
-    ) = read_lee_inputs::<()>();
+    ) = read_lee_call::<()>();
 
     // Unpack the input account pre state
     let [pre_state] = pre_states
@@ -41,7 +45,7 @@ fn main() {
         .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
 
     // Create the (unchanged) post state
-    let post_state = AccountPostState::new(pre_state.account.clone());
+    let post_state = AccountDiffOutput::new(AccountDiff::unchanged(pre_state.account_id));
 
     // Create the chained call
     let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();

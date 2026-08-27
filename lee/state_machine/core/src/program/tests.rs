@@ -130,48 +130,45 @@ fn program_output_try_with_block_validity_window_empty_range_fails() {
 }
 
 #[test]
-fn post_state_new_with_claim_constructor() {
-    let account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-        balance: 1337,
-        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
-        nonce: 10_u128.into(),
+fn diff_output_new_with_claim_constructor() {
+    let diff = AccountDiff {
+        id: AccountId::new([7; 32]),
+        diff_balance: BalanceDiff::Add(1337),
+        diff_data: Some(vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap()),
     };
 
-    let account_post_state = AccountPostState::new_claimed(account.clone(), Claim::Authorized);
+    let diff_output = AccountDiffOutput::new_claimed(diff.clone(), Claim::Authorized);
 
-    assert_eq!(account, account_post_state.account);
-    assert_eq!(account_post_state.required_claim(), Some(Claim::Authorized));
+    assert_eq!(&diff, diff_output.diff());
+    assert_eq!(diff_output.claim(), Some(Claim::Authorized));
 }
 
 #[test]
-fn post_state_new_without_claim_constructor() {
-    let account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-        balance: 1337,
-        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
-        nonce: 10_u128.into(),
+fn diff_output_new_without_claim_constructor() {
+    let diff = AccountDiff {
+        id: AccountId::new([7; 32]),
+        diff_balance: BalanceDiff::Add(1337),
+        diff_data: Some(vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap()),
     };
 
-    let account_post_state = AccountPostState::new(account.clone());
+    let diff_output = AccountDiffOutput::new(diff.clone());
 
-    assert_eq!(account, account_post_state.account);
-    assert!(account_post_state.required_claim().is_none());
+    assert_eq!(&diff, diff_output.diff());
+    assert!(diff_output.claim().is_none());
 }
 
 #[test]
-fn post_state_account_getter() {
-    let mut account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-        balance: 1337,
-        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
-        nonce: 10_u128.into(),
+fn diff_output_diff_getter() {
+    let mut diff = AccountDiff {
+        id: AccountId::new([7; 32]),
+        diff_balance: BalanceDiff::Add(1337),
+        diff_data: Some(vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap()),
     };
 
-    let mut account_post_state = AccountPostState::new(account.clone());
+    let mut diff_output = AccountDiffOutput::new(diff.clone());
 
-    assert_eq!(account_post_state.account(), &account);
-    assert_eq!(account_post_state.account_mut(), &mut account);
+    assert_eq!(diff_output.diff(), &diff);
+    assert_eq!(diff_output.diff_mut(), &mut diff);
 }
 
 // ---- AccountId::for_private_pda tests ----

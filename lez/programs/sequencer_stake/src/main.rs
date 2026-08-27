@@ -1,10 +1,10 @@
 use std::collections::btree_map::Entry;
 
 use lee_core::{
-    account::{AccountId, AccountWithMetadata},
+    account::{AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Data},
     program::{
-        AccountPostState, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramId,
-        ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramCall,
+        ProgramId, ProgramInput, ProgramOutput, read_lee_call,
     },
 };
 use sequencer_stake_core::{
@@ -13,7 +13,7 @@ use sequencer_stake_core::{
 };
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -21,7 +21,7 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let (post_states, chained_calls) = match instruction {
         Instruction::Stake {
@@ -113,7 +113,7 @@ fn stake(
     amount: u128,
     mover_program_id: ProgramId,
     mover_instruction_data: InstructionData,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<AccountDiffOutput>, Vec<ChainedCall>) {
     let [funding_account, ownership_account, config_account] =
         <[AccountWithMetadata; 3]>::try_from(pre_states).expect(
             "Stake requires a funding account, an ownership account, and the config account",
@@ -185,26 +185,39 @@ fn stake(
     }
 
     // pass-through: propagates authorization into the nested mover call
-    let funding_account_post = AccountPostState::new(funding_account.account.clone());
+    let funding_account_post =
+        AccountDiffOutput::new(AccountDiff::unchanged(funding_account.account_id));
 
     // claim is a no-op on a top-up (already owned)
-    let mut ownership_account_data = ownership_account.account.clone();
-    ownership_account_data.data = StakeRecord {
+    let new_stake_record_data: Data = StakeRecord {
         sequencer_key,
         pending_unstake: None,
     }
     .to_bytes()
     .try_into()
     .expect("StakeRecord should fit in account data");
-    let ownership_account_post =
-        AccountPostState::new_claimed_if_default(ownership_account_data, Claim::Authorized);
+    let ownership_diff = AccountDiff {
+        id: ownership_account.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(new_stake_record_data),
+    };
+    let ownership_account_post = AccountDiffOutput::new_claimed_if_default(
+        ownership_diff,
+        ownership_account.account.program_owner,
+        Claim::Authorized,
+    );
 
-    let mut config_account_new = config_account.account;
-    config_account_new.data = config
-        .to_bytes()
-        .try_into()
-        .expect("SequencerStakeConfig should fit in account data");
-    let config_account_post = AccountPostState::new(config_account_new);
+    let config_diff = AccountDiff {
+        id: config_account.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(
+            config
+                .to_bytes()
+                .try_into()
+                .expect("SequencerStakeConfig should fit in account data"),
+        ),
+    };
+    let config_account_post = AccountDiffOutput::new(config_diff);
 
     let mover_call = ChainedCall {
         program_id: mover_program_id,
@@ -234,7 +247,7 @@ fn stake(
 fn confirm_stake(
     pre_states: Vec<AccountWithMetadata>,
     expected_balance_after: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     let [ownership_account] = <[AccountWithMetadata; 1]>::try_from(pre_states)
         .expect("ConfirmStake requires exactly the ownership account");
 
@@ -243,7 +256,9 @@ fn confirm_stake(
         "mover call did not deposit the expected amount into the ownership account"
     );
 
-    vec![AccountPostState::new(ownership_account.account)]
+    vec![AccountDiffOutput::new(AccountDiff::unchanged(
+        ownership_account.account_id,
+    ))]
 }
 
 fn unstake_request(
@@ -251,7 +266,7 @@ fn unstake_request(
     pre_states: Vec<AccountWithMetadata>,
     amount: u128,
     destination: AccountId,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     let [ownership_account, config_account] = <[AccountWithMetadata; 2]>::try_from(pre_states)
         .expect("UnstakeRequest requires the ownership account and the config account");
 
@@ -301,28 +316,38 @@ fn unstake_request(
         .expect("total pending unstake overflow");
 
     // only data changes here; transfer happens in FinalizeUnstake
-    let mut ownership_account_new = ownership_account.account;
-    ownership_account_new.data = record
-        .to_bytes()
-        .try_into()
-        .expect("StakeRecord should fit in account data");
+    let ownership_diff = AccountDiff {
+        id: ownership_account.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(
+            record
+                .to_bytes()
+                .try_into()
+                .expect("StakeRecord should fit in account data"),
+        ),
+    };
 
-    let mut config_account_new = config_account.account;
-    config_account_new.data = config
-        .to_bytes()
-        .try_into()
-        .expect("SequencerStakeConfig should fit in account data");
+    let config_diff = AccountDiff {
+        id: config_account.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(
+            config
+                .to_bytes()
+                .try_into()
+                .expect("SequencerStakeConfig should fit in account data"),
+        ),
+    };
 
     vec![
-        AccountPostState::new(ownership_account_new),
-        AccountPostState::new(config_account_new),
+        AccountDiffOutput::new(ownership_diff),
+        AccountDiffOutput::new(config_diff),
     ]
 }
 
 fn finalize_unstake(
     self_program_id: ProgramId,
     pre_states: Vec<AccountWithMetadata>,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     let [ownership_account, destination_account, config_account] =
         <[AccountWithMetadata; 3]>::try_from(pre_states).expect(
             "FinalizeUnstake requires the ownership account, a destination account, and the config account",
@@ -346,21 +371,22 @@ fn finalize_unstake(
     );
 
     // no signature check: already authorized back in UnstakeRequest
-    let mut ownership_account_new = ownership_account.account.clone();
-    ownership_account_new.balance = ownership_account_new
-        .balance
-        .checked_sub(pending.amount)
-        .expect("insufficient staked balance");
-    ownership_account_new.data = record
-        .to_bytes()
-        .try_into()
-        .expect("StakeRecord should fit in account data");
+    let ownership_diff = AccountDiff {
+        id: ownership_account.account_id,
+        diff_balance: BalanceDiff::Sub(pending.amount),
+        diff_data: Some(
+            record
+                .to_bytes()
+                .try_into()
+                .expect("StakeRecord should fit in account data"),
+        ),
+    };
 
-    let mut destination_new = destination_account.account;
-    destination_new.balance = destination_new
-        .balance
-        .checked_add(pending.amount)
-        .expect("finalize unstake amount overflow");
+    let destination_diff = AccountDiff {
+        id: destination_account.account_id,
+        diff_balance: BalanceDiff::Add(pending.amount),
+        diff_data: None,
+    };
 
     let mut config = decode_config(&config_account, self_program_id);
     let entry = config
@@ -384,15 +410,20 @@ fn finalize_unstake(
         config.entries.remove(&record.sequencer_key);
     }
 
-    let mut config_account_new = config_account.account;
-    config_account_new.data = config
-        .to_bytes()
-        .try_into()
-        .expect("SequencerStakeConfig should fit in account data");
+    let config_diff = AccountDiff {
+        id: config_account.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(
+            config
+                .to_bytes()
+                .try_into()
+                .expect("SequencerStakeConfig should fit in account data"),
+        ),
+    };
 
     vec![
-        AccountPostState::new(ownership_account_new),
-        AccountPostState::new(destination_new),
-        AccountPostState::new(config_account_new),
+        AccountDiffOutput::new(ownership_diff),
+        AccountDiffOutput::new(destination_diff),
+        AccountDiffOutput::new(config_diff),
     ]
 }

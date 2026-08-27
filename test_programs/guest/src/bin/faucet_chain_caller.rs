@@ -1,8 +1,9 @@
 use borsh::to_vec;
 use lee_core::{
-    account::AccountId,
+    account::{AccountDiff, AccountId},
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
     },
 };
 
@@ -10,7 +11,7 @@ type Instruction = (ProgramId, ProgramId, AccountId, u128);
 // (faucet_program_id, vault_program_id, recipient_id, amount)
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -18,11 +19,11 @@ fn main() {
             instruction: (faucet_program_id, vault_program_id, recipient_id, amount),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let post_states: Vec<_> = pre_states
         .iter()
-        .map(|pre| AccountPostState::new(pre.account.clone()))
+        .map(|pre| AccountDiffOutput::new(AccountDiff::unchanged(pre.account_id)))
         .collect();
 
     assert_eq!(pre_states.len(), 2);

@@ -1940,13 +1940,13 @@ fn pool_pda_produces_unique_id_for_token_pair() {
 #[test]
 fn call_add_liquidity_vault_a_omitted() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_with_wrong_id(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_with_wrong_id(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
@@ -1957,13 +1957,13 @@ fn call_add_liquidity_vault_a_omitted() {
 #[test]
 fn call_add_liquidity_vault_b_omitted() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_with_wrong_id(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_with_wrong_id(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
@@ -1974,13 +1974,13 @@ fn call_add_liquidity_vault_b_omitted() {
 #[test]
 fn call_add_liquidity_lp_definition_mismatch() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_with_wrong_id(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_with_wrong_id(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
@@ -1991,13 +1991,13 @@ fn call_add_liquidity_lp_definition_mismatch() {
 #[test]
 fn call_add_liquidity_zero_balance_1() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         0,
         BalanceForTests::add_max_amount_b(),
@@ -2008,13 +2008,13 @@ fn call_add_liquidity_zero_balance_1() {
 #[test]
 fn call_add_liquidity_zero_balance_2() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         0,
         BalanceForTests::add_max_amount_a(),
@@ -2025,13 +2025,13 @@ fn call_add_liquidity_zero_balance_2() {
 #[test]
 fn call_add_liquidity_vault_insufficient_balance_1() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init_zero(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init_zero(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_max_amount_a()).unwrap(),
         BalanceForTests::add_max_amount_b(),
         BalanceForTests::add_min_amount_lp(),
@@ -2042,13 +2042,13 @@ fn call_add_liquidity_vault_insufficient_balance_1() {
 #[test]
 fn call_add_liquidity_vault_insufficient_balance_2() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init_zero(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init_zero(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_max_amount_a()).unwrap(),
         BalanceForTests::add_max_amount_b(),
         BalanceForTests::add_min_amount_lp(),
@@ -2059,13 +2059,13 @@ fn call_add_liquidity_vault_insufficient_balance_2() {
 #[test]
 fn call_add_liquidity_actual_amount_zero_1() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init_reserve_a_low(),
-        AccountWithMetadataForTests::vault_a_init_low(),
-        AccountWithMetadataForTests::vault_b_init_high(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init_reserve_a_low(),
+        &AccountWithMetadataForTests::vault_a_init_low(),
+        &AccountWithMetadataForTests::vault_b_init_high(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
@@ -2076,13 +2076,13 @@ fn call_add_liquidity_actual_amount_zero_1() {
 #[test]
 fn call_add_liquidity_actual_amount_zero_2() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init_reserve_b_low(),
-        AccountWithMetadataForTests::vault_a_init_high(),
-        AccountWithMetadataForTests::vault_b_init_low(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init_reserve_b_low(),
+        &AccountWithMetadataForTests::vault_a_init_high(),
+        &AccountWithMetadataForTests::vault_b_init_low(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a_low(),
         BalanceForTests::add_max_amount_b_low(),
@@ -2093,13 +2093,13 @@ fn call_add_liquidity_actual_amount_zero_2() {
 #[test]
 fn call_add_liquidity_reserves_zero_1() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init_reserve_a_zero(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init_reserve_a_zero(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
@@ -2110,13 +2110,13 @@ fn call_add_liquidity_reserves_zero_1() {
 #[test]
 fn call_add_liquidity_reserves_zero_2() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init_reserve_b_zero(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init_reserve_b_zero(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
@@ -2127,13 +2127,13 @@ fn call_add_liquidity_reserves_zero_2() {
 #[test]
 fn call_add_liquidity_payable_lp_zero() {
     let _post_states = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_add_zero_lp(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_add_zero_lp(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a_low(),
         BalanceForTests::add_max_amount_b_low(),
@@ -2143,13 +2143,13 @@ fn call_add_liquidity_payable_lp_zero() {
 #[test]
 fn call_add_liquidity_chained_call_successsful() {
     let (post_states, chained_calls) = add_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
@@ -2157,9 +2157,13 @@ fn call_add_liquidity_chained_call_successsful() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_add_successful().account
-            == *pool_post.account()
+    assert_eq!(
+        pool_post.diff().diff_data,
+        Some(
+            AccountWithMetadataForTests::pool_definition_add_successful()
+                .account
+                .data
+        )
     );
 
     let chained_call_lp = chained_calls[0].clone();
@@ -2175,13 +2179,13 @@ fn call_add_liquidity_chained_call_successsful() {
 #[test]
 fn call_remove_liquidity_vault_a_omitted() {
     let _post_states = remove_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_with_wrong_id(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_with_wrong_id(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
@@ -2192,13 +2196,13 @@ fn call_remove_liquidity_vault_a_omitted() {
 #[test]
 fn call_remove_liquidity_vault_b_omitted() {
     let _post_states = remove_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_with_wrong_id(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_with_wrong_id(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
@@ -2209,13 +2213,13 @@ fn call_remove_liquidity_vault_b_omitted() {
 #[test]
 fn call_remove_liquidity_lp_def_mismatch() {
     let _post_states = remove_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_with_wrong_id(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_with_wrong_id(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
@@ -2226,15 +2230,15 @@ fn call_remove_liquidity_lp_def_mismatch() {
 #[test]
 fn call_remove_liquidity_insufficient_liquidity_amount() {
     let _post_states = remove_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_a(), /* different token account than lp to
-                                                        * create desired
-                                                        * error */
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_a(), /* different token account than lp to
+                                                         * create desired
+                                                         * error */
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
@@ -2247,13 +2251,13 @@ fn call_remove_liquidity_insufficient_liquidity_amount() {
 #[test]
 fn call_remove_liquidity_insufficient_balance_1() {
     let _post_states = remove_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::remove_amount_lp_1()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
@@ -2266,13 +2270,13 @@ fn call_remove_liquidity_insufficient_balance_1() {
 #[test]
 fn call_remove_liquidity_insufficient_balance_2() {
     let _post_states = remove_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
@@ -2283,13 +2287,13 @@ fn call_remove_liquidity_insufficient_balance_2() {
 #[test]
 fn call_remove_liquidity_min_bal_zero_1() {
     let _post_states = remove_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         0,
         BalanceForTests::remove_min_amount_b(),
@@ -2300,13 +2304,13 @@ fn call_remove_liquidity_min_bal_zero_1() {
 #[test]
 fn call_remove_liquidity_min_bal_zero_2() {
     let _post_states = remove_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         0,
@@ -2316,13 +2320,13 @@ fn call_remove_liquidity_min_bal_zero_2() {
 #[test]
 fn call_remove_liquidity_chained_call_successful() {
     let (post_states, chained_calls) = remove_liquidity(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_init(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_init(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b_low(),
@@ -2330,9 +2334,13 @@ fn call_remove_liquidity_chained_call_successful() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_remove_successful().account
-            == *pool_post.account()
+    assert_eq!(
+        pool_post.diff().diff_data,
+        Some(
+            AccountWithMetadataForTests::pool_definition_remove_successful()
+                .account
+                .data
+        )
     );
 
     let chained_call_lp = chained_calls[0].clone();
@@ -2348,13 +2356,13 @@ fn call_remove_liquidity_chained_call_successful() {
 #[test]
 fn call_new_definition_with_zero_balance_1() {
     let _post_states = new_definition(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_uninit(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(0).expect("Balances must be nonzero"),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
@@ -2365,13 +2373,13 @@ fn call_new_definition_with_zero_balance_1() {
 #[test]
 fn call_new_definition_with_zero_balance_2() {
     let _post_states = new_definition(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_uninit(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(0).expect("Balances must be nonzero"),
         AMM_PROGRAM_ID,
@@ -2382,13 +2390,13 @@ fn call_new_definition_with_zero_balance_2() {
 #[test]
 fn call_new_definition_same_token_definition() {
     let _post_states = new_definition(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_lp_uninit(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
@@ -2399,13 +2407,13 @@ fn call_new_definition_same_token_definition() {
 #[test]
 fn call_new_definition_wrong_liquidity_id() {
     let _post_states = new_definition(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_with_wrong_id(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_uninit(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_with_wrong_id(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
@@ -2416,13 +2424,13 @@ fn call_new_definition_wrong_liquidity_id() {
 #[test]
 fn call_new_definition_wrong_pool_id() {
     let _post_states = new_definition(
-        AccountWithMetadataForTests::pool_definition_with_wrong_id(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_uninit(),
+        &AccountWithMetadataForTests::pool_definition_with_wrong_id(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
@@ -2433,13 +2441,13 @@ fn call_new_definition_wrong_pool_id() {
 #[test]
 fn call_new_definition_wrong_vault_id_1() {
     let _post_states = new_definition(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_with_wrong_id(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_uninit(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_with_wrong_id(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
@@ -2450,13 +2458,13 @@ fn call_new_definition_wrong_vault_id_1() {
 #[test]
 fn call_new_definition_wrong_vault_id_2() {
     let _post_states = new_definition(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_with_wrong_id(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_uninit(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_with_wrong_id(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
@@ -2467,13 +2475,13 @@ fn call_new_definition_wrong_vault_id_2() {
 #[test]
 fn call_new_definition_cannot_initialize_active_pool() {
     let _post_states = new_definition(
-        AccountWithMetadataForTests::pool_definition_active(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_uninit(),
+        &AccountWithMetadataForTests::pool_definition_active(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
@@ -2484,13 +2492,13 @@ fn call_new_definition_cannot_initialize_active_pool() {
 #[test]
 fn call_new_definition_chained_call_successful() {
     let (post_states, chained_calls) = new_definition(
-        AccountWithMetadataForTests::pool_definition_active(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_uninit(),
+        &AccountWithMetadataForTests::pool_definition_active(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
@@ -2498,9 +2506,13 @@ fn call_new_definition_chained_call_successful() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_add_successful().account
-            == *pool_post.account()
+    assert_eq!(
+        pool_post.diff().diff_data,
+        Some(
+            AccountWithMetadataForTests::pool_definition_add_successful()
+                .account
+                .data
+        )
     );
 
     let chained_call_lp = chained_calls[0].clone();
@@ -2632,8 +2644,13 @@ fn call_swap_chained_call_successful_1() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_swap_test_1().account == *pool_post.account()
+    assert_eq!(
+        pool_post.diff().diff_data,
+        Some(
+            AccountWithMetadataForTests::pool_definition_swap_test_1()
+                .account
+                .data
+        )
     );
 
     let chained_call_a = chained_calls[0].clone();
@@ -2664,8 +2681,13 @@ fn call_swap_chained_call_successful_2() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_swap_test_2().account == *pool_post.account()
+    assert_eq!(
+        pool_post.diff().diff_data,
+        Some(
+            AccountWithMetadataForTests::pool_definition_swap_test_2()
+                .account
+                .data
+        )
     );
 
     let chained_call_a = chained_calls[1].clone();
@@ -2831,9 +2853,13 @@ fn call_swap_exact_output_chained_call_successful() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_swap_exact_output_test_1().account
-            == *pool_post.account()
+    assert_eq!(
+        pool_post.diff().diff_data,
+        Some(
+            AccountWithMetadataForTests::pool_definition_swap_exact_output_test_1()
+                .account
+                .data
+        )
     );
 
     let chained_call_a = chained_calls[0].clone();
@@ -2864,9 +2890,13 @@ fn call_swap_exact_output_chained_call_successful_2() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_swap_exact_output_test_2().account
-            == *pool_post.account()
+    assert_eq!(
+        pool_post.diff().diff_data,
+        Some(
+            AccountWithMetadataForTests::pool_definition_swap_exact_output_test_2()
+                .account
+                .data
+        )
     );
 
     let chained_call_a = chained_calls[1].clone();
@@ -2959,13 +2989,13 @@ fn swap_exact_output_overflow_protection() {
 #[test]
 fn new_definition_lp_asymmetric_amounts() {
     let (post_states, chained_calls) = new_definition(
-        AccountWithMetadataForTests::pool_definition_inactive(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_uninit(),
+        &AccountWithMetadataForTests::pool_definition_inactive(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
@@ -2973,7 +3003,7 @@ fn new_definition_lp_asymmetric_amounts() {
 
     // check the minted LP amount
     let pool_post = post_states[0].clone();
-    let pool_def = PoolDefinition::try_from(&pool_post.account().data).unwrap();
+    let pool_def = PoolDefinition::try_from(pool_post.diff().diff_data.as_ref().unwrap()).unwrap();
     assert_eq!(
         pool_def.liquidity_pool_supply,
         BalanceForTests::lp_supply_init()
@@ -2992,20 +3022,20 @@ fn new_definition_lp_symmetric_amounts() {
     assert_eq!(expected_lp, 100);
 
     let (post_states, chained_calls) = new_definition(
-        AccountWithMetadataForTests::pool_definition_inactive(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::pool_lp_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
-        AccountWithMetadataForTests::user_holding_lp_uninit(),
+        &AccountWithMetadataForTests::pool_definition_inactive(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::pool_lp_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::user_holding_lp_uninit(),
         NonZero::new(token_a_amount).unwrap(),
         NonZero::new(token_b_amount).unwrap(),
         AMM_PROGRAM_ID,
     );
 
     let pool_post = post_states[0].clone();
-    let pool_def = PoolDefinition::try_from(&pool_post.account().data).unwrap();
+    let pool_def = PoolDefinition::try_from(pool_post.diff().diff_data.as_ref().unwrap()).unwrap();
     assert_eq!(pool_def.liquidity_pool_supply, expected_lp);
 
     let chained_call_lp = chained_calls[0].clone();

@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountDiffOutput, Claim},
 };
 use token_core::{
     NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding, TokenMetadata,
@@ -8,11 +8,11 @@ use token_core::{
 
 #[must_use]
 pub fn new_fungible_definition(
-    definition_target_account: AccountWithMetadata,
-    holding_target_account: AccountWithMetadata,
+    definition_target_account: &AccountWithMetadata,
+    holding_target_account: &AccountWithMetadata,
     name: String,
     total_supply: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     assert_eq!(
         definition_target_account.account,
         Account::default(),
@@ -35,26 +35,32 @@ pub fn new_fungible_definition(
         balance: total_supply,
     };
 
-    let mut definition_target_account_post = definition_target_account.account;
-    definition_target_account_post.data = Data::from(&token_definition);
+    let definition_diff = AccountDiff {
+        id: definition_target_account.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(Data::from(&token_definition)),
+    };
 
-    let mut holding_target_account_post = holding_target_account.account;
-    holding_target_account_post.data = Data::from(&token_holding);
+    let holding_diff = AccountDiff {
+        id: holding_target_account.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(Data::from(&token_holding)),
+    };
 
     vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
+        AccountDiffOutput::new_claimed(definition_diff, Claim::Authorized),
+        AccountDiffOutput::new_claimed(holding_diff, Claim::Authorized),
     ]
 }
 
 #[must_use]
 pub fn new_definition_with_metadata(
-    definition_target_account: AccountWithMetadata,
-    holding_target_account: AccountWithMetadata,
-    metadata_target_account: AccountWithMetadata,
+    definition_target_account: &AccountWithMetadata,
+    holding_target_account: &AccountWithMetadata,
+    metadata_target_account: &AccountWithMetadata,
     new_definition: NewTokenDefinition,
     metadata: NewTokenMetadata,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     assert_eq!(
         definition_target_account.account,
         Account::default(),
@@ -109,18 +115,27 @@ pub fn new_definition_with_metadata(
         primary_sale_date: 0_u64, // TODO #261: future works to implement this
     };
 
-    let mut definition_target_account_post = definition_target_account.account;
-    definition_target_account_post.data = Data::from(&token_definition);
+    let definition_diff = AccountDiff {
+        id: definition_target_account.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(Data::from(&token_definition)),
+    };
 
-    let mut holding_target_account_post = holding_target_account.account;
-    holding_target_account_post.data = Data::from(&token_holding);
+    let holding_diff = AccountDiff {
+        id: holding_target_account.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(Data::from(&token_holding)),
+    };
 
-    let mut metadata_target_account_post = metadata_target_account.account;
-    metadata_target_account_post.data = Data::from(&token_metadata);
+    let metadata_diff = AccountDiff {
+        id: metadata_target_account.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(Data::from(&token_metadata)),
+    };
 
     vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(metadata_target_account_post, Claim::Authorized),
+        AccountDiffOutput::new_claimed(definition_diff, Claim::Authorized),
+        AccountDiffOutput::new_claimed(holding_diff, Claim::Authorized),
+        AccountDiffOutput::new_claimed(metadata_diff, Claim::Authorized),
     ]
 }

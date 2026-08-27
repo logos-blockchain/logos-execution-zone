@@ -1,20 +1,23 @@
 use bridge_core::Instruction;
 use lee_core::{
-    account::Account,
-    program::{AccountPostState, ChainedCall, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{Account, AccountDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, Claim, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call,
+    },
 };
 
-fn unchanged_post_states(
+fn unchanged_diffs(
     pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     pre_states
         .iter()
-        .map(|pre_state| AccountPostState::new(pre_state.account.clone()))
+        .map(|pre_state| AccountDiffOutput::new(AccountDiff::unchanged(pre_state.account_id)))
         .collect()
 }
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -22,7 +25,7 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     assert!(
         caller_program_id.is_none(),
@@ -71,19 +74,20 @@ fn main() {
             // is the only on-chain signal. Relevant once the explorer surfaces
             // deposits.
             if receipt.account != Account::default() {
-                (unchanged_post_states(&pre_states_clone), vec![])
+                (unchanged_diffs(&pre_states_clone), vec![])
             } else {
                 // First mint: claim the receipt — its existence is the record,
                 // the account's contents are never read — and chain the vault
                 // transfer.
-                let receipt_post = AccountPostState::new_claimed_if_default(
-                    receipt.account,
+                let receipt_post = AccountDiffOutput::new_claimed_if_default(
+                    AccountDiff::unchanged(receipt.account_id),
+                    receipt.account.program_owner,
                     Claim::Pda(bridge_core::deposit_receipt_seed(l1_deposit_op_id)),
                 );
 
                 let post_states = vec![
-                    AccountPostState::new(bridge.account.clone()),
-                    AccountPostState::new(recipient_vault.account.clone()),
+                    AccountDiffOutput::new(AccountDiff::unchanged(bridge.account_id)),
+                    AccountDiffOutput::new(AccountDiff::unchanged(recipient_vault.account_id)),
                     receipt_post,
                 ];
 
@@ -130,7 +134,7 @@ fn main() {
             //         amount: u128::from(amount),
             //     },
             // )];
-            // (unchanged_post_states(&pre_states_clone), chained_calls)
+            // (unchanged_diffs(&pre_states_clone), chained_calls)
         }
     };
 

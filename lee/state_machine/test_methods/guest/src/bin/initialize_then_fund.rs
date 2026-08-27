@@ -1,8 +1,9 @@
 use borsh::to_vec;
 use lee_core::{
-    account::AccountWithMetadata,
+    account::{AccountDiff, AccountWithMetadata},
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
     },
 };
 
@@ -15,7 +16,7 @@ type Instruction = (u128, ProgramId, ProgramId);
 /// callers that need a padding account to satisfy the privacy-preserving transaction's "at least
 /// one private action" precondition.
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -23,7 +24,7 @@ fn main() {
             instruction: (balance, claimer_id, simple_transfer_id),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let (recipient_pre, sender_pre, padding_pre): (
         AccountWithMetadata,
@@ -55,11 +56,13 @@ fn main() {
 
     let mut output_pre_states = vec![recipient_pre.clone(), sender_pre.clone()];
     let mut output_post_states = vec![
-        AccountPostState::new(recipient_pre.account),
-        AccountPostState::new(sender_pre.account),
+        AccountDiffOutput::new(AccountDiff::unchanged(recipient_pre.account_id)),
+        AccountDiffOutput::new(AccountDiff::unchanged(sender_pre.account_id)),
     ];
     if let Some(padding_pre) = padding_pre {
-        output_post_states.push(AccountPostState::new(padding_pre.account.clone()));
+        output_post_states.push(AccountDiffOutput::new(AccountDiff::unchanged(
+            padding_pre.account_id,
+        )));
         output_pre_states.push(padding_pre);
     }
 

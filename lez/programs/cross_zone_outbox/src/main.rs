@@ -1,11 +1,11 @@
 use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda, outbox_pda_seed};
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
+    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
 };
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -13,7 +13,7 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     // The emitter, and the only identity here the state machine verifies: it
     // checks a guest's claimed caller against the real one. Note this is the
@@ -66,8 +66,7 @@ fn main() {
         "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
     );
 
-    let mut post_account = outbox.account.clone();
-    post_account.data = OutboxRecord {
+    let diff_data = OutboxRecord {
         emitter,
         target_zone,
         ordinal,
@@ -79,9 +78,15 @@ fn main() {
     .try_into()
     .expect("OutboxRecord fits in account data");
 
+    let diff = AccountDiff {
+        id: outbox.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(diff_data),
+    };
+
     // Unconditional, since the pre-state is provably default by the assert above.
-    let post = AccountPostState::new_claimed(
-        post_account,
+    let post = AccountDiffOutput::new_claimed(
+        diff,
         Claim::Pda(outbox_pda_seed(emitter, &target_zone, ordinal)),
     );
 

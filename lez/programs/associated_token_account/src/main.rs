@@ -1,8 +1,8 @@
 use associated_token_account_core::Instruction;
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramCall, ProgramInput, ProgramOutput, read_lee_call};
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -10,7 +10,7 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let pre_states_clone = pre_states.clone();
 

@@ -1,19 +1,22 @@
 use faucet_core::Instruction;
-use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountDiff,
+    program::{
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    },
 };
 
 fn unchanged_post_states(
     pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     pre_states
         .iter()
-        .map(|pre_state| AccountPostState::new(pre_state.account.clone()))
+        .map(|pre_state| AccountDiffOutput::new(AccountDiff::unchanged(pre_state.account_id)))
         .collect()
 }
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -21,7 +24,7 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     assert!(
         caller_program_id.is_none(),

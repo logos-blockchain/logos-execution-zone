@@ -5,10 +5,10 @@ use std::{
 
 use lee_core::{
     Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     encryption::ViewingPublicKey,
     program::{
-        AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim,
+        AccountDiffOutput, BlockValidityWindow, CallerData, ChainedCall, Claim,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
         TimestampValidityWindow, validate_execution,
     },
@@ -275,12 +275,14 @@ impl ExecutionState {
         caller: CallerData,
         caller_pda_seeds: &[PdaSeed],
         output_pre_states: Vec<AccountWithMetadata>,
-        output_post_states: Vec<AccountPostState>,
+        output_post_states: Vec<AccountDiffOutput>,
     ) -> HashSet<AccountId> {
         let mut authorized_output_accounts = Vec::new();
-        for (mut pre, mut post) in output_pre_states.into_iter().zip(output_post_states) {
+        for (mut pre, diff_output) in output_pre_states.into_iter().zip(output_post_states) {
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
+            // `pre` is consumed by the match below, so capture what materialization needs now.
+            let pre_account = pre.account.clone();
             let post_states_entry = self.post_states.entry(pre.account_id);
             match &post_states_entry {
                 Entry::Occupied(occupied) => {
@@ -413,11 +415,21 @@ impl ExecutionState {
                 authorized_output_accounts.push(pre_account_id);
             }
 
-            if let Some(claim) = post.required_claim() {
+            let diff = diff_output.diff();
+
+            let balance = apply_balance_diff(pre_account.balance, diff.diff_balance)
+                .expect("balance diff must be valid; validate_execution already checked it");
+
+            let data = diff
+                .diff_data
+                .clone()
+                .unwrap_or_else(|| pre_account.data.clone());
+
+            // Owner is inherited unless a claim overrides it (AccountDiff carries no ownership).
+            let post_program_owner = if let Some(claim) = diff_output.claim() {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(
-                    post.account().program_owner,
-                    DEFAULT_PROGRAM_OWNER,
+                    pre_account.program_owner, DEFAULT_PROGRAM_OWNER,
                     "Cannot claim an initialized account {pre_account_id}"
                 );
 
@@ -491,10 +503,17 @@ impl ExecutionState {
                     }
                 }
 
-                post.account_mut().program_owner = AccountId::from(program_id);
-            }
+                AccountId::from(program_id)
+            } else {
+                pre_account.program_owner
+            };
 
-            post_states_entry.insert_entry(post.into_account());
+            post_states_entry.insert_entry(Account {
+                program_owner: post_program_owner,
+                balance,
+                data,
+                nonce: pre_account.nonce,
+            });
         }
 
         let mut authorized_accounts = caller.authorized_accounts;

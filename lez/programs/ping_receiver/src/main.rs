@@ -1,9 +1,9 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
     program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountDiffOutput, Claim, DEFAULT_PROGRAM_OWNER, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
     },
 };
 use ping_core::{
@@ -12,7 +12,7 @@ use ping_core::{
 };
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -20,7 +20,7 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<ReceiverInstruction>();
+    ) = read_lee_call::<ReceiverInstruction>();
 
     match instruction {
         ReceiverInstruction::Record { payload } => record(
@@ -92,10 +92,16 @@ fn record(
         "third account must be the ping record PDA"
     );
 
-    let mut post_account = record.account.clone();
-    post_account.data = payload.try_into().expect("payload fits in account data");
-    let post =
-        AccountPostState::new_claimed_if_default(post_account, Claim::Pda(ping_record_seed()));
+    let record_diff = AccountDiff {
+        id: record.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(payload.try_into().expect("payload fits in account data")),
+    };
+    let post = AccountDiffOutput::new_claimed_if_default(
+        record_diff,
+        record.account.program_owner,
+        Claim::Pda(ping_record_seed()),
+    );
 
     ProgramOutput::new(
         self_program_id,
@@ -103,8 +109,8 @@ fn record(
         instruction_data,
         vec![marker.clone(), config.clone(), record],
         vec![
-            AccountPostState::new(marker.account),
-            AccountPostState::new(config.account),
+            AccountDiffOutput::new(AccountDiff::unchanged(marker.account_id)),
+            AccountDiffOutput::new(AccountDiff::unchanged(config.account_id)),
             post,
         ],
     )
@@ -160,11 +166,15 @@ fn renounce_authority(
     );
 
     cfg.authority = None;
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
-        .to_bytes()
-        .try_into()
-        .expect("receiver config fits in account data");
+    let config_diff = AccountDiff {
+        id: config.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(
+            cfg.to_bytes()
+                .try_into()
+                .expect("receiver config fits in account data"),
+        ),
+    };
 
     ProgramOutput::new(
         self_program_id,
@@ -172,10 +182,14 @@ fn renounce_authority(
         instruction_data,
         vec![config, authority.clone()],
         vec![
-            AccountPostState::new(config_account),
+            AccountDiffOutput::new(config_diff),
             // Claimed on first use: the authority's own signature bumps its
             // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
+            AccountDiffOutput::new_claimed_if_default(
+                AccountDiff::unchanged(authority.account_id),
+                authority.account.program_owner,
+                Claim::Authorized,
+            ),
         ],
     )
     .write();
@@ -232,11 +246,15 @@ fn update_sources(
     );
 
     cfg.sources = sources;
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
-        .to_bytes()
-        .try_into()
-        .expect("receiver config fits in account data");
+    let config_diff = AccountDiff {
+        id: config.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(
+            cfg.to_bytes()
+                .try_into()
+                .expect("receiver config fits in account data"),
+        ),
+    };
 
     ProgramOutput::new(
         self_program_id,
@@ -244,10 +262,14 @@ fn update_sources(
         instruction_data,
         vec![config, authority.clone()],
         vec![
-            AccountPostState::new(config_account),
+            AccountDiffOutput::new(config_diff),
             // Claimed on first use: the authority's own signature bumps its
             // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
+            AccountDiffOutput::new_claimed_if_default(
+                AccountDiff::unchanged(authority.account_id),
+                authority.account.program_owner,
+                Claim::Authorized,
+            ),
         ],
     )
     .write();
@@ -292,13 +314,19 @@ fn init_config(
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = config_value
-        .to_bytes()
-        .try_into()
-        .expect("receiver config fits in account data");
-    let config_post = AccountPostState::new_claimed_if_default(
-        config_account,
+    let config_diff = AccountDiff {
+        id: config.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(
+            config_value
+                .to_bytes()
+                .try_into()
+                .expect("receiver config fits in account data"),
+        ),
+    };
+    let config_post = AccountDiffOutput::new_claimed_if_default(
+        config_diff,
+        config.account.program_owner,
         Claim::Pda(receiver_config_seed()),
     );
 

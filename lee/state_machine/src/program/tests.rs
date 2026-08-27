@@ -1,4 +1,4 @@
-use lee_core::account::{Account, AccountId, AccountWithMetadata};
+use lee_core::account::{Account, AccountId, AccountWithMetadata, BalanceDiff};
 use risc0_zkvm::{ExecutorEnv, default_executor};
 
 use crate::program::Program;
@@ -18,22 +18,22 @@ fn program_execution() {
     );
     let recipient = AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
 
-    let expected_sender_post = Account {
-        balance: 77_665_544_332_211 - balance_to_move,
-        ..Account::default()
-    };
-    let expected_recipient_post = Account {
-        balance: balance_to_move,
-        ..Account::default()
-    };
     let program_output = program
         .execute(None, &[sender, recipient], &instruction_data)
         .unwrap();
 
     let [sender_post, recipient_post] = program_output.post_states.try_into().unwrap();
 
-    assert_eq!(sender_post.account(), &expected_sender_post);
-    assert_eq!(recipient_post.account(), &expected_recipient_post);
+    assert_eq!(
+        sender_post.diff().diff_balance,
+        BalanceDiff::Sub(balance_to_move)
+    );
+    assert!(sender_post.diff().diff_data.is_none());
+    assert_eq!(
+        recipient_post.diff().diff_balance,
+        BalanceDiff::Add(balance_to_move)
+    );
+    assert!(recipient_post.diff().diff_data.is_none());
 }
 
 #[test]

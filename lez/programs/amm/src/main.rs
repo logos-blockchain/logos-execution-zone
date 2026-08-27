@@ -9,10 +9,10 @@
 use std::num::NonZero;
 
 use amm_core::Instruction;
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramCall, ProgramInput, ProgramOutput, read_lee_call};
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -20,7 +20,7 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let pre_states_clone = pre_states.clone();
 
@@ -42,13 +42,13 @@ fn main() {
                 .try_into()
                 .expect("Transfer instruction requires exactly seven accounts");
             amm_program::new_definition::new_definition(
-                pool,
-                vault_a,
-                vault_b,
-                pool_definition_lp,
-                user_holding_a,
-                user_holding_b,
-                user_holding_lp,
+                &pool,
+                &vault_a,
+                &vault_b,
+                &pool_definition_lp,
+                &user_holding_a,
+                &user_holding_b,
+                &user_holding_lp,
                 NonZero::new(token_a_amount).expect("Token A should have a nonzero amount"),
                 NonZero::new(token_b_amount).expect("Token B should have a nonzero amount"),
                 amm_program_id,
@@ -71,13 +71,13 @@ fn main() {
                 .try_into()
                 .expect("Transfer instruction requires exactly seven accounts");
             amm_program::add::add_liquidity(
-                pool,
-                vault_a,
-                vault_b,
-                pool_definition_lp,
-                user_holding_a,
-                user_holding_b,
-                user_holding_lp,
+                &pool,
+                &vault_a,
+                &vault_b,
+                &pool_definition_lp,
+                &user_holding_a,
+                &user_holding_b,
+                &user_holding_lp,
                 NonZero::new(min_amount_liquidity)
                     .expect("Min amount of liquidity should be nonzero"),
                 max_amount_to_add_token_a,
@@ -101,13 +101,13 @@ fn main() {
                 .try_into()
                 .expect("Transfer instruction requires exactly seven accounts");
             amm_program::remove::remove_liquidity(
-                pool,
-                vault_a,
-                vault_b,
-                pool_definition_lp,
-                user_holding_a,
-                user_holding_b,
-                user_holding_lp,
+                &pool,
+                &vault_a,
+                &vault_b,
+                &pool_definition_lp,
+                &user_holding_a,
+                &user_holding_b,
+                &user_holding_lp,
                 NonZero::new(remove_liquidity_amount)
                     .expect("Remove liquidity amount must be nonzero"),
                 min_amount_to_remove_token_a,

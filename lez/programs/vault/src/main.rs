@@ -5,22 +5,25 @@
 //! performs the actual transfer of funds from the vault accounts.
 
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
-use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountDiff,
+    program::{
+        AccountDiffOutput, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    },
 };
 use vault_core::Instruction;
 
-fn unchanged_post_states(
+fn unchanged_diffs(
     pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountPostState> {
+) -> Vec<AccountDiffOutput> {
     pre_states
         .iter()
-        .map(|pre_state| AccountPostState::new(pre_state.account.clone()))
+        .map(|pre_state| AccountDiffOutput::new(AccountDiff::unchanged(pre_state.account_id)))
         .collect()
 }
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -28,10 +31,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = read_lee_call::<Instruction>();
 
     let pre_states_clone = pre_states.clone();
-    let post_states = unchanged_post_states(&pre_states_clone);
+    let post_states = unchanged_diffs(&pre_states_clone);
 
     let chained_calls = match instruction {
         Instruction::Transfer {

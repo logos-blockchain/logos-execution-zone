@@ -1,9 +1,9 @@
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
     program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountDiffOutput, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call,
     },
 };
 use ping_core::{
@@ -11,7 +11,7 @@ use ping_core::{
 };
 
 fn main() {
-    let (
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -19,7 +19,7 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<SenderInstruction>();
+    ) = read_lee_call::<SenderInstruction>();
 
     assert!(
         caller_program_id.is_none(),
@@ -96,14 +96,17 @@ fn send(
         },
     );
 
-    let config_post = AccountPostState::new(config.account.clone());
+    let config_post = AccountDiffOutput::new(AccountDiff::unchanged(config.account_id));
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![config, outbox.clone()],
-        vec![config_post, AccountPostState::new(outbox.account)],
+        vec![
+            config_post,
+            AccountDiffOutput::new(AccountDiff::unchanged(outbox.account_id)),
+        ],
     )
     .with_chained_calls(vec![call])
     .write();
@@ -142,13 +145,21 @@ fn init_config(
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = outbox_bytes(outbox_program_id)
-        .to_vec()
-        .try_into()
-        .expect("outbox id fits in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(sender_config_seed()));
+    let config_diff = AccountDiff {
+        id: config.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: Some(
+            outbox_bytes(outbox_program_id)
+                .to_vec()
+                .try_into()
+                .expect("outbox id fits in account data"),
+        ),
+    };
+    let config_post = AccountDiffOutput::new_claimed_if_default(
+        config_diff,
+        config.account.program_owner,
+        Claim::Pda(sender_config_seed()),
+    );
 
     ProgramOutput::new(
         self_program_id,
