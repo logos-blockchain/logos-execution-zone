@@ -1,8 +1,8 @@
+use borsh::to_vec;
 use lee_core::program::{
     AccountPostState, ChainedCall, Claim, InstructionData, PdaSeed, ProgramId, ProgramInput,
     ProgramOutput, read_lee_inputs,
 };
-use risc0_zkvm::serde::to_vec;
 
 type Instruction = (
     PdaSeed,
@@ -21,7 +21,7 @@ fn main() {
             instruction:
                 (claim_seed, delegated_seed, callee_program_id, callee_instruction, sibling),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Some((pda, rest)) = pre_states.split_first() else {
@@ -69,7 +69,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![pda.clone()],
         // Claim first PDA supplied
         vec![AccountPostState::new_claimed(

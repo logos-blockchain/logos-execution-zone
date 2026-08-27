@@ -10,7 +10,7 @@ fn main() {
             pre_states,
             ..
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Ok([pre1, pre2]) = <[_; 2]>::try_from(pre_states) else {
@@ -22,7 +22,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![pre1, pre2],
         vec![AccountPostState::new(account_pre1)],
     )

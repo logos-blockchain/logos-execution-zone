@@ -71,7 +71,7 @@ fn main() {
             pre_states,
             instruction: (function_id, data),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let post_states = match (pre_states.as_slice(), function_id, data.len()) {
@@ -90,7 +90,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         pre_states,
         post_states,
     )

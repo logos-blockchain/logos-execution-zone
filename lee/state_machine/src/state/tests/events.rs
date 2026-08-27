@@ -21,7 +21,7 @@ impl ExampleEvent {
     }
 }
 
-fn program_transaction<T: serde::Serialize>(
+fn program_transaction<T: borsh::BorshSerialize>(
     program_id: ProgramId,
     account_id: AccountId,
     instruction: T,

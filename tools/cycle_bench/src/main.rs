@@ -175,11 +175,11 @@ struct Case {
     instruction_label: &'static str,
     program: Program,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: InstructionData,
+    instruction_data: InstructionData,
 }
 
 impl Case {
-    fn new<I: Serialize>(
+    fn new<I: borsh::BorshSerialize>(
         program_name: &'static str,
         instruction_label: &'static str,
         program: Program,
@@ -191,7 +191,7 @@ impl Case {
             instruction_label,
             program,
             pre_states,
-            instruction_words: risc0_zkvm::serde::to_vec(instruction)?,
+            instruction_data: borsh::to_vec(instruction)?,
         })
     }
 
@@ -201,7 +201,7 @@ impl Case {
             instruction_label,
             program,
             pre_states,
-            instruction_words,
+            instruction_data,
         } = self;
         let caller_program_id: Option<ProgramId> = None;
 
@@ -213,11 +213,12 @@ impl Case {
         let total = exec_iters.saturating_add(1).max(2);
         for iter in 0..total {
             let mut env_builder = ExecutorEnv::builder();
-            env_builder
-                .write(&program.id())?
-                .write(&caller_program_id)?
-                .write(&pre_states)?
-                .write(&instruction_words)?;
+            program.write_inputs(
+                caller_program_id,
+                &pre_states,
+                &instruction_data,
+                &mut env_builder,
+            )?;
             let env = env_builder.build()?;
 
             let started = Instant::now();
@@ -239,11 +240,12 @@ impl Case {
         let mut prove_segments = None;
         if prove {
             let mut env_builder = ExecutorEnv::builder();
-            env_builder
-                .write(&program.id())?
-                .write(&caller_program_id)?
-                .write(&pre_states)?
-                .write(&instruction_words)?;
+            program.write_inputs(
+                caller_program_id,
+                &pre_states,
+                &instruction_data,
+                &mut env_builder,
+            )?;
             let env = env_builder.build()?;
 
             let started = Instant::now();

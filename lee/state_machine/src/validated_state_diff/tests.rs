@@ -396,8 +396,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
 fn malicious_programs_cannot_drain_victim_without_signature() {
     // p2_id, simple_balance_transfer_id, victim_id_raw, victim_balance, victim_nonce,
     // victim_program_owner, recipient_id_raw, amount.
-    // Primitives only — AccountId/Account cannot round-trip through instruction_data
-    // via risc0_zkvm::serde (SerializeDisplay issue).
+    // Primitives only — this instruction is borsh-encoded into instruction_data.
     type InjectorInstruction = (
         lee_core::program::ProgramId, // p2_id
         lee_core::program::ProgramId, // simple_balance_transfer_id

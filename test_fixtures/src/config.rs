@@ -2,7 +2,7 @@ use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
-use indexer_service::{ChannelId, ClientConfig, IndexerConfig};
+use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
@@ -277,6 +277,7 @@ pub fn indexer_config(
         peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
         bridge_lock_holdings: Vec::new(),
         allow_chain_reset: false,
+        event_filter: EventFilterConfig::Archival,
     })
 }
 

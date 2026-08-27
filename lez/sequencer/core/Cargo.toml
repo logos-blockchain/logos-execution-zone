@@ -48,7 +48,6 @@ bytesize.workspace = true
 hex.workspace = true
 url.workspace = true
 num-bigint.workspace = true
-risc0-zkvm.workspace = true
 futures.workspace = true
 libp2p.workspace = true
 

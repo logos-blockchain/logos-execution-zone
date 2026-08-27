@@ -19,7 +19,7 @@ fn main() {
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     match instruction {
@@ -27,7 +27,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             recipient,
             amount,
         ),
@@ -35,20 +35,20 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             &config,
         ),
         Instruction::RenounceAuthority => renounce_authority(
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
         ),
         Instruction::UpdateSources { sources } => update_sources(
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             sources,
         ),
     }
@@ -58,7 +58,7 @@ fn mint(
     self_program_id: lee_core::program::ProgramId,
     caller_program_id: Option<lee_core::program::ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_data: Vec<u8>,
     recipient: [u8; 32],
     amount: u128,
 ) {
@@ -120,7 +120,7 @@ fn mint(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![marker.clone(), config, holding],
         vec![
             AccountPostState::new(marker.account),
@@ -136,7 +136,7 @@ fn renounce_authority(
     self_program_id: lee_core::program::ProgramId,
     caller_program_id: Option<lee_core::program::ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_data: Vec<u8>,
 ) {
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
@@ -189,7 +189,7 @@ fn renounce_authority(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config, authority.clone()],
         vec![
             AccountPostState::new(config_account),
@@ -207,7 +207,7 @@ fn update_sources(
     self_program_id: lee_core::program::ProgramId,
     caller_program_id: Option<lee_core::program::ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_data: Vec<u8>,
     sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
 ) {
     // The config is read before the account list is validated, so who may call
@@ -261,7 +261,7 @@ fn update_sources(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config, authority.clone()],
         vec![
             AccountPostState::new(config_account),
@@ -279,7 +279,7 @@ fn init_config(
     self_program_id: lee_core::program::ProgramId,
     caller_program_id: Option<lee_core::program::ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_data: Vec<u8>,
     config_value: &WrappedTokenConfig,
 ) {
     assert!(
@@ -325,7 +325,7 @@ fn init_config(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config],
         vec![config_post],
     )

@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee::{AccountId, V03State, ValidatedStateDiff};
-use lee_core::{BlockId, Timestamp};
+use lee_core::{BlockId, Timestamp, program::TransactionEvent};
 use log::warn;
 use serde::{Deserialize, Serialize};
 
@@ -142,17 +142,18 @@ impl LeeTransaction {
     ///
     /// The indexer replays blocks the sequencer already validated and inscribed on Bedrock,
     /// so it trusts those inscriptions and re-derives state without re-validating them.
+    ///
+    /// Returns the events the transaction emitted.
     pub fn execute_on_state(
-        self,
+        &self,
         state: &mut V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<Self, lee::error::LeeError> {
+    ) -> Result<Vec<TransactionEvent>, lee::error::LeeError> {
         let diff = self
             .compute_state_diff(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
-        drop(state.apply_state_diff(diff));
-        Ok(self)
+        Ok(state.apply_state_diff(diff))
     }
 
     fn validate_bridge_account_modification(
@@ -225,6 +226,18 @@ pub enum TransactionMalformationError {
     FailedToDecode { tx: HashType },
     #[error("Transaction size {size} exceeds maximum allowed size of {max} bytes")]
     TransactionTooLarge { size: usize, max: usize },
+}
+
+/// A struct encoding a vector of transaction events alongside a fingerprint of a
+/// transaction which emitted it relative to the block it was in.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct TxEvents {
+    // Index of an emitting transaction in a block.
+    pub tx_index: u32,
+    // Hash of the emitting transaction.
+    pub tx_hash: HashType,
+    // Vector of events in the order of emission.
+    pub events: Vec<TransactionEvent>,
 }
 
 /// Returns the canonical Clock Program invocation transaction for the given block timestamp.
