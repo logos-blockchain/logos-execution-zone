@@ -1,21 +1,103 @@
-use std::{
-    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
-    convert::Infallible,
-};
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
 
-use lee_core::{
+use crate::{
     Identifier, InputAccount, InputAccountIdentity, NullifierPublicKey, PrivateWitness,
     WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiffError},
     encryption::ViewingPublicKey,
     program::{
         AccountDiffOutput, BlockValidityWindow, CallContext, CallerData, ChainedCall, Claim,
-        DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEffects, ProgramId,
-        ProgramOutput, TimestampValidityWindow, match_caller_seed_as_private_pda,
-        match_caller_seed_as_public_pda, validate_execution, validate_public_claim,
+        ClaimError, DEFAULT_PROGRAM_OWNER, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS,
+        PdaSeed, ProgramEffects, ProgramId, ProgramOutput, TimestampValidityWindow,
+        match_caller_seed_as_private_pda, match_caller_seed_as_public_pda, validate_execution,
+        validate_public_claim,
     },
 };
-use risc0_zkvm::guest::env;
+
+#[derive(Debug, thiserror::Error)]
+#[error("Duplicate input account {account_id}")]
+pub struct DuplicateInputAccount {
+    pub account_id: AccountId,
+}
+
+/// Every way the walk can reject a transaction. `Provider` carries whatever the per-call step
+/// failed with; every other variant is a rule the walk itself enforces.
+#[derive(Debug, thiserror::Error)]
+pub enum ExecutionWalkError<E> {
+    #[error("{0}")]
+    Provider(E),
+
+    #[error("Max chained calls depth is exceeded")]
+    MaxChainedCallsDepthExceeded,
+
+    #[error("No input supplied for account {account_id}")]
+    MissingInputAccount { account_id: AccountId },
+
+    #[error(
+        "Private PDA {account_id} is not the account program {program_id:?} derives from its seed"
+    )]
+    PrivatePdaMismatch {
+        account_id: AccountId,
+        program_id: ProgramId,
+    },
+
+    #[error("private PDA pre_state must have a witnessed npk")]
+    MissingPrivatePdaWitness { account_id: AccountId },
+
+    #[error(
+        "Two different accounts resolved under the same (program, seed) in one transaction: existing {existing}, new {account_id}"
+    )]
+    FamilyBindingConflict {
+        existing: AccountId,
+        account_id: AccountId,
+    },
+
+    #[error("Duplicate binding for {account_id}: conflicting (program_id, seed)")]
+    ConflictingPrivatePdaBinding { account_id: AccountId },
+
+    #[error(
+        "private PDA {account_id} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds"
+    )]
+    UnboundPrivatePda { account_id: AccountId },
+
+    #[error("Account {account_id} was modified but not claimed")]
+    UnclaimedModifiedDefault { account_id: AccountId },
+
+    #[error("Post state must exist for pre state {account_id}")]
+    MissingPostState { account_id: AccountId },
+
+    #[error("There should be non empty intersection in the program output block validity windows")]
+    EmptyBlockWindowIntersection,
+
+    #[error(
+        "There should be non empty intersection in the program output timestamp validity windows"
+    )]
+    EmptyTimestampWindowIntersection,
+
+    #[error("Invalid program behavior in program {program_id:?}: {source}")]
+    ExecutionValidation {
+        program_id: ProgramId,
+        // Boxed to keep the error type small
+        source: Box<ExecutionValidationError>,
+    },
+
+    #[error("Cannot claim an initialized account {account_id}")]
+    ClaimedInitializedAccount { account_id: AccountId },
+
+    #[error("{source} in program {program_id:?}")]
+    Claim {
+        program_id: ProgramId,
+        source: ClaimError,
+    },
+
+    #[error(
+        "balance diff must apply; this is the per-account sufficiency check that rejects the proof: {source}"
+    )]
+    BalanceDiff {
+        account_id: AccountId,
+        source: BalanceDiffError,
+    },
+}
 
 /// State of the involved accounts before and after program execution.
 pub struct ExecutionState {
@@ -57,39 +139,26 @@ pub struct ExecutionState {
 }
 
 impl ExecutionState {
-    /// Validate program outputs and derive the overall execution state.
-    pub fn derive(
+    /// Walk the chained calls, validate what each program did, and derive the overall execution
+    /// state. `provider` runs one call: it is handed the call context and the `pre_states` the walk
+    /// derived for it, and answers with the program's full output. Whoever supplies that output
+    /// is also whoever must bind it — in the circuit by verifying a receipt over the journal the
+    /// walk's own `CallContext` and `pre_states` reconstruct.
+    pub fn derive<E>(
         input_accounts: &HashMap<AccountId, InputAccount>,
-        program_effects: Vec<ProgramEffects>,
         top_level_call: ChainedCall,
-    ) -> Self {
+        mut provider: impl FnMut(CallContext, Vec<AccountWithMetadata>) -> Result<ProgramOutput, E>,
+    ) -> Result<Self, ExecutionWalkError<E>> {
         let private_pda_witnesses = input_accounts
             .values()
             .filter_map(|input| Some((input.account_id, input.identity.npk_vpk_if_private_pda()?)))
             .collect();
 
-        let block_validity_window = BlockValidityWindow::try_intersect(
-            program_effects
-                .iter()
-                .map(|effects| effects.block_validity_window),
-        )
-        .expect(
-            "There should be non empty intersection in the program output block validity windows",
-        );
-        let timestamp_validity_window = TimestampValidityWindow::try_intersect(
-            program_effects
-                .iter()
-                .map(|effects| effects.timestamp_validity_window),
-        )
-        .expect(
-            "There should be non empty intersection in the program output timestamp validity windows",
-        );
-
         let mut execution_state = Self {
             pre_states: Vec::new(),
             post_states: HashMap::new(),
-            block_validity_window,
-            timestamp_validity_window,
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             private_pda_bindings: HashMap::new(),
             pda_family_binding: HashMap::new(),
             private_pda_witnesses,
@@ -105,66 +174,78 @@ impl ExecutionState {
             initial_caller_data,
         )]);
 
-        let mut program_effects_iter = program_effects.into_iter();
         let mut chain_calls_counter = 0;
 
         while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
-            assert!(
-                chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
-                "Max chained calls depth is exceeded"
-            );
-
-            let effects = program_effects_iter
-                .next()
-                .expect("Insufficient program effects for chained calls");
+            if chain_calls_counter > MAX_NUMBER_CHAINED_CALLS {
+                return Err(ExecutionWalkError::MaxChainedCallsDepthExceeded);
+            }
 
             // The caller only names accounts; the protocol delivers them. Rebuilding what this
-            // call was owed and splicing it into the journal leaves the program no say in the
-            // matter: a receipt binds the journal, so a program run on other accounts, at other
-            // values, or under other authorizations than the ones derived here discharges
-            // nothing and the proof fails.
+            // call was owed and handing it to the provider leaves the program no say in the
+            // matter: in the circuit a receipt binds the journal, so a program run on other
+            // accounts, at other values, or under other authorizations than the ones derived
+            // here discharges nothing and the proof fails.
             let pre_states =
-                execution_state.derive_pre_states(input_accounts, &caller_data, &chained_call);
+                execution_state.derive_pre_states(input_accounts, &caller_data, &chained_call)?;
             let ChainedCall {
                 program_id,
                 instruction_data,
                 ..
             } = chained_call;
 
-            let program_output = ProgramOutput {
-                call: CallContext {
-                    self_program_id: program_id,
-                    caller_program_id: caller_data.program_id,
-                    instruction_data,
-                },
+            let call = CallContext {
+                self_program_id: program_id,
+                caller_program_id: caller_data.program_id,
+                instruction_data,
+            };
+            let ProgramOutput {
                 pre_states,
                 effects,
+                ..
+            } = provider(call, pre_states).map_err(ExecutionWalkError::Provider)?;
+            let ProgramEffects {
+                post_states,
+                chained_calls: next_calls,
+                block_validity_window,
+                timestamp_validity_window,
+            } = effects;
+
+            let Ok(block_window) = BlockValidityWindow::try_intersect(
+                [execution_state.block_validity_window, block_validity_window].into_iter(),
+            ) else {
+                return Err(ExecutionWalkError::EmptyBlockWindowIntersection);
             };
-            let program_output_frame = lee_core::to_borsh_frame(&program_output);
-            env::verify(program_id, &program_output_frame).unwrap_or_else(|_: Infallible| {
-                unreachable!("Infallible error is never constructed")
-            });
+            let Ok(timestamp_window) = TimestampValidityWindow::try_intersect(
+                [
+                    execution_state.timestamp_validity_window,
+                    timestamp_validity_window,
+                ]
+                .into_iter(),
+            ) else {
+                return Err(ExecutionWalkError::EmptyTimestampWindowIntersection);
+            };
+            execution_state.block_validity_window = block_window;
+            execution_state.timestamp_validity_window = timestamp_window;
 
             // Check that the program is well behaved.
             // See the # Programs section for the definition of the `validate_execution` method.
-            let validated_execution = validate_execution(
-                &program_output.pre_states,
-                &program_output.effects.post_states,
-                program_id,
-            );
-            if let Err(err) = validated_execution {
-                panic!("Invalid program behavior in program {program_id:?}: {err}");
-            }
+            validate_execution(&pre_states, &post_states, program_id).map_err(|source| {
+                ExecutionWalkError::ExecutionValidation {
+                    program_id,
+                    source: Box::new(source),
+                }
+            })?;
 
             let authorized_accounts = execution_state.apply_states(
                 input_accounts,
                 program_id,
                 caller_data.authorized_accounts,
-                program_output.pre_states,
-                program_output.effects.post_states,
-            );
+                pre_states,
+                post_states,
+            )?;
 
-            for next_call in program_output.effects.chained_calls.into_iter().rev() {
+            for next_call in next_calls.into_iter().rev() {
                 // Push the call with newly-authorized account set.
                 chained_calls.push_front((
                     next_call,
@@ -179,11 +260,6 @@ impl ExecutionState {
             );
         }
 
-        assert!(
-            program_effects_iter.next().is_none(),
-            "Inner call without a chained call found",
-        );
-
         // Every private-PDA pre_state must have had its npk bound to its account_id, either via
         // a `Claim::Pda(seed)` in some program's post_state or via a caller's `pda_seeds`
         // matching the private derivation. An unbound private-PDA pre_state has no
@@ -192,50 +268,46 @@ impl ExecutionState {
             if execution_state
                 .private_pda_witnesses
                 .contains_key(&pre.account_id)
+                && !execution_state
+                    .private_pda_bindings
+                    .contains_key(&pre.account_id)
             {
-                assert!(
-                    execution_state
-                        .private_pda_bindings
-                        .contains_key(&pre.account_id),
-                    "private PDA {} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds",
-                    pre.account_id
-                );
+                return Err(ExecutionWalkError::UnboundPrivatePda {
+                    account_id: pre.account_id,
+                });
             }
         }
 
         // Check that all modified uninitialized accounts were claimed
-        for (account_id, post) in execution_state
+        for pre in execution_state
             .pre_states
             .iter()
             .filter(|a| a.account.program_owner == DEFAULT_PROGRAM_OWNER)
-            .map(|a| {
-                let post = execution_state
-                    .post_states
-                    .get(&a.account_id)
-                    .expect("Post state must exist for pre state");
-                (a, post)
-            })
-            .filter(|(pre_default, post)| pre_default.account != **post)
-            .map(|(pre, post)| (pre.account_id, post))
         {
-            assert_ne!(
-                post.program_owner, DEFAULT_PROGRAM_OWNER,
-                "Account {account_id} was modified but not claimed"
-            );
+            let post = execution_state.post_states.get(&pre.account_id).ok_or(
+                ExecutionWalkError::MissingPostState {
+                    account_id: pre.account_id,
+                },
+            )?;
+            if pre.account != *post && post.program_owner == DEFAULT_PROGRAM_OWNER {
+                return Err(ExecutionWalkError::UnclaimedModifiedDefault {
+                    account_id: pre.account_id,
+                });
+            }
         }
 
-        execution_state
+        Ok(execution_state)
     }
 
     /// Rebuild the `pre_states` a call was owed: the accounts its caller named, at the values
     /// the execution so far leaves them at, under the authorization the transaction can actually
     /// establish.
-    fn derive_pre_states(
+    fn derive_pre_states<E>(
         &mut self,
         input_accounts: &HashMap<AccountId, InputAccount>,
         caller: &CallerData,
         chained_call: &ChainedCall,
-    ) -> Vec<AccountWithMetadata> {
+    ) -> Result<Vec<AccountWithMetadata>, ExecutionWalkError<E>> {
         let mut pre_states = Vec::with_capacity(chained_call.accounts.len());
         for &account_id in &chained_call.accounts {
             let (account, is_authorized) = match self.post_states.get(&account_id).cloned() {
@@ -248,7 +320,7 @@ impl ExecutionState {
                         caller,
                         &chained_call.pda_seeds,
                         account_id,
-                    );
+                    )?;
                     (account, is_authorized)
                 }
                 None => self.derive_first_sight(
@@ -256,7 +328,7 @@ impl ExecutionState {
                     caller,
                     &chained_call.pda_seeds,
                     account_id,
-                ),
+                )?,
             };
             pre_states.push(AccountWithMetadata {
                 account,
@@ -264,20 +336,20 @@ impl ExecutionState {
                 account_id,
             });
         }
-        pre_states
+        Ok(pre_states)
     }
 
     /// Resolve an account the walk has not reached before and record it. Its value, and for a
     /// regular account its credential, come from the input; a PDA's authorization is derived.
     /// Returns what the program was handed, which for a delegated public PDA is not what we
     /// store.
-    fn derive_first_sight(
+    fn derive_first_sight<E>(
         &mut self,
         input_accounts: &HashMap<AccountId, InputAccount>,
         caller: &CallerData,
         caller_pda_seeds: &[PdaSeed],
         account_id: AccountId,
-    ) -> (Account, bool) {
+    ) -> Result<(Account, bool), ExecutionWalkError<E>> {
         let InputAccount {
             account,
             is_authorized: attested,
@@ -285,7 +357,7 @@ impl ExecutionState {
             ..
         } = input_accounts
             .get(&account_id)
-            .unwrap_or_else(|| panic!("No input supplied for account {account_id}"));
+            .ok_or(ExecutionWalkError::MissingInputAccount { account_id })?;
 
         // External seed is only consulted the first time the account is seen. Subsequent calls
         // need no re-check because the entry is already recorded on private_pda_bindings.
@@ -297,7 +369,7 @@ impl ExecutionState {
             ..
         }) = identity
         {
-            self.bind_verified_private_pda(*authority_program_id, *seed, account_id);
+            self.bind_verified_private_pda(*authority_program_id, *seed, account_id)?;
         }
 
         let (is_authorized, stored_is_authorized) =
@@ -310,7 +382,7 @@ impl ExecutionState {
                     caller,
                     caller_pda_seeds,
                     account_id,
-                );
+                )?;
                 (derived, derived)
             } else if let Some((seed, caller_program_id)) =
                 match_caller_seed_as_public_pda(caller, caller_pda_seeds, account_id)
@@ -320,7 +392,7 @@ impl ExecutionState {
                     caller_program_id,
                     seed,
                     account_id,
-                );
+                )?;
                 // The caller's seeds authorize this PDA, so that is how the host hands it to the
                 // callee and how its journal must read. What we store is masked: in a privacy
                 // circuit the verifier cannot replay the transaction to see which public PDAs a
@@ -341,40 +413,42 @@ impl ExecutionState {
             is_authorized: stored_is_authorized,
             account_id,
         });
-        (account.clone(), is_authorized)
+        Ok((account.clone(), is_authorized))
     }
 
     /// Record `account_id` as the private PDA `program_id` derives from `seed`, having proven
     /// that derivation against the account's own witnessed npk/vpk/identifier.
-    fn bind_verified_private_pda(
+    fn bind_verified_private_pda<E>(
         &mut self,
         program_id: ProgramId,
         seed: PdaSeed,
         account_id: AccountId,
-    ) {
+    ) -> Result<(), ExecutionWalkError<E>> {
         let (npk, vpk, identifier) = self
             .private_pda_witnesses
             .get(&account_id)
-            .expect("private PDA pre_state must have a witnessed npk");
+            .ok_or(ExecutionWalkError::MissingPrivatePdaWitness { account_id })?;
         let expected = AccountId::for_private_pda(&program_id, &seed, npk, vpk, *identifier);
-        assert_eq!(
-            account_id, expected,
-            "Private PDA {account_id} is not the account program {program_id:?} derives from its seed"
-        );
-        bind_private_pda(&mut self.private_pda_bindings, account_id, program_id, seed);
-        assert_family_binding(&mut self.pda_family_binding, program_id, seed, account_id);
+        if account_id != expected {
+            return Err(ExecutionWalkError::PrivatePdaMismatch {
+                account_id,
+                program_id,
+            });
+        }
+        bind_private_pda(&mut self.private_pda_bindings, account_id, program_id, seed)?;
+        assert_family_binding(&mut self.pda_family_binding, program_id, seed, account_id)
     }
 
     /// Settle a call's claims, carry its accounts forward, and return the set of accounts its own
     /// callees inherit as authorized.
-    fn apply_states(
+    fn apply_states<E>(
         &mut self,
         input_accounts: &HashMap<AccountId, InputAccount>,
         program_id: ProgramId,
         mut authorized_accounts: HashSet<AccountId>,
         pre_states: Vec<AccountWithMetadata>,
         post_states: Vec<AccountDiffOutput>,
-    ) -> HashSet<AccountId> {
+    ) -> Result<HashSet<AccountId>, ExecutionWalkError<E>> {
         for (pre, diff_output) in pre_states.into_iter().zip(post_states) {
             let account_id = pre.account_id;
 
@@ -384,23 +458,22 @@ impl ExecutionState {
 
             if let Some(claim) = diff_output.claim() {
                 // The invoked program can only claim accounts with default program id.
-                assert_eq!(
-                    pre.account.program_owner, DEFAULT_PROGRAM_OWNER,
-                    "Cannot claim an initialized account {account_id}"
-                );
+                if pre.account.program_owner != DEFAULT_PROGRAM_OWNER {
+                    return Err(ExecutionWalkError::ClaimedInitializedAccount { account_id });
+                }
 
                 if input_accounts[&account_id].identity.is_public() {
                     // Authorization itself was settled when the pre_states were derived, so the
                     // `Authorized` rule reads the already-derived flag.
                     validate_public_claim(claim, &pre, program_id)
-                        .unwrap_or_else(|e| panic!("{e} in program {program_id:?}"));
+                        .map_err(|source| ExecutionWalkError::Claim { program_id, source })?;
                     if let Claim::Pda(seed) = claim {
                         assert_family_binding(
                             &mut self.pda_family_binding,
                             program_id,
                             seed,
                             account_id,
-                        );
+                        )?;
                     }
                 } else {
                     // Private accounts: don't enforce the claim semantics. Unauthorized private
@@ -408,21 +481,19 @@ impl ExecutionState {
                     match claim {
                         Claim::Authorized => {}
                         Claim::Pda(seed) => {
-                            self.bind_verified_private_pda(program_id, seed, account_id);
+                            self.bind_verified_private_pda(program_id, seed, account_id)?;
                         }
                     }
                 }
             }
 
-            self.post_states.insert(
-                account_id,
-                diff_output.materialize(&pre.account, program_id).expect(
-                    "balance diff must apply; this is the per-account sufficiency check that rejects the proof",
-                ),
-            );
+            let post = diff_output
+                .materialize(&pre.account, program_id)
+                .map_err(|source| ExecutionWalkError::BalanceDiff { account_id, source })?;
+            self.post_states.insert(account_id, post);
         }
 
-        authorized_accounts
+        Ok(authorized_accounts)
     }
 
     /// Consume self and yield the validity windows, the per-account PDA seed/program map
@@ -433,6 +504,7 @@ impl ExecutionState {
         clippy::type_complexity,
         reason = "tuple bundles four exit values from one consuming call so all fields stay private; a struct would only rename it"
     )]
+    #[must_use]
     pub fn into_parts(
         mut self,
     ) -> (
@@ -462,16 +534,17 @@ impl ExecutionState {
 
 /// Index the per-account inputs by the account each one names. Duplicate ids are rejected rather
 /// than silently shadowed, so the map is a faithful view of what the prover supplied.
-pub fn index_by_account_id(input_accounts: Vec<InputAccount>) -> HashMap<AccountId, InputAccount> {
+pub fn index_by_account_id(
+    input_accounts: Vec<InputAccount>,
+) -> Result<HashMap<AccountId, InputAccount>, DuplicateInputAccount> {
     let mut indexed = HashMap::with_capacity(input_accounts.len());
     for input in input_accounts {
         let account_id = input.account_id;
-        assert!(
-            indexed.insert(account_id, input).is_none(),
-            "Duplicate input account {account_id}"
-        );
+        if indexed.insert(account_id, input).is_some() {
+            return Err(DuplicateInputAccount { account_id });
+        }
     }
-    indexed
+    Ok(indexed)
 }
 
 /// Record or re-verify the `(program_id, seed) → account_id` family binding for the
@@ -481,41 +554,37 @@ pub fn index_by_account_id(input_accounts: Vec<InputAccount>) -> HashMap<Account
 /// once (different npks under the same seed) and let a callee mix balances across them. Free
 /// function so callers can pass `&mut self.pda_family_binding` without holding a borrow on
 /// the surrounding struct's other fields.
-fn assert_family_binding(
+fn assert_family_binding<E>(
     bindings: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     program_id: ProgramId,
     seed: PdaSeed,
     account_id: AccountId,
-) {
+) -> Result<(), ExecutionWalkError<E>> {
     match bindings.entry((program_id, seed)) {
         Entry::Vacant(e) => {
             e.insert(account_id);
+            Ok(())
         }
-        Entry::Occupied(e) => {
-            assert_eq!(
-                *e.get(),
-                account_id,
-                "Two different accounts resolved under the same (program, seed) in one transaction: existing {}, new {account_id}",
-                e.get()
-            );
-        }
+        Entry::Occupied(e) if *e.get() == account_id => Ok(()),
+        Entry::Occupied(e) => Err(ExecutionWalkError::FamilyBindingConflict {
+            existing: *e.get(),
+            account_id,
+        }),
     }
 }
 
-fn bind_private_pda(
+fn bind_private_pda<E>(
     map: &mut HashMap<AccountId, (ProgramId, PdaSeed)>,
     account_id: AccountId,
     program_id: ProgramId,
     seed: PdaSeed,
-) {
+) -> Result<(), ExecutionWalkError<E>> {
     match map.entry(account_id) {
-        Entry::Occupied(e) => assert_eq!(
-            *e.get(),
-            (program_id, seed),
-            "Duplicate binding for {account_id}: conflicting (program_id, seed)"
-        ),
+        Entry::Occupied(e) if *e.get() == (program_id, seed) => Ok(()),
+        Entry::Occupied(_) => Err(ExecutionWalkError::ConflictingPrivatePdaBinding { account_id }),
         Entry::Vacant(e) => {
             e.insert((program_id, seed));
+            Ok(())
         }
     }
 }
@@ -525,7 +594,7 @@ fn bind_private_pda(
 /// form, marks the account in `private_pda_bindings`. Free function so callers can pass
 /// individual `&mut self.*` field borrows without holding a borrow on the surrounding struct's
 /// other fields.
-fn derive_authorization_and_record_bindings(
+fn derive_authorization_and_record_bindings<E>(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     private_pda_bindings: &mut HashMap<AccountId, (ProgramId, PdaSeed)>,
     private_pda_witnesses: &HashMap<AccountId, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
@@ -533,7 +602,7 @@ fn derive_authorization_and_record_bindings(
     caller: &CallerData,
     caller_pda_seeds: &[PdaSeed],
     pre_account_id: AccountId,
-) -> bool {
+) -> Result<bool, ExecutionWalkError<E>> {
     let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> =
         match_caller_seed_as_public_pda(caller, caller_pda_seeds, pre_account_id)
             .map(|(seed, caller_program_id)| (seed, false, caller_program_id))
@@ -548,18 +617,18 @@ fn derive_authorization_and_record_bindings(
             });
 
     if let Some((seed, is_private_form, caller_program_id)) = matched_caller_seed {
-        assert_family_binding(pda_family_binding, caller_program_id, seed, pre_account_id);
+        assert_family_binding(pda_family_binding, caller_program_id, seed, pre_account_id)?;
         if is_private_form {
             bind_private_pda(
                 private_pda_bindings,
                 pre_account_id,
                 caller_program_id,
                 seed,
-            );
+            )?;
         }
     }
 
-    matched_caller_seed.is_some()
+    Ok(matched_caller_seed.is_some()
         || globally_authorized.contains(&pre_account_id)
-        || caller.authorized_accounts.contains(&pre_account_id)
+        || caller.authorized_accounts.contains(&pre_account_id))
 }

@@ -27,6 +27,7 @@ mod circuit_io;
 mod commitment;
 mod encoding;
 pub mod encryption;
+pub mod execution_state;
 mod frame;
 mod nullifier;
 pub mod program;
