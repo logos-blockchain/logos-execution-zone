@@ -22,16 +22,18 @@ pub const CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: &str = "CUCUMBER_REMOVE_ARTEF
 /// Environment variable selecting an existing node deployment configuration.
 pub const CUCUMBER_NODE_CONFIG_OVERRIDE: &str = "CUCUMBER_NODE_CONFIG_OVERRIDE";
 /// Environment variable restricting the run to scenarios matching a Cucumber
-/// tag expression (e.g. `@stake_registration_ci and not @slow`). A
-/// comma-separated tag list is accepted as shorthand for `or`
+/// tag expression (e.g. `@stake_registration_ci and not @slow`).
+///
+/// A comma-separated tag list is accepted as shorthand for `or`
 /// (`CUCUMBER_TAGS=@P-17,@P-21`), and a leading `@` on plain tags is optional.
 /// Unset runs every scenario. Ignored when the binary is invoked with
 /// cucumber's own `--tags`/`--name` CLI filter, which takes precedence.
 pub const CUCUMBER_TAGS: &str = "CUCUMBER_TAGS";
 
-/// Parses [`CUCUMBER_TAGS`] into cucumber's tag-expression filter; `None` when
-/// unset or empty, meaning run every scenario. A malformed expression is a
-/// startup error rather than a silently unmatchable filter.
+/// Parses [`CUCUMBER_TAGS`] into cucumber's tag-expression filter.
+///
+/// Returns `None` when unset or empty, meaning run every scenario. A malformed
+/// expression is a startup error rather than a silently unmatchable filter.
 pub fn get_tag_filter() -> Result<Option<TagOperation>> {
     let raw = match std::env::var(CUCUMBER_TAGS) {
         Ok(value) if !value.trim().is_empty() => value,
