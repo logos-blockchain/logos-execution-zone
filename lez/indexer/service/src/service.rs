@@ -730,9 +730,9 @@ pub(crate) fn check_event_coverage(
 }
 
 pub(crate) fn check_range_coverage(
-    segments: &[(EventFilter, u64)],
-    from: u64,
-    to: u64,
+    segments: &[(EventFilter, BlockId)],
+    from: BlockId,
+    to: BlockId,
     program_id: Option<ProgramId>,
     selector: Option<Selector>,
 ) -> Result<(), ErrorObjectOwned> {

@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use common::transaction::TxEvents;
-use lee_core::program::{ProgramId, TransactionEvent};
+use lee_core::{
+    BlockId,
+    program::{ProgramId, TransactionEvent},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum EventFilter {
@@ -77,9 +80,9 @@ impl EventFilter {
 /// and the range must not precede the first segment.
 #[must_use]
 pub fn covered_over_range(
-    segments: &[(EventFilter, u64)],
-    from: u64,
-    to: u64,
+    segments: &[(EventFilter, BlockId)],
+    from: BlockId,
+    to: BlockId,
     program_id: Option<ProgramId>,
     selector: Option<[u8; 8]>,
 ) -> bool {

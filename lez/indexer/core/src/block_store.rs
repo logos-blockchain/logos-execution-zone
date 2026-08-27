@@ -22,7 +22,7 @@ use crate::{event_filter::EventFilter, status::CrossZoneHalt};
 pub struct IndexerStore {
     dbio: Arc<RocksDBIO>,
     current_state: Arc<RwLock<V03State>>,
-    filter_segments: Vec<(EventFilter, u64)>,
+    filter_segments: Vec<(EventFilter, BlockId)>,
 }
 
 impl IndexerStore {
@@ -69,7 +69,7 @@ impl IndexerStore {
     /// Applied filters with the height each took effect at, oldest first; the
     /// events column only holds what the filter of its era kept.
     #[must_use]
-    pub fn filter_segments(&self) -> &[(EventFilter, u64)] {
+    pub fn filter_segments(&self) -> &[(EventFilter, BlockId)] {
         &self.filter_segments
     }
 
@@ -106,15 +106,19 @@ impl IndexerStore {
             .find(|enc_tx| enc_tx.hash().0 == tx_hash))
     }
 
-    pub fn get_events_for_block(&self, block_id: u64) -> Result<Option<Vec<TxEvents>>> {
+    pub fn get_events_for_block(&self, block_id: BlockId) -> Result<Option<Vec<TxEvents>>> {
         Ok(self.dbio.get_block_events(block_id)?)
     }
 
-    pub fn get_events_range(&self, from: u64, to: u64) -> Result<Vec<(u64, Vec<TxEvents>)>> {
+    pub fn get_events_range(
+        &self,
+        from: BlockId,
+        to: BlockId,
+    ) -> Result<Vec<(BlockId, Vec<TxEvents>)>> {
         Ok(self.dbio.get_block_events_range(from, to)?)
     }
 
-    pub fn block_id_by_tx_hash(&self, tx_hash: [u8; 32]) -> Result<Option<u64>> {
+    pub fn block_id_by_tx_hash(&self, tx_hash: [u8; 32]) -> Result<Option<BlockId>> {
         Ok(self.dbio.get_block_id_by_tx_hash(tx_hash)?)
     }
 
@@ -321,8 +325,8 @@ impl IndexerStore {
 fn reconcile_filter_segments(
     dbio: &RocksDBIO,
     configured: EventFilter,
-) -> Result<Vec<(EventFilter, u64)>> {
-    let mut segments: Vec<(EventFilter, u64)> = match dbio.get_event_filter_segments_bytes()? {
+) -> Result<Vec<(EventFilter, BlockId)>> {
+    let mut segments: Vec<(EventFilter, BlockId)> = match dbio.get_event_filter_segments_bytes()? {
         Some(bytes) => borsh::from_slice(&bytes)?,
         None => Vec::new(),
     };
@@ -939,7 +943,7 @@ mod tests {
         let home = tempdir().unwrap();
         drop(open_with(home.as_ref(), EventFilter::Archival));
 
-        let bad: Vec<(EventFilter, u64)> =
+        let bad: Vec<(EventFilter, BlockId)> =
             vec![(EventFilter::Archival, 5), (EventFilter::Archival, 0)];
         let initial_state = testnet_initial_state::initial_state();
         let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
@@ -955,7 +959,7 @@ mod tests {
         let home = tempdir().unwrap();
         drop(open_with(home.as_ref(), EventFilter::Archival));
 
-        let ahead: Vec<(EventFilter, u64)> = vec![(EventFilter::Archival, 1)];
+        let ahead: Vec<(EventFilter, BlockId)> = vec![(EventFilter::Archival, 1)];
         let initial_state = testnet_initial_state::initial_state();
         let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
         dbio.put_event_filter_segments_bytes(&borsh::to_vec(&ahead).unwrap())
