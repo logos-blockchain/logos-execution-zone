@@ -57,7 +57,7 @@ fn main() {
             pre_states,
             instruction: solution,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Ok(
@@ -101,7 +101,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![
             pinata_definition,
             pinata_token_holding,

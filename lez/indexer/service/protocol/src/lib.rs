@@ -48,12 +48,18 @@ mod base64 {
     }
 }
 
+// Largest block span a single events range query may cover. Lives here so every surface
+// that serves the query (RPC service, FFI) enforces the identical bound.
+pub const MAX_EVENT_QUERY_BLOCK_SPAN: u64 = 1000;
+
 pub type Nonce = u128;
 
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema,
 )]
-pub struct ProgramId(pub [u32; 8]);
+pub struct ProgramId(
+    #[schemars(with = "String", description = "base58-encoded program id")] pub [u32; 8],
+);
 
 impl Display for ProgramId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -100,6 +106,7 @@ impl FromStr for ProgramId {
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema,
 )]
+#[schemars(with = "String", description = "base58-encoded account id")]
 pub struct AccountId {
     pub value: [u8; 32],
 }
@@ -224,7 +231,7 @@ pub struct PublicMessage {
     pub instruction_data: InstructionData,
 }
 
-pub type InstructionData = Vec<u32>;
+pub type InstructionData = Vec<u8>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicActionWithID {
@@ -353,7 +360,7 @@ pub struct Data(
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema,
 )]
-pub struct HashType(pub [u8; 32]);
+pub struct HashType(#[schemars(with = "String", description = "hex-encoded hash")] pub [u8; 32]);
 
 impl Display for HashType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -502,6 +509,130 @@ pub struct IndexerStatus {
     pub cross_zone_peers: Vec<PeerStatus>,
 }
 
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema,
+)]
+pub struct Selector(
+    #[schemars(with = "String", description = "hex-encoded event selector")] pub [u8; 8],
+);
+
+impl Display for Selector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+impl FromStr for Selector {
+    type Err = hex::FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0_u8; 8];
+        hex::decode_to_slice(s, &mut bytes)?;
+        Ok(Self(bytes))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct EventRecord {
+    pub block_id: BlockId,
+    pub tx_index: u32,
+    pub tx_hash: HashType,
+    pub program_id: ProgramId,
+    pub selector: Selector,
+    #[serde(with = "base64")]
+    #[schemars(with = "String", description = "base64-encoded event data")]
+    pub data: Vec<u8>,
+}
+
+impl EventRecord {
+    #[must_use]
+    pub fn matches_fields(
+        &self,
+        program_id: Option<ProgramId>,
+        selector: Option<Selector>,
+    ) -> bool {
+        program_id.is_none_or(|program_id| program_id == self.program_id)
+            && selector.is_none_or(|selector| selector == self.selector)
+    }
+}
+
+// With `tx_hash` set the lookup is a point query and the block-range fields are ignored;
+// otherwise `from_block` is required.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetEventsFilter {
+    pub from_block: Option<BlockId>,
+    pub to_block: Option<BlockId>,
+    pub tx_hash: Option<HashType>,
+    pub program_id: Option<ProgramId>,
+    pub selector: Option<Selector>,
+}
+
+// A live stream carries no block range.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventSubscriptionFilter {
+    pub tx_hash: Option<HashType>,
+    pub program_id: Option<ProgramId>,
+    pub selector: Option<Selector>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum EventRangeError {
+    FromPastTip { from: BlockId, tip: BlockId },
+    ToPastTip { to: BlockId, tip: BlockId },
+    Inverted { from: BlockId, to: BlockId },
+    SpanExceeded { span: u64 },
+}
+
+impl Display for EventRangeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FromPastTip { from, tip } => {
+                write!(f, "from_block {from} exceeds the indexed tip {tip}")
+            }
+            Self::ToPastTip { to, tip } => {
+                write!(f, "to_block {to} exceeds the indexed tip {tip}")
+            }
+            Self::Inverted { from, to } => write!(f, "from_block {from} exceeds to_block {to}"),
+            Self::SpanExceeded { span } => write!(
+                f,
+                "block span {span} exceeds the maximum of {MAX_EVENT_QUERY_BLOCK_SPAN}"
+            ),
+        }
+    }
+}
+
+pub fn resolve_event_block_range(
+    from_block: BlockId,
+    to_block: Option<BlockId>,
+    tip: BlockId,
+) -> Result<(BlockId, BlockId), EventRangeError> {
+    if from_block > tip {
+        return Err(EventRangeError::FromPastTip {
+            from: from_block,
+            tip,
+        });
+    }
+    let to_block = to_block.unwrap_or(tip);
+    if to_block > tip {
+        return Err(EventRangeError::ToPastTip { to: to_block, tip });
+    }
+    if to_block < from_block {
+        return Err(EventRangeError::Inverted {
+            from: from_block,
+            to: to_block,
+        });
+    }
+
+    let span = to_block.saturating_sub(from_block).saturating_add(1);
+    if span > MAX_EVENT_QUERY_BLOCK_SPAN {
+        return Err(EventRangeError::SpanExceeded { span });
+    }
+
+    Ok((from_block, to_block))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,5 +713,126 @@ mod tests {
             let back: PeerHealth = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(back, health);
         }
+    }
+
+    #[test]
+    fn identifier_encodings_are_pinned() {
+        let account = AccountId { value: [1; 32] };
+        let program = ProgramId([1; 8]);
+        let selector = Selector([1; 8]);
+        let hash = HashType([1; 32]);
+
+        for (json, expected) in [
+            (
+                serde_json::to_value(account).expect("serialize"),
+                "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+            ),
+            (
+                serde_json::to_value(program).expect("serialize"),
+                "4uQeVjgVccFGKht1dTy7bqxH3WehditPsgHyN1FSvRM",
+            ),
+            (
+                serde_json::to_value(selector).expect("serialize"),
+                "0101010101010101",
+            ),
+            (
+                serde_json::to_value(hash).expect("serialize"),
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            ),
+        ] {
+            assert_eq!(json, serde_json::json!(expected));
+        }
+
+        assert_eq!(
+            serde_json::from_value::<AccountId>(serde_json::json!(
+                "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+            ))
+            .expect("deserialize"),
+            account
+        );
+        assert_eq!(
+            serde_json::from_value::<Selector>(serde_json::json!("0101010101010101"))
+                .expect("deserialize"),
+            selector
+        );
+    }
+
+    #[test]
+    fn event_record_wire_shape_is_pinned() {
+        let record = EventRecord {
+            block_id: 7,
+            tx_index: 1,
+            tx_hash: HashType([2; 32]),
+            program_id: ProgramId([1; 8]),
+            selector: Selector([1; 8]),
+            data: vec![1, 2, 3],
+        };
+
+        assert_eq!(
+            serde_json::to_value(&record).expect("serialize"),
+            serde_json::json!({
+                "block_id": 7,
+                "tx_index": 1,
+                "tx_hash": "0202020202020202020202020202020202020202020202020202020202020202",
+                "program_id": "4uQeVjgVccFGKht1dTy7bqxH3WehditPsgHyN1FSvRM",
+                "selector": "0101010101010101",
+                "data": "AQID",
+            })
+        );
+    }
+
+    #[test]
+    fn to_block_defaults_to_tip() {
+        assert_eq!(resolve_event_block_range(3, None, 9).unwrap(), (3, 9));
+    }
+
+    #[test]
+    fn explicit_to_block_wins_over_tip() {
+        assert_eq!(resolve_event_block_range(3, Some(5), 900).unwrap(), (3, 5));
+    }
+
+    #[test]
+    fn span_at_the_cap_is_allowed_and_one_past_it_is_not() {
+        let tip = MAX_EVENT_QUERY_BLOCK_SPAN.saturating_add(10);
+        assert_eq!(
+            resolve_event_block_range(1, Some(MAX_EVENT_QUERY_BLOCK_SPAN), tip).unwrap(),
+            (1, MAX_EVENT_QUERY_BLOCK_SPAN)
+        );
+
+        let over_cap = MAX_EVENT_QUERY_BLOCK_SPAN.saturating_add(1);
+        assert_eq!(
+            resolve_event_block_range(1, Some(over_cap), tip),
+            Err(EventRangeError::SpanExceeded { span: over_cap })
+        );
+    }
+
+    #[test]
+    fn an_unbounded_to_block_is_capped_against_the_tip_too() {
+        let tip = MAX_EVENT_QUERY_BLOCK_SPAN.saturating_add(5);
+        assert_eq!(
+            resolve_event_block_range(1, None, tip),
+            Err(EventRangeError::SpanExceeded { span: tip })
+        );
+    }
+
+    #[test]
+    fn bounds_above_the_indexed_tip_are_rejected() {
+        assert_eq!(
+            resolve_event_block_range(11, None, 10),
+            Err(EventRangeError::FromPastTip { from: 11, tip: 10 })
+        );
+        assert_eq!(
+            resolve_event_block_range(5, Some(11), 10),
+            Err(EventRangeError::ToPastTip { to: 11, tip: 10 })
+        );
+        assert_eq!(resolve_event_block_range(5, Some(10), 10).unwrap(), (5, 10));
+    }
+
+    #[test]
+    fn an_inverted_range_is_rejected() {
+        assert_eq!(
+            resolve_event_block_range(5, Some(3), 10),
+            Err(EventRangeError::Inverted { from: 5, to: 3 })
+        );
     }
 }

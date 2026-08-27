@@ -3,10 +3,11 @@ use std::borrow::Cow;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::AccountWithMetadata,
-    program::{InstructionData, ProgramId, ProgramOutput},
+    from_frame,
+    program::{InstructionData, ProgramId, ProgramInput, ProgramOutput},
+    to_frame,
 };
-use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor, serde::to_vec};
-use serde::Serialize;
+use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor};
 
 use crate::error::LeeError;
 
@@ -46,10 +47,11 @@ impl Program {
         &self.elf
     }
 
-    pub fn serialize_instruction<T: Serialize>(
+    pub fn serialize_instruction<T: BorshSerialize>(
         instruction: T,
     ) -> Result<InstructionData, LeeError> {
-        to_vec(&instruction).map_err(|e| LeeError::InstructionSerializationError(e.to_string()))
+        borsh::to_vec(&instruction)
+            .map_err(|e| LeeError::InstructionSerializationError(e.to_string()))
     }
 
     pub(crate) fn execute(
@@ -61,8 +63,7 @@ impl Program {
         // Write inputs to the program
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
-        Self::write_inputs(
-            self.id,
+        self.write_inputs(
             caller_program_id,
             pre_states,
             instruction_data,
@@ -77,35 +78,33 @@ impl Program {
             .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
 
         // Get outputs
-        let program_output = session_info
-            .journal
-            .decode()
+        let payload = from_frame(&session_info.journal.bytes).ok_or_else(|| {
+            LeeError::ProgramExecutionFailed("malformed program journal frame".to_owned())
+        })?;
+        let program_output = borsh::from_slice(payload)
             .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
 
         Ok(program_output)
     }
 
-    /// Writes inputs to `env_builder` in the order expected by the programs.
-    pub(crate) fn write_inputs(
-        program_id: ProgramId,
+    /// Writes the guest's [`ProgramInput`] as a single length-prefixed borsh frame, the form
+    /// `read_lee_inputs` expects.
+    pub fn write_inputs(
+        &self,
         caller_program_id: Option<ProgramId>,
         pre_states: &[AccountWithMetadata],
-        instruction_data: &[u32],
+        instruction_data: &[u8],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
-        env_builder
-            .write(&program_id)
-            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
-        env_builder
-            .write(&caller_program_id)
-            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
-        let pre_states = pre_states.to_vec();
-        env_builder
-            .write(&pre_states)
-            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
-        env_builder
-            .write(&instruction_data)
-            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        let input = ProgramInput {
+            self_program_id: self.id,
+            caller_program_id,
+            pre_states: pre_states.to_vec(),
+            instruction: instruction_data.to_vec(),
+        };
+        let payload =
+            borsh::to_vec(&input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder.write_slice(&to_frame(&payload));
         Ok(())
     }
 }

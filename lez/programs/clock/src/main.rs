@@ -44,7 +44,7 @@ fn main() {
             pre_states,
             instruction: timestamp,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Ok([pre_01, pre_10, pre_50]) = <[_; 3]>::try_from(pre_states) else {
@@ -87,7 +87,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![pre_01, pre_10, pre_50],
         vec![post_01, post_10, post_50],
     )
