@@ -5,12 +5,15 @@
 
 use cucumber::{gherkin::Step, then};
 use futures::future::try_join_all;
-use lee::Account;
+use lee::{Account, AccountId};
 use sequencer_stake_core::{SequencerEntry, SequencerKey, StakeRecord};
 
 use super::{
     super::log_step,
-    helpers::{assert_not_included, config_entry, get_account, wait_for_inclusion},
+    helpers::{
+        assert_not_included, config_entry, get_account, inclusion_block, wait_for_inclusion,
+        wait_for_joint_accreditation,
+    },
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
@@ -195,6 +198,166 @@ async fn stake_accounts_are_unchanged(world: &mut CucumberWorld, step: &Step) ->
                 message: format!(
                     "account {account_id} differs from its pre-submission snapshot: \
                      {before:?} -> {after:?}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The two `(sequencer key, funding, ownership)` casts of a paired
+/// registration.
+fn stake_pairs(
+    world: &CucumberWorld,
+) -> Result<[(SequencerKey, AccountId, AccountId); 2], StepError> {
+    let scenario = world.stake()?;
+    Ok([
+        (
+            scenario.sequencer_key(),
+            scenario.funding_id()?,
+            scenario.ownership_id()?,
+        ),
+        (
+            scenario.second_sequencer_key(),
+            scenario.second_funding_id()?,
+            scenario.second_ownership_id()?,
+        ),
+    ])
+}
+
+#[then("both stake transactions are accepted")]
+async fn both_stake_transactions_accepted(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let hashes = [
+        scenario.last_submission()?.hash,
+        scenario.second_submission()?.hash,
+    ];
+    let context = world.lez()?;
+    try_join_all(
+        hashes
+            .into_iter()
+            .map(|hash| wait_for_inclusion(context, hash)),
+    )
+    .await?;
+    Ok(())
+}
+
+#[then("the config holds an entry for each sequencer key pointing at its own ownership account")]
+async fn config_holds_entry_per_key(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    let amount = world.stake()?.last_submission()?.amount;
+    for (sequencer_key, _funding_id, ownership_id) in stake_pairs(world)? {
+        let entry = config_entry(world.lez()?, sequencer_key)
+            .await?
+            .ok_or_else(|| StepError::AssertionFailed {
+                message: format!("the config has no entry for sequencer key {sequencer_key:?}"),
+            })?;
+        if entry.account_id != ownership_id
+            || entry.total_staked != amount
+            || entry.total_pending_unstake != 0
+        {
+            return Err(StepError::AssertionFailed {
+                message: format!(
+                    "the entry for {sequencer_key:?} is {entry:?}, expected it to point at \
+                     {ownership_id:?} tracking {amount} staked with 0 pending unstake"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[then("each ownership account is claimed by sequencer_stake backing its sequencer key")]
+async fn each_ownership_account_claimed(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    for (sequencer_key, _funding_id, ownership_id) in stake_pairs(world)? {
+        let account = get_account(world.lez()?, ownership_id).await?;
+        if account.program_owner != programs::sequencer_stake().id().into() {
+            return Err(StepError::AssertionFailed {
+                message: format!(
+                    "ownership account {ownership_id:?} is not owned by sequencer_stake"
+                ),
+            });
+        }
+        let record = StakeRecord::from_bytes(account.data.as_ref()).ok_or_else(|| {
+            StepError::AssertionFailed {
+                message: format!(
+                    "ownership account {ownership_id:?} data does not decode as a StakeRecord"
+                ),
+            }
+        })?;
+        if record.sequencer_key != sequencer_key || record.pending_unstake.is_some() {
+            return Err(StepError::AssertionFailed {
+                message: format!(
+                    "ownership account {ownership_id:?} carries {record:?}, expected its own \
+                     sequencer key with no pending unstake"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[then("both sequencer keys join the live committee together")]
+async fn both_keys_join_live_committee(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let first_hash = scenario.last_submission()?.hash;
+    let second_hash = scenario.second_submission()?.hash;
+    let keys = [
+        scenario.sequencer_key().to_bytes(),
+        scenario.second_sequencer_key().to_bytes(),
+    ];
+    let context = world.lez()?;
+
+    // Stakes sharing a block finalize together, so the joint-accreditation
+    // wait may insist on one atomic committee update. In the rare race where
+    // the two Stakes land in different blocks, split updates are legitimate
+    // and only the eventual outcome is asserted.
+    let first_block = inclusion_block(context, first_hash).await?;
+    let second_block = inclusion_block(context, second_hash).await?;
+    let atomic = first_block.is_some() && first_block == second_block;
+    tracing::info!(
+        target: super::super::TARGET,
+        "Stakes included in blocks {first_block:?} and {second_block:?}: {}",
+        if atomic {
+            "insisting on one atomic committee update"
+        } else {
+            "split blocks, asserting only the eventual outcome"
+        }
+    );
+    wait_for_joint_accreditation(context, keys, atomic).await
+}
+
+#[then("each stake moved the staked amount from its funding account to its ownership account")]
+async fn each_stake_moved_the_amount(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    let amount = world.stake()?.last_submission()?.amount;
+    for (_sequencer_key, funding_id, ownership_id) in stake_pairs(world)? {
+        let snapshot = world.stake()?.snapshot()?;
+        let expected_funding = snapshot
+            .account(funding_id)?
+            .balance
+            .checked_sub(amount)
+            .ok_or_else(|| StepError::AssertionFailed {
+                message: "expected funding balance underflows".to_owned(),
+            })?;
+        let expected_ownership = snapshot
+            .account(ownership_id)?
+            .balance
+            .checked_add(amount)
+            .ok_or_else(|| StepError::AssertionFailed {
+                message: "expected ownership balance overflows".to_owned(),
+            })?;
+        let context = world.lez()?;
+        let funding = get_account(context, funding_id).await?.balance;
+        let ownership = get_account(context, ownership_id).await?.balance;
+        if funding != expected_funding || ownership != expected_ownership {
+            return Err(StepError::AssertionFailed {
+                message: format!(
+                    "the stake through {ownership_id:?} left balances funding {funding} and \
+                     ownership {ownership}, expected {expected_funding} and {expected_ownership}"
                 ),
             });
         }

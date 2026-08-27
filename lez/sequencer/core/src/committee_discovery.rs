@@ -325,6 +325,25 @@ mod tests {
     }
 
     #[test]
+    fn two_new_keys_join_in_one_update() {
+        // Two qualifying Stakes landing in the same discovery window ride a
+        // single desired list: one ChannelConfigOp admits both joiners at
+        // once, alongside the already-live key — the join mirror of the
+        // join-plus-exit (D-11) and double-exit (M-04) cases.
+        let live = Staked::new(3, MINIMUM);
+        let joiner_a = Staked::new(5, MINIMUM);
+        let joiner_b = Staked::new(6, 2 * MINIMUM);
+
+        let mut expected = vec![live.key, joiner_a.key, joiner_b.key];
+        expected.sort_unstable();
+
+        assert_eq!(
+            committee_update(&state_with([live, joiner_a, joiner_b]), &[live.key]),
+            Some(expected)
+        );
+    }
+
+    #[test]
     fn every_pending_unstake_is_a_candidate_regardless_of_validity() {
         // Even a not-yet-valid full drain is a candidate — validity is decided
         // separately, by `finalize_unstake_is_valid`, uniformly for every

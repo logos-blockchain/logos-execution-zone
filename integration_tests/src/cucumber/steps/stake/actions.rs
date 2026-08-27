@@ -4,14 +4,14 @@ use wallet::AccountIdentity;
 
 use super::{
     super::log_step,
-    helpers::{get_account, submit_and_record},
+    helpers::{get_account, last_block, scenario_snapshot, submit_and_record},
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
     stake_scenario::{
-        chain_caller_instruction, confirm_stake_instruction, raw_stake_instruction,
-        simple_balance_transfer_instruction, stake_instruction, stake_instruction_with_mover,
-        transfer_instruction,
+        SubmissionRecord, chain_caller_instruction, confirm_stake_instruction,
+        raw_stake_instruction, simple_balance_transfer_instruction, stake_instruction,
+        stake_instruction_with_mover, transfer_instruction,
     },
     world::CucumberWorld,
 };
@@ -109,6 +109,52 @@ async fn submit_stake_with_simple_mover(
         amount,
     )
     .await
+}
+
+#[when(expr = "a Stake of {string} is submitted for each sequencer key back-to-back")]
+async fn submit_stakes_for_both_keys(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expression: String,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let amount = scenario.amount(&expression)?;
+    let first_instruction = stake_instruction(scenario.sequencer_key(), amount)?;
+    let first_accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
+    let second_instruction = stake_instruction(scenario.second_sequencer_key(), amount)?;
+    let second_accounts = stake_accounts(
+        scenario.second_funding_id()?,
+        scenario.second_ownership_id()?,
+    );
+
+    let snapshot = scenario_snapshot(world).await?;
+    let context = world.lez()?;
+    // Both are admitted before either can be included, so one builder pull
+    // tries both against the shared config account. The signing pairs are
+    // disjoint, so the second submission does not depend on the first.
+    let program_id = programs::sequencer_stake().id();
+    let first_hash = context
+        .send_program_transaction(first_accounts, first_instruction, program_id)
+        .await?;
+    let second_hash = context
+        .send_program_transaction(second_accounts, second_instruction, program_id)
+        .await?;
+    let submitted_at_block = last_block(context).await?;
+
+    let scenario = world.stake_mut()?;
+    scenario.set_snapshot(snapshot);
+    scenario.record_submission(SubmissionRecord {
+        hash: first_hash,
+        amount,
+        submitted_at_block,
+    });
+    scenario.record_second_submission(SubmissionRecord {
+        hash: second_hash,
+        amount,
+        submitted_at_block,
+    });
+    Ok(())
 }
 
 #[when(expr = "a Stake of {string} is submitted with the mover told to deposit one coin {word}")]

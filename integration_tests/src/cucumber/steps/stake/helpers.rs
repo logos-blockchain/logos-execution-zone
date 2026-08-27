@@ -7,16 +7,23 @@ use common::HashType;
 use futures::future::try_join_all;
 use lee::{Account, AccountId, PublicKey, program::Program};
 use lee_core::program::{InstructionData, ProgramId};
+use sequencer_core::{
+    block_publisher::{Ed25519PublicKey, read_channel_state},
+    config::BedrockConfig,
+};
 use sequencer_service_rpc::RpcClient as _;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig};
 use wallet::AccountIdentity;
 
 use super::super::wait_until;
-use crate::cucumber::{
-    context::LezScenarioContext,
-    error::{StepError, StepResult},
-    stake_scenario::{AccountsSnapshot, SubmissionRecord, stake_instruction},
-    world::CucumberWorld,
+use crate::{
+    config::{self, UrlProtocol},
+    cucumber::{
+        context::LezScenarioContext,
+        error::{StepError, StepResult},
+        stake_scenario::{AccountsSnapshot, SubmissionRecord, stake_instruction},
+        world::CucumberWorld,
+    },
 };
 
 /// Cadence of the inclusion and non-inclusion polls.
@@ -105,6 +112,41 @@ pub(super) async fn last_block(context: &LezScenarioContext) -> Result<u64, Step
         .map_err(StepError::query_failed)
 }
 
+/// Creates a fresh public account and asserts it starts out default-owned and
+/// unclaimed.
+pub(super) async fn create_unclaimed_account(
+    context: &LezScenarioContext,
+) -> Result<AccountId, StepError> {
+    let account_id = context.new_public_account().await?;
+    let account = get_account(context, account_id).await?;
+    if account != Account::default() {
+        return Err(StepError::AssertionFailed {
+            message: "the fresh account does not start out default-owned and unclaimed".to_owned(),
+        });
+    }
+    Ok(account_id)
+}
+
+/// Creates a fresh public account claimed for `authenticated_transfer` with
+/// exactly `balance` on it, so it can act as a Stake mover's sender.
+pub(super) async fn create_funded_account(
+    context: &LezScenarioContext,
+    balance: u128,
+) -> Result<AccountId, StepError> {
+    let funding_id = context.new_public_account().await?;
+    let supply_id = first_configured_public_account(context).await?;
+    context
+        .public_transfer_to_new_account(supply_id, funding_id, balance)
+        .await?;
+    let funded = get_account(context, funding_id).await?.balance;
+    if funded != balance {
+        return Err(StepError::AssertionFailed {
+            message: format!("the funding account holds {funded}, expected {balance}"),
+        });
+    }
+    Ok(funding_id)
+}
+
 /// Snapshots the config account plus every scenario account introduced so
 /// far, immediately before a submission.
 pub(super) async fn scenario_snapshot(
@@ -115,6 +157,7 @@ pub(super) async fn scenario_snapshot(
     let mut account_ids = vec![system_accounts::sequencer_stake_config_account_id()];
     account_ids.extend(scenario.funding_id().ok());
     account_ids.extend(scenario.ownership_id().ok());
+    account_ids.extend(scenario.second_funding_id().ok());
     account_ids.extend(scenario.second_ownership_id().ok());
 
     let accounts = try_join_all(account_ids.into_iter().map(|account_id| async move {
@@ -211,6 +254,76 @@ pub(super) async fn assert_not_included(
         });
     }
     Ok(())
+}
+
+/// The block that included `hash`, or `None` while it is not included.
+pub(super) async fn inclusion_block(
+    context: &LezScenarioContext,
+    hash: HashType,
+) -> Result<Option<u64>, StepError> {
+    Ok(context
+        .sequencer_client()
+        .get_transaction(hash)
+        .await
+        .map_err(StepError::query_failed)?
+        .map(|(_transaction, block_id)| block_id))
+}
+
+/// Reads the live accredited keys (as raw key bytes) from the Bedrock channel
+/// backing the stack, or `None` while the channel does not exist yet.
+async fn live_accredited_keys(
+    context: &LezScenarioContext,
+) -> Result<Option<Vec<[u8; 32]>>, StepError> {
+    let bedrock_config = BedrockConfig {
+        channel_id: config::bedrock_channel_id(),
+        node_url: config::addr_to_url(UrlProtocol::Http, context.bedrock().primary_api_addr())
+            .map_err(|source| StepError::QueryFailedSource { source })?,
+        funding_key: config::bedrock_funding_key(),
+        auth: None,
+        priority_fee: 10_000,
+    };
+    let state = read_channel_state(&bedrock_config)
+        .await
+        .map_err(|source| StepError::QueryFailedSource { source })?;
+    Ok(state.map(|state| {
+        state
+            .accredited_keys
+            .iter()
+            .map(Ed25519PublicKey::to_bytes)
+            .collect()
+    }))
+}
+
+/// Waits until both `keys` are accredited on the Bedrock channel. With
+/// `atomic` — the Stakes shared a block, so they finalize together, qualify
+/// in the same discovery window and one `ChannelConfigOp` must admit both —
+/// observing exactly one accredited key fails immediately as a split update.
+pub(super) async fn wait_for_joint_accreditation(
+    context: &LezScenarioContext,
+    keys: [[u8; 32]; 2],
+    atomic: bool,
+) -> StepResult {
+    wait_until(
+        POLL_INTERVAL,
+        wait_timeout(context),
+        "both sequencer keys to join the live committee",
+        || async move {
+            let Some(live) = live_accredited_keys(context).await? else {
+                return Ok(None);
+            };
+            let accredited = keys.map(|key| live.contains(&key));
+            if atomic && accredited.iter().any(|seen| *seen) && !accredited.iter().all(|seen| *seen)
+            {
+                return Err(StepError::AssertionFailed {
+                    message: "one sequencer key is accredited without the other, but their \
+                              Stakes shared a block so a single committee update must admit both"
+                        .to_owned(),
+                });
+            }
+            Ok(accredited.iter().all(|seen| *seen).then_some(()))
+        },
+    )
+    .await
 }
 
 /// Submits a fully signed, well-formed `Stake` and waits for its inclusion.

@@ -223,3 +223,33 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     When a Stake carrying the off-curve key bytes is submitted
     Then the stake transaction is not included in a block
     And the stake accounts are unchanged
+
+  @stake_registration_ci @P-26 @P1 @L3
+  # The registration mirror of the plan's simultaneous-exit cases (M-04,
+  # M-07): both Stakes are admitted before either is included, so one builder
+  # pull tries both in the same block build and both write the shared config
+  # account. Pins that neither write is lost and neither transaction is
+  # dropped — a builder drop would be final, since dropped transactions are
+  # not requeued. The two signing pairs are disjoint, so the submissions do
+  # not couple through any account's nonce.
+  Scenario: Two keys register through the shared config account at the same time
+    Given a second sequencer key with its own unclaimed ownership account and a funding account holding "ten times the minimum stake"
+    When a Stake of "twice the minimum stake" is submitted for each sequencer key back-to-back
+    Then both stake transactions are accepted
+    And the config holds an entry for each sequencer key pointing at its own ownership account
+    And each ownership account is claimed by sequencer_stake backing its sequencer key
+    And each stake moved the staked amount from its funding account to its ownership account
+
+  @stake_registration_ci @D-15 @P1 @L3
+  # Node-level mirror of committee_discovery's two_new_keys_join_in_one_update:
+  # both Stakes ride one block, finalize together and qualify in the same
+  # discovery window, so a single ChannelConfigOp admits both keys — observed
+  # through Bedrock channel state, where no poll may catch one key accredited
+  # without the other. In the rare race where the Stakes land in different
+  # blocks, split updates are legitimate and only the eventual outcome is
+  # asserted.
+  Scenario: Two simultaneous registrations enter the live committee in one update
+    Given a second sequencer key with its own unclaimed ownership account and a funding account holding "ten times the minimum stake"
+    When a Stake of "twice the minimum stake" is submitted for each sequencer key back-to-back
+    Then both stake transactions are accepted
+    And both sequencer keys join the live committee together
