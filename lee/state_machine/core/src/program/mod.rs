@@ -728,6 +728,25 @@ pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionDa
     )
 }
 
+/// Whether a callee's journalled `pre_states` name exactly the accounts its caller asked for,
+/// in order.
+///
+/// A `ChainedCall` only names accounts; the protocol resolves and delivers them. The callee's
+/// journal is the sole evidence of what it actually ran on, so binding a call to its inputs
+/// requires that journal to account for every named account and nothing else. Callees destructure
+/// positionally, so order is part of the contract.
+///
+/// Shared by both executors so the public and privacy-preserving paths cannot drift.
+#[must_use]
+pub fn pre_states_match_accounts(
+    accounts: &[AccountId],
+    pre_states: &[AccountWithMetadata],
+) -> bool {
+    accounts
+        .iter()
+        .eq(pre_states.iter().map(|pre| &pre.account_id))
+}
+
 /// Validates well-behaved program execution.
 ///
 /// # Parameters

@@ -9,7 +9,7 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
     program::{
         CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
-        validate_execution,
+        pre_states_match_accounts, validate_execution,
     },
 };
 use log::debug;
@@ -143,6 +143,22 @@ impl ValidatedStateDiff {
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_id, program_output
+            );
+
+            // The caller only names accounts; the protocol delivers them. The callee's journal is
+            // the only evidence of what it ran on, so it must account for exactly the named
+            // accounts, in order. Only a real caller->callee edge is bound: the synthetic
+            // top-level call's accounts are the transaction's own declared accounts, already
+            // covered by `DeclaredAccountMissingFromOutput`.
+            ensure!(
+                caller_data.program_id.is_none()
+                    || pre_states_match_accounts(
+                        &chained_call.accounts,
+                        &program_output.pre_states
+                    ),
+                InvalidProgramBehaviorError::ChainedCallAccountsMismatch {
+                    program_id: chained_call.program_id
+                }
             );
 
             for pre in &program_output.pre_states {
