@@ -115,6 +115,7 @@ pub struct StakeScenario {
     second_sequencer_key: SequencerKey,
     funding_id: Option<AccountId>,
     ownership_id: Option<AccountId>,
+    second_funding_id: Option<AccountId>,
     second_ownership_id: Option<AccountId>,
     off_curve_bytes: Option<[u8; 32]>,
     /// Test programs deployed at runtime, keyed by image id: the header
@@ -123,6 +124,7 @@ pub struct StakeScenario {
     deployed_programs: BTreeMap<ProgramId, AccountId>,
     snapshot: Option<AccountsSnapshot>,
     last_submission: Option<SubmissionRecord>,
+    second_submission: Option<SubmissionRecord>,
 }
 
 impl StakeScenario {
@@ -137,11 +139,13 @@ impl StakeScenario {
             second_sequencer_key: sequencer_key_from_seed(SECOND_SEQUENCER_KEY_SEED),
             funding_id: None,
             ownership_id: None,
+            second_funding_id: None,
             second_ownership_id: None,
             off_curve_bytes: None,
             deployed_programs: BTreeMap::new(),
             snapshot: None,
             last_submission: None,
+            second_submission: None,
         }
     }
 
@@ -221,6 +225,25 @@ impl StakeScenario {
         })
     }
 
+    /// Stores the funding account backing the second sequencer key's stake.
+    pub const fn set_second_funding_id(&mut self, account_id: AccountId) {
+        self.second_funding_id = Some(account_id);
+    }
+
+    /// Returns the second key's funding account id, or a typed error before
+    /// that setup step ran.
+    pub fn second_funding_id(&self) -> Result<AccountId, StepError> {
+        self.second_funding_id.ok_or(StepError::MissingObservation {
+            field: "second funding account",
+        })
+    }
+
+    /// Returns the stake funds PDA of the second ownership account.
+    pub fn second_funds_id(&self) -> Result<AccountId, StepError> {
+        self.second_ownership_id()
+            .map(|ownership_id| system_accounts::stake_funds_account_id(&ownership_id))
+    }
+
     /// Stores the ownership account of the second staked key.
     pub const fn set_second_ownership_id(&mut self, account_id: AccountId) {
         self.second_ownership_id = Some(account_id);
@@ -289,6 +312,21 @@ impl StakeScenario {
             .as_ref()
             .ok_or(StepError::MissingObservation {
                 field: "stake submission",
+            })
+    }
+
+    /// Records the second transaction of a paired submission.
+    pub const fn record_second_submission(&mut self, record: SubmissionRecord) {
+        self.second_submission = Some(record);
+    }
+
+    /// Returns the second transaction of a paired submission, or a typed
+    /// error when the last submission was not a pair.
+    pub fn second_submission(&self) -> Result<&SubmissionRecord, StepError> {
+        self.second_submission
+            .as_ref()
+            .ok_or(StepError::MissingObservation {
+                field: "second stake submission",
             })
     }
 
