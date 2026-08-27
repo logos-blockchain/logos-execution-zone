@@ -41,6 +41,11 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(async_main())
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "the tracing macro expansions dominate the score; extracting the hook bodies into \
+              helpers does not lower it"
+)]
 async fn async_main() -> anyhow::Result<()> {
     integration_tests::cucumber::default::init_tracing();
     reap_all_stale_port_blocks();
@@ -174,7 +179,7 @@ async fn async_main() -> anyhow::Result<()> {
 
     // A run that matched no scenario reports no failures; exiting green on it
     // would let a typo'd tag filter pass CI having tested nothing.
-    if writer.passed_steps() + writer.skipped_steps() + writer.failed_steps() == 0 {
+    if [writer.passed_steps(), writer.skipped_steps(), writer.failed_steps()] == [0; 3] {
         anyhow::bail!(
             "No scenarios ran: the tag/name filters matched nothing, or the feature \
              directory is empty"
