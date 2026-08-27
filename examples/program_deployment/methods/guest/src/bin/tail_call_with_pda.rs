@@ -51,7 +51,7 @@ fn main() {
     // Create the chained call
     let chained_call_greeting: Vec<u8> =
         b"Hello from tail call with Program Derived Account ID".to_vec();
-    let chained_call_instruction_data = risc0_zkvm::serde::to_vec(&chained_call_greeting).unwrap();
+    let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
 
     // Flip the `is_authorized` flag to true
     let pre_state_for_chained_call = {

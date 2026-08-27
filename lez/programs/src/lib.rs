@@ -134,7 +134,83 @@ mod inner {
 
     #[cfg(test)]
     mod tests {
+        use lee::{Account, AccountId, PublicTransaction, V03State, public_transaction};
+
         use super::*;
+
+        fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
+            let message = public_transaction::Message::try_new(
+                bridge().id(),
+                vec![
+                    bridge_core::compute_bridge_account_id(bridge().id()),
+                    vault_core::compute_vault_account_id(vault().id(), recipient_id),
+                    bridge_core::deposit_receipt_account_id(bridge().id(), op_id),
+                ],
+                vec![],
+                bridge_core::Instruction::Deposit {
+                    l1_deposit_op_id: op_id,
+                    vault_program_id: vault().id(),
+                    recipient_id,
+                    amount,
+                },
+            )
+            .unwrap();
+
+            PublicTransaction::new(
+                message,
+                public_transaction::WitnessSet::from_raw_parts(vec![]),
+            )
+        }
+
+        #[test]
+        fn bridge_deposit_emits_one_event_and_its_replay_emits_none() {
+            let recipient_id = AccountId::new([5; 32]);
+            let op_id = [9; 32];
+            let amount = 1_000;
+            let auth_transfer_owned = Account {
+                program_owner: authenticated_transfer().id().into(),
+                ..Account::default()
+            };
+
+            let mut state = V03State::new()
+                .with_public_accounts([
+                    (
+                        bridge_core::compute_bridge_account_id(bridge().id()),
+                        Account {
+                            balance: u128::from(amount),
+                            ..auth_transfer_owned.clone()
+                        },
+                    ),
+                    (
+                        vault_core::compute_vault_account_id(vault().id(), recipient_id),
+                        auth_transfer_owned,
+                    ),
+                ])
+                .with_programs([bridge(), vault(), authenticated_transfer()]);
+
+            let tx = deposit_tx(op_id, recipient_id, amount);
+            let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].program_id, bridge().id());
+            assert_eq!(
+                events[0].event.selector,
+                bridge_core::event::Deposit::SELECTOR
+            );
+            assert_eq!(
+                bridge_core::event::Deposit::from_bytes(&events[0].event.data).unwrap(),
+                bridge_core::event::Deposit {
+                    l1_deposit_op_id: op_id,
+                    vault_program_id: vault().id(),
+                    recipient_id,
+                    amount,
+                }
+            );
+
+            let replayed = state.transition_from_public_transaction(&tx, 2, 0).unwrap();
+
+            assert_eq!(replayed.len(), 0);
+        }
 
         #[test]
         fn builtin_programs() {

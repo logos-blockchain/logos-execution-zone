@@ -1,11 +1,13 @@
+use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::PdaSeed;
 use lee_core::{account::AccountId, program::ProgramId};
-use serde::{Deserialize, Serialize};
+
+pub mod event;
 
 const BRIDGE_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/BridgeSeed/0000000000/";
 const DEPOSIT_RECEIPT_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeDepositReceipt/0";
 
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Transfers native tokens from the bridge PDA account to a recipient vault,
     /// exactly once per `l1_deposit_op_id`.

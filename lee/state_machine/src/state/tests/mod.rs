@@ -162,27 +162,27 @@ impl TestPrivateKeys {
 
 // ── Flash Swap types (mirrors of guest types for host-side serialisation) ──
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct CallbackInstruction {
     return_funds: bool,
     token_program_id: ProgramId,
     amount: u128,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 enum FlashSwapInstruction {
     Initiate {
         token_program_id: ProgramId,
         callback_program_id: ProgramId,
         amount_out: u128,
-        callback_instruction_data: Vec<u32>,
+        callback_instruction_data: Vec<u8>,
     },
     InvariantCheck {
         min_vault_balance: u128,
     },
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct EmitterInstruction {
     events: Vec<ProgramEvent>,
     chain: Vec<(ProgramId, InstructionData)>,

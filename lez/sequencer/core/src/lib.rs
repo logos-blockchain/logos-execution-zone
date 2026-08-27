@@ -2194,9 +2194,7 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
         return None;
     }
 
-    match risc0_zkvm::serde::from_slice::<sequencer_stake_core::Instruction, u32>(
-        &message.instruction_data,
-    ) {
+    match borsh::from_slice::<sequencer_stake_core::Instruction>(&message.instruction_data) {
         Ok(sequencer_stake_core::Instruction::FinalizeUnstake) => {
             message.account_ids.first().copied()
         }
@@ -2275,9 +2273,7 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
         return None;
     }
 
-    match risc0_zkvm::serde::from_slice::<cross_zone_inbox_core::Instruction, u32>(
-        &message.instruction_data,
-    ) {
+    match borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data) {
         Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) => Some(msg),
         Ok(cross_zone_inbox_core::Instruction::InitConfig(_)) | Err(_) => None,
     }
@@ -2384,8 +2380,7 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     }
 
     let instruction =
-        risc0_zkvm::serde::from_slice::<bridge_core::Instruction, u32>(&message.instruction_data)
-            .ok()?;
+        borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data).ok()?;
 
     match instruction {
         bridge_core::Instruction::Deposit {
@@ -2407,8 +2402,7 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     }
 
     let instruction =
-        risc0_zkvm::serde::from_slice::<bridge_core::Instruction, u32>(&message.instruction_data)
-            .ok()?;
+        borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data).ok()?;
 
     let bridge_core::Instruction::Withdraw {
         amount,

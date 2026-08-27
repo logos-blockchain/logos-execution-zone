@@ -8,9 +8,13 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+borsh.workspace = true
 lee_core.workspace = true
 authenticated_transfer_core.workspace = true
 clock_core.workspace = true
 faucet_core.workspace = true
 
 risc0-zkvm.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["risc0-zkvm"]

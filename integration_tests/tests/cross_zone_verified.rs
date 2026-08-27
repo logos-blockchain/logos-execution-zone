@@ -110,11 +110,10 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
     let outbox_id = programs::cross_zone_outbox().id();
     let ordinal = 0;
 
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping instruction");
-    let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
     let send = SenderInstruction::Send {
         target_zone,

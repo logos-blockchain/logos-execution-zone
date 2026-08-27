@@ -13,7 +13,7 @@ fn main() {
             pre_states,
             instruction: (callee_program_id, callee_instruction, declare_pre_states),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let (output_pre_states, output_post_states) = if declare_pre_states {
@@ -31,7 +31,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         output_pre_states,
         output_post_states,
     )

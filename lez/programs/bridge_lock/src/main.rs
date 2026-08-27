@@ -20,7 +20,7 @@ fn main() {
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     assert!(
@@ -40,7 +40,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             amount,
             target_zone,
             target_program_id,
@@ -55,7 +55,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             outbox_program_id,
             target_program_id,
         ),
@@ -70,7 +70,7 @@ fn lock(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_data: Vec<u8>,
     amount: u128,
     target_zone: [u8; 32],
     target_program_id: ProgramId,
@@ -181,7 +181,7 @@ fn lock(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config, holder, escrow, outbox.clone()],
         vec![
             config_post,
@@ -200,7 +200,7 @@ fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_data: Vec<u8>,
     outbox_program_id: ProgramId,
     target_program_id: ProgramId,
 ) {
@@ -240,23 +240,14 @@ fn init_config(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config],
         vec![config_post],
     )
     .write();
 }
 
-/// Decodes the cross-zone payload (risc0 words, little-endian bytes) into the
-/// wrapped-token instruction it carries.
+/// Decodes the cross-zone payload (borsh bytes) into the wrapped-token instruction it carries.
 fn decode_mint(payload: &[u8]) -> WrappedInstruction {
-    assert!(
-        payload.len().is_multiple_of(4),
-        "payload must be u32-aligned instruction words"
-    );
-    let words: Vec<u32> = payload
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap_or_else(|_| unreachable!())))
-        .collect();
-    risc0_zkvm::serde::from_slice(&words).expect("payload decodes to a wrapped-token instruction")
+    borsh::from_slice(payload).expect("payload decodes to a wrapped-token instruction")
 }
