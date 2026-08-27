@@ -12,6 +12,20 @@ pub struct Message {
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
+    /// An optional large raw byte payload, carried alongside `instruction_data` rather than
+    /// packed into it.
+    ///
+    /// `instruction_data` is word-serialized (`risc0_zkvm::serde`) so it can be read inside a
+    /// RISC0 guest; that format encodes a `Vec<u8>` at 4 bytes per word, since it doesn't route
+    /// through the serializer's `serialize_bytes`. `Message` itself, in contrast, is
+    /// borsh-encoded on the wire, which packs `Vec<u8>` byte-for-byte. So a large payload that
+    /// only needs to reach *native* dispatch logic (never a real guest — e.g. `Deploy`'s program
+    /// bytecode, which is handled natively, see `DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc
+    /// comment) belongs here instead of in `instruction_data`, avoiding that ~4x bloat entirely
+    /// rather than just packing it more efficiently.
+    ///
+    /// Unused for now — no constructor sets it and no dispatch logic reads it yet.
+    pub raw_payload: Option<Vec<u8>>,
 }
 
 impl Message {
@@ -28,6 +42,7 @@ impl Message {
             account_ids,
             nonces,
             instruction_data,
+            raw_payload: None,
         })
     }
 
@@ -43,6 +58,7 @@ impl Message {
             account_ids,
             nonces,
             instruction_data,
+            raw_payload: None,
         }
     }
 
@@ -111,6 +127,7 @@ mod tests {
             &[42; 32],
             &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             &[0, 0, 0, 0],
+            &[0], // raw_payload: None
         ]
         .concat();
 
@@ -127,6 +144,7 @@ mod tests {
             &[42; 32],
             &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             &[3, 0, 0, 0, 7, 8, 9],
+            &[0], // raw_payload: None
         ]
         .concat();
 
