@@ -231,7 +231,7 @@ pub struct PublicMessage {
     pub instruction_data: InstructionData,
 }
 
-pub type InstructionData = Vec<u32>;
+pub type InstructionData = Vec<u8>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicActionWithID {

@@ -1058,7 +1058,7 @@ mod tests {
             panic!("a dispatch is a public transaction");
         };
         let Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) =
-            risc0_zkvm::serde::from_slice(&public_tx.message().instruction_data)
+            borsh::from_slice(&public_tx.message().instruction_data)
         else {
             panic!("the recorded transaction is an inbox dispatch");
         };
