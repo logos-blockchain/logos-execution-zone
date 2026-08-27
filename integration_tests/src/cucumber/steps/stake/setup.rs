@@ -4,14 +4,14 @@
 )]
 
 use cucumber::{gherkin::Step, given};
-use lee::Account;
 use wallet::AccountIdentity;
 
 use super::{
     super::log_step,
     helpers::{
-        config_entry, deploy_and_wait, first_configured_public_account, get_account, stake_config,
-        submit_accepted_stake, wait_for_inclusion,
+        config_entry, create_funded_account, create_unclaimed_account, deploy_and_wait,
+        first_configured_public_account, get_account, stake_config, submit_accepted_stake,
+        wait_for_inclusion,
     },
 };
 use crate::cucumber::{
@@ -54,14 +54,7 @@ async fn sequencer_key_has_no_entry(world: &mut CucumberWorld, step: &Step) -> S
 #[given("a default-owned, unclaimed ownership account for the sequencer key")]
 async fn ownership_account_is_unclaimed(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
-    let context = world.lez()?;
-    let ownership_id = context.new_public_account().await?;
-    let account = get_account(context, ownership_id).await?;
-    if account != Account::default() {
-        return Err(StepError::AssertionFailed {
-            message: "the ownership account does not start out fresh and unclaimed".to_owned(),
-        });
-    }
+    let ownership_id = create_unclaimed_account(world.lez()?).await?;
     world.stake_mut()?.set_ownership_id(ownership_id);
     Ok(())
 }
@@ -74,21 +67,30 @@ async fn fund_funding_account(
 ) -> StepResult {
     log_step(step);
     let balance = world.stake()?.amount(&expression)?;
-    let context = world.lez()?;
-    let funding_id = context.new_public_account().await?;
-    let supply_id = first_configured_public_account(context).await?;
-    // Claims the fresh account for authenticated_transfer with exactly
-    // `balance` on it, so it can act as the Stake mover's sender.
-    context
-        .public_transfer_to_new_account(supply_id, funding_id, balance)
-        .await?;
-    let funded = get_account(context, funding_id).await?.balance;
-    if funded != balance {
-        return Err(StepError::AssertionFailed {
-            message: format!("the funding account holds {funded}, expected {balance}"),
-        });
-    }
+    let funding_id = create_funded_account(world.lez()?, balance).await?;
     world.stake_mut()?.set_funding_id(funding_id);
+    Ok(())
+}
+
+#[given(
+    expr = "a second sequencer key with its own unclaimed ownership account and a funding \
+            account holding {string}"
+)]
+async fn second_key_with_own_accounts(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expression: String,
+) -> StepResult {
+    log_step(step);
+    let balance = world.stake()?.amount(&expression)?;
+    let context = world.lez()?;
+    // A signing pair disjoint from the first key's, so the two Stakes can be
+    // submitted back-to-back without coupling through any account's nonce.
+    let ownership_id = create_unclaimed_account(context).await?;
+    let funding_id = create_funded_account(context, balance).await?;
+    let scenario = world.stake_mut()?;
+    scenario.set_second_ownership_id(ownership_id);
+    scenario.set_second_funding_id(funding_id);
     Ok(())
 }
 

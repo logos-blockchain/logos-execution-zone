@@ -23,17 +23,6 @@ Feature: Sequencer registration — a first Stake turns balance into stake
   # Should the node ever gain a transaction status API (pending, included, or
   # dropped with a reason), replace the two-block window with it.
   #
-  # Registration cases not ported:
-  # - P-15, P-16 need no new test program: the mover instruction data is
-  #   caller-controlled and opaque to sequencer_stake, so authenticated_transfer
-  #   can be told to move a different amount than the Stake declares
-  # - P-19 needs a ConfirmStake chained from another program, rejected by the
-  #   self-caller guard; the stake_chain_caller program supports it
-  # - G-01..G-03 exercise genesis builders private to sequencer_core
-  #
-  # P-17 and P-21 deploy a test program at runtime (a program deployment
-  # transaction), since test guests are not in the node's compiled-in set.
-
   Background:
     Given a LEZ stack with fast blocks and configured public accounts
     And the sequencer_stake config account is at the default minimum stake
@@ -101,6 +90,31 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     And the ownership account is not claimed
     And the stake accounts are unchanged
 
+  @stake_registration_ci @P-15 @P0 @L3
+  # No bad-mover guest needed: the mover instruction data is caller-controlled
+  # and opaque to sequencer_stake, so authenticated_transfer itself plays the
+  # bad mover when told to move one coin less than the Stake declares. The
+  # runtime rejects the chained ConfirmStake's declared pre-state against the
+  # actual post-mover balance (InconsistentAccountPreState) before the
+  # in-guest equality assert can fire.
+  Scenario: Mover deposits less than the requested amount
+    When a Stake of "twice the minimum stake" is submitted with the mover told to deposit one coin less
+    Then the stake transaction is not included in a block
+    And the ownership account is not claimed
+    And the config has no entry for the sequencer key
+    And the stake accounts are unchanged
+
+  @stake_registration_ci @P-16 @P0 @L3
+  # The balance equality check is two-sided: a surplus cannot be smuggled into
+  # total_staked. Same mechanism as P-15, with authenticated_transfer told to
+  # move one coin more than the Stake declares.
+  Scenario: Mover deposits more than the requested amount
+    When a Stake of "twice the minimum stake" is submitted with the mover told to deposit one coin more
+    Then the stake transaction is not included in a block
+    And the ownership account is not claimed
+    And the config has no entry for the sequencer key
+    And the stake accounts are unchanged
+
   @stake_registration_ci @P-25 @P0 @L3
   # In-program reason: "Sender has insufficient balance" — the mover call
   # itself fails, so the whole transaction is rejected atomically. The most
@@ -133,6 +147,19 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     Then the stake transaction is not included in a block
     And the ownership account is not claimed
     And the config has no entry for the sequencer key
+    And the stake accounts are unchanged
+
+  @stake_registration_ci @P-19 @P1 @L3
+  # In-program reason: "ConfirmStake can only be invoked as a self-chained
+  # call". The chained mirror of P-18: the stake_chain_caller test program
+  # (deployed at runtime) forwards a ConfirmStake whose expected balance
+  # matches the current ownership balance, so the caller check — the caller
+  # is stake_chain_caller, not sequencer_stake — is the only assert that can
+  # reject it.
+  Scenario: ConfirmStake chained from a different program is rejected
+    Given the stake_chain_caller test program is deployed
+    When a ConfirmStake matching the current ownership balance is submitted as a chained call through the stake_chain_caller program
+    Then the stake transaction is not included in a block
     And the stake accounts are unchanged
 
   @stake_registration_ci @P-20 @P2 @L3
@@ -196,3 +223,37 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     When a Stake carrying the off-curve key bytes is submitted
     Then the stake transaction is not included in a block
     And the stake accounts are unchanged
+
+  @stake_registration_ci @P-26 @P1 @L3
+  # The registration mirror of the plan's simultaneous-exit cases (M-04,
+  # M-07): both Stakes are admitted before either is included, so one builder
+  # pull tries both in the same block build and both write the shared config
+  # account. Pins that neither write is lost and neither transaction is
+  # dropped — a builder drop would be final, since dropped transactions are
+  # not requeued. The two signing pairs are disjoint, so the submissions do
+  # not couple through any account's nonce. The same-block assertion keeps the
+  # scenario from passing vacuously: if the back-to-back submissions race a
+  # block boundary the shared pull never happened, and the scenario fails
+  # loudly for a rerun instead of green-lighting an unexercised property.
+  Scenario: Two keys register through the shared config account at the same time
+    Given a second sequencer key with its own unclaimed ownership account and a funding account holding "ten times the minimum stake"
+    When a Stake of "twice the minimum stake" is submitted for each sequencer key back-to-back
+    Then both stake transactions are accepted
+    And both stake transactions were included in the same block
+    And the config holds an entry for each sequencer key pointing at its own ownership account
+    And each ownership account is claimed by sequencer_stake backing its sequencer key
+    And each stake moved the staked amount from its funding account to its ownership account
+
+  @stake_registration_ci @D-15 @P1 @L3
+  # Node-level mirror of committee_discovery's two_new_keys_join_in_one_update:
+  # both Stakes ride one block, finalize together and qualify in the same
+  # discovery window, so a single ChannelConfigOp admits both keys — observed
+  # through Bedrock channel state, where no poll may catch one key accredited
+  # without the other. In the rare race where the Stakes land in different
+  # blocks, split updates are legitimate and only the eventual outcome is
+  # asserted.
+  Scenario: Two simultaneous registrations enter the live committee in one update
+    Given a second sequencer key with its own unclaimed ownership account and a funding account holding "ten times the minimum stake"
+    When a Stake of "twice the minimum stake" is submitted for each sequencer key back-to-back
+    Then both stake transactions are accepted
+    And both sequencer keys join the live committee together

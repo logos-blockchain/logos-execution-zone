@@ -2,27 +2,22 @@ use std::time::Duration;
 
 use cucumber::{gherkin::Step, given, when};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use sequencer_core::{
-    block_publisher::{Ed25519PublicKey, read_channel_state},
-    config::BedrockConfig,
-};
+use sequencer_core::block_publisher::{Ed25519PublicKey, read_channel_state};
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
 use super::{
     super::{
-        log_step,
+        environment::helpers::bedrock_read_config,
+        log_step, query_error_as_pending,
         transfers::helpers::{ensure_transfer_name_available, insert_transfer_artifact},
         wait_until,
     },
     parse_committee_config, parse_sequencer_registrations, require_sequencer,
 };
-use crate::{
-    config::{self, UrlProtocol},
-    cucumber::{
-        error::{StepError, StepResult},
-        world::{CucumberWorld, TransferArtifact, TransferKind},
-    },
+use crate::cucumber::{
+    error::{StepError, StepResult},
+    world::{CucumberWorld, TransferArtifact, TransferKind},
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -38,12 +33,13 @@ async fn wait_for_height(
         Duration::from_secs(timeout_seconds),
         format!("{description} at block {target}"),
         || async move {
-            Ok((client
-                .get_last_block_id()
-                .await
-                .map_err(StepError::query_failed)?
-                >= target)
-                .then_some(()))
+            query_error_as_pending(
+                client
+                    .get_last_block_id()
+                    .await
+                    .map_err(StepError::query_failed)
+                    .map(|block| (block >= target).then_some(())),
+            )
         },
     )
     .await
@@ -226,45 +222,37 @@ async fn committee_is_active(
             Ok(Ed25519Key::from_bytes(&signing_key).public_key().to_bytes())
         })
         .collect::<Result<Vec<_>, StepError>>()?;
-    let bedrock_config = BedrockConfig {
-        channel_id: config::bedrock_channel_id(),
-        node_url: config::addr_to_url(UrlProtocol::Http, context.bedrock().primary_api_addr())
-            .map_err(|source| StepError::QueryFailedSource { source })?,
-        funding_key: config::bedrock_funding_key(),
-        auth: None,
-        priority_fee: 10_000,
-    };
-    let timeout = Duration::from_secs(timeout_seconds);
-    let wait = async {
-        loop {
-            let state = read_channel_state(&bedrock_config)
-                .await
-                .map_err(|source| StepError::QueryFailedSource { source })?;
-            let active = state.is_some_and(|state| {
-                let mut actual_keys = state
-                    .accredited_keys
-                    .iter()
-                    .map(Ed25519PublicKey::to_bytes)
-                    .collect::<Vec<_>>();
-                actual_keys.sort_unstable();
-                let mut expected_keys = expected_keys.clone();
-                expected_keys.sort_unstable();
-                actual_keys == expected_keys
-            });
-            if active {
-                return Ok::<(), StepError>(());
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    };
-    tokio::time::timeout(timeout, wait)
-        .await
-        .map_err(|_elapsed| StepError::Timeout {
-            message: format!(
-                "committee configured by '{leader_alias}' was not active within {timeout:?}"
-            ),
-        })??;
-    Ok(())
+    let bedrock_config = bedrock_read_config(context.bedrock().primary_api_addr())?;
+    let expected_keys = &expected_keys;
+    let bedrock_config = &bedrock_config;
+    wait_until(
+        POLL_INTERVAL,
+        Duration::from_secs(timeout_seconds),
+        format!("the committee configured by '{leader_alias}' to become active"),
+        || async move {
+            query_error_as_pending(
+                read_channel_state(bedrock_config)
+                    .await
+                    .map_err(|source| StepError::QueryFailedSource { source })
+                    .map(|state| {
+                        state
+                            .is_some_and(|state| {
+                                let mut actual_keys = state
+                                    .accredited_keys
+                                    .iter()
+                                    .map(Ed25519PublicKey::to_bytes)
+                                    .collect::<Vec<_>>();
+                                actual_keys.sort_unstable();
+                                let mut expected_keys = expected_keys.clone();
+                                expected_keys.sort_unstable();
+                                actual_keys == expected_keys
+                            })
+                            .then_some(())
+                    }),
+            )
+        },
+    )
+    .await
 }
 
 #[when(expr = "sequencer {string} becomes the posting turn within {int} seconds")]
@@ -288,41 +276,30 @@ async fn sequencer_becomes_posting_turn(
                 message: format!("sequencer '{alias}' is not registered"),
             })?;
     let expected_key: Ed25519PublicKey = Ed25519Key::from_bytes(&signing_key).public_key();
-    let bedrock_config = BedrockConfig {
-        channel_id: config::bedrock_channel_id(),
-        node_url: config::addr_to_url(UrlProtocol::Http, context.bedrock().primary_api_addr())
-            .map_err(|source| StepError::QueryFailedSource { source })?,
-        funding_key: config::bedrock_funding_key(),
-        auth: None,
-        priority_fee: 10_000,
-    };
-    let timeout = Duration::from_secs(timeout_seconds);
-    let wait = async {
-        loop {
-            let is_turn = read_channel_state(&bedrock_config)
-                .await
-                .map_err(|source| StepError::QueryFailedSource { source })?
-                .and_then(|state| {
-                    state
-                        .accredited_keys
-                        .get(usize::from(state.tip_sequencer))
-                        .copied()
-                })
-                == Some(expected_key);
-            if is_turn {
-                return Ok::<(), StepError>(());
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    };
-    tokio::time::timeout(timeout, wait)
-        .await
-        .map_err(|_elapsed| StepError::Timeout {
-            message: format!(
-                "sequencer '{alias}' did not become the posting turn within {timeout:?}"
-            ),
-        })??;
-    Ok(())
+    let bedrock_config = bedrock_read_config(context.bedrock().primary_api_addr())?;
+    let bedrock_config = &bedrock_config;
+    wait_until(
+        POLL_INTERVAL,
+        Duration::from_secs(timeout_seconds),
+        format!("sequencer '{alias}' to become the posting turn"),
+        || async move {
+            query_error_as_pending(
+                read_channel_state(bedrock_config)
+                    .await
+                    .map_err(|source| StepError::QueryFailedSource { source })
+                    .map(|state| {
+                        (state.and_then(|state| {
+                            state
+                                .accredited_keys
+                                .get(usize::from(state.tip_sequencer))
+                                .copied()
+                        }) == Some(expected_key))
+                        .then_some(())
+                    }),
+            )
+        },
+    )
+    .await
 }
 
 #[when(
