@@ -18,7 +18,7 @@ fn main() {
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<SenderInstruction>();
 
     assert!(
@@ -37,7 +37,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             target_zone,
             target_program_id,
             target_accounts,
@@ -48,7 +48,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             outbox_program_id,
         ),
     }
@@ -62,7 +62,7 @@ fn send(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_data: Vec<u8>,
     target_zone: [u8; 32],
     target_program_id: ProgramId,
     target_accounts: Vec<[u8; 32]>,
@@ -101,7 +101,7 @@ fn send(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config, outbox.clone()],
         vec![config_post, AccountPostState::new(outbox.account)],
     )
@@ -114,7 +114,7 @@ fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_data: Vec<u8>,
     outbox_program_id: ProgramId,
 ) {
     // pre_states: [config PDA].
@@ -153,7 +153,7 @@ fn init_config(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config],
         vec![config_post],
     )

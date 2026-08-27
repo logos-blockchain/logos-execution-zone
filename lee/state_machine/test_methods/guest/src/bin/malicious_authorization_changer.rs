@@ -1,10 +1,10 @@
+use borsh::to_vec;
 use lee_core::{
     account::AccountWithMetadata,
     program::{
         AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
-use risc0_zkvm::serde::to_vec;
 
 type Instruction = (u128, ProgramId);
 
@@ -19,7 +19,7 @@ fn main() {
             pre_states,
             instruction: (balance, transfer_program_id),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Ok([sender, receiver]) = <[_; 2]>::try_from(pre_states) else {
@@ -32,11 +32,11 @@ fn main() {
         ..sender.clone()
     };
 
-    let instruction_data = to_vec(&balance).unwrap();
+    let call_instruction_data = to_vec(&balance).unwrap();
 
     let chained_call = ChainedCall {
         program_id: transfer_program_id,
-        instruction_data,
+        instruction_data: call_instruction_data,
         pre_states: vec![authorised_sender, receiver.clone()],
         pda_seeds: vec![],
     };
@@ -44,7 +44,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![sender.clone(), receiver.clone()],
         vec![
             AccountPostState::new(sender.account),

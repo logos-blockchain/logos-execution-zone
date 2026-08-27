@@ -51,7 +51,7 @@ fn main() {
             pre_states,
             instruction: solution,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Ok([pinata, winner]) = <[_; 2]>::try_from(pre_states) else {
@@ -83,7 +83,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![pinata, winner],
         vec![
             AccountPostState::new_claimed_if_default(pinata_post, Claim::Authorized),

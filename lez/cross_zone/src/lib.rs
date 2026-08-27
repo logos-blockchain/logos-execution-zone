@@ -23,7 +23,6 @@ use lee_core::{
     account::{Account, AccountId, Balance},
     program::ProgramId,
 };
-use serde::Serialize;
 
 pub mod acceptance;
 #[cfg(any(test, feature = "test-utils"))]
@@ -69,7 +68,7 @@ pub fn is_sequencer_only_program(program_id: ProgramId) -> bool {
 /// watcher and verifier both use this so they agree on what a given source tx
 /// emits.
 #[must_use]
-pub fn extract_emission(program_id: ProgramId, instruction_data: &[u32]) -> Option<Emission> {
+pub fn extract_emission(program_id: ProgramId, instruction_data: &[u8]) -> Option<Emission> {
     if program_id == programs::ping_sender().id() {
         // Not every transaction to an emitter emits: `InitConfig` is one of its
         // instructions, so a non-`Send` decode is an ordinary non-emitting tx.
@@ -79,7 +78,7 @@ pub fn extract_emission(program_id: ProgramId, instruction_data: &[u32]) -> Opti
             target_accounts,
             payload,
             ..
-        }) = risc0_zkvm::serde::from_slice(instruction_data)
+        }) = borsh::from_slice(instruction_data)
         else {
             return None;
         };
@@ -96,7 +95,7 @@ pub fn extract_emission(program_id: ProgramId, instruction_data: &[u32]) -> Opti
             target_accounts,
             payload,
             ..
-        }) = risc0_zkvm::serde::from_slice(instruction_data)
+        }) = borsh::from_slice(instruction_data)
         else {
             return None;
         };
@@ -330,7 +329,7 @@ pub fn build_ping_receiver_init_config_tx(
 
 /// Builds an unsigned, sequencer-origin genesis transaction invoking `instruction`
 /// on `program_id` over `account_ids`.
-fn genesis_public_tx<I: Serialize>(
+fn genesis_public_tx<I: borsh::BorshSerialize>(
     program_id: ProgramId,
     account_ids: Vec<AccountId>,
     instruction: I,

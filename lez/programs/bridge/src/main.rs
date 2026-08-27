@@ -24,7 +24,7 @@ fn main() {
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     assert!(
@@ -105,8 +105,8 @@ fn main() {
                 ];
 
                 let events = vec![ProgramEvent {
-                    selector: bridge_core::Deposit::SELECTOR,
-                    data: bridge_core::Deposit {
+                    selector: bridge_core::event::Deposit::SELECTOR,
+                    data: bridge_core::event::Deposit {
                         l1_deposit_op_id,
                         vault_program_id,
                         recipient_id,
@@ -141,8 +141,8 @@ fn main() {
             // );
 
             // let events = vec![ProgramEvent {
-            //     selector: bridge_core::Withdraw::SELECTOR,
-            //     data: bridge_core::Withdraw {
+            //     selector: bridge_core::event::Withdraw::SELECTOR,
+            //     data: bridge_core::event::Withdraw {
             //         sender_id: sender.account_id,
             //         amount,
             //         bedrock_account_pk,
@@ -164,7 +164,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         pre_states_clone,
         post_states,
     )

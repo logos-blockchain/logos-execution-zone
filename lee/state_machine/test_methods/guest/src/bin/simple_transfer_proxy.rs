@@ -37,7 +37,7 @@ fn main() {
             pre_states,
             instruction: (pda_seed, simple_transfer_id, amount, is_withdraw),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     if is_withdraw {
@@ -65,7 +65,7 @@ fn main() {
         ProgramOutput::new(
             self_program_id,
             caller_program_id,
-            instruction_words,
+            instruction_data,
             pre_states,
             vec![pda_post, recipient_post],
         )
@@ -89,7 +89,7 @@ fn main() {
         ProgramOutput::new(
             self_program_id,
             caller_program_id,
-            instruction_words,
+            instruction_data,
             pre_states,
             vec![pda_post],
         )
