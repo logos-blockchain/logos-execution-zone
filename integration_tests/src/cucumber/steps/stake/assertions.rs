@@ -243,6 +243,27 @@ async fn both_stake_transactions_accepted(world: &mut CucumberWorld, step: &Step
     Ok(())
 }
 
+#[then("both stake transactions were included in the same block")]
+async fn stakes_included_in_same_block(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let first_hash = scenario.last_submission()?.hash;
+    let second_hash = scenario.second_submission()?.hash;
+    let context = world.lez()?;
+    let first_block = inclusion_block(context, first_hash).await?;
+    let second_block = inclusion_block(context, second_hash).await?;
+    if first_block.is_none() || first_block != second_block {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "the Stakes were included in blocks {first_block:?} and {second_block:?}; the \
+                 shared-block-build property this scenario pins was not exercised — the \
+                 back-to-back submissions raced a block boundary, so rerun the scenario"
+            ),
+        });
+    }
+    Ok(())
+}
+
 #[then("the config holds an entry for each sequencer key pointing at its own ownership account")]
 async fn config_holds_entry_per_key(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);

@@ -7,23 +7,17 @@ use common::HashType;
 use futures::future::try_join_all;
 use lee::{Account, AccountId, PublicKey, program::Program};
 use lee_core::program::{InstructionData, ProgramId};
-use sequencer_core::{
-    block_publisher::{Ed25519PublicKey, read_channel_state},
-    config::BedrockConfig,
-};
+use sequencer_core::block_publisher::{Ed25519PublicKey, read_channel_state};
 use sequencer_service_rpc::RpcClient as _;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig};
 use wallet::AccountIdentity;
 
-use super::super::wait_until;
-use crate::{
-    config::{self, UrlProtocol},
-    cucumber::{
-        context::LezScenarioContext,
-        error::{StepError, StepResult},
-        stake_scenario::{AccountsSnapshot, SubmissionRecord, stake_instruction},
-        world::CucumberWorld,
-    },
+use super::super::{environment::helpers::bedrock_read_config, query_error_as_pending, wait_until};
+use crate::cucumber::{
+    context::LezScenarioContext,
+    error::{StepError, StepResult},
+    stake_scenario::{AccountsSnapshot, SubmissionRecord, stake_instruction},
+    world::CucumberWorld,
 };
 
 /// Cadence of the inclusion and non-inclusion polls.
@@ -212,12 +206,14 @@ pub(super) async fn wait_for_inclusion(context: &LezScenarioContext, hash: HashT
         wait_timeout(context),
         format!("transaction {hash} to be included"),
         || async move {
-            Ok(context
-                .sequencer_client()
-                .get_transaction(hash)
-                .await
-                .map_err(StepError::query_failed)?
-                .map(|_included| ()))
+            query_error_as_pending(
+                context
+                    .sequencer_client()
+                    .get_transaction(hash)
+                    .await
+                    .map_err(StepError::query_failed)
+                    .map(|included| included.map(|_included| ())),
+            )
         },
     )
     .await
@@ -236,7 +232,13 @@ pub(super) async fn assert_not_included(
         POLL_INTERVAL,
         wait_timeout(context),
         format!("the chain to reach block {target} proving non-inclusion"),
-        || async move { Ok((last_block(context).await? >= target).then_some(())) },
+        || async move {
+            query_error_as_pending(
+                last_block(context)
+                    .await
+                    .map(|block| (block >= target).then_some(())),
+            )
+        },
     )
     .await?;
 
@@ -274,14 +276,7 @@ pub(super) async fn inclusion_block(
 async fn live_accredited_keys(
     context: &LezScenarioContext,
 ) -> Result<Option<Vec<[u8; 32]>>, StepError> {
-    let bedrock_config = BedrockConfig {
-        channel_id: config::bedrock_channel_id(),
-        node_url: config::addr_to_url(UrlProtocol::Http, context.bedrock().primary_api_addr())
-            .map_err(|source| StepError::QueryFailedSource { source })?,
-        funding_key: config::bedrock_funding_key(),
-        auth: None,
-        priority_fee: 10_000,
-    };
+    let bedrock_config = bedrock_read_config(context.bedrock().primary_api_addr())?;
     let state = read_channel_state(&bedrock_config)
         .await
         .map_err(|source| StepError::QueryFailedSource { source })?;
@@ -308,7 +303,9 @@ pub(super) async fn wait_for_joint_accreditation(
         wait_timeout(context),
         "both sequencer keys to join the live committee",
         || async move {
-            let Some(live) = live_accredited_keys(context).await? else {
+            // A transient channel-read failure only consumes timeout budget;
+            // the split-update assertion below still fails the wait outright.
+            let Some(live) = query_error_as_pending(live_accredited_keys(context).await)? else {
                 return Ok(None);
             };
             let accredited = keys.map(|key| live.contains(&key));

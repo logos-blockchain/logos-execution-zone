@@ -1,6 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context as _, Result, anyhow};
+use cucumber::gherkin::tagexpr::TagOperation;
 use tracing_subscriber::{EnvFilter, fmt};
 
 const FEATURES_DIR_REL: &str = "cucumber_tests/features/";
@@ -20,22 +21,43 @@ pub const RUST_LOG: &str = "RUST_LOG";
 pub const CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: &str = "CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL";
 /// Environment variable selecting an existing node deployment configuration.
 pub const CUCUMBER_NODE_CONFIG_OVERRIDE: &str = "CUCUMBER_NODE_CONFIG_OVERRIDE";
-/// Environment variable restricting the run to scenarios carrying one of a
-/// comma-separated list of tags (a leading `@` is optional). Unset runs every
-/// scenario. Example: `CUCUMBER_TAGS=@P-17,@P-21`.
+/// Environment variable restricting the run to scenarios matching a Cucumber
+/// tag expression (e.g. `@stake_registration_ci and not @slow`). A
+/// comma-separated tag list is accepted as shorthand for `or`
+/// (`CUCUMBER_TAGS=@P-17,@P-21`), and a leading `@` on plain tags is optional.
+/// Unset runs every scenario. Ignored when the binary is invoked with
+/// cucumber's own `--tags`/`--name` CLI filter, which takes precedence.
 pub const CUCUMBER_TAGS: &str = "CUCUMBER_TAGS";
 
-/// Parses [`CUCUMBER_TAGS`] into the tags to keep (leading `@` stripped);
-/// `None` when unset or empty, meaning run every scenario.
-#[must_use]
-pub fn get_tag_filter() -> Option<Vec<String>> {
-    let tags: Vec<String> = std::env::var(CUCUMBER_TAGS)
-        .ok()?
+/// Parses [`CUCUMBER_TAGS`] into cucumber's tag-expression filter; `None` when
+/// unset or empty, meaning run every scenario. A malformed expression is a
+/// startup error rather than a silently unmatchable filter.
+pub fn get_tag_filter() -> Result<Option<TagOperation>> {
+    let raw = match std::env::var(CUCUMBER_TAGS) {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => return Ok(None),
+    };
+    let expression = raw
         .split(',')
-        .map(|tag| tag.trim().trim_start_matches('@').to_owned())
-        .filter(|tag| !tag.is_empty())
-        .collect();
-    (!tags.is_empty()).then_some(tags)
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            // Comma-list shorthand: a bare tag name gets its `@` back;
+            // anything expression-shaped passes through untouched.
+            if segment.starts_with('@')
+                || segment.contains(|character: char| character.is_whitespace() || character == '(')
+            {
+                segment.to_owned()
+            } else {
+                format!("@{segment}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" or ");
+    expression
+        .parse::<TagOperation>()
+        .map(Some)
+        .map_err(|error| anyhow!("Invalid {CUCUMBER_TAGS} value '{raw}': {error}"))
 }
 
 /// Installs the Cucumber tracing subscriber using `RUST_LOG` or an `info` default.

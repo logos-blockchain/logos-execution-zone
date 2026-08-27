@@ -43,3 +43,19 @@ where
             message: format!("{description} within {timeout:?}"),
         })?
 }
+
+/// Maps a failed query inside a [`wait_until`] condition to "not ready yet",
+/// so a transient RPC hiccup consumes timeout budget instead of failing the
+/// whole wait outright. Non-query errors — assertion failures in particular —
+/// propagate unchanged. A persistent outage still surfaces, as the timeout.
+pub(crate) fn query_error_as_pending<T>(
+    result: Result<Option<T>, StepError>,
+) -> Result<Option<T>, StepError> {
+    match result {
+        Err(error @ (StepError::QueryFailed { .. } | StepError::QueryFailedSource { .. })) => {
+            tracing::debug!(target: TARGET, "Treating a failed poll query as pending: {error}");
+            Ok(None)
+        }
+        other => other,
+    }
+}

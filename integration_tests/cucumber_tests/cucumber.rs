@@ -150,27 +150,38 @@ async fn async_main() -> anyhow::Result<()> {
     });
 
     // Runs Cucumber. Features sourced from a Parser are fed to a Runner, which
-    // produces events handled by a Writer. `CUCUMBER_TAGS`, when set, restricts
-    // the run to scenarios carrying one of the listed tags.
+    // produces events handled by a Writer. `CUCUMBER_TAGS`, when set, is fed
+    // into cucumber's own tag-expression filter — unless the binary was
+    // invoked with a `--tags`/`--name` CLI filter, which takes precedence
+    // (cucumber consults the CLI filters first and would silently ignore any
+    // programmatic one).
     let feature_path = get_feature_path()?;
-    let failed = if let Some(tags) = get_tag_filter() {
-        info!(target: TARGET, "Restricting run to scenarios tagged: {tags:?}");
-        runner
-            .filter_run(feature_path, move |feature, rule, scenario| {
-                let matches = |candidate: &String| tags.iter().any(|wanted| wanted == candidate);
-                scenario.tags.iter().any(&matches)
-                    || feature.tags.iter().any(&matches)
-                    || rule.is_some_and(|rule| rule.tags.iter().any(&matches))
-            })
-            .await
-    } else {
-        runner.run(feature_path).await
-    };
+    let mut cli = cucumber::cli::Opts::<_, _, _>::parsed();
+    if let Some(tags) = get_tag_filter()? {
+        if cli.re_filter.is_some() || cli.tags_filter.is_some() {
+            warn!(target: TARGET,
+                "Ignoring CUCUMBER_TAGS: a --tags/--name CLI filter is already set"
+            );
+        } else {
+            info!(target: TARGET, "Restricting run to scenarios matching: {tags:?}");
+            cli.tags_filter = Some(tags);
+        }
+    }
+    let writer = runner.with_cli(cli).run(feature_path).await;
 
     // Clean up manually reserved handshake port block files for this process
     release_reserved_port_block();
 
-    if failed.execution_has_failed() || teardown_failed.load(std::sync::atomic::Ordering::Relaxed) {
+    // A run that matched no scenario reports no failures; exiting green on it
+    // would let a typo'd tag filter pass CI having tested nothing.
+    if writer.passed_steps() + writer.skipped_steps() + writer.failed_steps() == 0 {
+        anyhow::bail!(
+            "No scenarios ran: the tag/name filters matched nothing, or the feature \
+             directory is empty"
+        );
+    }
+
+    if writer.execution_has_failed() || teardown_failed.load(std::sync::atomic::Ordering::Relaxed) {
         anyhow::bail!("Cucumber scenarios failed");
     }
 

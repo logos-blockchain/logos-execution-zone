@@ -231,11 +231,15 @@ Feature: Sequencer registration — a first Stake turns balance into stake
   # account. Pins that neither write is lost and neither transaction is
   # dropped — a builder drop would be final, since dropped transactions are
   # not requeued. The two signing pairs are disjoint, so the submissions do
-  # not couple through any account's nonce.
+  # not couple through any account's nonce. The same-block assertion keeps the
+  # scenario from passing vacuously: if the back-to-back submissions race a
+  # block boundary the shared pull never happened, and the scenario fails
+  # loudly for a rerun instead of green-lighting an unexercised property.
   Scenario: Two keys register through the shared config account at the same time
     Given a second sequencer key with its own unclaimed ownership account and a funding account holding "ten times the minimum stake"
     When a Stake of "twice the minimum stake" is submitted for each sequencer key back-to-back
     Then both stake transactions are accepted
+    And both stake transactions were included in the same block
     And the config holds an entry for each sequencer key pointing at its own ownership account
     And each ownership account is claimed by sequencer_stake backing its sequencer key
     And each stake moved the staked amount from its funding account to its ownership account

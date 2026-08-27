@@ -173,7 +173,7 @@ impl StakeScenario {
     pub fn second_ownership_id(&self) -> Result<AccountId, StepError> {
         self.second_ownership_id
             .ok_or(StepError::MissingObservation {
-                field: "second staked sequencer key",
+                field: "second ownership account",
             })
     }
 

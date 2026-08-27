@@ -1,11 +1,12 @@
-use std::{path::PathBuf, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use cucumber::gherkin::Step;
+use sequencer_core::config::BedrockConfig;
 use tracing::warn;
 
 use super::super::TARGET;
 use crate::{
-    config::SequencerPartialConfig,
+    config::{self, SequencerPartialConfig, UrlProtocol},
     cucumber::{
         context::LezScenarioContext,
         error::{StepError, StepResult},
@@ -16,6 +17,23 @@ use crate::{
 
 /// Bedrock priority fee every Cucumber LEZ deployment publishes with.
 const STACK_PRIORITY_FEE: u64 = 10_000;
+
+/// Bedrock channel-read configuration for the deployed stack, shared by every
+/// step that reads channel state directly. Sourced from the same fixtures the
+/// stack deploys with — including [`STACK_PRIORITY_FEE`] — so the reads cannot
+/// drift from the deployment.
+pub(crate) fn bedrock_read_config(
+    bedrock_api_addr: SocketAddr,
+) -> Result<BedrockConfig, StepError> {
+    Ok(BedrockConfig {
+        channel_id: config::bedrock_channel_id(),
+        node_url: config::addr_to_url(UrlProtocol::Http, bedrock_api_addr)
+            .map_err(|source| StepError::QueryFailedSource { source })?,
+        funding_key: config::bedrock_funding_key(),
+        auth: None,
+        priority_fee: STACK_PRIORITY_FEE,
+    })
+}
 
 /// Base sequencer configuration for Cucumber LEZ deployments: framework
 /// defaults plus the stack-wide Bedrock priority fee. Scenario configs start
