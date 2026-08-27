@@ -46,7 +46,7 @@ fn main() {
 
     // Create the chained call
     let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();
-    let chained_call_instruction_data = risc0_zkvm::serde::to_vec(&chained_call_greeting).unwrap();
+    let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
     let chained_call = ChainedCall {
         program_id: hello_world_program_id(),
         instruction_data: chained_call_instruction_data,

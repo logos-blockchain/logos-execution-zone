@@ -8,7 +8,7 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, Event,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, TransactionEvent,
         compute_public_authorized_pdas, validate_execution,
     },
 };
@@ -32,7 +32,7 @@ pub struct StateDiff {
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<Nullifier>,
     pub program: Option<Program>,
-    pub events: Vec<Event>,
+    pub events: Vec<TransactionEvent>,
 }
 
 /// The validated output of executing or verifying a transaction, ready to be applied to the state.
@@ -90,7 +90,7 @@ impl ValidatedStateDiff {
             .collect();
 
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
-        let mut events: Vec<Event> = Vec::new();
+        let mut events: Vec<TransactionEvent> = Vec::new();
 
         let initial_call = ChainedCall {
             program_id: message.program_id,
@@ -264,10 +264,15 @@ impl ValidatedStateDiff {
 
             // Write all the output event data into a proper event struct,
             // marking its emitter program.
-            events.extend(program_output.events.into_iter().map(|data| Event {
-                program_id: chained_call.program_id,
-                data,
-            }));
+            events.extend(
+                program_output
+                    .events
+                    .into_iter()
+                    .map(|event| TransactionEvent {
+                        program_id: chained_call.program_id,
+                        event,
+                    }),
+            );
 
             // Source from `program_output.pre_states`, not `chained_call.pre_states`:
             // the loop above already gates program_output's `is_authorized` via the

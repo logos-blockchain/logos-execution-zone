@@ -1,5 +1,21 @@
 use super::*;
 
+fn assert_circuit_proving_failure<T>(result: &Result<T, LeeError>, expected: &str) {
+    assert!(
+        matches!(result, Err(LeeError::CircuitProvingError(msg)) if msg.contains(expected)),
+        "expected CircuitProvingError containing {expected:?}, got: {:?}",
+        result.as_ref().err()
+    );
+}
+
+fn assert_program_prove_failure<T>(result: &Result<T, LeeError>, expected: &str) {
+    assert!(
+        matches!(result, Err(LeeError::ProgramProveFailed(msg)) if msg.contains(expected)),
+        "expected ProgramProveFailed containing {expected:?}, got: {:?}",
+        result.as_ref().err()
+    );
+}
+
 #[test]
 fn transition_from_privacy_preserving_transaction_shielded() {
     let sender_keys = test_public_account_keys_1();
@@ -260,7 +276,7 @@ fn burner_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "Total balance across accounts is not preserved");
 }
 
 #[test]
@@ -278,12 +294,12 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
 
     let result = execute_and_prove(
         vec![public_account],
-        Program::serialize_instruction(10_u128).unwrap(),
+        Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Public],
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "Total balance across accounts is not preserved");
 }
 
 #[test]
@@ -306,7 +322,7 @@ fn nonce_changer_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "Unallowed modification of nonce");
 }
 
 #[test]
@@ -324,12 +340,12 @@ fn data_changer_program_should_fail_for_non_owned_account_in_privacy_preserving_
 
     let result = execute_and_prove(
         vec![public_account],
-        Program::serialize_instruction(vec![0]).unwrap(),
+        Program::serialize_instruction(vec![0_u8]).unwrap(),
         vec![InputAccountIdentity::Public],
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "Unauthorized modification of data");
 }
 
 #[test]
@@ -360,7 +376,7 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::ProgramProveFailed(_))));
+    assert_program_prove_failure(&result, "provided data should fit into data limit");
 }
 
 #[test]
@@ -383,7 +399,10 @@ fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(
+        &result,
+        "Pre-state and post-state lengths do not match: pre-state length 1, post-state length 2",
+    );
 }
 
 #[test]
@@ -415,7 +434,10 @@ fn missing_output_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(
+        &result,
+        "Pre-state and post-state lengths do not match: pre-state length 2, post-state length 1",
+    );
 }
 
 #[test]
@@ -438,7 +460,10 @@ fn program_owner_changer_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(
+        &result,
+        "Unallowed modification of program owner for account",
+    );
 }
 
 #[test]
@@ -470,7 +495,7 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "which is not the owner");
 }
 
 #[test]
@@ -541,5 +566,5 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
     );
 
     // Assert - should fail because the malicious program tries to manipulate is_authorized
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_proving_failure(&result, "Inconsistent authorization for account");
 }

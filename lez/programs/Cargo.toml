@@ -123,6 +123,7 @@ programs = [
 ]
 
 [dependencies]
+borsh.workspace = true
 lee = { workspace = true, optional = true }
 lee_core = { workspace = true, optional = true }
 risc0-zkvm = { workspace = true, optional = true }
@@ -148,3 +149,7 @@ token_program = { path = "token", optional = true }
 
 [build-dependencies]
 build_utils = { workspace = true, optional = true }
+
+[dev-dependencies]
+bridge_core = { workspace = true }
+vault_core = { workspace = true }

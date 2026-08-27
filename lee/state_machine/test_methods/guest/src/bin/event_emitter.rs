@@ -1,12 +1,11 @@
 use lee_core::program::{
-    AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+    AccountPostState, ChainedCall, InstructionData, ProgramEvent, ProgramId, ProgramInput,
+    ProgramOutput, read_lee_inputs,
 };
-use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct EmitterInstruction {
-    pub events: Vec<Vec<u8>>,
+    pub events: Vec<ProgramEvent>,
     pub chain: Vec<(ProgramId, InstructionData)>,
 }
 
@@ -18,7 +17,7 @@ fn main() {
             pre_states,
             instruction: EmitterInstruction { events, chain },
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<EmitterInstruction>();
 
     let post_states = pre_states
@@ -28,10 +27,10 @@ fn main() {
 
     let chained_calls = chain
         .into_iter()
-        .map(|(program_id, instruction_data)| ChainedCall {
+        .map(|(program_id, call_instruction_data)| ChainedCall {
             program_id,
             pre_states: pre_states.clone(),
-            instruction_data,
+            instruction_data: call_instruction_data,
             pda_seeds: vec![],
         })
         .collect();
@@ -41,7 +40,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         pre_states,
         post_states,
     )

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
+use risc0_zkvm::guest::env;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -52,7 +52,11 @@ impl From<AccountId> for ProgramId {
     }
 }
 
-pub type InstructionData = Vec<u32>;
+/// Borsh-encoded program instruction bytes.
+pub type InstructionData = Vec<u8>;
+
+/// Struct encoding the input to an LEE program.
+#[derive(BorshSerialize, BorshDeserialize)]
 pub struct ProgramInput<T> {
     pub self_program_id: ProgramId,
     pub caller_program_id: Option<ProgramId>,
@@ -242,7 +246,7 @@ pub struct CallerData {
     pub authorized_accounts: HashSet<AccountId>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ChainedCall {
     /// The program ID of the program to execute.
     pub program_id: ProgramId,
@@ -257,7 +261,7 @@ pub struct ChainedCall {
 
 impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
-    pub fn new<I: Serialize>(
+    pub fn new<I: BorshSerialize>(
         program_id: ProgramId,
         pre_states: Vec<AccountWithMetadata>,
         instruction: &I,
@@ -265,8 +269,8 @@ impl ChainedCall {
         Self {
             program_id,
             pre_states,
-            instruction_data: risc0_zkvm::serde::to_vec(instruction)
-                .expect("Serialization to Vec<u32> should not fail"),
+            instruction_data: borsh::to_vec(instruction)
+                .expect("borsh serialization is infallible"),
             pda_seeds: Vec::new(),
         }
     }
@@ -283,7 +287,7 @@ impl ChainedCall {
 /// A post state may optionally request that the executing program
 /// becomes the owner of the account (a "claim"). This is used to signal
 /// that the program intends to take ownership of the account.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
 pub struct AccountPostState {
     account: Account,
@@ -292,7 +296,9 @@ pub struct AccountPostState {
 
 /// A claim request for an account, indicating that the executing program intends to take ownership
 /// of the account.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 pub enum Claim {
     /// The program requests ownership of the account which was authorized by the signer.
     ///
@@ -368,11 +374,8 @@ impl AccountPostState {
 pub type BlockValidityWindow = ValidityWindow<BlockId>;
 pub type TimestampValidityWindow = ValidityWindow<Timestamp>;
 
-#[derive(Clone, Copy, Default, Serialize, Deserialize)]
-#[cfg_attr(
-    any(feature = "host", test),
-    derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)
-)]
+#[derive(Clone, Copy, Default, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct ValidityWindow<T> {
     from: Option<T>,
     to: Option<T>,
@@ -468,7 +471,18 @@ impl<T> From<std::ops::RangeFull> for ValidityWindow<T> {
 #[error("Invalid window")]
 pub struct InvalidWindow;
 
-#[derive(Serialize, Deserialize, Clone)]
+/// The event struct emitted by a program.
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct ProgramEvent {
+    /// Selector bytes allowing to distinguish event type. By convention, the
+    /// first 8 bytes of `sha256("<program>::<EventName>")`.
+    pub selector: [u8; 8],
+    /// The arbitrary event-data emitted in the program output.
+    pub data: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use = "ProgramOutput does nothing unless written"]
 pub struct ProgramOutput {
@@ -491,7 +505,7 @@ pub struct ProgramOutput {
     pub timestamp_validity_window: TimestampValidityWindow,
     /// A vector of event data. Dropped for private transaction for function
     /// privacy.
-    pub events: Vec<Vec<u8>>,
+    pub events: Vec<ProgramEvent>,
 }
 
 impl ProgramOutput {
@@ -516,7 +530,7 @@ impl ProgramOutput {
     }
 
     pub fn write(self) {
-        env::commit(&self);
+        env::commit_slice(&crate::to_borsh_frame(&self));
     }
 
     pub fn with_chained_calls(mut self, chained_calls: Vec<ChainedCall>) -> Self {
@@ -524,7 +538,7 @@ impl ProgramOutput {
         self
     }
 
-    pub fn with_events(mut self, events: Vec<Vec<u8>>) -> Self {
+    pub fn with_events(mut self, events: Vec<ProgramEvent>) -> Self {
         self.events = events;
         self
     }
@@ -582,11 +596,11 @@ impl ProgramOutput {
 /// A struct holding an event-output of a program.
 #[cfg(feature = "host")]
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct Event {
+pub struct TransactionEvent {
     /// Which program emitted the event.
     pub program_id: ProgramId,
-    /// The arbitrary event-data emitted in the program output.
-    pub data: Vec<u8>,
+    /// Program event-data with selector.
+    pub event: ProgramEvent,
 }
 
 /// Representation of a number as `lo + hi * 2^128`.
@@ -705,14 +719,31 @@ pub fn compute_public_authorized_pdas(
         .collect()
 }
 
-/// Reads the LEE inputs from the guest environment.
+/// Reads first 4 bytes indicating the length in bytes of the program input bytes.
+/// Afterwards, reads exactly that many payload bytes.
 #[must_use]
-pub fn read_lee_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionData) {
-    let self_program_id: ProgramId = env::read();
-    let caller_program_id: Option<ProgramId> = env::read();
-    let pre_states: Vec<AccountWithMetadata> = env::read();
-    let instruction_words: InstructionData = env::read();
-    let instruction = T::deserialize(&mut Deserializer::new(instruction_words.as_ref())).unwrap();
+pub fn read_input_frame() -> Vec<u8> {
+    let mut len_bytes = [0; 4];
+    env::read_slice(&mut len_bytes);
+    let len = usize::try_from(u32::from_le_bytes(len_bytes)).expect("frame length fits in usize");
+    let mut payload: Vec<u8> = vec![0; len];
+    env::read_slice(&mut payload);
+    payload
+}
+
+/// Reads the LEE inputs from the guest environment. The frame decodes as
+/// `ProgramInput<InstructionData>`; `T` is a second decode of the instruction bytes.
+#[must_use]
+pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionData) {
+    let ProgramInput {
+        self_program_id,
+        caller_program_id,
+        pre_states,
+        instruction: instruction_data,
+    } = borsh::from_slice::<ProgramInput<InstructionData>>(&read_input_frame())
+        .expect("guest input must be valid borsh");
+    let instruction =
+        borsh::from_slice(&instruction_data).expect("instruction must decode from borsh");
     (
         ProgramInput {
             self_program_id,
@@ -720,7 +751,7 @@ pub fn read_lee_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionDa
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     )
 }
 

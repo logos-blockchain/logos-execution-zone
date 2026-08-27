@@ -1,6 +1,27 @@
 use super::*;
 
-fn program_transaction<T: serde::Serialize>(
+// Reference for the selector VALUE convention: selector = first 8 bytes of
+// sha256("<program>::<EventName>"), pinned as a literal so the guest never hashes.
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Debug, PartialEq, Eq)]
+struct ExampleEvent {
+    account: AccountId,
+    amount: Balance,
+}
+
+impl ExampleEvent {
+    const SELECTOR: [u8; 8] = [0x92, 0x8d, 0x12, 0x8c, 0x88, 0x2f, 0x1c, 0x5d];
+    const SELECTOR_NAME: &'static str = "lee_test::ExampleEvent";
+
+    fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).unwrap()
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        borsh::from_slice(bytes).unwrap()
+    }
+}
+
+fn program_transaction<T: borsh::BorshSerialize>(
     program_id: ProgramId,
     account_id: AccountId,
     instruction: T,
@@ -12,8 +33,18 @@ fn program_transaction<T: serde::Serialize>(
     PublicTransaction::new(message, witness_set)
 }
 
-fn payloads(events: &[lee_core::program::Event]) -> Vec<Vec<u8>> {
-    events.iter().map(|event| event.data.clone()).collect()
+fn payloads(events: &[TransactionEvent]) -> Vec<Vec<u8>> {
+    events
+        .iter()
+        .map(|event| event.event.data.clone())
+        .collect()
+}
+
+fn emitted(n: u8) -> ProgramEvent {
+    ProgramEvent {
+        selector: [n; 8],
+        data: vec![n; 4],
+    }
 }
 
 #[test]
@@ -26,7 +57,7 @@ fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
         emitter_id,
         account_id,
         EmitterInstruction {
-            events: vec![vec![0; 4], vec![1; 4]],
+            events: vec![emitted(0), emitted(1)],
             chain: vec![],
         },
     );
@@ -34,37 +65,14 @@ fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
     let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     assert_eq!(payloads(&events), vec![vec![0; 4], vec![1; 4]]);
-    assert!(events.iter().all(|event| event.program_id == emitter_id));
-}
-
-#[test]
-fn parent_events_precede_chained_callee_events() {
-    let account_id = AccountId::new([1; 32]);
-    let mut state = V03State::new().with_test_programs();
-    let emitter_id = crate::test_methods::event_emitter().id();
-
-    let callee_instruction_data = Program::serialize_instruction(EmitterInstruction {
-        events: vec![vec![1; 4], vec![2; 4]],
-        chain: vec![],
-    })
-    .unwrap();
-
-    let tx = program_transaction(
-        emitter_id,
-        account_id,
-        EmitterInstruction {
-            events: vec![vec![0; 4]],
-            chain: vec![(emitter_id, callee_instruction_data)],
-        },
-    );
-
-    let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
-
     assert_eq!(
-        payloads(&events),
-        vec![vec![0; 4], vec![1; 4], vec![2; 4]],
-        "a parent's events must all precede its callee's"
+        events
+            .iter()
+            .map(|event| event.event.selector)
+            .collect::<Vec<_>>(),
+        vec![[0; 8], [1; 8]]
     );
+    assert!(events.iter().all(|event| event.program_id == emitter_id));
 }
 
 #[test]
@@ -74,17 +82,17 @@ fn chained_events_follow_depth_first_pre_order() {
     let emitter_id = crate::test_methods::event_emitter().id();
 
     let grandchild = Program::serialize_instruction(EmitterInstruction {
-        events: vec![vec![2; 4]],
+        events: vec![emitted(2)],
         chain: vec![],
     })
     .unwrap();
     let first_callee = Program::serialize_instruction(EmitterInstruction {
-        events: vec![vec![1; 4]],
+        events: vec![emitted(1)],
         chain: vec![(emitter_id, grandchild)],
     })
     .unwrap();
     let second_callee = Program::serialize_instruction(EmitterInstruction {
-        events: vec![vec![3; 4]],
+        events: vec![emitted(3)],
         chain: vec![],
     })
     .unwrap();
@@ -93,7 +101,7 @@ fn chained_events_follow_depth_first_pre_order() {
         emitter_id,
         account_id,
         EmitterInstruction {
-            events: vec![vec![0; 4]],
+            events: vec![emitted(0)],
             chain: vec![(emitter_id, first_callee), (emitter_id, second_callee)],
         },
     );
@@ -139,7 +147,7 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     // three sibling chained calls, so the only emitting program is neither the top-level
     // program nor its caller.
     let callback_instruction_data = Program::serialize_instruction(EmitterInstruction {
-        events: vec![vec![0; 4]],
+        events: vec![emitted(0)],
         chain: vec![],
     })
     .unwrap();
@@ -169,4 +177,128 @@ fn program_that_emits_nothing_yields_no_events() {
     let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     assert!(events.is_empty());
+}
+
+#[test]
+fn emitted_events_leave_state_untouched() {
+    let account_id = AccountId::new([1; 32]);
+    let emitter_id = crate::test_methods::event_emitter().id();
+
+    let run = |events: Vec<ProgramEvent>| {
+        let mut state = V03State::new().with_test_programs();
+        let tx = program_transaction(
+            emitter_id,
+            account_id,
+            EmitterInstruction {
+                events,
+                chain: vec![],
+            },
+        );
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+        state
+    };
+
+    let silent = run(vec![]);
+    let emitting = run(vec![emitted(0), emitted(1)]);
+
+    assert_eq!(
+        borsh::to_vec(&silent).unwrap(),
+        borsh::to_vec(&emitting).unwrap(),
+        "event emission must not perturb state"
+    );
+}
+
+#[test]
+fn example_event_selector_matches_its_derivation() {
+    use sha2::Digest as _;
+
+    let digest = sha2::Sha256::digest(ExampleEvent::SELECTOR_NAME.as_bytes());
+
+    assert_eq!(&ExampleEvent::SELECTOR[..], &digest[..8]);
+}
+
+#[test]
+fn events_are_filterable_by_selector_and_decodable() {
+    let account_id = AccountId::new([1; 32]);
+    let mut state = V03State::new().with_test_programs();
+    let emitter_id = crate::test_methods::event_emitter().id();
+
+    let example = ExampleEvent {
+        account: AccountId::new([7; 32]),
+        amount: 42,
+    };
+    let tx = program_transaction(
+        emitter_id,
+        account_id,
+        EmitterInstruction {
+            events: vec![
+                emitted(0),
+                ProgramEvent {
+                    selector: ExampleEvent::SELECTOR,
+                    data: example.to_bytes(),
+                },
+                emitted(1),
+            ],
+            chain: vec![],
+        },
+    );
+
+    let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    let matched: Vec<_> = events
+        .iter()
+        .filter(|event| event.event.selector == ExampleEvent::SELECTOR)
+        .collect();
+    assert_eq!(matched.len(), 1);
+    assert_eq!(matched[0].program_id, emitter_id);
+    assert_eq!(ExampleEvent::from_bytes(&matched[0].event.data), example);
+
+    let unmatched = events
+        .iter()
+        .filter(|event| event.event.selector == [0xff; 8])
+        .count();
+    assert_eq!(unmatched, 0);
+}
+
+#[test]
+fn event_emitting_program_proves_and_validates_on_the_private_path() {
+    let keys = test_private_account_keys_1();
+    let emitter = crate::test_methods::event_emitter();
+
+    let pre = AccountWithMetadata::new(Account::default(), true, (&keys.npk(), &keys.vpk(), 0));
+
+    let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
+        vec![pre],
+        Program::serialize_instruction(EmitterInstruction {
+            events: vec![emitted(0), emitted(1)],
+            chain: vec![],
+        })
+        .unwrap(),
+        vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: WitnessKind::Regular {
+                ask: Some(keys.ask),
+            },
+            nullifier: NullifierWitness::Init {
+                npk: keys.npk(),
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
+        &emitter.into(),
+    )
+    .expect("emitting guest must prove on the private path");
+
+    assert_eq!(output.private_actions.len(), 1);
+
+    let message = Message::from_circuit_output(vec![], output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    let mut state = V03State::new();
+
+    state
+        .transition_from_privacy_preserving_transaction(&tx, 1, 0)
+        .unwrap();
 }

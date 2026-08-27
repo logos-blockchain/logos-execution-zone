@@ -10,11 +10,12 @@ use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
     InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
     PrivateWitness, Timestamp, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+    account::{Account, AccountId, AccountWithMetadata, Balance, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, ExecutionValidationError, InstructionData, MAX_NUMBER_CHAINED_CALLS,
-        PdaSeed, ProgramId, TimestampValidityWindow, WrappedBalanceSum,
+        PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow, TransactionEvent,
+        WrappedBalanceSum,
     },
 };
 
@@ -161,29 +162,29 @@ impl TestPrivateKeys {
 
 // ── Flash Swap types (mirrors of guest types for host-side serialisation) ──
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct CallbackInstruction {
     return_funds: bool,
     token_program_id: ProgramId,
     amount: u128,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 enum FlashSwapInstruction {
     Initiate {
         token_program_id: ProgramId,
         callback_program_id: ProgramId,
         amount_out: u128,
-        callback_instruction_data: Vec<u32>,
+        callback_instruction_data: Vec<u8>,
     },
     InvariantCheck {
         min_vault_balance: u128,
     },
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct EmitterInstruction {
-    events: Vec<Vec<u8>>,
+    events: Vec<ProgramEvent>,
     chain: Vec<(ProgramId, InstructionData)>,
 }
 

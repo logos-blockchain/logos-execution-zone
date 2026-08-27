@@ -5,7 +5,7 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
     account::{Account, AccountId, Data},
-    program::{Event, PROGRAM_STORAGE_OWNER, ProgramId},
+    program::{PROGRAM_STORAGE_OWNER, ProgramId, TransactionEvent},
 };
 
 use crate::{
@@ -204,7 +204,8 @@ impl V03State {
         self.public_state.insert(account_id, account);
     }
 
-    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) -> Vec<Event> {
+    #[must_use]
+    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) -> Vec<TransactionEvent> {
         let StateDiff {
             signer_account_ids,
             public_diff,
@@ -238,7 +239,7 @@ impl V03State {
         tx: &PublicTransaction,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<Vec<Event>, LeeError> {
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
         let diff = ValidatedStateDiff::from_public_transaction(tx, self, block_id, timestamp)?;
         Ok(self.apply_state_diff(diff))
     }
@@ -251,7 +252,7 @@ impl V03State {
     ) -> Result<(), LeeError> {
         let diff =
             ValidatedStateDiff::from_privacy_preserving_transaction(tx, self, block_id, timestamp)?;
-        self.apply_state_diff(diff);
+        drop(self.apply_state_diff(diff));
         Ok(())
     }
 
@@ -260,7 +261,7 @@ impl V03State {
         tx: &ProgramDeploymentTransaction,
     ) -> Result<(), LeeError> {
         let diff = ValidatedStateDiff::from_program_deployment_transaction(tx, self)?;
-        self.apply_state_diff(diff);
+        drop(self.apply_state_diff(diff));
         Ok(())
     }
 

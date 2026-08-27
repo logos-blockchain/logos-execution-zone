@@ -23,6 +23,7 @@ use crate::{
 pub mod block_store;
 pub mod config;
 pub mod cross_zone_verifier;
+pub mod event_filter;
 mod retry;
 pub mod status;
 
@@ -131,7 +132,8 @@ impl IndexerCore {
         // finalized blocks. `None` when cross-zone messaging is disabled.
         let verifier = CrossZoneVerifier::start(&config);
 
-        let store = IndexerStore::open_db(&home, genesis_accounts)?;
+        let store =
+            IndexerStore::open_db(&home, genesis_accounts, config.event_filter.to_filter()?)?;
         // A persisted halt outlives the process: report it from boot with its
         // stored reason. The ingest loop may still start and re-halt
         // identically, which refreshes the record.
@@ -591,7 +593,7 @@ mod tests {
     use logos_blockchain_zone_sdk::Slot;
 
     use super::*;
-    use crate::config::{ChannelId, ClientConfig, IndexerConfig};
+    use crate::config::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 
     /// The cursor must not move while more of the same slot may still arrive.
     ///
@@ -657,6 +659,7 @@ mod tests {
             cross_zone: None,
             cross_zone_accept_unverified,
             peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
+            event_filter: EventFilterConfig::default(),
             bridge_lock_holdings: Vec::new(),
         };
         IndexerCore::open(config, dir).expect("open core")

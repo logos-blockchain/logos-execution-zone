@@ -10,16 +10,21 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use indexer_service_protocol::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
-    CommitmentSetDigest, Data, EncryptedAccountData, HashType, IndexerStatus, IndexerSyncState,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, PublicActionWithID,
-    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    CommitmentSetDigest, Data, EncryptedAccountData, EventRecord, EventSubscriptionFilter,
+    GetEventsFilter, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
+    ProgramDeploymentTransaction, ProgramId, PublicActionWithID, PublicMessage, PublicTransaction,
+    Selector, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
     types::ErrorObjectOwned,
 };
 use tokio::sync::{RwLock, broadcast};
+
+use crate::service::{
+    EventQuery, matches_subscription_filter, plan_query, unknown_transaction_error,
+};
 
 const MOCK_GENESIS_TIMESTAMP_MS: u64 = 1_704_067_200_000;
 const MOCK_BLOCK_INTERVAL_MS: u64 = 30_000;
@@ -192,6 +197,34 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
         Ok(())
     }
 
+    async fn subscribe_to_events(
+        &self,
+        subscription_sink: jsonrpsee::PendingSubscriptionSink,
+        filter: EventSubscriptionFilter,
+    ) -> SubscriptionResult {
+        let sink = subscription_sink.accept().await?;
+
+        // One canned event per generated block, matching `get_events`' shape.
+        let mut receiver = self.finalized_blocks_tx.subscribe();
+        loop {
+            match receiver.recv().await {
+                Ok(block) => {
+                    let Some(record) = mock_event_record(&block) else {
+                        continue;
+                    };
+                    if matches_subscription_filter(&record, &filter) {
+                        let json = serde_json::value::to_raw_value(&record).unwrap();
+                        sink.send(json).await?;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+
+        Ok(())
+    }
+
     async fn get_last_finalized_block_id(&self) -> Result<Option<BlockId>, ErrorObjectOwned> {
         Ok(self
             .state
@@ -329,6 +362,37 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .collect())
     }
 
+    async fn get_events(
+        &self,
+        filter: GetEventsFilter,
+    ) -> Result<Vec<EventRecord>, ErrorObjectOwned> {
+        // Resolution goes through the production planner so the mock enforces the same
+        // contract as the real service.
+        let state = self.state.read().await;
+        let tip = state.blocks.last().map_or(0, |block| block.header.block_id);
+        let records = state.blocks.iter().filter_map(mock_event_record);
+
+        let records: Vec<EventRecord> = match plan_query(&filter, tip)? {
+            EventQuery::ByTxHash(tx_hash) => {
+                if !state.transactions.contains_key(&tx_hash) {
+                    return Err(unknown_transaction_error());
+                }
+                records.filter(|record| tx_hash == record.tx_hash).collect()
+            }
+            EventQuery::ByRange {
+                from_block,
+                to_block,
+            } => records
+                .filter(|record| record.block_id >= from_block && record.block_id <= to_block)
+                .collect(),
+        };
+
+        Ok(records
+            .into_iter()
+            .filter(|record| record.matches_fields(filter.program_id, filter.selector))
+            .collect())
+    }
+
     async fn get_status(&self) -> Result<IndexerStatus, ErrorObjectOwned> {
         let indexed_block_id = self
             .state
@@ -352,6 +416,19 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
     async fn healthcheck(&self) -> Result<(), ErrorObjectOwned> {
         Ok(())
     }
+}
+
+// One canned event per block: the first transaction emits one event from a fixed program.
+fn mock_event_record(block: &Block) -> Option<EventRecord> {
+    let tx = block.body.transactions.first()?;
+    Some(EventRecord {
+        block_id: block.header.block_id,
+        tx_index: 0,
+        tx_hash: *tx.hash(),
+        program_id: ProgramId([7_u32; 8]),
+        selector: Selector([1_u8; 8]),
+        data: vec![block.header.block_id as u8; 4],
+    })
 }
 
 fn mock_public_tx(
@@ -486,5 +563,84 @@ fn index_block_transactions(
             Transaction::ProgramDeployment(deployment_tx) => deployment_tx.hash,
         };
         transactions.insert(tx_hash, (tx.clone(), block.header.block_id));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use indexer_service_rpc::RpcServer as _;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn get_events_returns_records_in_block_order() {
+        let service = MockIndexerService::new_with_mock_blocks();
+        let records = service
+            .get_events(GetEventsFilter {
+                from_block: Some(1),
+                ..GetEventsFilter::default()
+            })
+            .await
+            .unwrap();
+        let block_ids: Vec<BlockId> = records.iter().map(|record| record.block_id).collect();
+        assert!(block_ids.len() > 1);
+        assert!(block_ids.is_sorted_by(|a, b| a < b));
+    }
+
+    #[tokio::test]
+    async fn tx_hash_lookup_applies_field_filters() {
+        let service = MockIndexerService::new_with_mock_blocks();
+        let tx_hash = {
+            let state = service.state.read().await;
+            *state.blocks[0].body.transactions[0].hash()
+        };
+        let matching = GetEventsFilter {
+            tx_hash: Some(tx_hash),
+            program_id: Some(ProgramId([7_u32; 8])),
+            ..GetEventsFilter::default()
+        };
+        let hit = service.get_events(matching).await.unwrap();
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].tx_hash, tx_hash);
+
+        let mismatched = GetEventsFilter {
+            tx_hash: Some(tx_hash),
+            program_id: Some(ProgramId([8_u32; 8])),
+            ..GetEventsFilter::default()
+        };
+        let miss = service.get_events(mismatched).await.unwrap();
+        assert!(miss.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_known_tx_without_events_returns_empty() {
+        let service = MockIndexerService::new_with_mock_blocks();
+        // Every transaction is indexed, but only the first of each block gets an
+        // event record.
+        let tx_hash = {
+            let state = service.state.read().await;
+            *state.blocks[0].body.transactions[1].hash()
+        };
+        let records = service
+            .get_events(GetEventsFilter {
+                tx_hash: Some(tx_hash),
+                ..GetEventsFilter::default()
+            })
+            .await
+            .unwrap();
+        assert!(records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_tx_hash_is_rejected() {
+        let service = MockIndexerService::new_with_mock_blocks();
+        let err = service
+            .get_events(GetEventsFilter {
+                tx_hash: Some(HashType([0xEE; 32])),
+                ..GetEventsFilter::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.message(), "UnknownTransaction");
     }
 }
