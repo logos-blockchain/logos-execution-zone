@@ -4,7 +4,7 @@ use lee_core::{
     PrivacyPreservingCircuitInput,
     account::AccountWithMetadata,
     execution_state::{ExecutionState, index_by_account_id},
-    program::{CallContext, ChainedCall, ProgramEffects, ProgramOutput, read_input_frame},
+    program::{CallContext, ProgramEffects, ProgramOutput, read_input_frame},
 };
 use risc0_zkvm::guest::env;
 
@@ -28,9 +28,7 @@ impl fmt::Debug for InsufficientEffects {
 fn main() {
     let PrivacyPreservingCircuitInput {
         program_effects,
-        top_level_program_id,
-        top_level_instruction_data,
-        top_level_accounts,
+        top_level_call,
         input_accounts,
         dummy_inputs,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
@@ -38,17 +36,11 @@ fn main() {
     let input_accounts = index_by_account_id(input_accounts).unwrap_or_else(|e| panic!("{e}"));
 
     let mut effects = program_effects.into_iter();
-    let execution_state = ExecutionState::derive(
-        &input_accounts,
-        ChainedCall {
-            program_id: top_level_program_id,
-            instruction_data: top_level_instruction_data,
-            accounts: top_level_accounts,
-            pda_seeds: Vec::new(),
-        },
-        |call, pre_states| verify_call(&mut effects, call, pre_states),
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
+    let execution_state =
+        ExecutionState::derive(&input_accounts, top_level_call, |call, pre_states| {
+            verify_call(&mut effects, call, pre_states)
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
 
     assert!(
         effects.next().is_none(),

@@ -8,7 +8,7 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Nonce},
     program::{
-        CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS,
+        CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER, EntryCall, MAX_NUMBER_CHAINED_CALLS,
         match_caller_seed_as_public_pda, validate_execution, validate_public_claim,
     },
 };
@@ -76,12 +76,12 @@ impl ValidatedStateDiff {
 
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
 
-        let initial_call = ChainedCall {
+        let initial_call = EntryCall {
             program_id: message.program_id,
             instruction_data: message.instruction_data.clone(),
             accounts: message.account_ids.clone(),
-            pda_seeds: vec![],
-        };
+        }
+        .into_chained_call();
 
         let initial_caller_data = CallerData {
             program_id: None,

@@ -6,8 +6,7 @@ use crate::{
     account::{Account, AccountId, AccountWithMetadata},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     program::{
-        BlockValidityWindow, InstructionData, PdaSeed, ProgramEffects, ProgramId,
-        TimestampValidityWindow,
+        BlockValidityWindow, EntryCall, PdaSeed, ProgramEffects, ProgramId, TimestampValidityWindow,
     },
 };
 
@@ -16,14 +15,10 @@ pub struct PrivacyPreservingCircuitInput {
     /// What each program in the walk decided, in call order. Everything else about a call the
     /// circuit derives for itself — see [`crate::program::ProgramOutput`].
     pub program_effects: Vec<ProgramEffects>,
-    /// The entry call. It has no caller, so there is no `pda_seeds` to go with it: nothing can be
-    /// delegated to it and nothing may pretend to be.
-    pub top_level_program_id: ProgramId,
-    pub top_level_instruction_data: InstructionData,
-    /// The accounts the top-level program ran on, in the order it commits them. Nothing else
-    /// names them, and a program is free to commit the accounts it was handed in an order of its
-    /// own.
-    pub top_level_accounts: Vec<AccountId>,
+    /// The entry call, whose `accounts` are the ones the top-level program ran on, in the order
+    /// it commits them: nothing else names them, and a program is free to commit the accounts it
+    /// was handed in an order of its own.
+    pub top_level_call: EntryCall,
     /// One entry per account the walk resolves, each naming the account it describes. Order
     /// carries no meaning: the circuit indexes these by `AccountId`, so a caller need not
     /// predict the traversal.

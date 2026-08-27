@@ -7,9 +7,10 @@ use crate::{
     encryption::ViewingPublicKey,
     program::{
         AccountDiffOutput, BlockValidityWindow, CallContext, CallerData, ChainedCall, Claim,
-        ClaimError, DEFAULT_PROGRAM_OWNER, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS,
-        PdaSeed, ProgramEffects, ProgramId, ProgramOutput, TimestampValidityWindow,
-        match_caller_seed_as_public_pda, validate_execution, validate_public_claim,
+        ClaimError, DEFAULT_PROGRAM_OWNER, EntryCall, ExecutionValidationError,
+        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEffects, ProgramId, ProgramOutput,
+        TimestampValidityWindow, match_caller_seed_as_public_pda, validate_execution,
+        validate_public_claim,
     },
 };
 
@@ -167,7 +168,7 @@ impl ExecutionState {
     /// walk's own `CallContext` and `pre_states` reconstruct.
     pub fn derive<E>(
         input_accounts: &HashMap<AccountId, InputAccount>,
-        top_level_call: ChainedCall,
+        top_level_call: EntryCall,
         mut provider: impl FnMut(CallContext, Vec<AccountWithMetadata>) -> Result<ProgramOutput, E>,
     ) -> Result<Self, ExecutionWalkError<E>> {
         let private_pdas = input_accounts
@@ -201,7 +202,7 @@ impl ExecutionState {
             authorized_accounts: HashSet::new(),
         };
         let mut chained_calls = VecDeque::<(ChainedCall, CallerData)>::from_iter([(
-            top_level_call,
+            top_level_call.into_chained_call(),
             initial_caller_data,
         )]);
 

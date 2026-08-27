@@ -281,6 +281,35 @@ pub struct ChainedCall {
     pub pda_seeds: Vec<PdaSeed>,
 }
 
+/// The call a transaction opens with.
+///
+/// Nothing invokes it, so no caller can delegate seeds to it — and with no `pda_seeds` field
+/// there is nothing to pretend otherwise, rather than an emptiness someone has to assert. Field
+/// order preserves the circuit input's former flattened layout, which is NOT [`ChainedCall`]'s
+/// (there, `accounts` precedes `instruction_data`).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct EntryCall {
+    /// The program ID of the program to execute.
+    pub program_id: ProgramId,
+    /// The instruction data to pass.
+    pub instruction_data: InstructionData,
+    /// The accounts the program runs on, named by id only.
+    pub accounts: Vec<AccountId>,
+}
+
+impl EntryCall {
+    /// The only place an entry call's empty `pda_seeds` is written.
+    #[must_use]
+    pub fn into_chained_call(self) -> ChainedCall {
+        ChainedCall {
+            program_id: self.program_id,
+            accounts: self.accounts,
+            instruction_data: self.instruction_data,
+            pda_seeds: Vec::new(),
+        }
+    }
+}
+
 impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
     pub fn new<I: BorshSerialize>(

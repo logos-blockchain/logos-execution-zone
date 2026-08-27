@@ -848,9 +848,11 @@ fn a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named() {
     // 3. The circuit input a lying prover would submit for the pair.
     let circuit_input = lee_core::PrivacyPreservingCircuitInput {
         program_effects: vec![forwarder_output.effects, transfer_output.effects],
-        top_level_program_id: forwarder_id,
-        top_level_instruction_data: forwarder_instruction,
-        top_level_accounts: vec![sender.account_id, recipient.account_id],
+        top_level_call: EntryCall {
+            program_id: forwarder_id,
+            instruction_data: forwarder_instruction,
+            accounts: vec![sender.account_id, recipient.account_id],
+        },
         input_accounts: [&sender, &recipient, &attacker]
             .into_iter()
             .map(|pre| lee_core::InputAccount {

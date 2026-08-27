@@ -14,8 +14,8 @@ use lee_core::{
     encryption::ViewingPublicKey,
     execution_state::ExecutionWalkError,
     program::{
-        BlockValidityWindow, ClaimError, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS,
-        PdaSeed, ProgramId, TimestampValidityWindow,
+        BlockValidityWindow, ClaimError, EntryCall, ExecutionValidationError,
+        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, TimestampValidityWindow,
     },
 };
 

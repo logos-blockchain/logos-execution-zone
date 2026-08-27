@@ -8,7 +8,7 @@ use lee_core::{
     execution_state::{ExecutionState, index_by_account_id},
     parse_journal,
     program::{
-        ChainedCall, InstructionData, MAX_NUMBER_CHAINED_CALLS, ProgramEffects, ProgramId,
+        EntryCall, InstructionData, MAX_NUMBER_CHAINED_CALLS, ProgramEffects, ProgramId,
         ProgramOutput,
     },
     to_frame,
@@ -159,14 +159,15 @@ pub fn execute_and_prove_with_padded_inputs(
 
     // The host runs the circuit's own walk, so what it feeds each program is what the circuit
     // will re-derive and verify the journal against.
+    let top_level_call = EntryCall {
+        program_id: top_level_program_id,
+        instruction_data,
+        accounts: top_level_accounts,
+    };
+
     ExecutionState::derive(
         &indexed_input_accounts,
-        ChainedCall {
-            program_id: top_level_program_id,
-            instruction_data: instruction_data.clone(),
-            accounts: top_level_accounts.clone(),
-            pda_seeds: Vec::new(),
-        },
+        top_level_call.clone(),
         |call, derived_pre_states| -> Result<ProgramOutput, LeeError> {
             if invocations >= MAX_NUMBER_CHAINED_CALLS {
                 return Err(LeeError::MaxChainedCallsDepthExceeded);
@@ -212,9 +213,7 @@ pub fn execute_and_prove_with_padded_inputs(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         program_effects,
-        top_level_program_id,
-        top_level_instruction_data: instruction_data,
-        top_level_accounts,
+        top_level_call,
         input_accounts: build_input_accounts(),
         dummy_inputs,
     };
