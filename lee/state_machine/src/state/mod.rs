@@ -18,8 +18,6 @@ use crate::{
     validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
 
-pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
-
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
 pub struct CommitmentSet {

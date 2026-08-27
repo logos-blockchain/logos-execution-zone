@@ -1,9 +1,9 @@
 use super::*;
 
-fn assert_circuit_proving_failure<T>(result: &Result<T, LeeError>, expected: &str) {
+fn assert_walk_rejection<T>(result: &Result<T, LeeError>, expected: &str) {
     assert!(
-        matches!(result, Err(LeeError::CircuitProvingError(msg)) if msg.contains(expected)),
-        "expected CircuitProvingError containing {expected:?}, got: {:?}",
+        matches!(result, Err(LeeError::ExecutionWalk(walk)) if walk.to_string().contains(expected)),
+        "expected the host walk to reject with {expected:?}, got: {:?}",
         result.as_ref().err()
     );
 }
@@ -276,7 +276,7 @@ fn burner_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert_circuit_proving_failure(&result, "Total balance across accounts is not preserved");
+    assert_walk_rejection(&result, "Total balance across accounts is not preserved");
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert_circuit_proving_failure(&result, "Total balance across accounts is not preserved");
+    assert_walk_rejection(&result, "Total balance across accounts is not preserved");
 }
 
 #[test]
@@ -322,7 +322,7 @@ fn data_changer_program_should_fail_for_non_owned_account_in_privacy_preserving_
         &program.into(),
     );
 
-    assert_circuit_proving_failure(&result, "Unauthorized modification of data");
+    assert_walk_rejection(&result, "Unauthorized modification of data");
 }
 
 #[test]
@@ -376,7 +376,7 @@ fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert_circuit_proving_failure(
+    assert_walk_rejection(
         &result,
         "Pre-state and post-state lengths do not match: pre-state length 1, post-state length 2",
     );
@@ -411,7 +411,7 @@ fn missing_output_program_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert_circuit_proving_failure(
+    assert_walk_rejection(
         &result,
         "Pre-state and post-state lengths do not match: pre-state length 2, post-state length 1",
     );
@@ -446,5 +446,5 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert_circuit_proving_failure(&result, "which is not the owner");
+    assert_walk_rejection(&result, "which is not the owner");
 }

@@ -2,8 +2,7 @@ use borsh::to_vec;
 use lee_core::{
     account::AccountDiff,
     program::{
-        AccountDiffOutput, ChainedCall, Claim, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call,
+        AccountDiffOutput, ChainedCall, Claim, PdaSeed, ProgramCall, ProgramId, read_lee_call,
     },
 };
 
@@ -15,17 +14,12 @@ use lee_core::{
 type Instruction = (PdaSeed, PdaSeed, ProgramId);
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (claim_seed, delegated_seed, callee_program_id),
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (claim_seed, delegated_seed, callee_program_id),
+    } = read_lee_call::<Instruction>();
 
-    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
+    let [pre] = input.pre_states.as_slice() else {
         return;
     };
 
@@ -41,13 +35,8 @@ fn main() {
         pda_seeds: vec![delegated_seed],
     };
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pre],
-        vec![claimed],
-    )
-    .with_chained_calls(vec![chained_call])
-    .write();
+    input
+        .into_output(vec![claimed])
+        .with_chained_calls(vec![chained_call])
+        .write();
 }

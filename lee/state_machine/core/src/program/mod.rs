@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff},
+    account::{
+        Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, BalanceDiffError,
+        apply_balance_diff,
+    },
     encryption::ViewingPublicKey,
 };
 
@@ -55,13 +58,29 @@ impl From<AccountId> for ProgramId {
 /// Borsh-encoded program instruction bytes.
 pub type InstructionData = Vec<u8>;
 
-/// Struct encoding the input to an LEE program.
+/// Everything the protocol hands a program: the call it is serving and the accounts it may act on.
+///
+/// A program echoes both back verbatim in its journal, which [`ProgramInput::into_output`] makes
+/// unforgeable by construction.
 #[derive(BorshSerialize, BorshDeserialize)]
-pub struct ProgramInput<T> {
-    pub self_program_id: ProgramId,
-    pub caller_program_id: Option<ProgramId>,
+pub struct ProgramInput {
+    pub call: CallContext,
     pub pre_states: Vec<AccountWithMetadata>,
-    pub instruction: T,
+}
+
+impl ProgramInput {
+    pub fn into_output(self, post_states: Vec<AccountDiffOutput>) -> ProgramOutput {
+        ProgramOutput {
+            call: self.call,
+            pre_states: self.pre_states,
+            effects: ProgramEffects {
+                post_states,
+                chained_calls: Vec::new(),
+                block_validity_window: ValidityWindow::new_unbounded(),
+                timestamp_validity_window: ValidityWindow::new_unbounded(),
+            },
+        }
+    }
 }
 
 /// A 32-byte seed used to compute a *Program-Derived `AccountId`* (PDA).
@@ -262,6 +281,35 @@ pub struct ChainedCall {
     pub pda_seeds: Vec<PdaSeed>,
 }
 
+/// The call a transaction opens with.
+///
+/// Nothing invokes it, so no caller can delegate seeds to it — and with no `pda_seeds` field
+/// there is nothing to pretend otherwise, rather than an emptiness someone has to assert. Field
+/// order preserves the circuit input's former flattened layout, which is NOT [`ChainedCall`]'s
+/// (there, `accounts` precedes `instruction_data`).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct EntryCall {
+    /// The program ID of the program to execute.
+    pub program_id: ProgramId,
+    /// The instruction data to pass.
+    pub instruction_data: InstructionData,
+    /// The accounts the program runs on, named by id only.
+    pub accounts: Vec<AccountId>,
+}
+
+impl EntryCall {
+    /// The only place an entry call's empty `pda_seeds` is written.
+    #[must_use]
+    pub fn into_chained_call(self) -> ChainedCall {
+        ChainedCall {
+            program_id: self.program_id,
+            accounts: self.accounts,
+            instruction_data: self.instruction_data,
+            pda_seeds: Vec::new(),
+        }
+    }
+}
+
 impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
     pub fn new<I: BorshSerialize>(
@@ -304,6 +352,21 @@ pub enum Claim {
     Pda(PdaSeed),
 }
 
+#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimError {
+    #[error("Trying to claim account {account_id} which is not default")]
+    ClaimedNonDefaultAccount { account_id: AccountId },
+
+    #[error("Trying to claim account {account_id} which is not authorized")]
+    ClaimedUnauthorizedAccount { account_id: AccountId },
+
+    #[error("PDA claim mismatch: expected {expected:?}, actual {actual:?}")]
+    MismatchedPdaClaim {
+        expected: AccountId,
+        actual: AccountId,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
 pub struct AccountDiffOutput {
@@ -315,6 +378,12 @@ impl AccountDiffOutput {
     #[must_use]
     pub const fn new(diff: AccountDiff) -> Self {
         Self { diff, claim: None }
+    }
+
+    /// An unclaimed output that leaves `id`'s balance and data untouched.
+    #[must_use]
+    pub const fn unchanged(id: AccountId) -> Self {
+        Self::new(AccountDiff::unchanged(id))
     }
 
     #[must_use]
@@ -350,15 +419,27 @@ impl AccountDiffOutput {
         &self.diff
     }
 
-    #[must_use]
-    pub const fn diff_mut(&mut self) -> &mut AccountDiff {
-        &mut self.diff
-    }
-}
-
-impl From<AccountDiffOutput> for AccountDiff {
-    fn from(output: AccountDiffOutput) -> Self {
-        output.diff
+    /// The post account this diff produces. Validating the claim is the caller's job; this only
+    /// applies the ownership transfer a validated claim implies.
+    pub fn materialize(
+        &self,
+        pre: &Account,
+        executing_program_id: ProgramId,
+    ) -> Result<Account, BalanceDiffError> {
+        Ok(Account {
+            program_owner: if self.claim.is_some() {
+                AccountId::from(executing_program_id)
+            } else {
+                pre.program_owner
+            },
+            balance: apply_balance_diff(pre.balance, self.diff.diff_balance)?,
+            data: self
+                .diff
+                .diff_data
+                .clone()
+                .unwrap_or_else(|| pre.data.clone()),
+            nonce: pre.nonce,
+        })
     }
 }
 
@@ -398,6 +479,18 @@ impl<T: Copy + PartialOrd> ValidityWindow<T> {
             return Err(InvalidWindow);
         }
         Ok(())
+    }
+
+    /// Narrowest window contained in both; `Err(InvalidWindow)` if the intersection is empty.
+    pub fn intersect(self, other: Self) -> Result<Self, InvalidWindow>
+    where
+        T: Ord,
+    {
+        let to = match (self.to, other.to) {
+            (Some(current), Some(end)) => Some(current.min(end)),
+            (current, end) => current.or(end),
+        };
+        (self.from.max(other.from), to).try_into()
     }
 
     /// Inclusive lower bound. `None` means no lower bound.
@@ -462,47 +555,71 @@ impl<T> From<std::ops::RangeFull> for ValidityWindow<T> {
 #[error("Invalid window")]
 pub struct InvalidWindow;
 
+/// The call a program was posed, as opposed to what it made of it.
 #[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-#[must_use = "ProgramOutput does nothing unless written"]
-pub struct ProgramOutput {
-    /// The program ID of the program that produced this output.
+pub struct CallContext {
+    /// The program ID of the program this call ran.
     pub self_program_id: ProgramId,
     /// The program ID of the caller that invoked this program via a chained call,
     /// or `None` if this is a top-level call.
     pub caller_program_id: Option<ProgramId>,
-    /// The instruction data the program received to produce this output.
+    /// The instruction data the program was called with.
     pub instruction_data: InstructionData,
-    /// The account pre states the program received to produce this output.
-    pub pre_states: Vec<AccountWithMetadata>,
+}
+
+/// What the program decided. Nothing here follows from the call, so it is the only part of a
+/// journal the privacy circuit has to be told.
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct ProgramEffects {
     /// The account diffs the program execution produced.
     pub post_states: Vec<AccountDiffOutput>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
-    /// The block ID window where the program output is valid.
+    /// The block ID window these effects are valid in.
     pub block_validity_window: BlockValidityWindow,
-    /// The timestamp window where the program output is valid.
+    /// The timestamp window these effects are valid in.
     pub timestamp_validity_window: TimestampValidityWindow,
 }
 
+/// The journal a program commits.
+///
+/// A risc0 receipt binds a program's image and its journal, never its inputs, so a program's own
+/// account of the call it served is worth nothing on its own. The split runs along that seam: the
+/// privacy circuit derives [`CallContext`] and `pre_states` from the chained call it is walking
+/// and verifies the journal it assembles from them, leaving the program a say only over
+/// [`ProgramEffects`].
+///
+/// The nested fields are serialized inline, so the encoding is the flat one programs have always
+/// committed.
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+#[must_use = "ProgramOutput does nothing unless written"]
+pub struct ProgramOutput {
+    pub call: CallContext,
+    /// The account pre states the program received to produce this output.
+    pub pre_states: Vec<AccountWithMetadata>,
+    pub effects: ProgramEffects,
+}
+
 impl ProgramOutput {
-    pub const fn new(
+    pub fn new(
         self_program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
         instruction_data: InstructionData,
         pre_states: Vec<AccountWithMetadata>,
         post_states: Vec<AccountDiffOutput>,
     ) -> Self {
-        Self {
-            self_program_id,
-            caller_program_id,
-            instruction_data,
+        ProgramInput {
+            call: CallContext {
+                self_program_id,
+                caller_program_id,
+                instruction_data,
+            },
             pre_states,
-            post_states,
-            chained_calls: Vec::new(),
-            block_validity_window: ValidityWindow::new_unbounded(),
-            timestamp_validity_window: ValidityWindow::new_unbounded(),
         }
+        .into_output(post_states)
     }
 
     pub fn write(self) {
@@ -510,13 +627,13 @@ impl ProgramOutput {
     }
 
     pub fn with_chained_calls(mut self, chained_calls: Vec<ChainedCall>) -> Self {
-        self.chained_calls = chained_calls;
+        self.effects.chained_calls = chained_calls;
         self
     }
 
     /// Sets the block ID validity window from an infallible range conversion (`1..`, `..5`, `..`).
     pub fn with_block_validity_window<W: Into<BlockValidityWindow>>(mut self, window: W) -> Self {
-        self.block_validity_window = window.into();
+        self.effects.block_validity_window = window.into();
         self
     }
 
@@ -528,7 +645,7 @@ impl ProgramOutput {
         mut self,
         window: W,
     ) -> Result<Self, InvalidWindow> {
-        self.block_validity_window = window.try_into()?;
+        self.effects.block_validity_window = window.try_into()?;
         Ok(self)
     }
 
@@ -537,7 +654,7 @@ impl ProgramOutput {
         mut self,
         window: W,
     ) -> Self {
-        self.timestamp_validity_window = window.into();
+        self.effects.timestamp_validity_window = window.into();
         self
     }
 
@@ -549,17 +666,19 @@ impl ProgramOutput {
         mut self,
         window: W,
     ) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = window.try_into()?;
+        self.effects.timestamp_validity_window = window.try_into()?;
         Ok(self)
     }
 
     pub fn valid_from_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (ts, self.timestamp_validity_window.end()).try_into()?;
+        self.effects.timestamp_validity_window =
+            (ts, self.effects.timestamp_validity_window.end()).try_into()?;
         Ok(self)
     }
 
     pub fn valid_until_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (self.timestamp_validity_window.start(), ts).try_into()?;
+        self.effects.timestamp_validity_window =
+            (self.effects.timestamp_validity_window.start(), ts).try_into()?;
         Ok(self)
     }
 }
@@ -664,27 +783,79 @@ pub enum CallKind {
 
 /// The guest-side view of a single invocation.
 pub enum ProgramCall<T> {
-    Execute(ProgramInput<T>, InstructionData),
+    Execute { input: ProgramInput, instruction: T },
 }
 
-/// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
-///
-/// Returns only public-form derivations, suitable for contexts where all accounts are public
-/// (e.g. the public-execution path). The privacy circuit must additionally check each mask-3
-/// `pre_state` against [`AccountId::for_private_pda`] with the supplied npk for that
-/// `pre_state`.
+/// A default-owned account whose state changed without any program claiming it. Both walks
+/// reject this at end of execution; the claim rules below are what makes a change legitimate.
 #[must_use]
-pub fn compute_public_authorized_pdas(
-    caller_program_id: Option<ProgramId>,
-    pda_seeds: &[PdaSeed],
-) -> HashSet<AccountId> {
-    let Some(caller) = caller_program_id else {
-        return HashSet::new();
-    };
-    pda_seeds
-        .iter()
-        .map(|seed| AccountId::for_public_pda(&caller, seed))
-        .collect()
+pub fn is_unclaimed_modified_default(pre: &Account, post: &Account) -> bool {
+    pre.program_owner == DEFAULT_PROGRAM_OWNER
+        && pre != post
+        && post.program_owner == DEFAULT_PROGRAM_OWNER
+}
+
+/// A claim of ANY kind requires a default-owned pre state; the per-kind rules in
+/// [`validate_public_claim`] apply on top, and only to public accounts.
+pub fn validate_claim_precondition(pre: &AccountWithMetadata) -> Result<(), ClaimError> {
+    if pre.account.program_owner == DEFAULT_PROGRAM_OWNER {
+        Ok(())
+    } else {
+        Err(ClaimError::ClaimedNonDefaultAccount {
+            account_id: pre.account_id,
+        })
+    }
+}
+
+/// The per-kind rules a claim on a PUBLIC account must satisfy, on top of
+/// [`validate_claim_precondition`].
+///
+/// Private accounts are deliberately exempt: unauthorized private claiming is allowed, so the
+/// circuit only runs this on its public arm.
+pub fn validate_public_claim(
+    claim: Claim,
+    pre: &AccountWithMetadata,
+    executing_program_id: ProgramId,
+) -> Result<(), ClaimError> {
+    let account_id = pre.account_id;
+    match claim {
+        Claim::Authorized => {
+            if pre.is_authorized {
+                Ok(())
+            } else {
+                Err(ClaimError::ClaimedUnauthorizedAccount { account_id })
+            }
+        }
+        Claim::Pda(seed) => {
+            let expected = AccountId::for_public_pda(&executing_program_id, &seed);
+            if expected == account_id {
+                Ok(())
+            } else {
+                Err(ClaimError::MismatchedPdaClaim {
+                    expected,
+                    actual: account_id,
+                })
+            }
+        }
+    }
+}
+
+/// Match `account_id` against the caller's seeds under the public-PDA derivation. `None`
+/// if no appropriate authorization given.
+#[must_use]
+pub fn match_caller_seed_as_public_pda(
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
+    account_id: AccountId,
+) -> Option<(PdaSeed, ProgramId)> {
+    let caller_program_id = caller.program_id?;
+    // Costy for calls with multiple seeds in one call.
+    caller_pda_seeds.iter().find_map(|seed| {
+        if AccountId::for_public_pda(&caller_program_id, seed) == account_id {
+            return Some((*seed, caller_program_id));
+        }
+        None
+    })
 }
 
 /// Reads first 4 bytes indicating the length in bytes of the program input bytes.
@@ -704,31 +875,18 @@ pub fn read_input_frame() -> Vec<u8> {
 /// Every guest `main` should match on the returned [`ProgramCall`] rather than assume it was
 /// invoked to execute. Each of `CallKind` and the invocation's own payload is read as its own
 /// length-prefixed borsh frame (see [`read_input_frame`]), one after the other; the payload frame
-/// decodes as `ProgramInput<InstructionData>`, with `T` a second decode of the instruction bytes.
+/// decodes as [`ProgramInput`], with `T` a second decode of its raw instruction bytes.
 #[must_use]
 pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
     let call_kind: CallKind =
         borsh::from_slice(&read_input_frame()).expect("call kind must decode from borsh");
     match call_kind {
         CallKind::Execute => {
-            let ProgramInput {
-                self_program_id,
-                caller_program_id,
-                pre_states,
-                instruction: instruction_data,
-            } = borsh::from_slice::<ProgramInput<InstructionData>>(&read_input_frame())
-                .expect("guest input must be valid borsh");
-            let instruction =
-                borsh::from_slice(&instruction_data).expect("instruction must decode from borsh");
-            ProgramCall::Execute(
-                ProgramInput {
-                    self_program_id,
-                    caller_program_id,
-                    pre_states,
-                    instruction,
-                },
-                instruction_data,
-            )
+            let input: ProgramInput =
+                borsh::from_slice(&read_input_frame()).expect("guest input must be valid borsh");
+            let instruction = borsh::from_slice(&input.call.instruction_data)
+                .expect("instruction must decode from borsh");
+            ProgramCall::Execute { input, instruction }
         }
     }
 }

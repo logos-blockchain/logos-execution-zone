@@ -2528,11 +2528,11 @@ fn call_new_definition_chained_call_successful() {
 #[test]
 fn call_swap_incorrect_token_type() {
     let _post_states = swap_exact_input(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_lp_definition_id(),
@@ -2543,11 +2543,11 @@ fn call_swap_incorrect_token_type() {
 #[test]
 fn call_swap_vault_a_omitted() {
     let _post_states = swap_exact_input(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_with_wrong_id(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_with_wrong_id(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
@@ -2558,11 +2558,11 @@ fn call_swap_vault_a_omitted() {
 #[test]
 fn call_swap_vault_b_omitted() {
     let _post_states = swap_exact_input(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_with_wrong_id(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_with_wrong_id(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
@@ -2573,11 +2573,11 @@ fn call_swap_vault_b_omitted() {
 #[test]
 fn call_swap_reserves_vault_mismatch_1() {
     let _post_states = swap_exact_input(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init_low(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init_low(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
@@ -2588,11 +2588,11 @@ fn call_swap_reserves_vault_mismatch_1() {
 #[test]
 fn call_swap_reserves_vault_mismatch_2() {
     let _post_states = swap_exact_input(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init_low(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init_low(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
@@ -2603,11 +2603,11 @@ fn call_swap_reserves_vault_mismatch_2() {
 #[test]
 fn call_swap_ianctive() {
     let _post_states = swap_exact_input(
-        AccountWithMetadataForTests::pool_definition_inactive(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_inactive(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
@@ -2618,11 +2618,11 @@ fn call_swap_ianctive() {
 #[test]
 fn call_swap_below_min_out() {
     let _post_states = swap_exact_input(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
@@ -2632,11 +2632,11 @@ fn call_swap_below_min_out() {
 #[test]
 fn call_swap_chained_call_successful_1() {
     let (post_states, chained_calls) = swap_exact_input(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_a_low(),
         IdForTests::token_a_definition_id(),
@@ -2669,11 +2669,11 @@ fn call_swap_chained_call_successful_1() {
 #[test]
 fn call_swap_chained_call_successful_2() {
     let (post_states, chained_calls) = swap_exact_input(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_b(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_b_definition_id(),
@@ -2707,11 +2707,11 @@ fn call_swap_chained_call_successful_2() {
 #[test]
 fn call_swap_exact_output_incorrect_token_type() {
     let _post_states = swap_exact_output(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_lp_definition_id(),
@@ -2722,11 +2722,11 @@ fn call_swap_exact_output_incorrect_token_type() {
 #[test]
 fn call_swap_exact_output_vault_a_omitted() {
     let _post_states = swap_exact_output(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_with_wrong_id(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_with_wrong_id(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
@@ -2737,11 +2737,11 @@ fn call_swap_exact_output_vault_a_omitted() {
 #[test]
 fn call_swap_exact_output_vault_b_omitted() {
     let _post_states = swap_exact_output(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_with_wrong_id(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_with_wrong_id(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
@@ -2752,11 +2752,11 @@ fn call_swap_exact_output_vault_b_omitted() {
 #[test]
 fn call_swap_exact_output_reserves_vault_mismatch_1() {
     let _post_states = swap_exact_output(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init_low(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init_low(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
@@ -2767,11 +2767,11 @@ fn call_swap_exact_output_reserves_vault_mismatch_1() {
 #[test]
 fn call_swap_exact_output_reserves_vault_mismatch_2() {
     let _post_states = swap_exact_output(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init_low(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init_low(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
@@ -2782,11 +2782,11 @@ fn call_swap_exact_output_reserves_vault_mismatch_2() {
 #[test]
 fn call_swap_exact_output_inactive() {
     let _post_states = swap_exact_output(
-        AccountWithMetadataForTests::pool_definition_inactive(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_inactive(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
@@ -2797,11 +2797,11 @@ fn call_swap_exact_output_inactive() {
 #[test]
 fn call_swap_exact_output_exceeds_max_in() {
     let _post_states = swap_exact_output(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         166_u128,
         100_u128,
         IdForTests::token_a_definition_id(),
@@ -2812,11 +2812,11 @@ fn call_swap_exact_output_exceeds_max_in() {
 #[test]
 fn call_swap_exact_output_zero() {
     let _post_states = swap_exact_output(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         0_u128,
         500_u128,
         IdForTests::token_a_definition_id(),
@@ -2827,11 +2827,11 @@ fn call_swap_exact_output_zero() {
 #[test]
 fn call_swap_exact_output_exceeds_reserve() {
     let _post_states = swap_exact_output(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::vault_b_reserve_init(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
@@ -2841,11 +2841,11 @@ fn call_swap_exact_output_exceeds_reserve() {
 #[test]
 fn call_swap_exact_output_chained_call_successful() {
     let (post_states, chained_calls) = swap_exact_output(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         BalanceForTests::max_amount_in(),
         BalanceForTests::vault_b_reserve_init(),
         IdForTests::token_a_definition_id(),
@@ -2878,11 +2878,11 @@ fn call_swap_exact_output_chained_call_successful() {
 #[test]
 fn call_swap_exact_output_chained_call_successful_2() {
     let (post_states, chained_calls) = swap_exact_output(
-        AccountWithMetadataForTests::pool_definition_init(),
-        AccountWithMetadataForTests::vault_a_init(),
-        AccountWithMetadataForTests::vault_b_init(),
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &AccountWithMetadataForTests::pool_definition_init(),
+        &AccountWithMetadataForTests::vault_a_init(),
+        &AccountWithMetadataForTests::vault_b_init(),
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         285,
         300,
         IdForTests::token_b_definition_id(),
@@ -2974,11 +2974,11 @@ fn swap_exact_output_overflow_protection() {
     };
 
     let _result = swap_exact_output(
-        pool,
-        vault_a,
-        vault_b,
-        AccountWithMetadataForTests::user_holding_a(),
-        AccountWithMetadataForTests::user_holding_b(),
+        &pool,
+        &vault_a,
+        &vault_b,
+        &AccountWithMetadataForTests::user_holding_a(),
+        &AccountWithMetadataForTests::user_holding_b(),
         2, // exact_amount_out: small, valid (< reserve_b)
         1, // max_amount_in: tiny — real deposit would be enormous, but
         // overflow wraps it to 0, making 0 <= 1 pass silently

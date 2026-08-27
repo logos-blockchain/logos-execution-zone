@@ -30,7 +30,10 @@ fn circuit_fails_if_visibility_masks_have_incorrect_lenght() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::MissingInputAccount { .. })),
+        "expected an account with no supplied input, got: {result:?}"
+    );
 }
 
 #[test]
@@ -394,7 +397,7 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
 /// A private PDA account that no program claims via `Claim::Pda` and no caller authorizes via
 /// `ChainedCall.pda_seeds` has no binding between its supplied npk and its `account_id`,
 /// so the circuit must reject. Here `simple_balance_transfer` emits no claim for the
-/// second account, leaving position 1 unbound.
+/// second account, leaving it unbound.
 #[test]
 fn private_pda_without_binding_fails() {
     let program = crate::test_methods::simple_balance_transfer();
@@ -421,12 +424,15 @@ fn private_pda_without_binding_fails() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::UnboundPrivatePda { .. })),
+        "expected an unbound private PDA, got: {result:?}"
+    );
 }
 
 /// Happy path: a program claims a new private PDA via `Claim::Pda(seed)`. The circuit
-/// reads the npk for that `pre_state` from `private_account_keys` at the `pre_state`'s
-/// position, derives `AccountId` via `AccountId::for_private_pda(program_id, seed, npk)`, and
+/// reads the npk for that `pre_state` from `private_account_keys`, derives `AccountId` via
+/// `AccountId::for_private_pda(program_id, seed, npk)`, and
 /// asserts it equals the `pre_state`'s `account_id`. The equality both validates the claim
 /// and binds the supplied npk to the `account_id`.
 #[test]
@@ -477,7 +483,10 @@ fn private_pda_npk_mismatch_fails() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::PrivatePdaMismatch { .. })),
+        "expected the private-PDA derivation to disagree, got: {result:?}"
+    );
 }
 
 /// Happy path for the caller-seeds authorization of a private PDA. The delegator claims a
@@ -637,7 +646,7 @@ fn holder_authorization_survives_across_sibling_calls() {
 }
 
 #[test]
-fn inherited_scope_passes_through_intermediate_calls() {
+fn nested_callee_that_omits_its_named_accounts_cannot_prove() {
     let delegator = crate::test_methods::selective_pda_delegator();
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let callee = crate::test_methods::auth_asserting_noop();
@@ -655,7 +664,7 @@ fn inherited_scope_passes_through_intermediate_calls() {
         [(forwarder_id, forwarder), (callee_id, callee)].into(),
     );
     let no_sibling: Option<(ProgramId, bool)> = None;
-    let forward_through_undeclaring_call = Program::serialize_instruction((
+    let forward_through_nested_call = Program::serialize_instruction((
         forwarder_id,
         Program::serialize_instruction((
             callee_id,
@@ -667,21 +676,33 @@ fn inherited_scope_passes_through_intermediate_calls() {
     ))
     .unwrap();
 
-    execute_and_prove(
+    let error = execute_and_prove(
         vec![pre_state],
         Program::serialize_instruction((
             seed,
             seed,
             forwarder_id,
-            forward_through_undeclaring_call,
+            forward_through_nested_call,
             no_sibling,
         ))
         .unwrap(),
         vec![init_pda_witness(&keys, 0, None)],
         &program_with_deps,
     )
-    .expect(
-        "an account authorized in an ancestor's output stays authorized below a call that never mentions it",
+    .expect_err("a callee that journals none of the accounts its caller named must not prove");
+
+    // The middle forwarder is handed `[pda]` and journals nothing, but the walk rebuilds
+    // `[pda]` from its caller's refs. The host runs that same derivation and rejects the
+    // mismatched journal before proving; the circuit-side splice for a hand-assembled proof
+    // is pinned by `a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named`.
+    assert!(
+        matches!(
+            &error,
+            LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::JournalledOutputMismatch { program_id }
+            ) if *program_id == forwarder_id
+        ),
+        "expected the forwarder's journalled pre_states to mismatch the derivation, got: {error:?}"
     );
 }
 
@@ -734,6 +755,134 @@ fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
     assert!(proof.is_valid_for(&output));
 }
 
+/// A chained call's `accounts` bind the accounts its callee is run on.
+///
+/// Both programs are honest, unmodified and in-tree, and both inner receipts are genuine — a
+/// risc0 receipt binds the image and the journal, never the inputs. Only the wiring lies: the
+/// forwarder's own verified journal names `[sender, recipient]`, and the real
+/// `simple_balance_transfer` ELF is run on `[sender, attacker]`. The circuit rebuilds the
+/// accounts the call named, splices them into the journal it verifies, and no receipt exists for
+/// those bytes — so the redirect cannot be proven and the attacker is never credited.
+#[test]
+fn a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named() {
+    const TRANSFER: u128 = 10;
+
+    /// Runs a program on caller-chosen inputs, exactly as the prover's own host would.
+    fn run(
+        program: &Program,
+        caller_program_id: Option<ProgramId>,
+        pre_states: &[AccountWithMetadata],
+        instruction_data: &[u8],
+    ) -> (risc0_zkvm::Receipt, lee_core::program::ProgramOutput) {
+        let mut env_builder = risc0_zkvm::ExecutorEnv::builder();
+        program
+            .write_inputs(
+                caller_program_id,
+                pre_states,
+                instruction_data,
+                &mut env_builder,
+            )
+            .expect("inputs are writable");
+        let receipt = risc0_zkvm::default_prover()
+            .prove(env_builder.build().expect("env builds"), program.elf())
+            .expect("program proves")
+            .receipt;
+        let output = lee_core::parse_journal(&receipt.journal.bytes).expect("journal decodes");
+        (receipt, output)
+    }
+
+    let forwarder = crate::test_methods::non_delegating_forwarder();
+    let transfer = crate::test_methods::simple_balance_transfer();
+    let forwarder_id = forwarder.id();
+    let transfer_id = transfer.id();
+
+    let held = |balance| Account {
+        program_owner: transfer_id.into(),
+        balance,
+        ..Account::default()
+    };
+    let sender = AccountWithMetadata::new(held(100), true, AccountId::new([1; 32]));
+    let recipient = AccountWithMetadata::new(held(0), false, AccountId::new([2; 32]));
+    let attacker = AccountWithMetadata::new(held(0), false, AccountId::new([3; 32]));
+
+    // 1. The honest forwarder, run honestly: it names `[sender, recipient]` for the transfer.
+    let forwarder_instruction = Program::serialize_instruction((
+        transfer_id,
+        Program::serialize_instruction(TRANSFER).unwrap(),
+        true,
+    ))
+    .unwrap();
+    let (forwarder_receipt, forwarder_output) = run(
+        &forwarder,
+        None,
+        &[sender.clone(), recipient.clone()],
+        &forwarder_instruction,
+    );
+    let chained_call = &forwarder_output.effects.chained_calls[0];
+    assert_eq!(
+        chained_call.accounts,
+        vec![sender.account_id, recipient.account_id]
+    );
+
+    // 2. The lie, and it is only in the wiring: the same honest transfer ELF, run on an account the
+    //    chained call never named.
+    let (transfer_receipt, transfer_output) = run(
+        &transfer,
+        Some(forwarder_id),
+        &[sender.clone(), attacker.clone()],
+        &chained_call.instruction_data,
+    );
+    let ran_on: Vec<AccountId> = transfer_output
+        .pre_states
+        .iter()
+        .map(|pre| pre.account_id)
+        .collect();
+    assert_ne!(
+        chained_call.accounts, ran_on,
+        "the callee ran on accounts the chained call never named"
+    );
+
+    // 3. The circuit input a lying prover would submit for the pair.
+    let circuit_input = lee_core::PrivacyPreservingCircuitInput {
+        program_effects: vec![forwarder_output.effects, transfer_output.effects],
+        top_level_call: EntryCall {
+            program_id: forwarder_id,
+            instruction_data: forwarder_instruction,
+            accounts: vec![sender.account_id, recipient.account_id],
+        },
+        input_accounts: [&sender, &recipient, &attacker]
+            .into_iter()
+            .map(|pre| lee_core::InputAccount {
+                account_id: pre.account_id,
+                account: pre.account.clone(),
+                is_authorized: pre.is_authorized,
+                identity: InputAccountIdentity::Public,
+            })
+            .collect(),
+        dummy_inputs: vec![],
+    };
+    let mut env_builder = risc0_zkvm::ExecutorEnv::builder();
+    env_builder.add_assumption(forwarder_receipt);
+    env_builder.add_assumption(transfer_receipt);
+    env_builder.write_slice(&lee_core::to_frame(&borsh::to_vec(&circuit_input).unwrap()));
+    let result = risc0_zkvm::default_prover().prove_with_opts(
+        env_builder.build().expect("env builds"),
+        crate::PRIVACY_PRESERVING_CIRCUIT_ELF,
+        &risc0_zkvm::ProverOpts::succinct(),
+    );
+
+    // Pin the mechanism, not just the failure: the rebuilt journal names `[sender, recipient]`,
+    // so the receipt the prover holds — for a run on `[sender, attacker]` — resolves nothing. A
+    // bare `is_err` here would also pass on a stale circuit artifact that decodes no input at all.
+    let error = result
+        .expect_err("the circuit must reject a callee run on accounts its caller never named")
+        .to_string();
+    assert!(
+        error.contains("no receipt found to resolve assumption"),
+        "expected the spliced journal to resolve no receipt, got: {error}"
+    );
+}
+
 /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
 /// `AccountId`s, one public PDA and one private PDA per distinct npk. Without the tx-wide
 /// family-binding check, a program could claim `PDA_alice` (`alice_npk`) and
@@ -777,12 +926,15 @@ fn two_private_pda_claims_under_same_seed_are_rejected() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::FamilyBindingConflict { .. })),
+        "expected two accounts under one (program, seed), got: {result:?}"
+    );
 }
 
 /// A private PDA that is reused at top level without an external seed in the identity still
 /// fails binding. The noop program emits no `Claim::Pda` and there is no caller
-/// `ChainedCall.pda_seeds`, so position 0 is never bound and the assertion fires.
+/// `ChainedCall.pda_seeds`, so the account is never bound and the assertion fires.
 /// Supplying `binding: Some((owner_program_id, seed))` in the witness's `WitnessKind::Pda` is
 /// the correct path for top-level reuse; this test pins the failure when no seed is provided.
 #[test]
@@ -809,7 +961,10 @@ fn private_pda_top_level_reuse_rejected_by_binding_check() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::UnboundPrivatePda { .. })),
+        "expected an unbound private PDA, got: {result:?}"
+    );
 }
 
 #[test]
@@ -915,7 +1070,10 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::InvalidInput(message)) if message.contains("Duplicate input account")),
+        "expected the duplicate input account to be rejected, got: {result:?}"
+    );
 }
 
 #[test]

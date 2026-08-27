@@ -1,36 +1,22 @@
 use lee_core::{
     account::AccountDiff,
-    program::{
-        AccountDiffOutput, Claim, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-    },
+    program::{AccountDiffOutput, Claim, PdaSeed, ProgramCall, read_lee_call},
 };
 
 type Instruction = PdaSeed;
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: seed,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: seed,
+    } = read_lee_call::<Instruction>();
 
-    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
+    let [pre] = input.pre_states.as_slice() else {
         return;
     };
 
     let account_post =
         AccountDiffOutput::new_claimed(AccountDiff::unchanged(pre.account_id), Claim::Pda(seed));
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pre],
-        vec![account_post],
-    )
-    .write();
+    input.into_output(vec![account_post]).write();
 }

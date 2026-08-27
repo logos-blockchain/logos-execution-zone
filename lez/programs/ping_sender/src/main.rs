@@ -1,9 +1,8 @@
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
+    account::{Account, AccountDiff, BalanceDiff},
     program::{
-        AccountDiffOutput, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_call,
+        AccountDiffOutput, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput, read_lee_call,
     },
 };
 use ping_core::{
@@ -11,18 +10,10 @@ use ping_core::{
 };
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = read_lee_call::<SenderInstruction>();
+    let ProgramCall::Execute { input, instruction } = read_lee_call::<SenderInstruction>();
 
     assert!(
-        caller_program_id.is_none(),
+        input.call.caller_program_id.is_none(),
         "ping_sender is only invoked as a top-level user transaction"
     );
 
@@ -34,35 +25,21 @@ fn main() {
             payload,
             ordinal,
         } => send(
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction_data,
+            input,
             target_zone,
             target_program_id,
             target_accounts,
             payload,
             ordinal,
         ),
-        SenderInstruction::InitConfig { outbox_program_id } => init_config(
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction_data,
-            outbox_program_id,
-        ),
+        SenderInstruction::InitConfig { outbox_program_id } => {
+            init_config(input, outbox_program_id);
+        }
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the emission fields are passed through verbatim"
-)]
 fn send(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
-    instruction_data: Vec<u8>,
+    input: ProgramInput,
     target_zone: [u8; 32],
     target_program_id: ProgramId,
     target_accounts: Vec<[u8; 32]>,
@@ -71,14 +48,15 @@ fn send(
 ) {
     // pre_states: [config PDA, outbox PDA]. The outbox claims its own slot, so
     // ping_sender forwards it unchanged.
-    let [config, outbox] = <[AccountWithMetadata; 2]>::try_from(pre_states)
-        .expect("Send requires the config and outbox accounts");
+    let [config, outbox] = input.pre_states.as_slice() else {
+        panic!("Send requires the config and outbox accounts");
+    };
 
     // Pinned rather than caller-named: chaining elsewhere would let an emission
     // skip the real outbox and leave no record of itself.
     assert_eq!(
         config.account_id,
-        sender_config_account_id(self_program_id),
+        sender_config_account_id(input.call.self_program_id),
         "first account must be the ping-sender config PDA"
     );
     let outbox_program_id =
@@ -96,36 +74,26 @@ fn send(
         },
     );
 
-    let config_post = AccountDiffOutput::new(AccountDiff::unchanged(config.account_id));
+    let post_states = vec![
+        AccountDiffOutput::unchanged(config.account_id),
+        AccountDiffOutput::unchanged(outbox.account_id),
+    ];
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![config, outbox.clone()],
-        vec![
-            config_post,
-            AccountDiffOutput::new(AccountDiff::unchanged(outbox.account_id)),
-        ],
-    )
-    .with_chained_calls(vec![call])
-    .write();
+    input
+        .into_output(post_states)
+        .with_chained_calls(vec![call])
+        .write();
 }
 
 /// Writes the outbox program id into the config PDA exactly once at genesis.
-fn init_config(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
-    instruction_data: Vec<u8>,
-    outbox_program_id: ProgramId,
-) {
+fn init_config(input: ProgramInput, outbox_program_id: ProgramId) {
     // pre_states: [config PDA].
-    let [config] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitConfig requires the config account");
+    let [config] = input.pre_states.as_slice() else {
+        panic!("InitConfig requires the config account");
+    };
     assert_eq!(
         config.account_id,
-        sender_config_account_id(self_program_id),
+        sender_config_account_id(input.call.self_program_id),
         "account must be the ping-sender config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
@@ -135,7 +103,7 @@ fn init_config(
     if config.account != Account::default() {
         assert_eq!(
             config.account.program_owner,
-            self_program_id.into(),
+            input.call.self_program_id.into(),
             "ping-sender config PDA is owned by another program"
         );
         assert_eq!(
@@ -161,12 +129,5 @@ fn init_config(
         Claim::Pda(sender_config_seed()),
     );
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![config],
-        vec![config_post],
-    )
-    .write();
+    input.into_output(vec![config_post]).write();
 }

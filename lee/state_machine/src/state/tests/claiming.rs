@@ -498,7 +498,13 @@ fn unauthorized_public_account_claiming_fails_when_executed_privately() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::Claim {
+            source: ClaimError::ClaimedUnauthorizedAccount { .. },
+            ..
+        })),
+        "expected the unauthorized claim to be rejected, got: {result:?}"
+    );
 }
 
 #[test]
@@ -651,22 +657,8 @@ fn private_chained_call(number_of_calls: u32) {
     let (output, proof) = execute_and_prove(
         vec![to_account, from_account],
         Program::serialize_instruction(instruction).unwrap(),
+        // Aligned with the `pre_states` above, not with the order `chain_caller` commits them in.
         vec![
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: from_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(from_keys.ask),
-                },
-                nullifier: NullifierWitness::Update {
-                    view_tag: 0,
-                    nsk: from_keys.nsk(),
-                    membership_proof: state
-                        .get_proof_for_commitment(&from_commitment)
-                        .expect("from's commitment must be in state"),
-                },
-            }),
             InputAccountIdentity::Private(PrivateWitness {
                 vpk: to_keys.vpk(),
                 random_seed: [0; 32],
@@ -680,6 +672,21 @@ fn private_chained_call(number_of_calls: u32) {
                     membership_proof: state
                         .get_proof_for_commitment(&to_commitment)
                         .expect("to's commitment must be in state"),
+                },
+            }),
+            InputAccountIdentity::Private(PrivateWitness {
+                vpk: from_keys.vpk(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular {
+                    ask: Some(from_keys.ask),
+                },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: from_keys.nsk(),
+                    membership_proof: state
+                        .get_proof_for_commitment(&from_commitment)
+                        .expect("from's commitment must be in state"),
                 },
             }),
         ],
@@ -732,8 +739,8 @@ fn claiming_mechanism_cannot_claim_initialied_accounts() {
 
     assert!(matches!(
         result,
-        Err(LeeError::InvalidProgramBehavior(
-            InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id: err_account_id }
-        )) if err_account_id == account_id
+        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Claim(
+            ClaimError::ClaimedNonDefaultAccount { account_id: err_account_id }
+        ))) if err_account_id == account_id
     ));
 }

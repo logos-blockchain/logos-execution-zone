@@ -37,12 +37,8 @@
 //! - `flash_swap_self_call_targets_correct_program`: zero-amount self-call isolation test
 //! - `flash_swap_standalone_invariant_check_rejected`: `caller_program_id` access control
 
-use lee_core::{
-    account::AccountDiff,
-    program::{
-        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call,
-    },
+use lee_core::program::{
+    AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call,
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -69,15 +65,9 @@ pub enum FlashSwapInstruction {
 }
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = read_lee_call::<FlashSwapInstruction>();
+    let ProgramCall::Execute { input, instruction } = read_lee_call::<FlashSwapInstruction>();
+    let (self_program_id, caller_program_id) =
+        (input.call.self_program_id, input.call.caller_program_id);
 
     match instruction {
         FlashSwapInstruction::Initiate {
@@ -86,9 +76,10 @@ fn main() {
             amount_out,
             callback_instruction_data,
         } => {
-            let Ok([vault_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {
+            let [vault_pre, receiver_pre] = input.pre_states.as_slice() else {
                 panic!("Initiate requires exactly 2 accounts: vault, receiver");
             };
+            let (vault_id, receiver_id) = (vault_pre.account_id, receiver_pre.account_id);
 
             // Capture initial vault balance, the invariant check will verify it is restored.
             let min_vault_balance = vault_pre.account.balance;
@@ -100,7 +91,7 @@ fn main() {
                 borsh::to_vec(&amount_out).expect("transfer instruction serialization");
             let call_1 = ChainedCall {
                 program_id: token_program_id,
-                accounts: vec![vault_pre.account_id, receiver_pre.account_id],
+                accounts: vec![vault_id, receiver_id],
                 instruction_data: transfer_instruction,
                 pda_seeds: vec![PdaSeed::new([0_u8; 32])],
             };
@@ -109,7 +100,7 @@ fn main() {
             // etc.) and is expected to return funds to the vault.
             let call_2 = ChainedCall {
                 program_id: callback_program_id,
-                accounts: vec![vault_pre.account_id, receiver_pre.account_id],
+                accounts: vec![vault_id, receiver_id],
                 instruction_data: callback_instruction_data,
                 pda_seeds: vec![],
             };
@@ -125,25 +116,20 @@ fn main() {
                     .expect("invariant instruction serialization");
             let call_3 = ChainedCall {
                 program_id: self_program_id, // self-referential chained call
-                accounts: vec![vault_pre.account_id],
+                accounts: vec![vault_id],
                 instruction_data: invariant_instruction,
                 pda_seeds: vec![],
             };
 
             // The initiator itself makes no direct state changes.
             // All mutations happen inside the chained calls (token transfers).
-            ProgramOutput::new(
-                self_program_id,
-                caller_program_id,
-                instruction_data,
-                vec![vault_pre.clone(), receiver_pre.clone()],
-                vec![
-                    AccountDiffOutput::new(AccountDiff::unchanged(vault_pre.account_id)),
-                    AccountDiffOutput::new(AccountDiff::unchanged(receiver_pre.account_id)),
-                ],
-            )
-            .with_chained_calls(vec![call_1, call_2, call_3])
-            .write();
+            input
+                .into_output(vec![
+                    AccountDiffOutput::unchanged(vault_id),
+                    AccountDiffOutput::unchanged(receiver_id),
+                ])
+                .with_chained_calls(vec![call_1, call_2, call_3])
+                .write();
         }
 
         FlashSwapInstruction::InvariantCheck { min_vault_balance } => {
@@ -159,9 +145,10 @@ fn main() {
                  via a chained call",
             );
 
-            let Ok([vault]) = <[_; 1]>::try_from(pre_states) else {
+            let [vault] = input.pre_states.as_slice() else {
                 panic!("InvariantCheck requires exactly 1 account: vault");
             };
+            let vault_id = vault.account_id;
 
             // The core invariant: vault balance must not have decreased.
             // If the callback returned funds, this passes. If not, this panics and
@@ -174,16 +161,9 @@ fn main() {
             );
 
             // Pass-through: no state changes in the invariant check step.
-            ProgramOutput::new(
-                self_program_id,
-                caller_program_id,
-                instruction_data,
-                vec![vault.clone()],
-                vec![AccountDiffOutput::new(AccountDiff::unchanged(
-                    vault.account_id,
-                ))],
-            )
-            .write();
+            input
+                .into_output(vec![AccountDiffOutput::unchanged(vault_id)])
+                .write();
         }
     }
 }

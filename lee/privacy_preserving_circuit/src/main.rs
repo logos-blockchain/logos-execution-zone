@@ -1,24 +1,64 @@
-use lee_core::{PrivacyPreservingCircuitInput, program::read_input_frame};
+use std::convert::Infallible;
+
+use lee_core::{
+    PrivacyPreservingCircuitInput,
+    account::AccountWithMetadata,
+    execution_state::{ExecutionState, index_by_account_id},
+    program::{CallContext, ProgramEffects, ProgramOutput, read_input_frame},
+};
 use risc0_zkvm::guest::env;
 
-mod execution_state;
 mod output;
 
 fn main() {
     let PrivacyPreservingCircuitInput {
-        program_outputs,
-        account_identities,
-        program_id,
+        program_effects,
+        top_level_call,
+        input_accounts,
         dummy_inputs,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
 
-    let execution_state = execution_state::ExecutionState::derive_from_outputs(
-        &account_identities,
-        program_id,
-        program_outputs,
+    let input_accounts = index_by_account_id(input_accounts).unwrap_or_else(|e| panic!("{e}"));
+
+    let mut effects = program_effects.into_iter();
+    let execution_state = ExecutionState::derive(
+        &input_accounts,
+        top_level_call,
+        |call, pre_states| -> Result<_, Infallible> {
+            Ok(verify_call(&mut effects, call, pre_states))
+        },
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+
+    assert!(
+        effects.next().is_none(),
+        "Inner call without a chained call found"
     );
 
-    let output = output::compute_circuit_output(execution_state, &account_identities, dummy_inputs);
+    let output = output::compute_circuit_output(execution_state, &input_accounts, dummy_inputs);
 
     env::commit_slice(&lee_core::to_borsh_frame(&output));
+}
+
+/// Bind one call's effects to the call the walk derived. A receipt binds a program's image and
+/// its journal, never its inputs, so the journal is assembled here from the walk's own
+/// `CallContext` and `pre_states`: a program run on other accounts, at other values, or under
+/// other authorizations than the ones derived here discharges nothing and the proof fails.
+fn verify_call(
+    effects: &mut impl Iterator<Item = ProgramEffects>,
+    call: CallContext,
+    pre_states: Vec<AccountWithMetadata>,
+) -> ProgramOutput {
+    let effects = effects
+        .next()
+        .expect("Insufficient program effects for chained calls");
+    let program_id = call.self_program_id;
+    let program_output = ProgramOutput {
+        call,
+        pre_states,
+        effects,
+    };
+    env::verify(program_id, &lee_core::to_borsh_frame(&program_output))
+        .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
+    program_output
 }

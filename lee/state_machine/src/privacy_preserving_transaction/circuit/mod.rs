@@ -1,23 +1,24 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
+    DummyInput, InputAccount, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
-    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
-    from_frame,
+    account::{AccountId, AccountWithMetadata},
+    execution_state::{ExecutionState, index_by_account_id},
+    parse_journal,
     program::{
-        ChainedCall, InstructionData, ProgramId, ProgramOutput, compute_public_authorized_pdas,
+        EntryCall, InstructionData, MAX_NUMBER_CHAINED_CALLS, ProgramEffects, ProgramId,
+        ProgramOutput,
     },
     to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
 
 use crate::{
-    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
+    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, ensure,
     error::{InvalidProgramBehaviorError, LeeError},
     program::Program,
-    state::MAX_NUMBER_CHAINED_CALLS,
 };
 
 /// Proof of the privacy preserving execution circuit.
@@ -69,6 +70,10 @@ impl From<Program> for ProgramWithDependencies {
 
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
 /// circuit.
+///
+/// `account_identities[i]` describes `pre_states[i]`. The circuit keys these by `AccountId`, so
+/// this is the caller's own order throughout — not the order the entry program happens to commit
+/// its `pre_states` in, which the caller cannot know before it runs.
 pub fn execute_and_prove(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
@@ -84,6 +89,8 @@ pub fn execute_and_prove(
     )
 }
 
+/// As [`execute_and_prove`], with dummy private inputs padding the output. `account_identities[i]`
+/// describes `pre_states[i]`.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "Public entry point — taking ownership signals the caller hands off its top-level \
@@ -101,166 +108,111 @@ pub fn execute_and_prove_with_padded_inputs(
         program: initial_program,
         dependencies,
     } = program_with_dependencies;
+
+    // `zip` below would silently drop a surplus identity, where the circuit's own count check
+    // rejects it. Too few still reaches that check as an unresolvable account.
+    ensure!(
+        account_identities.len() <= pre_states.len(),
+        LeeError::InvalidInput("More account identities than accounts".into())
+    );
+
+    // An account first sighted at depth was untouched until then — reaching it is what lets a
+    // program modify it — so its top-level value is still its first-sight value, and the circuit
+    // can be handed all of them up front.
+    let build_input_accounts = || -> Vec<InputAccount> {
+        pre_states
+            .iter()
+            .zip(account_identities.iter().cloned())
+            .map(|(pre, identity)| InputAccount {
+                account_id: pre.account_id,
+                account: pre.account.clone(),
+                is_authorized: pre.is_authorized,
+                identity,
+            })
+            .collect()
+    };
+    let indexed_input_accounts = index_by_account_id(build_input_accounts())
+        .map_err(|e| LeeError::InvalidInput(e.to_string()))?;
+
     let mut env_builder = ExecutorEnv::builder();
-    let mut program_outputs = Vec::new();
 
-    // Best-effort mirror of the account state the circuit will independently derive; getting it
-    // wrong just wastes a proving attempt, since the circuit itself is the source of truth.
-    let mut materialized_state: HashMap<AccountId, Account> = pre_states
+    // The entry call is proven on the caller's own accounts: no caller named them and no seeds
+    // delegate them, so there is nothing to resolve. The order it commits them in is the order
+    // the walk takes.
+    let entry_receipt =
+        execute_and_prove_program(initial_program, None, &pre_states, &instruction_data)?;
+    let entry_output: ProgramOutput = parse_journal(&entry_receipt.journal.bytes)
+        .map_err(LeeError::ProgramOutputDeserializationError)?;
+    let top_level_accounts: Vec<AccountId> = entry_output
+        .pre_states
         .iter()
-        .map(|pre| (pre.account_id, pre.account.clone()))
-        .collect();
-    let accounts: Vec<AccountId> = pre_states.iter().map(|pre| pre.account_id).collect();
-
-    // Seeded from every top-level `is_authorized`, not just signer info — a private account's
-    // authorization may come from a witnessed `ask` with no public-derivable equivalent.
-    let mut host_authorized_accounts: HashSet<AccountId> = pre_states
-        .iter()
-        .filter(|pre| pre.is_authorized)
         .map(|pre| pre.account_id)
         .collect();
+    env_builder.add_assumption(entry_receipt);
 
-    // First-sighting position in the circuit's own traversal order, needed to look up a
-    // private-PDA account's witnessed `(npk, vpk, identifier)`.
-    let mut position_by_account: HashMap<AccountId, usize> = pre_states
-        .iter()
-        .enumerate()
-        .map(|(pos, pre)| (pre.account_id, pos))
-        .collect();
-    let mut next_position = pre_states.len();
+    let mut program_effects: Vec<ProgramEffects> = Vec::new();
+    let mut entry_output = Some(entry_output);
+    // The host rejects one call earlier than the walk's own cap, before anything is proven.
+    let mut invocations = 0;
 
-    let initial_call = ChainedCall {
+    // The host runs the circuit's own walk, so what it feeds each program is what the circuit
+    // will re-derive and verify the journal against.
+    let top_level_call = EntryCall {
         program_id: initial_program.id(),
         instruction_data,
-        accounts,
-        pda_seeds: vec![],
+        accounts: top_level_accounts,
     };
 
-    let mut chained_calls = VecDeque::from_iter([(initial_call, initial_program, None)]);
-    let mut chain_calls_counter = 0;
-    while let Some((chained_call, program, caller_program_id)) = chained_calls.pop_front() {
-        if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
-            return Err(LeeError::MaxChainedCallsDepthExceeded);
-        }
+    ExecutionState::derive(
+        &indexed_input_accounts,
+        top_level_call.clone(),
+        |call, derived_pre_states| -> Result<ProgramOutput, LeeError> {
+            if invocations >= MAX_NUMBER_CHAINED_CALLS {
+                return Err(LeeError::MaxChainedCallsDepthExceeded);
+            }
+            invocations = invocations
+                .checked_add(1)
+                .expect("the tally is bounded by the depth cap checked just above");
 
-        // The top-level call's pre_states came straight from the caller of `execute_and_prove`,
-        // not from a `ChainedCall`; use them as-is since a witnessed `ask` can't be re-derived
-        // from `host_authorized_accounts`/`authorized_pdas`.
-        let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_id) = caller_program_id {
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
-
-            let mut resolved = Vec::with_capacity(chained_call.accounts.len());
-            for account_id in &chained_call.accounts {
-                let account = materialized_state.get(account_id).cloned().ok_or(
-                    InvalidProgramBehaviorError::UnknownChainedCallAccount {
-                        account_id: *account_id,
+            let output = if let Some(entry_output) = entry_output.take() {
+                entry_output
+            } else {
+                let program = dependencies.get(&call.self_program_id).ok_or(
+                    InvalidProgramBehaviorError::UndeclaredProgramDependency {
+                        program_id: call.self_program_id,
                     },
                 )?;
-
-                let position = *position_by_account.entry(*account_id).or_insert_with(|| {
-                    let pos = next_position;
-                    next_position = next_position
-                        .checked_add(1)
-                        .expect("account position count cannot overflow usize");
-                    pos
-                });
-                let private_pda_witness = account_identities
-                    .get(position)
-                    .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
-
-                let is_authorized = host_authorized_accounts.contains(account_id)
-                    || authorized_pdas.contains(account_id)
-                    || private_pda_witness.is_some_and(|(npk, vpk, identifier)| {
-                        chained_call.pda_seeds.iter().any(|seed| {
-                            AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
-                                == *account_id
-                        })
-                    });
-
-                resolved.push(AccountWithMetadata::new(
-                    account,
-                    is_authorized,
-                    *account_id,
-                ));
-            }
-            resolved
-        } else {
-            pre_states.clone()
-        };
-
-        let inner_receipt = execute_and_prove_program(
-            program,
-            caller_program_id,
-            &real_pre_states,
-            &chained_call.instruction_data,
-        )?;
-
-        let program_output: ProgramOutput =
-            borsh::from_slice(from_frame(&inner_receipt.journal.bytes).ok_or_else(|| {
-                LeeError::ProgramOutputDeserializationError(
-                    "malformed inner-receipt journal frame".to_owned(),
-                )
-            })?)
-            .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
-
-        for (pre, post) in program_output
-            .pre_states
-            .iter()
-            .zip(&program_output.post_states)
-        {
-            // A successful claim reassigns ownership; the guest doesn't write this into its own
-            // diff, the circuit does it afterward, so predict it here too. Otherwise the owner is
-            // inherited from the pre-state — an `AccountDiff` carries no ownership.
-            let diff = post.diff();
-            let program_owner = if post.claim().is_some() {
-                AccountId::from(chained_call.program_id)
-            } else {
-                pre.account.program_owner
+                let receipt = execute_and_prove_program(
+                    program,
+                    call.caller_program_id,
+                    &derived_pre_states,
+                    &call.instruction_data,
+                )?;
+                let output: ProgramOutput = parse_journal(&receipt.journal.bytes)
+                    .map_err(LeeError::ProgramOutputDeserializationError)?;
+                env_builder.add_assumption(receipt);
+                output
             };
-            let balance = apply_balance_diff(pre.account.balance, diff.diff_balance)
-                .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-            materialized_state.insert(
-                pre.account_id,
-                Account {
-                    program_owner,
-                    balance,
-                    data: diff
-                        .diff_data
-                        .clone()
-                        .unwrap_or_else(|| pre.account.data.clone()),
-                    ..pre.account.clone()
-                },
+
+            // The circuit verifies every receipt against a journal it rebuilds from this same
+            // derivation, so a journal that disagrees here can never discharge its assumption.
+            // Failing now costs one program proof instead of the whole circuit proof.
+            ensure!(
+                output.call == call && output.pre_states == derived_pre_states,
+                InvalidProgramBehaviorError::JournalledOutputMismatch {
+                    program_id: call.self_program_id
+                }
             );
-            if pre.is_authorized {
-                host_authorized_accounts.insert(pre.account_id);
-            }
-        }
 
-        // TODO: remove clone
-        program_outputs.push(program_output.clone());
-
-        // Prove circuit.
-        env_builder.add_assumption(inner_receipt);
-
-        for new_call in program_output.chained_calls.into_iter().rev() {
-            let next_program = dependencies.get(&new_call.program_id).ok_or(
-                InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                    program_id: new_call.program_id,
-                },
-            )?;
-            chained_calls.push_front((new_call, next_program, Some(chained_call.program_id)));
-        }
-
-        chain_calls_counter = chain_calls_counter
-            .checked_add(1)
-            .expect("we check the max depth at the beginning of the loop");
-    }
+            program_effects.push(output.effects.clone());
+            Ok(output)
+        },
+    )?;
 
     let circuit_input = PrivacyPreservingCircuitInput {
-        program_outputs,
-        account_identities,
-        program_id: program_with_dependencies.program.id(),
+        program_effects,
+        top_level_call,
+        input_accounts: build_input_accounts(),
         dummy_inputs,
     };
 
@@ -275,14 +227,9 @@ pub fn execute_and_prove_with_padded_inputs(
 
     let proof = Proof(borsh::to_vec(&prove_info.receipt.inner)?);
 
-    let circuit_output: PrivacyPreservingCircuitOutput = borsh::from_slice(
-        from_frame(&prove_info.receipt.journal.bytes).ok_or_else(|| {
-            LeeError::CircuitOutputDeserializationError(
-                "malformed circuit journal frame".to_owned(),
-            )
-        })?,
-    )
-    .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
+    let circuit_output: PrivacyPreservingCircuitOutput =
+        parse_journal(&prove_info.receipt.journal.bytes)
+            .map_err(LeeError::CircuitOutputDeserializationError)?;
 
     Ok((circuit_output, proof))
 }

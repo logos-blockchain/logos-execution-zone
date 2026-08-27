@@ -14,15 +14,15 @@ use clock_core::{
 };
 use lee_core::{
     account::{AccountDiff, AccountWithMetadata, BalanceDiff},
-    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{AccountDiffOutput, ProgramCall, read_lee_call},
 };
 
 fn update_if_multiple(
-    pre: AccountWithMetadata,
+    pre: &AccountWithMetadata,
     divisor: u64,
     current_block_id: u64,
     updated_data: &[u8],
-) -> (AccountWithMetadata, AccountDiffOutput) {
+) -> AccountDiffOutput {
     if current_block_id.is_multiple_of(divisor) {
         let diff_data = updated_data
             .to_vec()
@@ -33,26 +33,20 @@ fn update_if_multiple(
             diff_balance: BalanceDiff::Add(0),
             diff_data: Some(diff_data),
         };
-        let post = AccountDiffOutput::new(diff);
-        (pre, post)
+        AccountDiffOutput::new(diff)
     } else {
-        let post = AccountDiffOutput::new(AccountDiff::unchanged(pre.account_id));
-        (pre, post)
+        AccountDiffOutput::unchanged(pre.account_id)
     }
 }
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: timestamp,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: timestamp,
+    } = read_lee_call::<Instruction>();
+    let self_program_id = input.call.self_program_id;
 
-    let Ok([pre_01, pre_10, pre_50]) = <[_; 3]>::try_from(pre_states) else {
+    let [pre_01, pre_10, pre_50] = input.pre_states.as_slice() else {
         panic!("Invalid number of input accounts");
     };
 
@@ -85,16 +79,9 @@ fn main() {
     }
     .to_bytes();
 
-    let (pre_01, post_01) = update_if_multiple(pre_01, 1, current_block_id, &updated_data);
-    let (pre_10, post_10) = update_if_multiple(pre_10, 10, current_block_id, &updated_data);
-    let (pre_50, post_50) = update_if_multiple(pre_50, 50, current_block_id, &updated_data);
+    let post_01 = update_if_multiple(pre_01, 1, current_block_id, &updated_data);
+    let post_10 = update_if_multiple(pre_10, 10, current_block_id, &updated_data);
+    let post_50 = update_if_multiple(pre_50, 50, current_block_id, &updated_data);
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pre_01, pre_10, pre_50],
-        vec![post_01, post_10, post_50],
-    )
-    .write();
+    input.into_output(vec![post_01, post_10, post_50]).write();
 }

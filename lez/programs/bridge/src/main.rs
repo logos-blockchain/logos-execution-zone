@@ -1,38 +1,17 @@
 use bridge_core::Instruction;
 use lee_core::{
     account::{Account, AccountDiff},
-    program::{
-        AccountDiffOutput, ChainedCall, Claim, ProgramCall, ProgramInput, ProgramOutput,
-        read_lee_call,
-    },
+    program::{AccountDiffOutput, ChainedCall, Claim, ProgramCall, read_lee_call},
 };
 
-fn unchanged_diffs(
-    pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountDiffOutput> {
-    pre_states
-        .iter()
-        .map(|pre_state| AccountDiffOutput::new(AccountDiff::unchanged(pre_state.account_id)))
-        .collect()
-}
-
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
+    let self_program_id = input.call.self_program_id;
 
     assert!(
-        caller_program_id.is_none(),
+        input.call.caller_program_id.is_none(),
         "Bridge cannot be invoked through chain calls"
     );
-
-    let pre_states_clone = pre_states.clone();
 
     let (post_states, chained_calls) = match instruction {
         Instruction::Deposit {
@@ -41,9 +20,9 @@ fn main() {
             recipient_id,
             amount,
         } => {
-            let [bridge, recipient_vault, receipt] = pre_states
-                .try_into()
-                .expect("Deposit requires exactly 3 accounts");
+            let [bridge, recipient_vault, receipt] = input.pre_states.as_slice() else {
+                panic!("Deposit requires exactly 3 accounts");
+            };
 
             assert_eq!(
                 bridge.account_id,
@@ -74,7 +53,14 @@ fn main() {
             // is the only on-chain signal. Relevant once the explorer surfaces
             // deposits.
             if receipt.account != Account::default() {
-                (unchanged_diffs(&pre_states_clone), vec![])
+                (
+                    input
+                        .pre_states
+                        .iter()
+                        .map(|pre_state| AccountDiffOutput::unchanged(pre_state.account_id))
+                        .collect(),
+                    vec![],
+                )
             } else {
                 // First mint: claim the receipt — its existence is the record,
                 // the account's contents are never read — and chain the vault
@@ -86,8 +72,8 @@ fn main() {
                 );
 
                 let post_states = vec![
-                    AccountDiffOutput::new(AccountDiff::unchanged(bridge.account_id)),
-                    AccountDiffOutput::new(AccountDiff::unchanged(recipient_vault.account_id)),
+                    AccountDiffOutput::unchanged(bridge.account_id),
+                    AccountDiffOutput::unchanged(recipient_vault.account_id),
                     receipt_post,
                 ];
 
@@ -134,17 +120,12 @@ fn main() {
             //         amount: u128::from(amount),
             //     },
             // )];
-            // (unchanged_diffs(&pre_states_clone), chained_calls)
+            // (unchanged post_states, chained_calls)
         }
     };
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        pre_states_clone,
-        post_states,
-    )
-    .with_chained_calls(chained_calls)
-    .write();
+    input
+        .into_output(post_states)
+        .with_chained_calls(chained_calls)
+        .write();
 }

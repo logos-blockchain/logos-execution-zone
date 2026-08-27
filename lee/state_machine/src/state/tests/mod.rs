@@ -12,9 +12,10 @@ use lee_core::{
     PrivateWitness, Timestamp, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
+    execution_state::ExecutionWalkError,
     program::{
-        BlockValidityWindow, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
-        ProgramId, TimestampValidityWindow,
+        BlockValidityWindow, ClaimError, EntryCall, ExecutionValidationError,
+        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, TimestampValidityWindow,
     },
 };
 
@@ -58,6 +59,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::two_pda_claimer());
         self.insert_program(&crate::test_methods::noop());
         self.insert_program(&crate::test_methods::chain_caller());
+        self.insert_program(&crate::test_methods::non_delegating_forwarder());
         self.insert_program(&crate::test_methods::initialize_then_fund());
         self.insert_program(&crate::test_methods::validity_window());
         self.insert_program(&crate::test_methods::flash_swap_initiator());

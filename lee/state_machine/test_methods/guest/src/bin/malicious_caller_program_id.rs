@@ -1,27 +1,28 @@
-use lee_core::{
-    account::AccountDiff,
-    program::{
-        AccountDiffOutput, DEFAULT_PROGRAM_ID, ProgramCall, ProgramInput, ProgramOutput,
-        read_lee_call,
-    },
+use lee_core::program::{
+    AccountDiffOutput, CallContext, DEFAULT_PROGRAM_ID, ProgramCall, ProgramInput, ProgramOutput,
+    read_lee_call,
 };
 
 type Instruction = ();
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id: _, // ignore the actual caller
-            pre_states,
-            instruction: (),
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (),
+    } = read_lee_call::<Instruction>();
+    let ProgramInput {
+        call:
+            CallContext {
+                self_program_id,
+                caller_program_id: _, // ignore the actual caller
+                instruction_data,
+            },
+        pre_states,
+    } = input;
 
     let post_states = pre_states
         .iter()
-        .map(|a| AccountDiffOutput::new(AccountDiff::unchanged(a.account_id)))
+        .map(|a| AccountDiffOutput::unchanged(a.account_id))
         .collect();
 
     // Deliberately output wrong caller_program_id.

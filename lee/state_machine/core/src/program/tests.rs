@@ -1,4 +1,5 @@
 use super::*;
+use crate::account::Nonce;
 
 #[test]
 fn validity_window_unbounded_accepts_any_value() {
@@ -102,24 +103,24 @@ fn program_output_try_with_block_validity_window_range() {
     let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
         .try_with_block_validity_window(10_u64..100)
         .unwrap();
-    assert_eq!(output.block_validity_window.start(), Some(10));
-    assert_eq!(output.block_validity_window.end(), Some(100));
+    assert_eq!(output.effects.block_validity_window.start(), Some(10));
+    assert_eq!(output.effects.block_validity_window.end(), Some(100));
 }
 
 #[test]
 fn program_output_with_block_validity_window_range_from() {
     let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
         .with_block_validity_window(10_u64..);
-    assert_eq!(output.block_validity_window.start(), Some(10));
-    assert_eq!(output.block_validity_window.end(), None);
+    assert_eq!(output.effects.block_validity_window.start(), Some(10));
+    assert_eq!(output.effects.block_validity_window.end(), None);
 }
 
 #[test]
 fn program_output_with_block_validity_window_range_to() {
     let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
         .with_block_validity_window(..100_u64);
-    assert_eq!(output.block_validity_window.start(), None);
-    assert_eq!(output.block_validity_window.end(), Some(100));
+    assert_eq!(output.effects.block_validity_window.start(), None);
+    assert_eq!(output.effects.block_validity_window.end(), Some(100));
 }
 
 #[test]
@@ -158,17 +159,51 @@ fn diff_output_new_without_claim_constructor() {
 }
 
 #[test]
-fn diff_output_diff_getter() {
-    let mut diff = AccountDiff {
-        id: AccountId::new([7; 32]),
-        diff_balance: BalanceDiff::Add(1337),
-        diff_data: Some(vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap()),
+fn materialize_applies_a_claim_as_ownership_by_the_executing_program() {
+    let executing_program_id: ProgramId = [9; 8];
+    let pre = Account {
+        program_owner: DEFAULT_PROGRAM_OWNER,
+        balance: 10,
+        data: vec![1].try_into().unwrap(),
+        nonce: Nonce(3),
     };
+    let output = AccountDiffOutput::new_claimed(
+        AccountDiff {
+            id: AccountId::new([7; 32]),
+            diff_balance: BalanceDiff::Add(5),
+            diff_data: Some(vec![2].try_into().unwrap()),
+        },
+        Claim::Authorized,
+    );
 
-    let mut diff_output = AccountDiffOutput::new(diff.clone());
+    let post = output.materialize(&pre, executing_program_id).unwrap();
 
-    assert_eq!(diff_output.diff(), &diff);
-    assert_eq!(diff_output.diff_mut(), &mut diff);
+    assert_eq!(post.program_owner, AccountId::from(executing_program_id));
+    assert_eq!(post.balance, 15);
+    assert_eq!(post.data, vec![2].try_into().unwrap());
+    assert_eq!(post.nonce, pre.nonce);
+}
+
+#[test]
+fn materialize_without_a_claim_inherits_the_owner_and_untouched_data() {
+    let pre = Account {
+        program_owner: AccountId::new([4; 32]),
+        balance: 10,
+        data: vec![1].try_into().unwrap(),
+        nonce: Nonce(3),
+    };
+    let output = AccountDiffOutput::new(AccountDiff {
+        id: AccountId::new([7; 32]),
+        diff_balance: BalanceDiff::Sub(4),
+        diff_data: None,
+    });
+
+    let post = output.materialize(&pre, [9; 8]).unwrap();
+
+    assert_eq!(post.program_owner, pre.program_owner);
+    assert_eq!(post.data, pre.data);
+    assert_eq!(post.balance, 6);
+    assert_eq!(post.nonce, pre.nonce);
 }
 
 // ---- AccountId::for_private_pda tests ----
@@ -320,21 +355,42 @@ fn for_private_account_dispatches_correctly() {
 }
 
 #[test]
-fn compute_public_authorized_pdas_with_seeds() {
-    let caller: ProgramId = [1; 8];
+fn match_caller_seed_as_public_pda_matches_the_seed_that_derives_the_account() {
+    let caller_program_id: ProgramId = [1; 8];
     let seed = PdaSeed::new([2; 32]);
-    let result = compute_public_authorized_pdas(Some(caller), &[seed]);
-    let expected = AccountId::for_public_pda(&caller, &seed);
-    assert!(result.contains(&expected));
-    assert_eq!(result.len(), 1);
+    let caller = CallerData {
+        program_id: Some(caller_program_id),
+        authorized_accounts: HashSet::new(),
+    };
+    let derived = AccountId::for_public_pda(&caller_program_id, &seed);
+
+    assert_eq!(
+        match_caller_seed_as_public_pda(&caller, &[PdaSeed::new([3; 32]), seed], derived),
+        Some((seed, caller_program_id))
+    );
+    assert!(
+        match_caller_seed_as_public_pda(&caller, &[seed], AccountId::new([4; 32])).is_none(),
+        "an account no seed derives is not authorized"
+    );
 }
 
-/// With no caller (top-level call), the result is always empty.
+/// With no caller (top-level call), no seed authorizes anything.
 #[test]
-fn compute_public_authorized_pdas_no_caller_returns_empty() {
+fn match_caller_seed_as_public_pda_without_a_caller_matches_nothing() {
     let seed = PdaSeed::new([2; 32]);
-    let result = compute_public_authorized_pdas(None, &[seed]);
-    assert!(result.is_empty());
+    let caller = CallerData {
+        program_id: None,
+        authorized_accounts: HashSet::new(),
+    };
+
+    assert!(
+        match_caller_seed_as_public_pda(
+            &caller,
+            &[seed],
+            AccountId::for_public_pda(&[1; 8], &seed)
+        )
+        .is_none()
+    );
 }
 
 #[test]

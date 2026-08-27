@@ -6,10 +6,11 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
+    account::{Account, AccountId, AccountWithMetadata, Nonce},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
-        validate_execution,
+        CallerData, ChainedCall, EntryCall, MAX_NUMBER_CHAINED_CALLS,
+        is_unclaimed_modified_default, match_caller_seed_as_public_pda,
+        validate_claim_precondition, validate_execution, validate_public_claim,
     },
 };
 use log::debug;
@@ -23,7 +24,6 @@ use crate::{
     program::Program,
     program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
-    state::MAX_NUMBER_CHAINED_CALLS,
 };
 
 pub struct StateDiff {
@@ -71,18 +71,18 @@ impl ValidatedStateDiff {
 
         // All account_ids must be different
         ensure!(
-            message.account_ids.iter().collect::<HashSet<_>>().len() == message.account_ids.len(),
+            n_unique(&message.account_ids) == message.account_ids.len(),
             LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
         );
 
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
 
-        let initial_call = ChainedCall {
+        let initial_call = EntryCall {
             program_id: message.program_id,
             instruction_data: message.instruction_data.clone(),
             accounts: message.account_ids.clone(),
-            pda_seeds: vec![],
-        };
+        }
+        .into_chained_call();
 
         let initial_caller_data = CallerData {
             program_id: None,
@@ -107,13 +107,11 @@ impl ValidatedStateDiff {
                 Cow::Owned(program_account.data.to_vec()),
             );
 
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
-
-            // Account is authorized if it is either in the caller's authorized accounts or in the
-            // list of PDAs the caller has authorized.
+            // Account is authorized if it is either in the caller's authorized accounts or
+            // derived from one of the seeds the caller delegated.
             let is_authorized = |account_id: &AccountId| {
-                authorized_pdas.contains(account_id)
+                match_caller_seed_as_public_pda(&caller_data, &chained_call.pda_seeds, *account_id)
+                    .is_some()
                     || caller_data.authorized_accounts.contains(account_id)
             };
 
@@ -123,10 +121,7 @@ impl ValidatedStateDiff {
                 .accounts
                 .iter()
                 .map(|account_id| {
-                    let account = state_diff
-                        .get(account_id)
-                        .cloned()
-                        .unwrap_or_else(|| state.get_account_by_id(*account_id));
+                    let account = overlaid_account(state, &state_diff, *account_id);
                     AccountWithMetadata::new(account, is_authorized(account_id), *account_id)
                 })
                 .collect();
@@ -145,14 +140,27 @@ impl ValidatedStateDiff {
                 chained_call.program_id, program_output
             );
 
+            // The caller only names accounts; the protocol delivers them. The callee's journal is
+            // the only evidence of what it ran on, so it must account for exactly the named
+            // accounts, in order. Only a real caller->callee edge is bound: the entry program is
+            // free to commit its own order or subset of what the transaction declared, which is
+            // what the circuit's `top_level_accounts` encodes.
+            ensure!(
+                caller_data.program_id.is_none()
+                    || pre_states_match_accounts(
+                        &chained_call.accounts,
+                        &program_output.pre_states
+                    ),
+                InvalidProgramBehaviorError::ChainedCallAccountsMismatch {
+                    program_id: chained_call.program_id
+                }
+            );
+
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
                 // Check that the program output pre_states coincide with the values in the public
                 // state or with any modifications to those values during the chain of calls.
-                let expected_pre = state_diff
-                    .get(&account_id)
-                    .cloned()
-                    .unwrap_or_else(|| state.get_account_by_id(account_id));
+                let expected_pre = overlaid_account(state, &state_diff, account_id);
                 ensure!(
                     pre.account == expected_pre,
                     InvalidProgramBehaviorError::InconsistentAccountPreState {
@@ -179,35 +187,37 @@ impl ValidatedStateDiff {
 
             // Verify that the program output's self_program_id matches the expected program ID.
             ensure!(
-                program_output.self_program_id == chained_call.program_id,
+                program_output.call.self_program_id == chained_call.program_id,
                 InvalidProgramBehaviorError::MismatchedProgramId {
                     expected: chained_call.program_id,
-                    actual: program_output.self_program_id
+                    actual: program_output.call.self_program_id
                 }
             );
 
             // Verify that the program output's caller_program_id matches the actual caller.
             ensure!(
-                program_output.caller_program_id == caller_data.program_id,
+                program_output.call.caller_program_id == caller_data.program_id,
                 InvalidProgramBehaviorError::MismatchedCallerProgramId {
                     expected: caller_data.program_id,
-                    actual: program_output.caller_program_id,
+                    actual: program_output.call.caller_program_id,
                 }
             );
 
-            // Verify execution corresponds to a well-behaved program.
-            // See the # Programs section for the definition of the `validate_execution` method.
             validate_execution(
                 &program_output.pre_states,
-                &program_output.post_states,
+                &program_output.effects.post_states,
                 chained_call.program_id,
             )
             .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
 
             // Verify validity window
             ensure!(
-                program_output.block_validity_window.is_valid_for(block_id)
+                program_output
+                    .effects
+                    .block_validity_window
+                    .is_valid_for(block_id)
                     && program_output
+                        .effects
                         .timestamp_validity_window
                         .is_valid_for(timestamp),
                 LeeError::OutOfValidityWindow
@@ -216,67 +226,23 @@ impl ValidatedStateDiff {
             for (pre, diff_output) in program_output
                 .pre_states
                 .iter()
-                .zip(&program_output.post_states)
+                .zip(&program_output.effects.post_states)
             {
                 let account_id = pre.account_id;
-                let diff = diff_output.diff();
 
-                let balance = apply_balance_diff(pre.account.balance, diff.diff_balance)
-                    .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-
-                let data = diff
-                    .diff_data
-                    .clone()
-                    .unwrap_or_else(|| pre.account.data.clone());
-
-                // Owner is inherited unless a claim overrides it (AccountDiff carries no
-                // ownership).
-                let program_owner = if let Some(claim) = diff_output.claim() {
-                    // The invoked program can only claim accounts with default program id.
-                    ensure!(
-                        pre.account.program_owner == DEFAULT_PROGRAM_OWNER,
-                        InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
-                    );
-
-                    match claim {
-                        Claim::Authorized => {
-                            // The program can only claim accounts that were authorized by the
-                            // signer.
-                            ensure!(
-                                pre.is_authorized,
-                                InvalidProgramBehaviorError::ClaimedUnauthorizedAccount {
-                                    account_id
-                                }
-                            );
-                        }
-                        Claim::Pda(seed) => {
-                            // The program can only claim accounts that correspond to the PDAs it
-                            // is authorized to claim. The public-execution path only sees public
-                            // accounts, so the public-PDA derivation is the correct formula here.
-                            let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
-                            ensure!(
-                                account_id == pda,
-                                InvalidProgramBehaviorError::MismatchedPdaClaim {
-                                    expected: pda,
-                                    actual: account_id
-                                }
-                            );
-                        }
-                    }
-
-                    AccountId::from(chained_call.program_id)
-                } else {
-                    pre.account.program_owner
-                };
+                // The public-execution path only sees public accounts, so the public claim
+                // rules are the whole story here.
+                if let Some(claim) = diff_output.claim() {
+                    validate_claim_precondition(pre)
+                        .and_then(|()| validate_public_claim(claim, pre, chained_call.program_id))
+                        .map_err(InvalidProgramBehaviorError::Claim)?;
+                }
 
                 state_diff.insert(
                     account_id,
-                    Account {
-                        program_owner,
-                        balance,
-                        data,
-                        nonce: pre.account.nonce,
-                    },
+                    diff_output
+                        .materialize(&pre.account, chained_call.program_id)
+                        .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?,
                 );
             }
 
@@ -296,7 +262,7 @@ impl ValidatedStateDiff {
                     .filter(|pre| pre.is_authorized)
                     .map(|pre| pre.account_id),
             );
-            for new_call in program_output.chained_calls.into_iter().rev() {
+            for new_call in program_output.effects.chained_calls.into_iter().rev() {
                 chained_calls.push_front((
                     new_call,
                     CallerData {
@@ -312,19 +278,13 @@ impl ValidatedStateDiff {
         }
 
         // Check that all modified uninitialized accounts where claimed
-        for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
-            let pre = state.get_account_by_id(*account_id);
-            if pre.program_owner != DEFAULT_PROGRAM_OWNER {
-                return None;
-            }
-            if pre == *post {
-                return None;
-            }
-            Some((*account_id, post))
+        if let Some(account_id) = state_diff.iter().find_map(|(account_id, post)| {
+            is_unclaimed_modified_default(&state.get_account_by_id(*account_id), post)
+                .then_some(*account_id)
         }) {
-            ensure!(
-                post.program_owner != DEFAULT_PROGRAM_OWNER,
+            return Err(
                 InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
+                    .into(),
             );
         }
 
@@ -403,13 +363,7 @@ impl ValidatedStateDiff {
 
         let signer_account_ids = tx.signer_account_ids();
         // Check nonces corresponds to the current nonces on the public state.
-        for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
-            let current_nonce = state.get_account_by_id(*account_id).nonce;
-            ensure!(
-                current_nonce == *nonce,
-                LeeError::InvalidInput("Nonce mismatch".into())
-            );
-        }
+        check_signer_nonces(state, &signer_account_ids, &message.nonces)?;
 
         // Verify validity window
         ensure!(
@@ -511,13 +465,7 @@ fn authenticate_public_transaction_signers(
     );
 
     let signer_account_ids = tx.signer_account_ids();
-    for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
-        let current_nonce = state.get_account_by_id(*account_id).nonce;
-        ensure!(
-            current_nonce == *nonce,
-            LeeError::InvalidInput("Nonce mismatch".into())
-        );
-    }
+    check_signer_nonces(state, &signer_account_ids, &message.nonces)?;
 
     Ok(signer_account_ids)
 }
@@ -547,9 +495,41 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         .ok_or(LeeError::InvalidPrivacyPreservingProof)
 }
 
+fn overlaid_account(
+    state: &V03State,
+    state_diff: &HashMap<AccountId, Account>,
+    account_id: AccountId,
+) -> Account {
+    state_diff
+        .get(&account_id)
+        .cloned()
+        .unwrap_or_else(|| state.get_account_by_id(account_id))
+}
+
+fn check_signer_nonces(
+    state: &V03State,
+    account_ids: &[AccountId],
+    nonces: &[Nonce],
+) -> Result<(), LeeError> {
+    for (account_id, nonce) in account_ids.iter().zip(nonces) {
+        let current_nonce = state.get_account_by_id(*account_id).nonce;
+        ensure!(
+            current_nonce == *nonce,
+            LeeError::InvalidInput("Nonce mismatch".into())
+        );
+    }
+    Ok(())
+}
+
 fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
     let set: HashSet<&T> = data.iter().collect();
     set.len()
+}
+
+fn pre_states_match_accounts(accounts: &[AccountId], pre_states: &[AccountWithMetadata]) -> bool {
+    accounts
+        .iter()
+        .eq(pre_states.iter().map(|pre| &pre.account_id))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountDiff, BalanceDiff},
-    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{AccountDiffOutput, Claim, ProgramCall, read_lee_call},
 };
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 
@@ -47,17 +47,12 @@ impl Challenge {
 fn main() {
     // Read input accounts.
     // It is expected to receive only two accounts: [pinata_account, winner_account]
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: solution,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: solution,
+    } = read_lee_call::<Instruction>();
 
-    let Ok([pinata, winner]) = <[_; 2]>::try_from(pre_states) else {
+    let [pinata, winner] = input.pre_states.as_slice() else {
         return;
     };
 
@@ -85,19 +80,14 @@ fn main() {
 
     let pinata_program_owner = pinata.account.program_owner;
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pinata, winner],
-        vec![
+    input
+        .into_output(vec![
             AccountDiffOutput::new_claimed_if_default(
                 pinata_diff,
                 pinata_program_owner,
                 Claim::Authorized,
             ),
             AccountDiffOutput::new(winner_diff),
-        ],
-    )
-    .write();
+        ])
+        .write();
 }

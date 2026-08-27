@@ -1,9 +1,6 @@
 use lee_core::{
     account::{AccountDiff, BalanceDiff, Data},
-    program::{
-        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
-        read_lee_call,
-    },
+    program::{AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, read_lee_call},
 };
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 
@@ -51,23 +48,16 @@ fn main() {
     // Read input accounts.
     // It is expected to receive three accounts: [pinata_definition, pinata_token_holding,
     // winner_token_holding]
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: solution,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: solution,
+    } = read_lee_call::<Instruction>();
 
-    let Ok(
-        [
-            pinata_definition,
-            pinata_token_holding,
-            winner_token_holding,
-        ],
-    ) = <[_; 3]>::try_from(pre_states)
+    let [
+        pinata_definition,
+        pinata_token_holding,
+        winner_token_holding,
+    ] = input.pre_states.as_slice()
     else {
         return;
     };
@@ -96,24 +86,14 @@ fn main() {
     )
     .with_pda_seeds(vec![PdaSeed::new([0; 32])]);
 
-    let pinata_token_holding_id = pinata_token_holding.account_id;
-    let winner_token_holding_id = winner_token_holding.account_id;
+    let post_states = vec![
+        AccountDiffOutput::new(pinata_definition_diff),
+        AccountDiffOutput::unchanged(pinata_token_holding.account_id),
+        AccountDiffOutput::unchanged(winner_token_holding.account_id),
+    ];
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![
-            pinata_definition,
-            pinata_token_holding,
-            winner_token_holding,
-        ],
-        vec![
-            AccountDiffOutput::new(pinata_definition_diff),
-            AccountDiffOutput::new(AccountDiff::unchanged(pinata_token_holding_id)),
-            AccountDiffOutput::new(AccountDiff::unchanged(winner_token_holding_id)),
-        ],
-    )
-    .with_chained_calls(vec![chained_call])
-    .write();
+    input
+        .into_output(post_states)
+        .with_chained_calls(vec![chained_call])
+        .write();
 }

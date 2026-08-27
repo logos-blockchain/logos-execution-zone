@@ -22,7 +22,7 @@ fn program_execution() {
         .execute(None, &[sender, recipient], &instruction_data)
         .unwrap();
 
-    let [sender_post, recipient_post] = program_output.post_states.try_into().unwrap();
+    let [sender_post, recipient_post] = program_output.effects.post_states.try_into().unwrap();
 
     assert_eq!(
         sender_post.diff().diff_balance,
@@ -60,8 +60,8 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
         .execute(env_builder.build().unwrap(), program.elf())
         .unwrap();
 
-    let payload = lee_core::from_frame(&session_info.journal.bytes).unwrap();
-    let output: lee_core::program::ProgramOutput = borsh::from_slice(payload).unwrap();
+    let output: lee_core::program::ProgramOutput =
+        lee_core::parse_journal(&session_info.journal.bytes).unwrap();
 
     // The journal must be byte-identical to `to_frame(borsh(output))`: the privacy circuit
     // reconstructs exactly these bytes for `env::verify`, so any drift breaks recursion.
@@ -69,8 +69,9 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
         session_info.journal.bytes,
         lee_core::to_frame(&borsh::to_vec(&output).unwrap())
     );
-    // The guest must echo the instruction bytes verbatim: chained-call binding compares them.
-    assert_eq!(output.instruction_data, instruction_data);
+    // The guest must echo the instruction bytes verbatim: the circuit splices its own copy of
+    // them into the journal it verifies.
+    assert_eq!(output.call.instruction_data, instruction_data);
 }
 
 #[test]
@@ -80,9 +81,9 @@ fn malformed_journal_frame_is_an_error_not_a_panic() {
     assert!(
         matches!(
             &err,
-            crate::error::LeeError::ProgramExecutionFailed(msg)
-                if msg.contains("malformed program journal frame")
+            crate::error::LeeError::ProgramOutputDeserializationError(msg)
+                if msg.contains("malformed journal frame")
         ),
-        "expected malformed-frame ProgramExecutionFailed, got: {err:?}"
+        "expected malformed-frame ProgramOutputDeserializationError, got: {err:?}"
     );
 }

@@ -1,42 +1,36 @@
 use lee_core::{
     account::{AccountDiff, BalanceDiff},
-    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{AccountDiffOutput, Claim, ProgramCall, read_lee_call},
 };
 
 type Instruction = u128;
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: balance,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: balance,
+    } = read_lee_call::<Instruction>();
 
-    if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
-        let account_post = AccountDiffOutput::new_claimed_if_default(
+    let single_account = match input.pre_states.as_slice() {
+        [account_pre] => Some(AccountDiffOutput::new_claimed_if_default(
             AccountDiff::unchanged(account_pre.account_id),
             account_pre.account.program_owner,
             Claim::Authorized,
-        );
-
-        ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
-            instruction_data,
-            pre_states,
-            vec![account_post],
-        )
-        .write();
+        )),
+        _ => None,
+    };
+    if let Some(account_post) = single_account {
+        input.into_output(vec![account_post]).write();
         return;
     }
 
-    let Ok([sender_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {
+    let [sender_pre, receiver_pre] = input.pre_states.as_slice() else {
         return;
     };
+    let (sender_owner, receiver_owner) = (
+        sender_pre.account.program_owner,
+        receiver_pre.account.program_owner,
+    );
 
     let sender_diff = AccountDiff {
         id: sender_pre.account_id,
@@ -49,23 +43,14 @@ fn main() {
         diff_data: None,
     };
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![sender_pre.clone(), receiver_pre.clone()],
-        vec![
-            AccountDiffOutput::new_claimed_if_default(
-                sender_diff,
-                sender_pre.account.program_owner,
-                Claim::Authorized,
-            ),
+    input
+        .into_output(vec![
+            AccountDiffOutput::new_claimed_if_default(sender_diff, sender_owner, Claim::Authorized),
             AccountDiffOutput::new_claimed_if_default(
                 receiver_diff,
-                receiver_pre.account.program_owner,
+                receiver_owner,
                 Claim::Authorized,
             ),
-        ],
-    )
-    .write();
+        ])
+        .write();
 }

@@ -1,10 +1,7 @@
 use borsh::to_vec;
-use lee_core::{
-    account::AccountDiff,
-    program::{
-        AccountDiffOutput, BlockValidityWindow, ChainedCall, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, TimestampValidityWindow, read_lee_call,
-    },
+use lee_core::program::{
+    AccountDiffOutput, BlockValidityWindow, ChainedCall, ProgramCall, ProgramId,
+    TimestampValidityWindow, read_lee_call,
 };
 
 /// A program that sets a block validity window on its output and chains to another program with a
@@ -17,17 +14,14 @@ use lee_core::{
 type Instruction = (BlockValidityWindow, ProgramId, BlockValidityWindow);
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (block_validity_window, chained_program_id, chained_block_validity_window),
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (block_validity_window, chained_program_id, chained_block_validity_window),
+    } = read_lee_call::<Instruction>();
 
-    let [pre] = <[_; 1]>::try_from(pre_states.clone()).expect("Expected exactly one pre state");
+    let [pre] = input.pre_states.as_slice() else {
+        panic!("Expected exactly one pre state");
+    };
     let account_id = pre.account_id;
 
     let chained_instruction = to_vec(&(
@@ -38,18 +32,13 @@ fn main() {
     let chained_call = ChainedCall {
         program_id: chained_program_id,
         instruction_data: chained_instruction,
-        accounts: pre_states.iter().map(|p| p.account_id).collect(),
+        accounts: vec![account_id],
         pda_seeds: vec![],
     };
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pre],
-        vec![AccountDiffOutput::new(AccountDiff::unchanged(account_id))],
-    )
-    .with_block_validity_window(block_validity_window)
-    .with_chained_calls(vec![chained_call])
-    .write();
+    input
+        .into_output(vec![AccountDiffOutput::unchanged(account_id)])
+        .with_block_validity_window(block_validity_window)
+        .with_chained_calls(vec![chained_call])
+        .write();
 }

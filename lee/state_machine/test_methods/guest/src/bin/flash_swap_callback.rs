@@ -24,12 +24,8 @@
 //! called by any program. In production, a callback would typically verify the caller
 //! if it needs to trust the context it is called from.
 
-use lee_core::{
-    account::AccountDiff,
-    program::{
-        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call,
-    },
+use lee_core::program::{
+    AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call,
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -42,20 +38,13 @@ pub struct CallbackInstruction {
 }
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id, // not enforced in this callback
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = read_lee_call::<CallbackInstruction>();
+    let ProgramCall::Execute { input, instruction } = read_lee_call::<CallbackInstruction>();
 
     // pre_states[0] = vault (after transfer out), pre_states[1] = receiver (after transfer out)
-    let Ok([vault_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {
+    let [vault_pre, receiver_pre] = input.pre_states.as_slice() else {
         panic!("Callback requires exactly 2 accounts: vault, receiver");
     };
+    let (vault_id, receiver_id) = (vault_pre.account_id, receiver_pre.account_id);
 
     let mut chained_calls = Vec::new();
 
@@ -67,7 +56,7 @@ fn main() {
 
         chained_calls.push(ChainedCall {
             program_id: instruction.token_program_id,
-            accounts: vec![receiver_pre.account_id, vault_pre.account_id],
+            accounts: vec![receiver_id, vault_id],
             instruction_data: transfer_instruction,
             pda_seeds: vec![PdaSeed::new([1_u8; 32])],
         });
@@ -78,16 +67,11 @@ fn main() {
 
     // The callback itself makes no direct state changes, accounts pass through unchanged.
     // All mutations go through the token program via chained calls.
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![vault_pre.clone(), receiver_pre.clone()],
-        vec![
-            AccountDiffOutput::new(AccountDiff::unchanged(vault_pre.account_id)),
-            AccountDiffOutput::new(AccountDiff::unchanged(receiver_pre.account_id)),
-        ],
-    )
-    .with_chained_calls(chained_calls)
-    .write();
+    input
+        .into_output(vec![
+            AccountDiffOutput::unchanged(vault_id),
+            AccountDiffOutput::unchanged(receiver_id),
+        ])
+        .with_chained_calls(chained_calls)
+        .write();
 }

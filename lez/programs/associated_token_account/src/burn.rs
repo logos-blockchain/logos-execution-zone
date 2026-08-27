@@ -1,13 +1,13 @@
 use lee_core::{
-    account::{AccountDiff, AccountWithMetadata},
+    account::AccountWithMetadata,
     program::{AccountDiffOutput, ChainedCall, ProgramId},
 };
 use token_core::TokenHolding;
 
 pub fn burn_from_associated_token_account(
-    owner: AccountWithMetadata,
-    holder_ata: AccountWithMetadata,
-    token_definition: AccountWithMetadata,
+    owner: &AccountWithMetadata,
+    holder_ata: &AccountWithMetadata,
+    token_definition: &AccountWithMetadata,
     ata_program_id: ProgramId,
     amount: u128,
 ) -> (Vec<AccountDiffOutput>, Vec<ChainedCall>) {
@@ -17,16 +17,16 @@ pub fn burn_from_associated_token_account(
         .expect("Holder ATA must hold a valid token")
         .definition_id();
     let seed = associated_token_account_core::verify_ata_and_get_seed(
-        &holder_ata,
-        &owner,
+        holder_ata,
+        owner,
         definition_id,
         ata_program_id,
     );
 
     let post_states = vec![
-        AccountDiffOutput::new(AccountDiff::unchanged(owner.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(holder_ata.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(token_definition.account_id)),
+        AccountDiffOutput::unchanged(owner.account_id),
+        AccountDiffOutput::unchanged(holder_ata.account_id),
+        AccountDiffOutput::unchanged(token_definition.account_id),
     ];
     let chained_call = ChainedCall::new(
         token_program_id,

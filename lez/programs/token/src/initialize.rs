@@ -31,7 +31,7 @@ pub fn initialize_account(
     };
 
     vec![
-        AccountDiffOutput::new(AccountDiff::unchanged(definition_account.account_id)),
+        AccountDiffOutput::unchanged(definition_account.account_id),
         AccountDiffOutput::new_claimed(holding_diff, Claim::Authorized),
     ]
 }
