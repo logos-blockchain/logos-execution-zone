@@ -81,9 +81,9 @@ fn malformed_journal_frame_is_an_error_not_a_panic() {
     assert!(
         matches!(
             &err,
-            crate::error::LeeError::ProgramExecutionFailed(msg)
-                if msg.contains("malformed program journal frame")
+            crate::error::LeeError::ProgramOutputDeserializationError(msg)
+                if msg.contains("malformed journal frame")
         ),
-        "expected malformed-frame ProgramExecutionFailed, got: {err:?}"
+        "expected malformed-frame ProgramOutputDeserializationError, got: {err:?}"
     );
 }

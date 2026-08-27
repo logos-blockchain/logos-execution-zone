@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::AccountWithMetadata,
-    from_frame,
+    parse_journal,
     program::{CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_borsh_frame, to_frame,
 };
@@ -78,11 +78,8 @@ impl Program {
             .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
 
         // Get outputs
-        let payload = from_frame(&session_info.journal.bytes).ok_or_else(|| {
-            LeeError::ProgramExecutionFailed("malformed program journal frame".to_owned())
-        })?;
-        let program_output = borsh::from_slice(payload)
-            .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+        let program_output = parse_journal(&session_info.journal.bytes)
+            .map_err(LeeError::ProgramOutputDeserializationError)?;
 
         Ok(program_output)
     }

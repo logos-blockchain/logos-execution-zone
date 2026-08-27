@@ -5,7 +5,7 @@ use lee_core::{
     DummyInput, InputAccount, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, AccountWithMetadata},
-    from_frame,
+    parse_journal,
     program::{
         CallerData, ChainedCall, InstructionData, MAX_NUMBER_CHAINED_CALLS, ProgramEffects,
         ProgramId, ProgramOutput, match_caller_seed_as_private_pda,
@@ -247,13 +247,8 @@ pub fn execute_and_prove_with_padded_inputs(
             &chained_call.instruction_data,
         )?;
 
-        let program_output: ProgramOutput =
-            borsh::from_slice(from_frame(&inner_receipt.journal.bytes).ok_or_else(|| {
-                LeeError::ProgramOutputDeserializationError(
-                    "malformed inner-receipt journal frame".to_owned(),
-                )
-            })?)
-            .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+        let program_output: ProgramOutput = parse_journal(&inner_receipt.journal.bytes)
+            .map_err(LeeError::ProgramOutputDeserializationError)?;
 
         if caller.program_id.is_none() {
             // The top-level program is handed the transaction's own accounts and may commit them
@@ -345,14 +340,9 @@ pub fn execute_and_prove_with_padded_inputs(
 
     let proof = Proof(borsh::to_vec(&prove_info.receipt.inner)?);
 
-    let circuit_output: PrivacyPreservingCircuitOutput = borsh::from_slice(
-        from_frame(&prove_info.receipt.journal.bytes).ok_or_else(|| {
-            LeeError::CircuitOutputDeserializationError(
-                "malformed circuit journal frame".to_owned(),
-            )
-        })?,
-    )
-    .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
+    let circuit_output: PrivacyPreservingCircuitOutput =
+        parse_journal(&prove_info.receipt.journal.bytes)
+            .map_err(LeeError::CircuitOutputDeserializationError)?;
 
     Ok((circuit_output, proof))
 }

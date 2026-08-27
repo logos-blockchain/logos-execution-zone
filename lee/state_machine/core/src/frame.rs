@@ -39,6 +39,13 @@ pub fn from_frame(bytes: &[u8]) -> Option<&[u8]> {
     payload.get(..len)
 }
 
+/// Decodes a framed borsh journal: the payload of a [`to_frame`]/[`to_borsh_frame`] frame,
+/// deserialized as `T`. `Err` carries the reason, for the caller to file under its own variant.
+pub fn parse_journal<T: borsh::BorshDeserialize>(bytes: &[u8]) -> Result<T, String> {
+    let payload = from_frame(bytes).ok_or_else(|| "malformed journal frame".to_owned())?;
+    borsh::from_slice(payload).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{from_frame, to_borsh_frame, to_frame};
