@@ -6,7 +6,7 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata, Nonce, apply_balance_diff},
+    account::{Account, AccountId, AccountWithMetadata, Nonce},
     program::{
         CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS,
         match_caller_seed_as_public_pda, validate_execution,
@@ -230,19 +230,8 @@ impl ValidatedStateDiff {
                 .zip(&program_output.effects.post_states)
             {
                 let account_id = pre.account_id;
-                let diff = diff_output.diff();
 
-                let balance = apply_balance_diff(pre.account.balance, diff.diff_balance)
-                    .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-
-                let data = diff
-                    .diff_data
-                    .clone()
-                    .unwrap_or_else(|| pre.account.data.clone());
-
-                // Owner is inherited unless a claim overrides it (AccountDiff carries no
-                // ownership).
-                let program_owner = if let Some(claim) = diff_output.claim() {
+                if let Some(claim) = diff_output.claim() {
                     // The invoked program can only claim accounts with default program id.
                     ensure!(
                         pre.account.program_owner == DEFAULT_PROGRAM_OWNER,
@@ -274,20 +263,13 @@ impl ValidatedStateDiff {
                             );
                         }
                     }
-
-                    AccountId::from(chained_call.program_id)
-                } else {
-                    pre.account.program_owner
-                };
+                }
 
                 state_diff.insert(
                     account_id,
-                    Account {
-                        program_owner,
-                        balance,
-                        data,
-                        nonce: pre.account.nonce,
-                    },
+                    diff_output
+                        .materialize(&pre.account, chained_call.program_id)
+                        .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?,
                 );
             }
 

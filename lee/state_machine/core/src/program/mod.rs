@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff},
+    account::{
+        Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, BalanceDiffError,
+        apply_balance_diff,
+    },
     encryption::ViewingPublicKey,
 };
 
@@ -348,6 +351,29 @@ impl AccountDiffOutput {
     #[must_use]
     pub const fn diff(&self) -> &AccountDiff {
         &self.diff
+    }
+
+    /// The post account this diff produces. Validating the claim is the caller's job; this only
+    /// applies the ownership transfer a validated claim implies.
+    pub fn materialize(
+        &self,
+        pre: &Account,
+        executing_program_id: ProgramId,
+    ) -> Result<Account, BalanceDiffError> {
+        Ok(Account {
+            program_owner: if self.claim.is_some() {
+                AccountId::from(executing_program_id)
+            } else {
+                pre.program_owner
+            },
+            balance: apply_balance_diff(pre.balance, self.diff.diff_balance)?,
+            data: self
+                .diff
+                .diff_data
+                .clone()
+                .unwrap_or_else(|| pre.data.clone()),
+            nonce: pre.nonce,
+        })
     }
 }
 

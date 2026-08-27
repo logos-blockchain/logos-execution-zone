@@ -6,7 +6,7 @@ use std::{
 use lee_core::{
     Identifier, InputAccount, InputAccountIdentity, NullifierPublicKey, PrivateWitness,
     WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
+    account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::{
         AccountDiffOutput, BlockValidityWindow, CallContext, CallerData, ChainedCall, Claim,
@@ -390,16 +390,7 @@ impl ExecutionState {
                 authorized_accounts.insert(account_id);
             }
 
-            let diff = diff_output.diff();
-            let balance = apply_balance_diff(pre_account.balance, diff.diff_balance)
-                .expect("balance diff must be valid; validate_execution already checked it");
-            let data = diff
-                .diff_data
-                .clone()
-                .unwrap_or_else(|| pre_account.data.clone());
-
-            // Owner is inherited unless a claim overrides it (AccountDiff carries no ownership).
-            let post_program_owner = if let Some(claim) = diff_output.claim() {
+            if let Some(claim) = diff_output.claim() {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(
                     pre_account.program_owner, DEFAULT_PROGRAM_OWNER,
@@ -466,20 +457,13 @@ impl ExecutionState {
                         }
                     }
                 }
-
-                AccountId::from(program_id)
-            } else {
-                pre_account.program_owner
-            };
+            }
 
             self.post_states.insert(
                 account_id,
-                Account {
-                    program_owner: post_program_owner,
-                    balance,
-                    data,
-                    nonce: pre_account.nonce,
-                },
+                diff_output.materialize(&pre_account, program_id).expect(
+                    "balance diff must apply; this is the per-account sufficiency check that rejects the proof",
+                ),
             );
         }
 

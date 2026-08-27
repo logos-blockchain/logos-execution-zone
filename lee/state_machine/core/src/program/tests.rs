@@ -1,4 +1,5 @@
 use super::*;
+use crate::account::Nonce;
 
 #[test]
 fn validity_window_unbounded_accepts_any_value() {
@@ -155,6 +156,72 @@ fn diff_output_new_without_claim_constructor() {
 
     assert_eq!(&diff, diff_output.diff());
     assert!(diff_output.claim().is_none());
+}
+
+#[test]
+fn materialize_applies_a_claim_as_ownership_by_the_executing_program() {
+    let executing_program_id: ProgramId = [9; 8];
+    let pre = Account {
+        program_owner: DEFAULT_PROGRAM_OWNER,
+        balance: 10,
+        data: vec![1].try_into().unwrap(),
+        nonce: Nonce(3),
+    };
+    let output = AccountDiffOutput::new_claimed(
+        AccountDiff {
+            id: AccountId::new([7; 32]),
+            diff_balance: BalanceDiff::Add(5),
+            diff_data: Some(vec![2].try_into().unwrap()),
+        },
+        Claim::Authorized,
+    );
+
+    let post = output.materialize(&pre, executing_program_id).unwrap();
+
+    assert_eq!(post.program_owner, AccountId::from(executing_program_id));
+    assert_eq!(post.balance, 15);
+    assert_eq!(post.data, vec![2].try_into().unwrap());
+    assert_eq!(post.nonce, pre.nonce);
+}
+
+#[test]
+fn materialize_without_a_claim_inherits_the_owner_and_untouched_data() {
+    let pre = Account {
+        program_owner: AccountId::new([4; 32]),
+        balance: 10,
+        data: vec![1].try_into().unwrap(),
+        nonce: Nonce(3),
+    };
+    let output = AccountDiffOutput::new(AccountDiff {
+        id: AccountId::new([7; 32]),
+        diff_balance: BalanceDiff::Sub(4),
+        diff_data: None,
+    });
+
+    let post = output.materialize(&pre, [9; 8]).unwrap();
+
+    assert_eq!(post.program_owner, pre.program_owner);
+    assert_eq!(post.data, pre.data);
+    assert_eq!(post.balance, 6);
+    assert_eq!(post.nonce, pre.nonce);
+}
+
+#[test]
+fn materialize_rejects_a_subtraction_the_pre_balance_cannot_cover() {
+    let pre = Account {
+        balance: 10,
+        ..Account::default()
+    };
+    let output = AccountDiffOutput::new(AccountDiff {
+        id: AccountId::new([7; 32]),
+        diff_balance: BalanceDiff::Sub(11),
+        diff_data: None,
+    });
+
+    assert_eq!(
+        output.materialize(&pre, [9; 8]),
+        Err(BalanceDiffError::InsufficientBalance)
+    );
 }
 
 // ---- AccountId::for_private_pda tests ----

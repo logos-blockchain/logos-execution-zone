@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccount, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
-    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
+    account::{Account, AccountId, AccountWithMetadata},
     from_frame,
     program::{
         CallerData, ChainedCall, InstructionData, MAX_NUMBER_CHAINED_CALLS, ProgramEffects,
@@ -289,25 +289,10 @@ pub fn execute_and_prove_with_padded_inputs(
             // A successful claim reassigns ownership; the guest doesn't write this into its own
             // diff, the circuit does it afterward, so predict it here too. Otherwise the owner is
             // inherited from the pre-state — an `AccountDiff` carries no ownership.
-            let diff = post.diff();
-            let program_owner = if post.claim().is_some() {
-                AccountId::from(chained_call.program_id)
-            } else {
-                pre.account.program_owner
-            };
-            let balance = apply_balance_diff(pre.account.balance, diff.diff_balance)
-                .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
             materialized_state.insert(
                 pre.account_id,
-                Account {
-                    program_owner,
-                    balance,
-                    data: diff
-                        .diff_data
-                        .clone()
-                        .unwrap_or_else(|| pre.account.data.clone()),
-                    ..pre.account.clone()
-                },
+                post.materialize(&pre.account, chained_call.program_id)
+                    .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?,
             );
             if pre.is_authorized {
                 authorized_accounts.insert(pre.account_id);
