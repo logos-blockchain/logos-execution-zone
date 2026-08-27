@@ -104,7 +104,7 @@ async fn async_main() -> anyhow::Result<()> {
     }
 
     let teardown_failure_flag = Arc::clone(&teardown_failed);
-    let failed = world
+    let writer = world
         .after(move |feature, _rule, scenario, scenario_finished, world| {
             let teardown_failure_flag = Arc::clone(&teardown_failure_flag);
             Box::pin(async move {
@@ -156,7 +156,16 @@ async fn async_main() -> anyhow::Result<()> {
     // Clean up manually reserved handshake port block files for this process
     release_reserved_port_block();
 
-    if failed.execution_has_failed() || teardown_failed.load(std::sync::atomic::Ordering::Relaxed) {
+    // A run that matched no scenario reports no failures; exiting green on it
+    // would let a typo'd tag filter pass CI having tested nothing.
+    if writer.passed_steps() + writer.skipped_steps() + writer.failed_steps() == 0 {
+        anyhow::bail!(
+            "No scenarios ran: the tag/name filters matched nothing, or the feature \
+             directory is empty"
+        );
+    }
+
+    if writer.execution_has_failed() || teardown_failed.load(std::sync::atomic::Ordering::Relaxed) {
         anyhow::bail!("Cucumber scenarios failed");
     }
 
