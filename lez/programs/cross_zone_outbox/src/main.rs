@@ -1,19 +1,23 @@
 use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda, outbox_pda_seed};
 use lee_core::{
     account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
-    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{
+        AccountDiffOutput, CallContext, Claim, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call,
+    },
 };
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
+    let ProgramInput {
+        call:
+            CallContext {
+                self_program_id,
+                caller_program_id,
+                instruction_data,
+            },
+        pre_states,
+    } = input;
 
     // The emitter, and the only identity here the state machine verifies: it
     // checks a guest's claimed caller against the real one. Note this is the

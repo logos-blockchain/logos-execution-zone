@@ -15,7 +15,7 @@
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
 use lee_core::{
     account::{AccountDiff, BalanceDiff},
-    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{AccountDiffOutput, Claim, ProgramCall, read_lee_call},
 };
 
 type Instruction = ();
@@ -49,17 +49,12 @@ impl PinataState {
 }
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (),
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (),
+    } = read_lee_call::<Instruction>();
 
-    let Ok([pinata, winner, clock_pre]) = <[_; 3]>::try_from(pre_states) else {
+    let [pinata, winner, clock_pre] = input.pre_states.as_slice() else {
         panic!("Expected exactly 3 input accounts: pinata, winner, clock");
     };
 
@@ -108,16 +103,11 @@ fn main() {
     // Clock account is read-only.
     let clock_diff = AccountDiff::unchanged(clock_pre.account_id);
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pinata, winner, clock_pre],
-        vec![
+    input
+        .into_output(vec![
             AccountDiffOutput::new_claimed_if_default(pinata_diff, pinata_owner, Claim::Authorized),
             AccountDiffOutput::new(winner_diff),
             AccountDiffOutput::new(clock_diff),
-        ],
-    )
-    .write();
+        ])
+        .write();
 }

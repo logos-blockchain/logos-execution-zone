@@ -1,10 +1,7 @@
 use borsh::to_vec;
 use lee_core::{
     account::AccountDiff,
-    program::{
-        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call,
-    },
+    program::{AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call},
 };
 
 /// Proxy for spending from a private PDA via `auth_transfer`.
@@ -14,17 +11,12 @@ use lee_core::{
 type Instruction = (PdaSeed, u128, ProgramId);
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (seed, amount, auth_transfer_id),
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (seed, amount, auth_transfer_id),
+    } = read_lee_call::<Instruction>();
 
-    let Ok([first, second]) = <[_; 2]>::try_from(pre_states) else {
+    let [first, second] = input.pre_states.as_slice() else {
         return;
     };
 
@@ -39,13 +31,8 @@ fn main() {
         pda_seeds: vec![seed],
     };
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![first, second],
-        vec![first_post, second_post],
-    )
-    .with_chained_calls(vec![chained_call])
-    .write();
+    input
+        .into_output(vec![first_post, second_post])
+        .with_chained_calls(vec![chained_call])
+        .write();
 }

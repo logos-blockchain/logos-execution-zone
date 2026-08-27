@@ -1,9 +1,6 @@
 use lee_core::{
     account::AccountDiff,
-    program::{
-        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call,
-    },
+    program::{AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call},
 };
 
 // Tail Call with PDA example program.
@@ -34,20 +31,15 @@ fn hello_world_program_id() -> ProgramId {
 
 fn main() {
     // Read inputs
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (),
-        },
-        instruction_data,
-    ) = read_lee_call::<()>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (),
+    } = read_lee_call::<()>();
 
     // Unpack the input account pre state
-    let [pre_state] = pre_states
-        .try_into()
-        .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
+    let [pre_state] = input.pre_states.as_slice() else {
+        panic!("Input pre states should consist of a single account");
+    };
 
     // Create the (unchanged) post state
     let post_state = AccountDiffOutput::new(AccountDiff::unchanged(pre_state.account_id));
@@ -67,13 +59,8 @@ fn main() {
     // Write the outputs.
     // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
     // called to commit the output.
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pre_state],
-        vec![post_state],
-    )
-    .with_chained_calls(vec![chained_call])
-    .write();
+    input
+        .into_output(vec![post_state])
+        .with_chained_calls(vec![chained_call])
+        .write();
 }

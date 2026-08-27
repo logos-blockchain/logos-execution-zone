@@ -2,8 +2,8 @@ use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
     program::{
-        AccountDiffOutput, Claim, DEFAULT_PROGRAM_OWNER, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call,
+        AccountDiffOutput, CallContext, Claim, DEFAULT_PROGRAM_OWNER, ProgramCall, ProgramId,
+        ProgramInput, ProgramOutput, read_lee_call,
     },
 };
 use ping_core::{
@@ -12,15 +12,16 @@ use ping_core::{
 };
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = read_lee_call::<ReceiverInstruction>();
+    let ProgramCall::Execute { input, instruction } = read_lee_call::<ReceiverInstruction>();
+    let ProgramInput {
+        call:
+            CallContext {
+                self_program_id,
+                caller_program_id,
+                instruction_data,
+            },
+        pre_states,
+    } = input;
 
     match instruction {
         ReceiverInstruction::Record { payload } => record(

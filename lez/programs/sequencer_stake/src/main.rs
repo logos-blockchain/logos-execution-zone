@@ -4,7 +4,7 @@ use lee_core::{
     account::{AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Data},
     program::{
         AccountDiffOutput, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramCall,
-        ProgramId, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramId, read_lee_call,
     },
 };
 use sequencer_stake_core::{
@@ -13,15 +13,10 @@ use sequencer_stake_core::{
 };
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
+    let pre_states = input.pre_states.clone();
+    let self_program_id = input.call.self_program_id;
+    let caller_program_id = input.call.caller_program_id;
 
     let (post_states, chained_calls) = match instruction {
         Instruction::Stake {
@@ -36,7 +31,7 @@ fn main() {
             );
             stake(
                 self_program_id,
-                pre_states.clone(),
+                pre_states,
                 sequencer_key,
                 amount,
                 mover_program_id,
@@ -51,7 +46,7 @@ fn main() {
                 Some(self_program_id),
                 "ConfirmStake can only be invoked as a self-chained call"
             );
-            let post = confirm_stake(pre_states.clone(), expected_balance_after);
+            let post = confirm_stake(pre_states, expected_balance_after);
             (post, Vec::new())
         }
         Instruction::UnstakeRequest {
@@ -62,7 +57,7 @@ fn main() {
                 caller_program_id.is_none(),
                 "UnstakeRequest is only invoked as a top-level user transaction"
             );
-            let post = unstake_request(self_program_id, pre_states.clone(), amount, destination);
+            let post = unstake_request(self_program_id, pre_states, amount, destination);
             (post, Vec::new())
         }
         Instruction::FinalizeUnstake => {
@@ -70,20 +65,15 @@ fn main() {
                 caller_program_id.is_none(),
                 "FinalizeUnstake is only invoked as a top-level user transaction"
             );
-            let post = finalize_unstake(self_program_id, pre_states.clone());
+            let post = finalize_unstake(self_program_id, pre_states);
             (post, Vec::new())
         }
     };
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        pre_states,
-        post_states,
-    )
-    .with_chained_calls(chained_calls)
-    .write();
+    input
+        .into_output(post_states)
+        .with_chained_calls(chained_calls)
+        .write();
 }
 
 fn decode_config(

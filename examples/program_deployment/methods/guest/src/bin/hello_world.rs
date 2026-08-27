@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountDiff, BalanceDiff},
-    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{AccountDiffOutput, Claim, ProgramCall, read_lee_call},
 };
 
 // Hello-world example program.
@@ -20,20 +20,15 @@ type Instruction = Vec<u8>;
 
 fn main() {
     // Read inputs
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: greeting,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: greeting,
+    } = read_lee_call::<Instruction>();
 
     // Unpack the input account pre state
-    let [pre_state] = pre_states
-        .try_into()
-        .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
+    let [pre_state] = input.pre_states.as_slice() else {
+        panic!("Input pre states should consist of a single account");
+    };
 
     // Construct the new data value: the existing data with the greeting appended.
     let new_data = {
@@ -63,12 +58,5 @@ fn main() {
     // with the LEE program rules.
     // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
     // called to commit the output.
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pre_state],
-        vec![post_state],
-    )
-    .write();
+    input.into_output(vec![post_state]).write();
 }

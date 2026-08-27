@@ -6,21 +6,12 @@
 //! Token program accepts [`Instruction`] as input, refer to the corresponding documentation
 //! for more details.
 
-use lee_core::program::{ProgramCall, ProgramInput, ProgramOutput, read_lee_call};
+use lee_core::program::{ProgramCall, read_lee_call};
 use token_program::core::Instruction;
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
-
-    let pre_states_clone = pre_states.clone();
+    let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
+    let pre_states = input.pre_states.clone();
 
     let post_states = match instruction {
         Instruction::Transfer {
@@ -86,12 +77,5 @@ fn main() {
         }
     };
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        pre_states_clone,
-        post_states,
-    )
-    .write();
+    input.into_output(post_states).write();
 }

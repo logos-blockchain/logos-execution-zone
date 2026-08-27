@@ -1,23 +1,18 @@
 use lee_core::{
     account::AccountDiff,
-    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{AccountDiffOutput, Claim, ProgramCall, read_lee_call},
 };
 
 type Instruction = (Option<Vec<u8>>, bool);
 
 /// A program that optionally modifies the account data and optionally claims it.
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (data_opt, should_claim),
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (data_opt, should_claim),
+    } = read_lee_call::<Instruction>();
 
-    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
+    let [pre] = input.pre_states.as_slice() else {
         return;
     };
 
@@ -38,12 +33,5 @@ fn main() {
         AccountDiffOutput::new(diff)
     };
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pre],
-        vec![post_state],
-    )
-    .write();
+    input.into_output(vec![post_state]).write();
 }

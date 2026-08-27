@@ -3,7 +3,7 @@ use borsh::to_vec;
 use lee_core::{
     account::AccountDiff,
     program::{
-        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        AccountDiffOutput, CallContext, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
         ProgramOutput, read_lee_call,
     },
 };
@@ -15,15 +15,19 @@ type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
 /// The `ProgramId` in the instruction must be the `program_id` of the authenticated transfers
 /// program.
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (balance, auth_transfer_id, num_chain_calls, pda_seed),
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (balance, auth_transfer_id, num_chain_calls, pda_seed),
+    } = read_lee_call::<Instruction>();
+    let ProgramInput {
+        call:
+            CallContext {
+                self_program_id,
+                caller_program_id,
+                instruction_data,
+            },
+        pre_states,
+    } = input;
 
     let Ok([recipient_pre, sender_pre]) = <[_; 2]>::try_from(pre_states) else {
         return;

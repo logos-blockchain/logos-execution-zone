@@ -58,13 +58,29 @@ impl From<AccountId> for ProgramId {
 /// Borsh-encoded program instruction bytes.
 pub type InstructionData = Vec<u8>;
 
-/// Struct encoding the input to an LEE program.
+/// Everything the protocol hands a program: the call it is serving and the accounts it may act on.
+///
+/// A program echoes both back verbatim in its journal, which [`ProgramInput::into_output`] makes
+/// unforgeable by construction.
 #[derive(BorshSerialize, BorshDeserialize)]
-pub struct ProgramInput<T> {
-    pub self_program_id: ProgramId,
-    pub caller_program_id: Option<ProgramId>,
+pub struct ProgramInput {
+    pub call: CallContext,
     pub pre_states: Vec<AccountWithMetadata>,
-    pub instruction: T,
+}
+
+impl ProgramInput {
+    pub fn into_output(self, post_states: Vec<AccountDiffOutput>) -> ProgramOutput {
+        ProgramOutput {
+            call: self.call,
+            pre_states: self.pre_states,
+            effects: ProgramEffects {
+                post_states,
+                chained_calls: Vec::new(),
+                block_validity_window: ValidityWindow::new_unbounded(),
+                timestamp_validity_window: ValidityWindow::new_unbounded(),
+            },
+        }
+    }
 }
 
 /// A 32-byte seed used to compute a *Program-Derived `AccountId`* (PDA).
@@ -744,7 +760,7 @@ pub enum CallKind {
 
 /// The guest-side view of a single invocation.
 pub enum ProgramCall<T> {
-    Execute(ProgramInput<T>, InstructionData),
+    Execute { input: ProgramInput, instruction: T },
 }
 
 /// The rules a claim on a PUBLIC account must satisfy. Private accounts are deliberately exempt:
@@ -841,31 +857,18 @@ pub fn read_input_frame() -> Vec<u8> {
 /// Every guest `main` should match on the returned [`ProgramCall`] rather than assume it was
 /// invoked to execute. Each of `CallKind` and the invocation's own payload is read as its own
 /// length-prefixed borsh frame (see [`read_input_frame`]), one after the other; the payload frame
-/// decodes as `ProgramInput<InstructionData>`, with `T` a second decode of the instruction bytes.
+/// decodes as [`ProgramInput`], with `T` a second decode of its raw instruction bytes.
 #[must_use]
 pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
     let call_kind: CallKind =
         borsh::from_slice(&read_input_frame()).expect("call kind must decode from borsh");
     match call_kind {
         CallKind::Execute => {
-            let ProgramInput {
-                self_program_id,
-                caller_program_id,
-                pre_states,
-                instruction: instruction_data,
-            } = borsh::from_slice::<ProgramInput<InstructionData>>(&read_input_frame())
-                .expect("guest input must be valid borsh");
-            let instruction =
-                borsh::from_slice(&instruction_data).expect("instruction must decode from borsh");
-            ProgramCall::Execute(
-                ProgramInput {
-                    self_program_id,
-                    caller_program_id,
-                    pre_states,
-                    instruction,
-                },
-                instruction_data,
-            )
+            let input: ProgramInput =
+                borsh::from_slice(&read_input_frame()).expect("guest input must be valid borsh");
+            let instruction = borsh::from_slice(&input.call.instruction_data)
+                .expect("instruction must decode from borsh");
+            ProgramCall::Execute { input, instruction }
         }
     }
 }

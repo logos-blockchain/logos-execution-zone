@@ -6,8 +6,8 @@ use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
     program::{
-        AccountDiffOutput, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_call,
+        AccountDiffOutput, CallContext, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
     },
 };
 
@@ -16,15 +16,16 @@ const fn unchanged(pre: &AccountWithMetadata) -> AccountDiffOutput {
 }
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
+    let ProgramInput {
+        call:
+            CallContext {
+                self_program_id,
+                caller_program_id,
+                instruction_data,
+            },
+        pre_states,
+    } = input;
 
     assert!(
         caller_program_id.is_none(),

@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountDiff, AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{AccountDiffOutput, Claim, ProgramCall, read_lee_call},
 };
 
 // Hello-world with write + move_data example program.
@@ -84,17 +84,12 @@ fn move_data(
 
 fn main() {
     // Read input accounts.
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (function_id, data),
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (function_id, data),
+    } = read_lee_call::<Instruction>();
 
-    let post_states = match (pre_states.as_slice(), function_id, data.len()) {
+    let post_states = match (input.pre_states.as_slice(), function_id, data.len()) {
         ([account_pre], WRITE_FUNCTION_ID, _) => {
             let post = write(account_pre, &data);
             vec![post]
@@ -107,12 +102,5 @@ fn main() {
 
     // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
     // called to commit the output.
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        pre_states,
-        post_states,
-    )
-    .write();
+    input.into_output(post_states).write();
 }

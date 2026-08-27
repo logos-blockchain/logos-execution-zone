@@ -1,8 +1,8 @@
 use lee_core::{
     account::{AccountDiff, BalanceDiff, Data},
     program::{
-        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
-        read_lee_call,
+        AccountDiffOutput, CallContext, ChainedCall, PdaSeed, ProgramCall, ProgramInput,
+        ProgramOutput, read_lee_call,
     },
 };
 use risc0_zkvm::sha::{Impl, Sha256 as _};
@@ -51,15 +51,19 @@ fn main() {
     // Read input accounts.
     // It is expected to receive three accounts: [pinata_definition, pinata_token_holding,
     // winner_token_holding]
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: solution,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: solution,
+    } = read_lee_call::<Instruction>();
+    let ProgramInput {
+        call:
+            CallContext {
+                self_program_id,
+                caller_program_id,
+                instruction_data,
+            },
+        pre_states,
+    } = input;
 
     let Ok(
         [

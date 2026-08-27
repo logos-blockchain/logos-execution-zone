@@ -1,9 +1,6 @@
 use lee_core::{
     account::AccountDiff,
-    program::{
-        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call,
-    },
+    program::{AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call},
 };
 
 /// PDA authorization program that delegates balance operations to `simple_transfer`.
@@ -34,18 +31,13 @@ type Instruction = (PdaSeed, ProgramId, u128, bool);
     reason = "clones needed in non-test compilation"
 )]
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (pda_seed, simple_transfer_id, amount, is_withdraw),
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (pda_seed, simple_transfer_id, amount, is_withdraw),
+    } = read_lee_call::<Instruction>();
 
     if is_withdraw {
-        let Ok([pda_pre, recipient_pre]) = <[_; 2]>::try_from(pre_states.clone()) else {
+        let [pda_pre, recipient_pre] = input.pre_states.as_slice() else {
             panic!("expected exactly 2 pre_states for withdraw: [pda, recipient]");
         };
 
@@ -65,18 +57,13 @@ fn main() {
         )
         .with_pda_seeds(vec![pda_seed]);
 
-        ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
-            instruction_data,
-            pre_states,
-            vec![pda_post, recipient_post],
-        )
-        .with_chained_calls(vec![auth_call])
-        .write();
+        input
+            .into_output(vec![pda_post, recipient_post])
+            .with_chained_calls(vec![auth_call])
+            .write();
     } else {
         // Init: initialize the PDA under simple_transfer's ownership.
-        let Ok([pda_pre]) = <[_; 1]>::try_from(pre_states.clone()) else {
+        let [pda_pre] = input.pre_states.as_slice() else {
             panic!("expected exactly 1 pre_state for init: [pda]");
         };
 
@@ -87,14 +74,9 @@ fn main() {
         let auth_call = ChainedCall::new(simple_transfer_id, vec![pda_pre.account_id], &amount)
             .with_pda_seeds(vec![pda_seed]);
 
-        ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
-            instruction_data,
-            pre_states,
-            vec![pda_post],
-        )
-        .with_chained_calls(vec![auth_call])
-        .write();
+        input
+            .into_output(vec![pda_post])
+            .with_chained_calls(vec![auth_call])
+            .write();
     }
 }

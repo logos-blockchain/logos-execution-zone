@@ -1,10 +1,7 @@
 use authenticated_transfer_core::Instruction;
 use lee_core::{
     account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
-    program::{
-        AccountDiffOutput, Claim, DEFAULT_PROGRAM_OWNER, ProgramCall, ProgramInput, ProgramOutput,
-        read_lee_call,
-    },
+    program::{AccountDiffOutput, Claim, DEFAULT_PROGRAM_OWNER, ProgramCall, read_lee_call},
 };
 
 /// Initializes a default account under the ownership of this program.
@@ -54,15 +51,8 @@ fn transfer(
 /// To be used both in public and private contexts.
 fn main() {
     // Read input accounts.
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
+    let pre_states = input.pre_states.clone();
 
     let post_states = match instruction {
         Instruction::Initialize => {
@@ -79,12 +69,5 @@ fn main() {
         }
     };
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        pre_states,
-        post_states,
-    )
-    .write();
+    input.into_output(post_states).write();
 }

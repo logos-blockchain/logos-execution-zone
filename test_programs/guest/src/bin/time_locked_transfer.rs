@@ -12,24 +12,19 @@
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
 use lee_core::{
     account::{AccountDiff, BalanceDiff},
-    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{AccountDiffOutput, ProgramCall, read_lee_call},
 };
 
 /// (`amount`, `deadline_timestamp`).
 type Instruction = (u128, u64);
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (amount, deadline),
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (amount, deadline),
+    } = read_lee_call::<Instruction>();
 
-    let Ok([sender_pre, receiver_pre, clock_pre]) = <[_; 3]>::try_from(pre_states) else {
+    let [sender_pre, receiver_pre, clock_pre] = input.pre_states.as_slice() else {
         panic!("Expected exactly 3 input accounts: sender, receiver, clock");
     };
 
@@ -59,16 +54,11 @@ fn main() {
     // Clock account is read-only: post state equals pre state.
     let clock_diff = AccountDiff::unchanged(clock_pre.account_id);
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![sender_pre, receiver_pre, clock_pre],
-        vec![
+    input
+        .into_output(vec![
             AccountDiffOutput::new(sender_diff),
             AccountDiffOutput::new(receiver_diff),
             AccountDiffOutput::new(clock_diff),
-        ],
-    )
-    .write();
+        ])
+        .write();
 }

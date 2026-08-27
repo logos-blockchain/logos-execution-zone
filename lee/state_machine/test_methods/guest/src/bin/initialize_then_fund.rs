@@ -1,10 +1,7 @@
 use borsh::to_vec;
 use lee_core::{
-    account::{AccountDiff, AccountWithMetadata},
-    program::{
-        AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_call,
-    },
+    account::AccountDiff,
+    program::{AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, read_lee_call},
 };
 
 type Instruction = (u128, ProgramId, ProgramId);
@@ -16,63 +13,45 @@ type Instruction = (u128, ProgramId, ProgramId);
 /// callers that need a padding account to satisfy the privacy-preserving transaction's "at least
 /// one private action" precondition.
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (balance, claimer_id, simple_transfer_id),
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (balance, claimer_id, simple_transfer_id),
+    } = read_lee_call::<Instruction>();
 
-    let (recipient_pre, sender_pre, padding_pre): (
-        AccountWithMetadata,
-        AccountWithMetadata,
-        Option<AccountWithMetadata>,
-    ) = if let Ok([recipient_pre, sender_pre, padding_pre]) = <[_; 3]>::try_from(pre_states.clone())
-    {
-        (recipient_pre, sender_pre, Some(padding_pre))
-    } else {
-        let Ok([recipient_pre, sender_pre]) = <[_; 2]>::try_from(pre_states) else {
-            return;
-        };
-        (recipient_pre, sender_pre, None)
+    let (recipient_id, sender_id, padding_id) = match input.pre_states.as_slice() {
+        [recipient_pre, sender_pre] => (recipient_pre.account_id, sender_pre.account_id, None),
+        [recipient_pre, sender_pre, padding_pre] => (
+            recipient_pre.account_id,
+            sender_pre.account_id,
+            Some(padding_pre.account_id),
+        ),
+        _ => return,
     };
 
     let initialize_call = ChainedCall {
         program_id: claimer_id,
         instruction_data: to_vec(&()).unwrap(),
-        accounts: vec![recipient_pre.account_id],
+        accounts: vec![recipient_id],
         pda_seeds: vec![],
     };
 
     let fund_call = ChainedCall {
         program_id: simple_transfer_id,
         instruction_data: to_vec(&balance).unwrap(),
-        accounts: vec![sender_pre.account_id, recipient_pre.account_id],
+        accounts: vec![sender_id, recipient_id],
         pda_seeds: vec![],
     };
 
-    let mut output_pre_states = vec![recipient_pre.clone(), sender_pre.clone()];
-    let mut output_post_states = vec![
-        AccountDiffOutput::new(AccountDiff::unchanged(recipient_pre.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(sender_pre.account_id)),
+    let mut post_states = vec![
+        AccountDiffOutput::new(AccountDiff::unchanged(recipient_id)),
+        AccountDiffOutput::new(AccountDiff::unchanged(sender_id)),
     ];
-    if let Some(padding_pre) = padding_pre {
-        output_post_states.push(AccountDiffOutput::new(AccountDiff::unchanged(
-            padding_pre.account_id,
-        )));
-        output_pre_states.push(padding_pre);
+    if let Some(padding_id) = padding_id {
+        post_states.push(AccountDiffOutput::new(AccountDiff::unchanged(padding_id)));
     }
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        output_pre_states,
-        output_post_states,
-    )
-    .with_chained_calls(vec![initialize_call, fund_call])
-    .write();
+    input
+        .into_output(post_states)
+        .with_chained_calls(vec![initialize_call, fund_call])
+        .write();
 }

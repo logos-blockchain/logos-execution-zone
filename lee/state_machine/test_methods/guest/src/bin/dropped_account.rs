@@ -1,6 +1,8 @@
 use lee_core::{
     account::AccountDiff,
-    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{
+        AccountDiffOutput, CallContext, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    },
 };
 
 type Instruction = ();
@@ -11,15 +13,19 @@ type Instruction = ();
 /// Differs from `missing_output` because the `pre_state` and `post_states` lengths match. We
 /// simply drop the account from both before returning them as part of the program's output.
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            ..
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (),
+    } = read_lee_call::<Instruction>();
+    let ProgramInput {
+        call:
+            CallContext {
+                self_program_id,
+                caller_program_id,
+                instruction_data,
+            },
+        pre_states,
+    } = input;
 
     let Ok([pre1, _pre2]) = <[_; 2]>::try_from(pre_states) else {
         return;

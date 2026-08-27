@@ -1,6 +1,6 @@
 use lee_core::{
     account::AccountDiff,
-    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{AccountDiffOutput, ProgramCall, read_lee_call},
 };
 
 /// A variant of `noop` that asserts every `pre_state.is_authorized == true` before echoing
@@ -10,17 +10,12 @@ use lee_core::{
 type Instruction = ();
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            ..
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: (),
+    } = read_lee_call::<Instruction>();
 
-    for pre in &pre_states {
+    for pre in &input.pre_states {
         assert!(
             pre.is_authorized,
             "auth_asserting_noop: pre_state {} is not authorized",
@@ -28,16 +23,10 @@ fn main() {
         );
     }
 
-    let post_states = pre_states
+    let post_states = input
+        .pre_states
         .iter()
         .map(|account| AccountDiffOutput::new(AccountDiff::unchanged(account.account_id)))
         .collect();
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        pre_states,
-        post_states,
-    )
-    .write();
+    input.into_output(post_states).write();
 }

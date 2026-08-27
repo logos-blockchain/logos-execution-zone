@@ -1,23 +1,18 @@
 use lee_core::{
     account::{AccountDiff, BalanceDiff},
-    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{AccountDiffOutput, Claim, ProgramCall, read_lee_call},
 };
 
 type Instruction = Vec<u8>;
 
 /// A program that modifies the account data by setting bytes sent in instruction.
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: data,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: data,
+    } = read_lee_call::<Instruction>();
 
-    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
+    let [pre] = input.pre_states.as_slice() else {
         return;
     };
 
@@ -33,12 +28,5 @@ fn main() {
         Claim::Authorized,
     );
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pre],
-        vec![diff_output],
-    )
-    .write();
+    input.into_output(vec![diff_output]).write();
 }

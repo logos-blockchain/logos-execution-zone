@@ -1,22 +1,17 @@
 use lee_core::{
     account::{AccountDiff, BalanceDiff},
-    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
+    program::{AccountDiffOutput, ProgramCall, read_lee_call},
 };
 
 type Instruction = u128;
 
 fn main() {
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: balance_to_burn,
-        },
-        instruction_data,
-    ) = read_lee_call::<Instruction>();
+    let ProgramCall::Execute {
+        input,
+        instruction: balance_to_burn,
+    } = read_lee_call::<Instruction>();
 
-    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
+    let [pre] = input.pre_states.as_slice() else {
         return;
     };
 
@@ -28,12 +23,7 @@ fn main() {
         diff_data: None,
     };
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pre],
-        vec![AccountDiffOutput::new(diff)],
-    )
-    .write();
+    input
+        .into_output(vec![AccountDiffOutput::new(diff)])
+        .write();
 }
