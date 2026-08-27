@@ -43,10 +43,6 @@ Feature: Sequencer registration
   # transaction status API (pending, included, or dropped with a reason),
   # replace the canary with it.
   #
-  # Registration cases not yet covered here:
-  # - G-01..G-03 exercise genesis builders private to sequencer_core, where
-  #   G-01 and G-02 are already covered
-
   Background:
     Given a LEZ stack with fast blocks and configured public accounts
     And the sequencer_stake config account is at the default minimum stake
