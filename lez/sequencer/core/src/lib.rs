@@ -922,7 +922,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                     withdrawals.push(withdraw_data);
                 }
 
-                state.apply_state_diff(validated_diff);
+                drop(state.apply_state_diff(validated_diff));
             }
             TransactionOrigin::Sequencer => {
                 let LeeTransaction::Public(public_tx) = tx else {

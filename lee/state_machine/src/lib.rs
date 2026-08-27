@@ -197,6 +197,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn event_emitter() -> Program {
+        Program::new_unchecked(
+            test_methods::EVENT_EMITTER_ID,
+            Cow::Borrowed(test_methods::EVENT_EMITTER_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn modified_transfer_program() -> Program {
         Program::new_unchecked(
             test_methods::MODIFIED_TRANSFER_ID,

@@ -10,11 +10,12 @@ use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
     InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
     PrivateWitness, Timestamp, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+    account::{Account, AccountId, AccountWithMetadata, Balance, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
-        BlockValidityWindow, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
-        ProgramId, TimestampValidityWindow, WrappedBalanceSum,
+        BlockValidityWindow, ExecutionValidationError, InstructionData, MAX_NUMBER_CHAINED_CALLS,
+        PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow, TransactionEvent,
+        WrappedBalanceSum,
     },
 };
 
@@ -35,6 +36,7 @@ mod authenticated_transfer;
 mod changer_claimer;
 mod circuit;
 mod claiming;
+mod events;
 mod flash_swap;
 mod genesis;
 mod privacy_preserving;
@@ -60,6 +62,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::two_pda_claimer());
         self.insert_program(&crate::test_methods::noop());
         self.insert_program(&crate::test_methods::chain_caller());
+        self.insert_program(&crate::test_methods::event_emitter());
         self.insert_program(&crate::test_methods::modified_transfer_program());
         self.insert_program(&crate::test_methods::malicious_authorization_changer());
         self.insert_program(&crate::test_methods::validity_window());
@@ -177,6 +180,12 @@ enum FlashSwapInstruction {
     InvariantCheck {
         min_vault_balance: u128,
     },
+}
+
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct EmitterInstruction {
+    events: Vec<ProgramEvent>,
+    chain: Vec<(ProgramId, InstructionData)>,
 }
 
 fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<AccountId, Account> {
