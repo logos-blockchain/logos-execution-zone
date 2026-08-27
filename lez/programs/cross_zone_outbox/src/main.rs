@@ -1,30 +1,19 @@
 use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda, outbox_pda_seed};
 use lee_core::{
-    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
-    program::{
-        AccountDiffOutput, CallContext, Claim, ProgramCall, ProgramInput, ProgramOutput,
-        read_lee_call,
-    },
+    account::{Account, AccountDiff, BalanceDiff},
+    program::{AccountDiffOutput, Claim, ProgramCall, read_lee_call},
 };
 
 fn main() {
     let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
-    let ProgramInput {
-        call:
-            CallContext {
-                self_program_id,
-                caller_program_id,
-                instruction_data,
-            },
-        pre_states,
-    } = input;
+    let self_program_id = input.call.self_program_id;
 
     // The emitter, and the only identity here the state machine verifies: it
     // checks a guest's claimed caller against the real one. Note this is the
     // immediate chained caller, not the top-level program that cross-zone
     // discovery names; the two coincide only while every emitter refuses to be
     // called by another program, which both do today.
-    let Some(emitter) = caller_program_id else {
+    let Some(emitter) = input.call.caller_program_id else {
         panic!("Outbox is only callable through a chain call from a user program");
     };
 
@@ -44,8 +33,9 @@ fn main() {
         ),
     };
 
-    let [outbox] =
-        <[AccountWithMetadata; 1]>::try_from(pre_states).expect("Emit requires exactly 1 account");
+    let [outbox] = input.pre_states.as_slice() else {
+        panic!("Emit requires exactly 1 account");
+    };
 
     assert_eq!(
         outbox.account_id,
@@ -94,12 +84,5 @@ fn main() {
         Claim::Pda(outbox_pda_seed(emitter, &target_zone, ordinal)),
     );
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![outbox],
-        vec![post],
-    )
-    .write();
+    input.into_output(vec![post]).write();
 }

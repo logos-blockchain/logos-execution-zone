@@ -1,7 +1,4 @@
-use lee_core::{
-    account::AccountDiff,
-    program::{AccountDiffOutput, ProgramCall, read_lee_call},
-};
+use lee_core::program::{AccountDiffOutput, ProgramCall, read_lee_call};
 
 /// A variant of `noop` that asserts every `pre_state.is_authorized == true` before echoing
 /// the `post_states`. Any unauthorized `pre_state` panics the guest, failing the whole
@@ -26,7 +23,7 @@ fn main() {
     let post_states = input
         .pre_states
         .iter()
-        .map(|account| AccountDiffOutput::new(AccountDiff::unchanged(account.account_id)))
+        .map(|account| AccountDiffOutput::unchanged(account.account_id))
         .collect();
     input.into_output(post_states).write();
 }

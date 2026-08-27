@@ -1,30 +1,20 @@
 use faucet_core::Instruction;
-use lee_core::{
-    account::AccountDiff,
-    program::{AccountDiffOutput, ChainedCall, ProgramCall, read_lee_call},
-};
-
-fn unchanged_post_states(
-    pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountDiffOutput> {
-    pre_states
-        .iter()
-        .map(|pre_state| AccountDiffOutput::new(AccountDiff::unchanged(pre_state.account_id)))
-        .collect()
-}
+use lee_core::program::{AccountDiffOutput, ChainedCall, ProgramCall, read_lee_call};
 
 fn main() {
     let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
-    let pre_states = input.pre_states.clone();
     let self_program_id = input.call.self_program_id;
-    let caller_program_id = input.call.caller_program_id;
 
     assert!(
-        caller_program_id.is_none(),
+        input.call.caller_program_id.is_none(),
         "Faucet cannot be invoked through chain calls"
     );
 
-    let post_states = unchanged_post_states(&input.pre_states);
+    let post_states = input
+        .pre_states
+        .iter()
+        .map(|pre_state| AccountDiffOutput::unchanged(pre_state.account_id))
+        .collect();
 
     let chained_calls = match instruction {
         Instruction::GenesisTransferVault {
@@ -32,9 +22,9 @@ fn main() {
             recipient_id,
             amount,
         } => {
-            let [faucet, recipient_vault] = pre_states
-                .try_into()
-                .expect("Transfer requires exactly 2 accounts");
+            let [faucet, recipient_vault] = input.pre_states.as_slice() else {
+                panic!("Transfer requires exactly 2 accounts");
+            };
 
             assert_eq!(
                 faucet.account_id,
@@ -55,9 +45,9 @@ fn main() {
             ]
         }
         Instruction::GenesisTransferDirect { amount } => {
-            let [faucet, recipient] = pre_states
-                .try_into()
-                .expect("TransferDirect requires exactly 2 accounts");
+            let [faucet, recipient] = input.pre_states.as_slice() else {
+                panic!("TransferDirect requires exactly 2 accounts");
+            };
 
             assert_eq!(
                 faucet.account_id,

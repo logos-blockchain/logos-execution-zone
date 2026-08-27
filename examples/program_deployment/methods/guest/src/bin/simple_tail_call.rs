@@ -1,7 +1,4 @@
-use lee_core::{
-    account::AccountDiff,
-    program::{AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, read_lee_call},
-};
+use lee_core::program::{AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, read_lee_call};
 
 // Tail Call example program.
 //
@@ -37,7 +34,7 @@ fn main() {
     };
 
     // Create the (unchanged) post state
-    let post_state = AccountDiffOutput::new(AccountDiff::unchanged(pre_state.account_id));
+    let post_state = AccountDiffOutput::unchanged(pre_state.account_id);
 
     // Create the chained call
     let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();

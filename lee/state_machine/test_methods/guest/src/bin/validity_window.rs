@@ -1,8 +1,5 @@
-use lee_core::{
-    account::AccountDiff,
-    program::{
-        AccountDiffOutput, BlockValidityWindow, ProgramCall, TimestampValidityWindow, read_lee_call,
-    },
+use lee_core::program::{
+    AccountDiffOutput, BlockValidityWindow, ProgramCall, TimestampValidityWindow, read_lee_call,
 };
 
 type Instruction = (BlockValidityWindow, TimestampValidityWindow);
@@ -17,7 +14,7 @@ fn main() {
         return;
     };
 
-    let diff_output = AccountDiffOutput::new(AccountDiff::unchanged(pre.account_id));
+    let diff_output = AccountDiffOutput::unchanged(pre.account_id);
 
     input
         .into_output(vec![diff_output])

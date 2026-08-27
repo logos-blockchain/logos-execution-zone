@@ -4,17 +4,17 @@ use lee_core::{
 };
 
 pub fn create_associated_token_account(
-    owner: AccountWithMetadata,
-    token_definition: AccountWithMetadata,
-    ata_account: AccountWithMetadata,
+    owner: &AccountWithMetadata,
+    token_definition: &AccountWithMetadata,
+    ata_account: &AccountWithMetadata,
     ata_program_id: ProgramId,
 ) -> (Vec<AccountDiffOutput>, Vec<ChainedCall>) {
     // No authorization check needed: create is idempotent, so anyone can call it safely.
     let token_program_id: lee_core::program::ProgramId =
         token_definition.account.program_owner.into();
     let ata_seed = associated_token_account_core::verify_ata_and_get_seed(
-        &ata_account,
-        &owner,
+        ata_account,
+        owner,
         token_definition.account_id,
         ata_program_id,
     );
@@ -28,8 +28,8 @@ pub fn create_associated_token_account(
                     owner.account.program_owner,
                     Claim::Authorized,
                 ),
-                AccountDiffOutput::new(AccountDiff::unchanged(token_definition.account_id)),
-                AccountDiffOutput::new(AccountDiff::unchanged(ata_account.account_id)),
+                AccountDiffOutput::unchanged(token_definition.account_id),
+                AccountDiffOutput::unchanged(ata_account.account_id),
             ],
             vec![],
         );
@@ -41,8 +41,8 @@ pub fn create_associated_token_account(
             owner.account.program_owner,
             Claim::Authorized,
         ),
-        AccountDiffOutput::new(AccountDiff::unchanged(token_definition.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(ata_account.account_id)),
+        AccountDiffOutput::unchanged(token_definition.account_id),
+        AccountDiffOutput::unchanged(ata_account.account_id),
     ];
     let chained_call = ChainedCall::new(
         token_program_id,

@@ -1,9 +1,5 @@
-use lee_core::{
-    account::AccountDiff,
-    program::{
-        AccountDiffOutput, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId,
-        read_lee_call,
-    },
+use lee_core::program::{
+    AccountDiffOutput, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, read_lee_call,
 };
 
 /// Chain-calls an arbitrary target with caller-supplied instruction data,
@@ -28,7 +24,7 @@ fn main() {
 
     let post_states = pre_states
         .iter()
-        .map(|pre| AccountDiffOutput::new(AccountDiff::unchanged(pre.account_id)))
+        .map(|pre| AccountDiffOutput::unchanged(pre.account_id))
         .collect();
 
     input

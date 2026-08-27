@@ -1,8 +1,5 @@
 use borsh::to_vec;
-use lee_core::{
-    account::AccountDiff,
-    program::{AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, read_lee_call},
-};
+use lee_core::program::{AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, read_lee_call};
 
 type Instruction = (u128, ProgramId, ProgramId);
 
@@ -43,11 +40,11 @@ fn main() {
     };
 
     let mut post_states = vec![
-        AccountDiffOutput::new(AccountDiff::unchanged(recipient_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(sender_id)),
+        AccountDiffOutput::unchanged(recipient_id),
+        AccountDiffOutput::unchanged(sender_id),
     ];
     if let Some(padding_id) = padding_id {
-        post_states.push(AccountDiffOutput::new(AccountDiff::unchanged(padding_id)));
+        post_states.push(AccountDiffOutput::unchanged(padding_id));
     }
 
     input

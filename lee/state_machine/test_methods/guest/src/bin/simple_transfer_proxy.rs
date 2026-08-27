@@ -1,6 +1,5 @@
-use lee_core::{
-    account::AccountDiff,
-    program::{AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call},
+use lee_core::program::{
+    AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call,
 };
 
 /// PDA authorization program that delegates balance operations to `simple_transfer`.
@@ -22,14 +21,6 @@ use lee_core::{
 /// **Deposit**: done directly via `simple_transfer` (no need for this program).
 type Instruction = (PdaSeed, ProgramId, u128, bool);
 
-#[expect(
-    clippy::allow_attributes,
-    reason = "allow is needed because the clones are only redundant in test compilation"
-)]
-#[allow(
-    clippy::redundant_clone,
-    reason = "clones needed in non-test compilation"
-)]
 fn main() {
     let ProgramCall::Execute {
         input,
@@ -43,12 +34,11 @@ fn main() {
 
         // Post-states stay unchanged in this program. The actual balance transfer
         // happens in the chained call to simple_transfer.
-        let pda_post = AccountDiffOutput::new(AccountDiff::unchanged(pda_pre.account_id));
-        let recipient_post =
-            AccountDiffOutput::new(AccountDiff::unchanged(recipient_pre.account_id));
+        let pda_post = AccountDiffOutput::unchanged(pda_pre.account_id);
+        let recipient_post = AccountDiffOutput::unchanged(recipient_pre.account_id);
 
         // Chain to simple_transfer with pda_seeds to authorize the PDA.
-        // The circuit's assert_authorization_and_record_bindings establishes the
+        // The walk's derive_authorization_and_record_bindings establishes the
         // private PDA (seed, npk) binding when pda_seeds match the private PDA derivation.
         let auth_call = ChainedCall::new(
             simple_transfer_id,
@@ -67,7 +57,7 @@ fn main() {
             panic!("expected exactly 1 pre_state for init: [pda]");
         };
 
-        let pda_post = AccountDiffOutput::new(AccountDiff::unchanged(pda_pre.account_id));
+        let pda_post = AccountDiffOutput::unchanged(pda_pre.account_id);
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
         // to authorize the PDA. simple_transfer will claim it with Claim::Authorized.

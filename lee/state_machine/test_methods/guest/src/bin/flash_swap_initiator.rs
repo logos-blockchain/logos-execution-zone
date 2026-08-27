@@ -37,9 +37,8 @@
 //! - `flash_swap_self_call_targets_correct_program`: zero-amount self-call isolation test
 //! - `flash_swap_standalone_invariant_check_rejected`: `caller_program_id` access control
 
-use lee_core::{
-    account::AccountDiff,
-    program::{AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call},
+use lee_core::program::{
+    AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call,
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -126,8 +125,8 @@ fn main() {
             // All mutations happen inside the chained calls (token transfers).
             input
                 .into_output(vec![
-                    AccountDiffOutput::new(AccountDiff::unchanged(vault_id)),
-                    AccountDiffOutput::new(AccountDiff::unchanged(receiver_id)),
+                    AccountDiffOutput::unchanged(vault_id),
+                    AccountDiffOutput::unchanged(receiver_id),
                 ])
                 .with_chained_calls(vec![call_1, call_2, call_3])
                 .write();
@@ -163,9 +162,7 @@ fn main() {
 
             // Pass-through: no state changes in the invariant check step.
             input
-                .into_output(vec![AccountDiffOutput::new(AccountDiff::unchanged(
-                    vault_id,
-                ))])
+                .into_output(vec![AccountDiffOutput::unchanged(vault_id)])
                 .write();
         }
     }

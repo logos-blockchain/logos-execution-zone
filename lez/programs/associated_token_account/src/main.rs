@@ -3,13 +3,12 @@ use lee_core::program::{ProgramCall, read_lee_call};
 
 fn main() {
     let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
-    let pre_states = input.pre_states.clone();
 
     let (post_states, chained_calls) = match instruction {
         Instruction::Create { ata_program_id } => {
-            let [owner, token_definition, ata_account] = pre_states
-                .try_into()
-                .expect("Create instruction requires exactly three accounts");
+            let [owner, token_definition, ata_account] = input.pre_states.as_slice() else {
+                panic!("Create instruction requires exactly three accounts");
+            };
             associated_token_account_program::create::create_associated_token_account(
                 owner,
                 token_definition,
@@ -21,9 +20,9 @@ fn main() {
             ata_program_id,
             amount,
         } => {
-            let [owner, sender_ata, recipient] = pre_states
-                .try_into()
-                .expect("Transfer instruction requires exactly three accounts");
+            let [owner, sender_ata, recipient] = input.pre_states.as_slice() else {
+                panic!("Transfer instruction requires exactly three accounts");
+            };
             associated_token_account_program::transfer::transfer_from_associated_token_account(
                 owner,
                 sender_ata,
@@ -36,9 +35,9 @@ fn main() {
             ata_program_id,
             amount,
         } => {
-            let [owner, holder_ata, token_definition] = pre_states
-                .try_into()
-                .expect("Burn instruction requires exactly three accounts");
+            let [owner, holder_ata, token_definition] = input.pre_states.as_slice() else {
+                panic!("Burn instruction requires exactly three accounts");
+            };
             associated_token_account_program::burn::burn_from_associated_token_account(
                 owner,
                 holder_ata,

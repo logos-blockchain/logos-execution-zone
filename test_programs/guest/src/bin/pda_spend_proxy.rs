@@ -1,7 +1,6 @@
 use borsh::to_vec;
-use lee_core::{
-    account::AccountDiff,
-    program::{AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call},
+use lee_core::program::{
+    AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call,
 };
 
 /// Proxy for spending from a private PDA via `auth_transfer`.
@@ -20,8 +19,8 @@ fn main() {
         return;
     };
 
-    let first_post = AccountDiffOutput::new(AccountDiff::unchanged(first.account_id));
-    let second_post = AccountDiffOutput::new(AccountDiff::unchanged(second.account_id));
+    let first_post = AccountDiffOutput::unchanged(first.account_id);
+    let second_post = AccountDiffOutput::unchanged(second.account_id);
 
     let chained_call = ChainedCall {
         program_id: auth_transfer_id,

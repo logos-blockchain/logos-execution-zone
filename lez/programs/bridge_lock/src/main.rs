@@ -4,28 +4,18 @@ use bridge_lock_core::{
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountDiff, AccountWithMetadata, BalanceDiff},
+    account::{Account, AccountDiff, BalanceDiff},
     program::{
-        AccountDiffOutput, CallContext, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call,
+        AccountDiffOutput, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput, read_lee_call,
     },
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
 
 fn main() {
     let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
-    let ProgramInput {
-        call:
-            CallContext {
-                self_program_id,
-                caller_program_id,
-                instruction_data,
-            },
-        pre_states,
-    } = input;
 
     assert!(
-        caller_program_id.is_none(),
+        input.call.caller_program_id.is_none(),
         "bridge_lock is only invoked as a top-level user transaction"
     );
 
@@ -38,10 +28,7 @@ fn main() {
             payload,
             ordinal,
         } => lock(
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction_data,
+            input,
             amount,
             target_zone,
             target_program_id,
@@ -52,26 +39,12 @@ fn main() {
         Instruction::InitConfig {
             outbox_program_id,
             target_program_id,
-        } => init_config(
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction_data,
-            outbox_program_id,
-            target_program_id,
-        ),
+        } => init_config(input, outbox_program_id, target_program_id),
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the emission fields are passed through verbatim"
-)]
 fn lock(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
-    instruction_data: Vec<u8>,
+    input: ProgramInput,
     amount: u128,
     target_zone: [u8; 32],
     target_program_id: ProgramId,
@@ -80,14 +53,15 @@ fn lock(
     ordinal: u32,
 ) {
     // pre_states: [config PDA, holder holding (authorized), escrow PDA, outbox PDA].
-    let [config, holder, escrow, outbox] = <[AccountWithMetadata; 4]>::try_from(pre_states)
-        .expect("Lock requires config, holder, escrow, and outbox accounts");
+    let [config, holder, escrow, outbox] = input.pre_states.as_slice() else {
+        panic!("Lock requires config, holder, escrow, and outbox accounts");
+    };
 
     // Pinned rather than caller-named: chaining elsewhere would debit the escrow
     // and leave no record of what it was for.
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(input.call.self_program_id),
         "first account must be the bridge-lock config PDA"
     );
     let (outbox_program_id, pinned_target) = read_config(&config.account.data)
@@ -133,12 +107,12 @@ fn lock(
     // program to emit the mint without an actual lock.
     assert_eq!(
         holder.account.program_owner,
-        self_program_id.into(),
+        input.call.self_program_id.into(),
         "holder account must be a bridge_lock holding"
     );
     assert_eq!(
         escrow.account_id,
-        escrow_account_id(self_program_id),
+        escrow_account_id(input.call.self_program_id),
         "third account must be the escrow PDA"
     );
 
@@ -175,40 +149,29 @@ fn lock(
         },
     );
 
-    let config_post = AccountDiffOutput::new(AccountDiff::unchanged(config.account_id));
+    let post_states = vec![
+        AccountDiffOutput::unchanged(config.account_id),
+        holder_post,
+        escrow_post,
+        AccountDiffOutput::unchanged(outbox.account_id),
+    ];
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![config, holder, escrow, outbox.clone()],
-        vec![
-            config_post,
-            holder_post,
-            escrow_post,
-            AccountDiffOutput::new(AccountDiff::unchanged(outbox.account_id)),
-        ],
-    )
-    .with_chained_calls(vec![call])
-    .write();
+    input
+        .into_output(post_states)
+        .with_chained_calls(vec![call])
+        .write();
 }
 
 /// Writes the outbox program and the mint target into the config PDA exactly once
 /// at genesis.
-fn init_config(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
-    instruction_data: Vec<u8>,
-    outbox_program_id: ProgramId,
-    target_program_id: ProgramId,
-) {
+fn init_config(input: ProgramInput, outbox_program_id: ProgramId, target_program_id: ProgramId) {
     // pre_states: [config PDA].
-    let [config] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitConfig requires the config account");
+    let [config] = input.pre_states.as_slice() else {
+        panic!("InitConfig requires the config account");
+    };
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(input.call.self_program_id),
         "account must be the bridge-lock config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
@@ -218,7 +181,7 @@ fn init_config(
     if config.account != Account::default() {
         assert_eq!(
             config.account.program_owner,
-            self_program_id.into(),
+            input.call.self_program_id.into(),
             "bridge-lock config PDA is owned by another program"
         );
         assert_eq!(
@@ -244,14 +207,7 @@ fn init_config(
         Claim::Pda(config_seed()),
     );
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![config],
-        vec![config_post],
-    )
-    .write();
+    input.into_output(vec![config_post]).write();
 }
 
 /// Decodes the cross-zone payload (borsh bytes) into the wrapped-token instruction it carries.

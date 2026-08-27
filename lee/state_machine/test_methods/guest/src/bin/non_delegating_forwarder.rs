@@ -1,9 +1,6 @@
-use lee_core::{
-    account::AccountDiff,
-    program::{
-        AccountDiffOutput, CallContext, ChainedCall, InstructionData, ProgramCall, ProgramId,
-        ProgramInput, ProgramOutput, read_lee_call,
-    },
+use lee_core::program::{
+    AccountDiffOutput, CallContext, ChainedCall, InstructionData, ProgramCall, ProgramId,
+    ProgramInput, ProgramOutput, read_lee_call,
 };
 
 type Instruction = (ProgramId, InstructionData, bool);
@@ -28,7 +25,7 @@ fn main() {
     let (output_pre_states, output_post_states) = if declare_pre_states {
         let post_states = pre_states
             .iter()
-            .map(|account| AccountDiffOutput::new(AccountDiff::unchanged(account.account_id)))
+            .map(|account| AccountDiffOutput::unchanged(account.account_id))
             .collect();
         (pre_states, post_states)
     } else {

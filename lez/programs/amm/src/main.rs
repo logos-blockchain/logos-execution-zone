@@ -13,7 +13,6 @@ use lee_core::program::{ProgramCall, read_lee_call};
 
 fn main() {
     let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
-    let pre_states = input.pre_states.clone();
 
     let (post_states, chained_calls) = match instruction {
         Instruction::NewDefinition {
@@ -29,17 +28,18 @@ fn main() {
                 user_holding_a,
                 user_holding_b,
                 user_holding_lp,
-            ] = pre_states
-                .try_into()
-                .expect("Transfer instruction requires exactly seven accounts");
+            ] = input.pre_states.as_slice()
+            else {
+                panic!("Transfer instruction requires exactly seven accounts");
+            };
             amm_program::new_definition::new_definition(
-                &pool,
-                &vault_a,
-                &vault_b,
-                &pool_definition_lp,
-                &user_holding_a,
-                &user_holding_b,
-                &user_holding_lp,
+                pool,
+                vault_a,
+                vault_b,
+                pool_definition_lp,
+                user_holding_a,
+                user_holding_b,
+                user_holding_lp,
                 NonZero::new(token_a_amount).expect("Token A should have a nonzero amount"),
                 NonZero::new(token_b_amount).expect("Token B should have a nonzero amount"),
                 amm_program_id,
@@ -58,17 +58,18 @@ fn main() {
                 user_holding_a,
                 user_holding_b,
                 user_holding_lp,
-            ] = pre_states
-                .try_into()
-                .expect("Transfer instruction requires exactly seven accounts");
+            ] = input.pre_states.as_slice()
+            else {
+                panic!("Transfer instruction requires exactly seven accounts");
+            };
             amm_program::add::add_liquidity(
-                &pool,
-                &vault_a,
-                &vault_b,
-                &pool_definition_lp,
-                &user_holding_a,
-                &user_holding_b,
-                &user_holding_lp,
+                pool,
+                vault_a,
+                vault_b,
+                pool_definition_lp,
+                user_holding_a,
+                user_holding_b,
+                user_holding_lp,
                 NonZero::new(min_amount_liquidity)
                     .expect("Min amount of liquidity should be nonzero"),
                 max_amount_to_add_token_a,
@@ -88,17 +89,18 @@ fn main() {
                 user_holding_a,
                 user_holding_b,
                 user_holding_lp,
-            ] = pre_states
-                .try_into()
-                .expect("Transfer instruction requires exactly seven accounts");
+            ] = input.pre_states.as_slice()
+            else {
+                panic!("Transfer instruction requires exactly seven accounts");
+            };
             amm_program::remove::remove_liquidity(
-                &pool,
-                &vault_a,
-                &vault_b,
-                &pool_definition_lp,
-                &user_holding_a,
-                &user_holding_b,
-                &user_holding_lp,
+                pool,
+                vault_a,
+                vault_b,
+                pool_definition_lp,
+                user_holding_a,
+                user_holding_b,
+                user_holding_lp,
                 NonZero::new(remove_liquidity_amount)
                     .expect("Remove liquidity amount must be nonzero"),
                 min_amount_to_remove_token_a,
@@ -110,9 +112,11 @@ fn main() {
             min_amount_out,
             token_definition_id_in,
         } => {
-            let [pool, vault_a, vault_b, user_holding_a, user_holding_b] = pre_states
-                .try_into()
-                .expect("SwapExactInput instruction requires exactly five accounts");
+            let [pool, vault_a, vault_b, user_holding_a, user_holding_b] =
+                input.pre_states.as_slice()
+            else {
+                panic!("SwapExactInput instruction requires exactly five accounts");
+            };
             amm_program::swap::swap_exact_input(
                 pool,
                 vault_a,
@@ -129,9 +133,11 @@ fn main() {
             max_amount_in,
             token_definition_id_in,
         } => {
-            let [pool, vault_a, vault_b, user_holding_a, user_holding_b] = pre_states
-                .try_into()
-                .expect("SwapExactOutput instruction requires exactly five accounts");
+            let [pool, vault_a, vault_b, user_holding_a, user_holding_b] =
+                input.pre_states.as_slice()
+            else {
+                panic!("SwapExactOutput instruction requires exactly five accounts");
+            };
             amm_program::swap::swap_exact_output(
                 pool,
                 vault_a,

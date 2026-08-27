@@ -1,7 +1,4 @@
-use lee_core::{
-    account::AccountDiff,
-    program::{AccountDiffOutput, ProgramCall, read_lee_call},
-};
+use lee_core::program::{AccountDiffOutput, ProgramCall, read_lee_call};
 
 type Instruction = ();
 
@@ -14,7 +11,7 @@ fn main() {
     let post_states = input
         .pre_states
         .iter()
-        .map(|account| AccountDiffOutput::new(AccountDiff::unchanged(account.account_id)))
+        .map(|account| AccountDiffOutput::unchanged(account.account_id))
         .collect();
     input.into_output(post_states).write();
 }

@@ -1,6 +1,6 @@
 use borsh::to_vec;
 use lee_core::{
-    account::{AccountDiff, AccountId},
+    account::AccountId,
     program::{AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, read_lee_call},
 };
 
@@ -16,7 +16,7 @@ fn main() {
 
     let post_states: Vec<_> = pre_states
         .iter()
-        .map(|pre| AccountDiffOutput::new(AccountDiff::unchanged(pre.account_id)))
+        .map(|pre| AccountDiffOutput::unchanged(pre.account_id))
         .collect();
 
     assert_eq!(pre_states.len(), 2);

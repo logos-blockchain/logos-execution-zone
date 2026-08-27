@@ -24,9 +24,8 @@
 //! called by any program. In production, a callback would typically verify the caller
 //! if it needs to trust the context it is called from.
 
-use lee_core::{
-    account::AccountDiff,
-    program::{AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call},
+use lee_core::program::{
+    AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, read_lee_call,
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -70,8 +69,8 @@ fn main() {
     // All mutations go through the token program via chained calls.
     input
         .into_output(vec![
-            AccountDiffOutput::new(AccountDiff::unchanged(vault_id)),
-            AccountDiffOutput::new(AccountDiff::unchanged(receiver_id)),
+            AccountDiffOutput::unchanged(vault_id),
+            AccountDiffOutput::unchanged(receiver_id),
         ])
         .with_chained_calls(chained_calls)
         .write();

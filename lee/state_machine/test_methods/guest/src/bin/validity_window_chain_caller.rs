@@ -1,10 +1,7 @@
 use borsh::to_vec;
-use lee_core::{
-    account::AccountDiff,
-    program::{
-        AccountDiffOutput, BlockValidityWindow, ChainedCall, ProgramCall, ProgramId,
-        TimestampValidityWindow, read_lee_call,
-    },
+use lee_core::program::{
+    AccountDiffOutput, BlockValidityWindow, ChainedCall, ProgramCall, ProgramId,
+    TimestampValidityWindow, read_lee_call,
 };
 
 /// A program that sets a block validity window on its output and chains to another program with a
@@ -40,9 +37,7 @@ fn main() {
     };
 
     input
-        .into_output(vec![AccountDiffOutput::new(AccountDiff::unchanged(
-            account_id,
-        ))])
+        .into_output(vec![AccountDiffOutput::unchanged(account_id)])
         .with_block_validity_window(block_validity_window)
         .with_chained_calls(vec![chained_call])
         .write();

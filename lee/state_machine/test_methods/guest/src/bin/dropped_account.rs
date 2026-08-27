@@ -1,8 +1,5 @@
-use lee_core::{
-    account::AccountDiff,
-    program::{
-        AccountDiffOutput, CallContext, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-    },
+use lee_core::program::{
+    AccountDiffOutput, CallContext, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
 };
 
 type Instruction = ();
@@ -38,7 +35,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pre1],
-        vec![AccountDiffOutput::new(AccountDiff::unchanged(account_id1))],
+        vec![AccountDiffOutput::unchanged(account_id1)],
     )
     .write();
 }

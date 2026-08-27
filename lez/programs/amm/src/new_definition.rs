@@ -155,12 +155,12 @@ pub fn new_definition(
 
     let post_states = vec![
         pool_post,
-        AccountDiffOutput::new(AccountDiff::unchanged(vault_a.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(vault_b.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(pool_definition_lp.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(user_holding_a.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(user_holding_b.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(user_holding_lp.account_id)),
+        AccountDiffOutput::unchanged(vault_a.account_id),
+        AccountDiffOutput::unchanged(vault_b.account_id),
+        AccountDiffOutput::unchanged(pool_definition_lp.account_id),
+        AccountDiffOutput::unchanged(user_holding_a.account_id),
+        AccountDiffOutput::unchanged(user_holding_b.account_id),
+        AccountDiffOutput::unchanged(user_holding_lp.account_id),
     ];
 
     (post_states, chained_calls)

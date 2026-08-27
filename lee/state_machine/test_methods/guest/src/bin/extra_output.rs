@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountDiff, AccountId},
+    account::AccountId,
     program::{AccountDiffOutput, ProgramCall, read_lee_call},
 };
 
@@ -19,9 +19,9 @@ fn main() {
 
     input
         .into_output(vec![
-            AccountDiffOutput::new(AccountDiff::unchanged(account_id)),
+            AccountDiffOutput::unchanged(account_id),
             // Extra, undeclared output: no matching pre-state for this account at all.
-            AccountDiffOutput::new(AccountDiff::unchanged(AccountId::default())),
+            AccountDiffOutput::unchanged(AccountId::default()),
         ])
         .write();
 }

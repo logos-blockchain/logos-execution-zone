@@ -1,9 +1,6 @@
-use lee_core::{
-    account::AccountDiff,
-    program::{
-        AccountDiffOutput, CallContext, DEFAULT_PROGRAM_ID, ProgramCall, ProgramInput,
-        ProgramOutput, read_lee_call,
-    },
+use lee_core::program::{
+    AccountDiffOutput, CallContext, DEFAULT_PROGRAM_ID, ProgramCall, ProgramInput, ProgramOutput,
+    read_lee_call,
 };
 
 type Instruction = ();
@@ -25,7 +22,7 @@ fn main() {
 
     let post_states = pre_states
         .iter()
-        .map(|a| AccountDiffOutput::new(AccountDiff::unchanged(a.account_id)))
+        .map(|a| AccountDiffOutput::unchanged(a.account_id))
         .collect();
 
     // Deliberately output wrong caller_program_id.

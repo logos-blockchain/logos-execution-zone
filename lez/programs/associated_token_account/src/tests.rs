@@ -74,9 +74,9 @@ fn initialized_ata_account() -> AccountWithMetadata {
 #[test]
 fn create_emits_chained_call_for_uninitialized_ata() {
     let (post_states, chained_calls) = crate::create::create_associated_token_account(
-        owner_account(),
-        definition_account(),
-        uninitialized_ata_account(),
+        &owner_account(),
+        &definition_account(),
+        &uninitialized_ata_account(),
         ATA_PROGRAM_ID,
     );
 
@@ -88,9 +88,9 @@ fn create_emits_chained_call_for_uninitialized_ata() {
 #[test]
 fn create_is_idempotent_for_initialized_ata() {
     let (post_states, chained_calls) = crate::create::create_associated_token_account(
-        owner_account(),
-        definition_account(),
-        initialized_ata_account(),
+        &owner_account(),
+        &definition_account(),
+        &initialized_ata_account(),
         ATA_PROGRAM_ID,
     );
 
@@ -111,9 +111,9 @@ fn create_panics_on_wrong_ata_address() {
     };
 
     crate::create::create_associated_token_account(
-        owner_account(),
-        definition_account(),
-        wrong_ata,
+        &owner_account(),
+        &definition_account(),
+        &wrong_ata,
         ATA_PROGRAM_ID,
     );
 }

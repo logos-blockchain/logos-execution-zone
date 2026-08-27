@@ -5,35 +5,26 @@
 //! performs the actual transfer of funds from the vault accounts.
 
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
-use lee_core::{
-    account::AccountDiff,
-    program::{AccountDiffOutput, ChainedCall, ProgramCall, read_lee_call},
-};
+use lee_core::program::{AccountDiffOutput, ChainedCall, ProgramCall, read_lee_call};
 use vault_core::Instruction;
-
-fn unchanged_diffs(
-    pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountDiffOutput> {
-    pre_states
-        .iter()
-        .map(|pre_state| AccountDiffOutput::new(AccountDiff::unchanged(pre_state.account_id)))
-        .collect()
-}
 
 fn main() {
     let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
-    let pre_states = input.pre_states.clone();
 
-    let post_states = unchanged_diffs(&input.pre_states);
+    let post_states = input
+        .pre_states
+        .iter()
+        .map(|pre_state| AccountDiffOutput::unchanged(pre_state.account_id))
+        .collect();
 
     let chained_calls = match instruction {
         Instruction::Transfer {
             recipient_id,
             amount,
         } => {
-            let [sender, recipient_vault] = pre_states
-                .try_into()
-                .expect("Transfer requires exactly 2 accounts");
+            let [sender, recipient_vault] = input.pre_states.as_slice() else {
+                panic!("Transfer requires exactly 2 accounts");
+            };
 
             let seed = vault_core::compute_vault_seed(recipient_id);
 
@@ -47,9 +38,9 @@ fn main() {
             ]
         }
         Instruction::Claim { amount } => {
-            let [owner, owner_vault] = pre_states
-                .try_into()
-                .expect("Claim requires exactly 2 accounts");
+            let [owner, owner_vault] = input.pre_states.as_slice() else {
+                panic!("Claim requires exactly 2 accounts");
+            };
 
             assert!(
                 owner.is_authorized,

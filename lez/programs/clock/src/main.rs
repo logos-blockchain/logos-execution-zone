@@ -35,7 +35,7 @@ fn update_if_multiple(
         };
         AccountDiffOutput::new(diff)
     } else {
-        AccountDiffOutput::new(AccountDiff::unchanged(pre.account_id))
+        AccountDiffOutput::unchanged(pre.account_id)
     }
 }
 

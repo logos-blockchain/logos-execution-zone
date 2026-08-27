@@ -63,12 +63,12 @@ fn validate_swap_setup(
     reason = "consistent with codebase style"
 )]
 fn create_swap_post_states(
-    pool: AccountWithMetadata,
+    pool: &AccountWithMetadata,
     pool_def_data: PoolDefinition,
-    vault_a: AccountWithMetadata,
-    vault_b: AccountWithMetadata,
-    user_holding_a: AccountWithMetadata,
-    user_holding_b: AccountWithMetadata,
+    vault_a: &AccountWithMetadata,
+    vault_b: &AccountWithMetadata,
+    user_holding_a: &AccountWithMetadata,
+    user_holding_b: &AccountWithMetadata,
     deposit_a: u128,
     withdraw_a: u128,
     deposit_b: u128,
@@ -86,34 +86,34 @@ fn create_swap_post_states(
             diff_balance: BalanceDiff::Add(0),
             diff_data: Some(Data::from(&pool_post_definition)),
         }),
-        AccountDiffOutput::new(AccountDiff::unchanged(vault_a.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(vault_b.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(user_holding_a.account_id)),
-        AccountDiffOutput::new(AccountDiff::unchanged(user_holding_b.account_id)),
+        AccountDiffOutput::unchanged(vault_a.account_id),
+        AccountDiffOutput::unchanged(vault_b.account_id),
+        AccountDiffOutput::unchanged(user_holding_a.account_id),
+        AccountDiffOutput::unchanged(user_holding_b.account_id),
     ]
 }
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn swap_exact_input(
-    pool: AccountWithMetadata,
-    vault_a: AccountWithMetadata,
-    vault_b: AccountWithMetadata,
-    user_holding_a: AccountWithMetadata,
-    user_holding_b: AccountWithMetadata,
+    pool: &AccountWithMetadata,
+    vault_a: &AccountWithMetadata,
+    vault_b: &AccountWithMetadata,
+    user_holding_a: &AccountWithMetadata,
+    user_holding_b: &AccountWithMetadata,
     swap_amount_in: u128,
     min_amount_out: u128,
     token_in_id: AccountId,
 ) -> (Vec<AccountDiffOutput>, Vec<ChainedCall>) {
-    let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b);
+    let pool_def_data = validate_swap_setup(pool, vault_a, vault_b);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
         if token_in_id == pool_def_data.definition_token_a_id {
             let (chained_calls, deposit_a, withdraw_b) = swap_logic(
-                &user_holding_a,
-                &vault_a,
-                &vault_b,
-                &user_holding_b,
+                user_holding_a,
+                vault_a,
+                vault_b,
+                user_holding_b,
                 swap_amount_in,
                 min_amount_out,
                 pool_def_data.reserve_a,
@@ -124,10 +124,10 @@ pub fn swap_exact_input(
             (chained_calls, [deposit_a, 0], [0, withdraw_b])
         } else if token_in_id == pool_def_data.definition_token_b_id {
             let (chained_calls, deposit_b, withdraw_a) = swap_logic(
-                &user_holding_b,
-                &vault_b,
-                &vault_a,
-                &user_holding_a,
+                user_holding_b,
+                vault_b,
+                vault_a,
+                user_holding_a,
                 swap_amount_in,
                 min_amount_out,
                 pool_def_data.reserve_b,
@@ -218,24 +218,24 @@ fn swap_logic(
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn swap_exact_output(
-    pool: AccountWithMetadata,
-    vault_a: AccountWithMetadata,
-    vault_b: AccountWithMetadata,
-    user_holding_a: AccountWithMetadata,
-    user_holding_b: AccountWithMetadata,
+    pool: &AccountWithMetadata,
+    vault_a: &AccountWithMetadata,
+    vault_b: &AccountWithMetadata,
+    user_holding_a: &AccountWithMetadata,
+    user_holding_b: &AccountWithMetadata,
     exact_amount_out: u128,
     max_amount_in: u128,
     token_in_id: AccountId,
 ) -> (Vec<AccountDiffOutput>, Vec<ChainedCall>) {
-    let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b);
+    let pool_def_data = validate_swap_setup(pool, vault_a, vault_b);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
         if token_in_id == pool_def_data.definition_token_a_id {
             let (chained_calls, deposit_a, withdraw_b) = exact_output_swap_logic(
-                &user_holding_a,
-                &vault_a,
-                &vault_b,
-                &user_holding_b,
+                user_holding_a,
+                vault_a,
+                vault_b,
+                user_holding_b,
                 exact_amount_out,
                 max_amount_in,
                 pool_def_data.reserve_a,
@@ -246,10 +246,10 @@ pub fn swap_exact_output(
             (chained_calls, [deposit_a, 0], [0, withdraw_b])
         } else if token_in_id == pool_def_data.definition_token_b_id {
             let (chained_calls, deposit_b, withdraw_a) = exact_output_swap_logic(
-                &user_holding_b,
-                &vault_b,
-                &vault_a,
-                &user_holding_a,
+                user_holding_b,
+                vault_b,
+                vault_a,
+                user_holding_a,
                 exact_amount_out,
                 max_amount_in,
                 pool_def_data.reserve_b,

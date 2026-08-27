@@ -1,7 +1,6 @@
 use borsh::to_vec;
 use lee_core::{
     Timestamp,
-    account::AccountDiff,
     program::{AccountDiffOutput, ChainedCall, ProgramCall, ProgramId, read_lee_call},
 };
 
@@ -19,7 +18,7 @@ fn main() {
 
     let post_states: Vec<_> = pre_states
         .iter()
-        .map(|pre| AccountDiffOutput::new(AccountDiff::unchanged(pre.account_id)))
+        .map(|pre| AccountDiffOutput::unchanged(pre.account_id))
         .collect();
 
     let chained_call = ChainedCall {

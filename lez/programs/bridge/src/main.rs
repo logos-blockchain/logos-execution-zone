@@ -4,23 +4,12 @@ use lee_core::{
     program::{AccountDiffOutput, ChainedCall, Claim, ProgramCall, read_lee_call},
 };
 
-fn unchanged_diffs(
-    pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountDiffOutput> {
-    pre_states
-        .iter()
-        .map(|pre_state| AccountDiffOutput::new(AccountDiff::unchanged(pre_state.account_id)))
-        .collect()
-}
-
 fn main() {
     let ProgramCall::Execute { input, instruction } = read_lee_call::<Instruction>();
-    let pre_states = input.pre_states.clone();
     let self_program_id = input.call.self_program_id;
-    let caller_program_id = input.call.caller_program_id;
 
     assert!(
-        caller_program_id.is_none(),
+        input.call.caller_program_id.is_none(),
         "Bridge cannot be invoked through chain calls"
     );
 
@@ -31,9 +20,9 @@ fn main() {
             recipient_id,
             amount,
         } => {
-            let [bridge, recipient_vault, receipt] = pre_states
-                .try_into()
-                .expect("Deposit requires exactly 3 accounts");
+            let [bridge, recipient_vault, receipt] = input.pre_states.as_slice() else {
+                panic!("Deposit requires exactly 3 accounts");
+            };
 
             assert_eq!(
                 bridge.account_id,
@@ -64,7 +53,14 @@ fn main() {
             // is the only on-chain signal. Relevant once the explorer surfaces
             // deposits.
             if receipt.account != Account::default() {
-                (unchanged_diffs(&input.pre_states), vec![])
+                (
+                    input
+                        .pre_states
+                        .iter()
+                        .map(|pre_state| AccountDiffOutput::unchanged(pre_state.account_id))
+                        .collect(),
+                    vec![],
+                )
             } else {
                 // First mint: claim the receipt — its existence is the record,
                 // the account's contents are never read — and chain the vault
@@ -76,8 +72,8 @@ fn main() {
                 );
 
                 let post_states = vec![
-                    AccountDiffOutput::new(AccountDiff::unchanged(bridge.account_id)),
-                    AccountDiffOutput::new(AccountDiff::unchanged(recipient_vault.account_id)),
+                    AccountDiffOutput::unchanged(bridge.account_id),
+                    AccountDiffOutput::unchanged(recipient_vault.account_id),
                     receipt_post,
                 ];
 
@@ -124,7 +120,7 @@ fn main() {
             //         amount: u128::from(amount),
             //     },
             // )];
-            // (unchanged_diffs(&input.pre_states), chained_calls)
+            // (unchanged post_states, chained_calls)
         }
     };
 

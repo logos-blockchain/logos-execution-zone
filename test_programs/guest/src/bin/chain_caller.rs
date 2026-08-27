@@ -1,11 +1,8 @@
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use borsh::to_vec;
-use lee_core::{
-    account::AccountDiff,
-    program::{
-        AccountDiffOutput, CallContext, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call,
-    },
+use lee_core::program::{
+    AccountDiffOutput, CallContext, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+    ProgramOutput, read_lee_call,
 };
 
 type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
@@ -54,8 +51,8 @@ fn main() {
         instruction_data,
         vec![sender_pre.clone(), recipient_pre.clone()],
         vec![
-            AccountDiffOutput::new(AccountDiff::unchanged(sender_pre.account_id)),
-            AccountDiffOutput::new(AccountDiff::unchanged(recipient_pre.account_id)),
+            AccountDiffOutput::unchanged(sender_pre.account_id),
+            AccountDiffOutput::unchanged(recipient_pre.account_id),
         ],
     )
     .with_chained_calls(chained_calls)
