@@ -124,5 +124,8 @@ fn private_changer_claimer_data_change_no_claim_fails() {
     );
 
     // Should fail - cannot modify data without claiming the account
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::UnclaimedModifiedDefault { .. })),
+        "expected a modified default account that was never claimed, got: {result:?}"
+    );
 }

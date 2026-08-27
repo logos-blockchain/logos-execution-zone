@@ -5,12 +5,13 @@ use lee_core::{
     Nullifier, NullifierPublicKey, NullifierWitness, PrivacyPreservingCircuitOutput,
     PrivateWitness, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+    execution_state::ExecutionWalkError,
     program::{PdaSeed, PrivateAccountKind},
 };
 
 use super::*;
 use crate::{
-    error::LeeError,
+    error::{InvalidProgramBehaviorError, LeeError},
     privacy_preserving_transaction::circuit::execute_and_prove,
     program::Program,
     state::{
@@ -402,7 +403,10 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
         &program_with_deps,
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::EmptyBlockWindowIntersection)),
+        "expected an empty block-window intersection, got: {result:?}"
+    );
 }
 
 /// A private PDA claimed with a non-default identifier produces a ciphertext that decrypts
@@ -1019,7 +1023,15 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
 fn private_pda_update_at_root_call_may_not_declare_authorization() {
     let result = pda_update_attempt(true, 99, 99);
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(
+            &result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::JournalledPreStatesMismatch { .. }
+            ))
+        ),
+        "expected the journalled pre_states to disagree with the walk, got: {result:?}"
+    );
 }
 
 #[test]
@@ -1038,7 +1050,10 @@ fn private_pda_init_identifier_mismatch_fails() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::PrivatePdaMismatch { .. })),
+        "expected the private-PDA derivation to disagree, got: {result:?}"
+    );
 }
 
 #[test]
@@ -1068,12 +1083,23 @@ fn private_pda_init_at_root_call_may_not_declare_authorization() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(
+            &result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::JournalledPreStatesMismatch { .. }
+            ))
+        ),
+        "expected the journalled pre_states to disagree with the walk, got: {result:?}"
+    );
 }
 
 #[test]
 fn private_pda_update_identifier_mismatch_fails() {
     let result = pda_update_attempt(false, 5, 99);
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::UnboundPrivatePda { .. })),
+        "expected an unbound private PDA, got: {result:?}"
+    );
 }

@@ -30,7 +30,10 @@ fn circuit_fails_if_visibility_masks_have_incorrect_lenght() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::MissingInputAccount { .. })),
+        "expected an account with no supplied input, got: {result:?}"
+    );
 }
 
 #[test]
@@ -421,7 +424,10 @@ fn private_pda_without_binding_fails() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::UnboundPrivatePda { .. })),
+        "expected an unbound private PDA, got: {result:?}"
+    );
 }
 
 /// Happy path: a program claims a new private PDA via `Claim::Pda(seed)`. The circuit
@@ -477,7 +483,10 @@ fn private_pda_npk_mismatch_fails() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::PrivatePdaMismatch { .. })),
+        "expected the private-PDA derivation to disagree, got: {result:?}"
+    );
 }
 
 /// Happy path for the caller-seeds authorization of a private PDA. The delegator claims a
@@ -682,16 +691,18 @@ fn nested_callee_that_omits_its_named_accounts_cannot_prove() {
     )
     .expect_err("a callee that journals none of the accounts its caller named must not prove");
 
-    // The middle forwarder is handed `[pda]` and journals nothing, but the circuit rebuilds
-    // `[pda]` from its caller's refs and splices that in, so its receipt covers other bytes.
-    // `CircuitProvingError`'s Display drops the payload, hence the match on the inner string.
+    // The middle forwarder is handed `[pda]` and journals nothing, but the walk rebuilds
+    // `[pda]` from its caller's refs. The host runs that same derivation and rejects the
+    // mismatched journal before proving; the circuit-side splice for a hand-assembled proof
+    // is pinned by `a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named`.
     assert!(
         matches!(
             &error,
-            LeeError::CircuitProvingError(msg)
-                if msg.contains("no receipt found to resolve assumption")
+            LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::JournalledPreStatesMismatch { program_id }
+            ) if *program_id == forwarder_id
         ),
-        "expected the spliced journal to resolve no receipt, got: {error:?}"
+        "expected the forwarder's journalled pre_states to mismatch the derivation, got: {error:?}"
     );
 }
 
@@ -916,7 +927,10 @@ fn two_private_pda_claims_under_same_seed_are_rejected() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::FamilyBindingConflict { .. })),
+        "expected two accounts under one (program, seed), got: {result:?}"
+    );
 }
 
 /// A private PDA that is reused at top level without an external seed in the identity still
@@ -948,7 +962,10 @@ fn private_pda_top_level_reuse_rejected_by_binding_check() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::UnboundPrivatePda { .. })),
+        "expected an unbound private PDA, got: {result:?}"
+    );
 }
 
 #[test]
@@ -1054,7 +1071,10 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::InvalidInput(message)) if message.contains("Duplicate input account")),
+        "expected the duplicate input account to be rejected, got: {result:?}"
+    );
 }
 
 #[test]

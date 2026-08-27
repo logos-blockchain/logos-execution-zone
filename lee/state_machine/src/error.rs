@@ -2,6 +2,7 @@ use std::io;
 
 use lee_core::{
     account::{Account, AccountId, BalanceDiffError},
+    execution_state::ExecutionWalkError,
     program::ProgramId,
 };
 use thiserror::Error;
@@ -76,6 +77,25 @@ pub enum LeeError {
 
     #[error("Execution outside of the validity window")]
     OutOfValidityWindow,
+
+    #[error(transparent)]
+    ExecutionWalk(Box<ExecutionWalkError<Self>>),
+}
+
+impl From<ExecutionWalkError<Self>> for LeeError {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "every other walk rejection is carried through unchanged, and one added later should be too"
+    )]
+    fn from(error: ExecutionWalkError<Self>) -> Self {
+        match error {
+            // The walk hands back whatever the host's own per-call step failed with.
+            ExecutionWalkError::Provider(error) => error,
+            // Pinned by callers, so it keeps its own variant.
+            ExecutionWalkError::MaxChainedCallsDepthExceeded => Self::MaxChainedCallsDepthExceeded,
+            error => Self::ExecutionWalk(Box::new(error)),
+        }
+    }
 }
 
 #[derive(Error, Debug)]
@@ -125,11 +145,6 @@ pub enum InvalidProgramBehaviorError {
     )]
     DeclaredAccountMissingFromOutput { account_id: AccountId },
 
-    #[error(
-        "Chained call named account {account_id}, but it isn't resolvable from the top-level \
-         pre_states or any earlier call's materialized diff in this transaction"
-    )]
-    UnknownChainedCallAccount { account_id: AccountId },
     #[error(transparent)]
     BalanceDiffFailed(#[from] BalanceDiffError),
 
@@ -138,6 +153,11 @@ pub enum InvalidProgramBehaviorError {
          `accounts` must match the callee's journalled pre_states exactly, in order"
     )]
     ChainedCallAccountsMismatch { program_id: ProgramId },
+
+    #[error(
+        "Program {program_id:?} journalled pre_states the execution walk does not derive for it"
+    )]
+    JournalledPreStatesMismatch { program_id: ProgramId },
 }
 
 #[cfg(test)]

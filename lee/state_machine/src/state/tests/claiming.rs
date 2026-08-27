@@ -498,7 +498,13 @@ fn unauthorized_public_account_claiming_fails_when_executed_privately() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(&result, Err(LeeError::ExecutionWalk(error)) if matches!(**error, ExecutionWalkError::Claim {
+            source: ClaimError::ClaimedUnauthorizedAccount { .. },
+            ..
+        })),
+        "expected the unauthorized claim to be rejected, got: {result:?}"
+    );
 }
 
 #[test]
