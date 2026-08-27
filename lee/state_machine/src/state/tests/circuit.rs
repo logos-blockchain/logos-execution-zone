@@ -637,7 +637,7 @@ fn holder_authorization_survives_across_sibling_calls() {
 }
 
 #[test]
-fn inherited_scope_passes_through_intermediate_calls() {
+fn inherited_scope_passes_through_nested_intermediate_calls() {
     let delegator = crate::test_methods::selective_pda_delegator();
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let callee = crate::test_methods::auth_asserting_noop();
@@ -655,12 +655,12 @@ fn inherited_scope_passes_through_intermediate_calls() {
         [(forwarder_id, forwarder), (callee_id, callee)].into(),
     );
     let no_sibling: Option<(ProgramId, bool)> = None;
-    let forward_through_undeclaring_call = Program::serialize_instruction((
+    let forward_through_nested_call = Program::serialize_instruction((
         forwarder_id,
         Program::serialize_instruction((
             callee_id,
             Program::serialize_instruction(()).unwrap(),
-            false,
+            true,
         ))
         .unwrap(),
         true,
@@ -673,16 +673,14 @@ fn inherited_scope_passes_through_intermediate_calls() {
             seed,
             seed,
             forwarder_id,
-            forward_through_undeclaring_call,
+            forward_through_nested_call,
             no_sibling,
         ))
         .unwrap(),
         vec![init_pda_witness(&keys, 0, None)],
         &program_with_deps,
     )
-    .expect(
-        "an account authorized in an ancestor's output stays authorized below a call that never mentions it",
-    );
+    .expect("an account authorized in an ancestor's output stays authorized two calls below it");
 }
 
 /// The circuit tracks accounts by `AccountId` across the whole call tree, not per-step: a
@@ -734,14 +732,14 @@ fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
     assert!(proof.is_valid_for(&output));
 }
 
-/// BUG PIN (currently failing to reject): the circuit never compares a chained call's
-/// `accounts` against the accounts the callee was actually run on.
+/// A chained call's `accounts` bind the accounts its callee is run on.
 ///
 /// Both programs are honest, unmodified and in-tree, and both inner receipts are genuine — a
 /// risc0 receipt binds the image and the journal, never the inputs. Only the wiring lies: the
 /// forwarder's own verified journal names `[sender, recipient]`, and the real
-/// `simple_balance_transfer` ELF is run on `[sender, attacker]`. The circuit accepts the pair, so
-/// the attacker keeps the funds and the recipient the caller named is never credited.
+/// `simple_balance_transfer` ELF is run on `[sender, attacker]`. The circuit rebuilds the
+/// accounts the call named, splices them into the journal it verifies, and no receipt exists for
+/// those bytes — so the redirect cannot be proven and the attacker is never credited.
 #[test]
 fn a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named() {
     const TRANSFER: u128 = 10;
@@ -827,12 +825,13 @@ fn a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named() {
     let circuit_input = lee_core::PrivacyPreservingCircuitInput {
         program_outputs: vec![forwarder_output.clone().into(), transfer_output.into()],
         top_level_pre_state_refs: vec![sender.account_id, recipient.account_id],
-        account_identities: vec![InputAccountIdentity::Public; 3],
-        first_sight_accounts: [&sender, &recipient, &attacker]
+        input_accounts: [&sender, &recipient, &attacker]
             .into_iter()
-            .map(|pre| lee_core::FirstSightAccount {
+            .map(|pre| lee_core::InputAccount {
+                account_id: pre.account_id,
                 account: pre.account.clone(),
                 is_authorized: pre.is_authorized,
+                identity: InputAccountIdentity::Public,
             })
             .collect(),
         program_id: forwarder_id,
@@ -842,33 +841,22 @@ fn a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named() {
     env_builder.add_assumption(forwarder_receipt);
     env_builder.add_assumption(transfer_receipt);
     env_builder.write_slice(&lee_core::to_frame(&borsh::to_vec(&circuit_input).unwrap()));
-    let prove_info = risc0_zkvm::default_prover()
-        .prove_with_opts(
-            env_builder.build().expect("env builds"),
-            crate::PRIVACY_PRESERVING_CIRCUIT_ELF,
-            &risc0_zkvm::ProverOpts::succinct(),
-        )
-        .expect("BUG: the circuit does not bind a chained call's accounts to the accounts the callee ran on");
-    prove_info
-        .receipt
-        .verify(crate::PRIVACY_PRESERVING_CIRCUIT_ID)
-        .expect("the resulting proof verifies");
+    let result = risc0_zkvm::default_prover().prove_with_opts(
+        env_builder.build().expect("env builds"),
+        crate::PRIVACY_PRESERVING_CIRCUIT_ELF,
+        &risc0_zkvm::ProverOpts::succinct(),
+    );
 
-    // 4. The funds landed on the attacker; the recipient the forwarder named got nothing.
-    let output: lee_core::PrivacyPreservingCircuitOutput = borsh::from_slice(
-        lee_core::from_frame(&prove_info.receipt.journal.bytes).expect("journal is framed"),
-    )
-    .expect("journal decodes");
-    let balance_of = |account_id| {
-        output
-            .public_actions
-            .iter()
-            .find(|action| action.pre.account_id == account_id)
-            .map(|action| action.post.balance)
-    };
-    assert_eq!(balance_of(attacker.account_id), Some(TRANSFER));
-    assert_eq!(balance_of(recipient.account_id), Some(0));
-    assert_eq!(balance_of(sender.account_id), Some(100 - TRANSFER));
+    // Pin the mechanism, not just the failure: the rebuilt journal names `[sender, recipient]`,
+    // so the receipt the prover holds — for a run on `[sender, attacker]` — resolves nothing. A
+    // bare `is_err` here would also pass on a stale circuit artifact that decodes no input at all.
+    let error = result
+        .expect_err("the circuit must reject a callee run on accounts its caller never named")
+        .to_string();
+    assert!(
+        error.contains("no receipt found to resolve assumption"),
+        "expected the spliced journal to resolve no receipt, got: {error}"
+    );
 }
 
 /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of

@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
-    EphemeralSecretKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
-    NullifierSecretKey, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateAccountKind,
-    PrivateAction, PrivateWitness, PublicAction, SharedSecretKey, WitnessKind,
+    EphemeralSecretKey, InputAccount, InputAccountIdentity, MembershipProof, Nullifier,
+    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivacyPreservingCircuitOutput,
+    PrivateAccountKind, PrivateAction, PrivateWitness, PublicAction, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
@@ -12,10 +14,10 @@ use crate::execution_state::ExecutionState;
 
 pub fn compute_circuit_output(
     execution_state: ExecutionState,
-    account_identities: &[InputAccountIdentity],
+    input_accounts: &HashMap<AccountId, InputAccount>,
     dummy_inputs: Vec<DummyInput>,
 ) -> PrivacyPreservingCircuitOutput {
-    let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
+    let (block_validity_window, timestamp_validity_window, pda_seed_by_account, states_iter) =
         execution_state.into_parts();
     let mut output = PrivacyPreservingCircuitOutput {
         public_actions: Vec::new(),
@@ -24,16 +26,16 @@ pub fn compute_circuit_output(
         timestamp_validity_window,
     };
 
+    // Each resolved account is looked up by id below, so matching counts leave no supplied input
+    // unused: the walk and the input describe the same set of accounts.
     assert_eq!(
-        account_identities.len(),
+        input_accounts.len(),
         states_iter.len(),
-        "Invalid account_identities length"
+        "Input accounts do not match the accounts the walk resolved"
     );
 
-    for (pos, (account_identity, (pre_state, post_state))) in
-        account_identities.iter().zip(states_iter).enumerate()
-    {
-        match account_identity {
+    for (pre_state, post_state) in states_iter {
+        match &input_accounts[&pre_state.account_id].identity {
             InputAccountIdentity::Public => {
                 output.public_actions.push(PublicAction {
                     pre: pre_state,
@@ -60,7 +62,7 @@ pub fn compute_circuit_output(
                     // The npk-to-account_id binding is established upstream in
                     // the execution-state walk via `Claim::Pda(seed)` or a caller `pda_seeds`
                     // match. Here we only enforce the lifecycle pre-conditions. The supplied npk
-                    // on the witness has been recorded into `private_pda_by_position` and used
+                    // on the witness has been recorded into `private_pda_witnesses` and used
                     // for the binding check; we use `pre_state.account_id` directly for nullifier
                     // and commitment derivation.
                     WitnessKind::Pda { .. } => pre_state.account_id,
@@ -129,9 +131,9 @@ pub fn compute_circuit_output(
                 let account_kind = match kind {
                     WitnessKind::Regular { .. } => PrivateAccountKind::Regular(*identifier),
                     WitnessKind::Pda { .. } => {
-                        let (authority_program_id, seed) = pda_seed_by_position
-                            .get(&pos)
-                            .expect("private PDA position must be in pda_seed_by_position");
+                        let (authority_program_id, seed) = pda_seed_by_account
+                            .get(&account_id)
+                            .expect("private PDA must be in pda_seed_by_account");
                         PrivateAccountKind::Pda {
                             program_id: *authority_program_id,
                             seed: *seed,

@@ -19,15 +19,10 @@ pub struct PrivacyPreservingCircuitInput {
     /// names them: the bootstrap call has no caller, and a program is free to commit the
     /// accounts it was handed in an order of its own.
     pub top_level_pre_state_refs: Vec<AccountId>,
-    /// One entry per `pre_state`, in the same order as the program's `pre_states`.
-    /// Length must equal the number of distinct accounts the walk resolves.
-    /// The guest's `private_pda_by_position` and `private_pda_bound_positions`
-    /// rely on this position alignment.
-    pub account_identities: Vec<InputAccountIdentity>,
-    /// What each account held, and whether it was authorized, when the walk first reached it —
-    /// aligned with `account_identities` by that same first-sight position. Every later sight is
-    /// taken from the execution itself, so this is the only door these values come through.
-    pub first_sight_accounts: Vec<FirstSightAccount>,
+    /// One entry per account the walk resolves, each naming the account it describes. Order
+    /// carries no meaning: the circuit indexes these by `AccountId`, so a caller need not
+    /// predict the traversal.
+    pub input_accounts: Vec<InputAccount>,
     /// Program ID.
     pub program_id: ProgramId,
     pub dummy_inputs: Vec<DummyInput>,
@@ -82,12 +77,17 @@ impl From<ProgramOutput> for BareProgramOutput {
     }
 }
 
+/// Everything the circuit is told about one account, alongside the id it is told it about.
 #[derive(BorshSerialize, BorshDeserialize)]
-pub struct FirstSightAccount {
+pub struct InputAccount {
+    pub account_id: AccountId,
+    /// What the account held when the walk first reached it. Every later sight is taken from the
+    /// execution itself, so this is the only door this value comes through.
     pub account: Account,
     /// The credential the host attests for a regular account. A PDA's authorization is always
     /// derived from a claim or from a caller's seeds, so this bit is ignored there.
     pub is_authorized: bool,
+    pub identity: InputAccountIdentity,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
