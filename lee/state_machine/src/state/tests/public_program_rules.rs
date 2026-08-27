@@ -375,3 +375,45 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
         ))) if total_balance_pre_states == 100.into() && total_balance_post_states == 99.into()
     ));
 }
+
+/// A callee must account for exactly the accounts its caller named. `dropped_account` is handed
+/// two and journals one, so the chained call is rejected — without this, a program's journal need
+/// not correspond to the accounts it was actually called with.
+#[test]
+fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
+    let owner = crate::test_methods::dropped_account().id();
+    let held = |balance| Account {
+        program_owner: owner.into(),
+        balance,
+        ..Account::default()
+    };
+    let mut state = V03State::new()
+        .with_public_accounts([
+            (AccountId::new([1; 32]), held(100)),
+            (AccountId::new([2; 32]), held(0)),
+        ])
+        .with_test_programs();
+
+    // The forwarder names both accounts for the callee; the callee journals only the first.
+    let message = public_transaction::Message::try_new(
+        crate::test_methods::non_delegating_forwarder().id(),
+        vec![AccountId::new([1; 32]), AccountId::new([2; 32])],
+        vec![],
+        (owner, Vec::<u8>::new(), true),
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ChainedCallAccountsMismatch { program_id }
+            )) if program_id == owner
+        ),
+        "expected ChainedCallAccountsMismatch for the callee, got {result:?}"
+    );
+}

@@ -60,6 +60,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::two_pda_claimer());
         self.insert_program(&crate::test_methods::noop());
         self.insert_program(&crate::test_methods::chain_caller());
+        self.insert_program(&crate::test_methods::non_delegating_forwarder());
         self.insert_program(&crate::test_methods::modified_transfer_program());
         self.insert_program(&crate::test_methods::initialize_then_fund());
         self.insert_program(&crate::test_methods::validity_window());
