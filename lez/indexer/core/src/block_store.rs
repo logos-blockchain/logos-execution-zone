@@ -443,6 +443,7 @@ mod tests {
 
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
     use lee_core::program::{InstructionData, ProgramEvent, ProgramId};
+    use storage::{DBIO as _, indexer::indexer_cells::EventFilterSegmentsCellOwned};
     use tempfile::tempdir;
     use testnet_initial_state::initial_pub_accounts_private_keys;
 
@@ -769,6 +770,38 @@ mod tests {
         let store = open_with(home.as_ref(), EventFilter::Archival);
 
         assert_eq!(store.filter_segments(), &[(EventFilter::Archival, 0)]);
+    }
+
+    #[tokio::test]
+    async fn a_db_with_blocks_but_no_segments_seams_at_the_tip() {
+        let home = tempdir().unwrap();
+        let tip = {
+            let store = open_with(home.as_ref(), EventFilter::Archival);
+            seed_emitted_events(&store).await;
+            store.get_last_block_id().unwrap().unwrap()
+        };
+
+        // What every upgrading deployment looks like: blocks already ingested, but no
+        // segment history, because filtering did not exist when they were written.
+        let initial_state = testnet_initial_state::initial_state();
+        let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
+        dbio.del::<EventFilterSegmentsCellOwned>(()).unwrap();
+        drop(dbio);
+
+        let reopened = open_with(home.as_ref(), EventFilter::Archival);
+
+        assert_eq!(
+            reopened.filter_segments(),
+            &[(EventFilter::Archival, tip.saturating_add(1))]
+        );
+        // Those blocks were never filtered, so no query may claim them as covered.
+        assert!(!covered_over_range(
+            reopened.filter_segments(),
+            1,
+            tip,
+            None,
+            None
+        ));
     }
 
     #[tokio::test]
