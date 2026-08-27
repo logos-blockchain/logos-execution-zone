@@ -12,16 +12,16 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AddPendingDepositEvent, ApplyStoreUpdate,
         CleanPendingBlocksUpTo, ConsumeUnseenWithdrawCount, DbDump, DeadLetterDispatchRecord,
-        DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
-        RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
-        ZoneAnchorRecord,
+        DeadLetterRequeue, DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint,
+        DispatchFailure, DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock,
+        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes,
+        MarkBlockAsFinalized, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        RaisePublishedHighWater, RecordDispatchFailure, RecordNewBlock, RequeueDeadLetterDispatch,
+        ResetAllBlocksToPending, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        SetZoneCheckpointBytes, StoreUpdateOutcome, ZoneAnchorRecord,
     },
 };
 
@@ -55,6 +55,7 @@ pub trait StorageActorTrait:
     + Message<AddPendingCrossZoneDispatches, Reply = Result<usize>>
     + Message<DropSettledCrossZoneDispatches, Reply = Result<usize>>
     + Message<RecordDispatchFailure, Reply = Result<DispatchFailure>>
+    + Message<RequeueDeadLetterDispatch, Reply = Result<DeadLetterRequeue>>
     + Message<GetDeadLetterDispatches, Reply = Result<Vec<DeadLetterDispatchRecord>>>
     + Message<GetDeadLetterDispatchCount, Reply = Result<u64>>
     + Message<GetCrossZonePeerFloorBytes, Reply = Result<Option<Vec<u8>>>>

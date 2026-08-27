@@ -9,13 +9,14 @@ use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
-        CleanPendingBlocksUpTo, DeadLetterDispatchRecord, DeleteBlock, DeleteZoneCheckpoint,
-        DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetBlock,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, GetZoneAnchor, GetZoneCheckpointBytes,
-        MarkBlockAsFinalized, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RaisePublishedHighWater, RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending,
+        CleanPendingBlocksUpTo, DeadLetterDispatchRecord, DeadLetterRequeue, DeleteBlock,
+        DeleteZoneCheckpoint, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
+        GetAllBlocks, GetBlock, GetDeadLetterDispatchCount, GetDeadLetterDispatches,
+        GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
+        GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
+        RecordDispatchFailure, RecordNewBlock, RequeueDeadLetterDispatch, ResetAllBlocksToPending,
         SetZoneAnchor, SetZoneCheckpointBytes, WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
@@ -259,6 +260,18 @@ impl<S: StorageActorTrait> SequencerStore<S> {
     pub async fn dead_letter_dispatch_count(&self) -> Result<u64> {
         self.storage_ref
             .ask(GetDeadLetterDispatchCount)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Restores a retained dead-lettered delivery to the pending list, with a
+    /// clean attempt count.
+    pub async fn requeue_dead_letter_dispatch(
+        &self,
+        message_key: [u8; 32],
+    ) -> Result<DeadLetterRequeue> {
+        self.storage_ref
+            .ask(RequeueDeadLetterDispatch { message_key })
             .await
             .map_err(Into::into)
     }

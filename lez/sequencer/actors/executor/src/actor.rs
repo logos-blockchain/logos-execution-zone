@@ -32,7 +32,8 @@ use crate::{
     protocol::{
         GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock, GetBlockRange,
         GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
-        GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock, Transaction,
+        GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -398,5 +399,24 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
             total_retired,
             retained: retained.into_iter().collect(),
         })
+    }
+}
+
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
+    Message<RequeueCrossZoneDeadLetter> for ExecutorActor<BP, S>
+{
+    type Reply = Result<RequeueCrossZoneDeadLetterReply>;
+
+    async fn handle(
+        &mut self,
+        RequeueCrossZoneDeadLetter { message_key }: RequeueCrossZoneDeadLetter,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let outcome = self
+            .sequencer
+            .requeue_cross_zone_dead_letter(message_key)
+            .await
+            .map_err(Error::CrossZoneDeadLetterRequeueFailed)?;
+        Ok(RequeueCrossZoneDeadLetterReply { outcome })
     }
 }

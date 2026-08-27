@@ -107,6 +107,10 @@ pub struct RecordDispatchFailure {
 
 pub struct GetDeadLetterDispatches;
 
+pub struct RequeueDeadLetterDispatch {
+    pub message_key: [u8; 32],
+}
+
 pub struct GetDeadLetterDispatchCount;
 
 pub struct GetCrossZonePeerFloorBytes {
@@ -400,8 +404,8 @@ impl From<db_cells::DispatchOrigin> for DispatchOrigin {
 ///
 /// A dispatch that fails execution is left out of the block, so nothing on
 /// chain records that it was attempted; this is the only durable trace. It
-/// identifies the message rather than carrying it: the peer block and index are
-/// enough to read it back off the channel.
+/// carries the encoded transaction so a requeue can restore the delivery
+/// without re-reading the peer channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeadLetterDispatchRecord {
     pub message_key: [u8; 32],
@@ -409,9 +413,9 @@ pub struct DeadLetterDispatchRecord {
     /// Attempts made before giving up, so the record carries the policy that was
     /// in force at the time.
     pub failed_attempts: u32,
-    /// Size of the delivery transaction that would not execute, the diagnostic
-    /// for size-related failures.
-    pub transaction_bytes: u32,
+    /// The borsh-encoded dispatch transaction. Its length is the diagnostic for
+    /// size-related failures.
+    pub transaction: Vec<u8>,
 }
 
 impl From<db_cells::DeadLetterDispatchRecord> for DeadLetterDispatchRecord {
@@ -420,14 +424,40 @@ impl From<db_cells::DeadLetterDispatchRecord> for DeadLetterDispatchRecord {
             message_key,
             origin,
             failed_attempts,
-            transaction_bytes,
+            transaction,
         }: db_cells::DeadLetterDispatchRecord,
     ) -> Self {
         Self {
             message_key,
             origin: origin.into(),
             failed_attempts,
-            transaction_bytes,
+            transaction,
+        }
+    }
+}
+
+/// What restoring a dead-lettered delivery did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadLetterRequeue {
+    /// Moved back into the pending list with a clean attempt count.
+    Requeued,
+    /// The delivery was already pending again, so only the dead letter was
+    /// dropped.
+    AlreadyPending,
+    /// No retained dead letter under that key.
+    NotFound,
+    /// Listed, but its transaction was over the retention bound and was not
+    /// kept; the message must be read back off the peer channel instead.
+    NotRetained,
+}
+
+impl From<db::DeadLetterRequeue> for DeadLetterRequeue {
+    fn from(value: db::DeadLetterRequeue) -> Self {
+        match value {
+            db::DeadLetterRequeue::Requeued => Self::Requeued,
+            db::DeadLetterRequeue::AlreadyPending => Self::AlreadyPending,
+            db::DeadLetterRequeue::NotFound => Self::NotFound,
+            db::DeadLetterRequeue::NotRetained => Self::NotRetained,
         }
     }
 }

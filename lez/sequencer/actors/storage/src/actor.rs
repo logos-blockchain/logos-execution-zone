@@ -23,16 +23,16 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AddPendingDepositEvent, ApplyStoreUpdate,
         CleanPendingBlocksUpTo, ConsumeUnseenWithdrawCount, DbDump, DeadLetterDispatchRecord,
-        DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
-        RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
-        ZoneAnchorRecord,
+        DeadLetterRequeue, DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint,
+        DispatchFailure, DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock,
+        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes,
+        MarkBlockAsFinalized, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        RaisePublishedHighWater, RecordDispatchFailure, RecordNewBlock, RequeueDeadLetterDispatch,
+        ResetAllBlocksToPending, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        SetZoneCheckpointBytes, StoreUpdateOutcome, ZoneAnchorRecord,
     },
 };
 
@@ -582,6 +582,21 @@ impl Message<RecordDispatchFailure> for StorageActor {
     ) -> Self::Reply {
         self.dbio()
             .record_dispatch_failure(message_key, retire_at, origin.into())
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+}
+
+impl Message<RequeueDeadLetterDispatch> for StorageActor {
+    type Reply = Result<DeadLetterRequeue>;
+
+    async fn handle(
+        &mut self,
+        RequeueDeadLetterDispatch { message_key }: RequeueDeadLetterDispatch,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.dbio()
+            .requeue_dead_letter_cross_zone_dispatch(message_key)
             .map(Into::into)
             .map_err(Into::into)
     }

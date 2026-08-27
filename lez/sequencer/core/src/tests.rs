@@ -850,7 +850,7 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
         dead_letters[0].message_key,
         cross_zone_inbox_core::message_key(&PEER_ZONE, 13, 0)
     );
-    assert!(dead_letters[0].transaction_bytes > 0);
+    assert!(!dead_letters[0].transaction.is_empty());
     assert_eq!(
         dead_letters[0].failed_attempts,
         RETIRE_DISPATCH_AFTER_FAILURES
