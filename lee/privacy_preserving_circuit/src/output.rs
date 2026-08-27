@@ -58,7 +58,7 @@ pub fn compute_circuit_output(
                         derived
                     }
                     // The npk-to-account_id binding is established upstream in
-                    // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
+                    // the execution-state walk via `Claim::Pda(seed)` or a caller `pda_seeds`
                     // match. Here we only enforce the lifecycle pre-conditions. The supplied npk
                     // on the witness has been recorded into `private_pda_by_position` and used
                     // for the binding check; we use `pre_state.account_id` directly for nullifier

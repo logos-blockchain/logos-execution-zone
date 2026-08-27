@@ -3,23 +3,91 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
+    program::{
+        AccountDiffOutput, BlockValidityWindow, ChainedCall, InstructionData, PdaSeed, ProgramId,
+        ProgramOutput, TimestampValidityWindow,
+    },
 };
 
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
-    /// Outputs of the program execution.
-    pub program_outputs: Vec<ProgramOutput>,
+    /// Outputs of the program execution, stripped of the `pre_states` each program committed.
+    pub program_outputs: Vec<BareProgramOutput>,
+    /// The accounts the top-level program ran on, in the order it commits them. Nothing else
+    /// names them: the bootstrap call has no caller, and a program is free to commit the
+    /// accounts it was handed in an order of its own.
+    pub top_level_pre_state_refs: Vec<AccountId>,
     /// One entry per `pre_state`, in the same order as the program's `pre_states`.
-    /// Length must equal the number of `pre_states` derived from `program_outputs`.
+    /// Length must equal the number of distinct accounts the walk resolves.
     /// The guest's `private_pda_by_position` and `private_pda_bound_positions`
     /// rely on this position alignment.
     pub account_identities: Vec<InputAccountIdentity>,
+    /// What each account held, and whether it was authorized, when the walk first reached it —
+    /// aligned with `account_identities` by that same first-sight position. Every later sight is
+    /// taken from the execution itself, so this is the only door these values come through.
+    pub first_sight_accounts: Vec<FirstSightAccount>,
     /// Program ID.
     pub program_id: ProgramId,
     pub dummy_inputs: Vec<DummyInput>,
+}
+
+/// A `ProgramOutput` without the `pre_states`.
+///
+/// A risc0 receipt binds a program's image and its journal, never its inputs, so a program's own
+/// record of what it ran on is worth nothing on its own. The circuit resolves those accounts
+/// itself and calls `into_program_output` to rebuild the journal an honest run must have
+/// produced; `env::verify` then rejects everything else.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct BareProgramOutput {
+    pub self_program_id: ProgramId,
+    pub caller_program_id: Option<ProgramId>,
+    pub instruction_data: InstructionData,
+    pub post_states: Vec<AccountDiffOutput>,
+    pub chained_calls: Vec<ChainedCall>,
+    pub block_validity_window: BlockValidityWindow,
+    pub timestamp_validity_window: TimestampValidityWindow,
+}
+
+impl BareProgramOutput {
+    /// Builds the real `ProgramOutput` so its encoding stays the one the program committed,
+    /// rather than one this type gets to define.
+    pub fn into_program_output(self, pre_states: Vec<AccountWithMetadata>) -> ProgramOutput {
+        ProgramOutput {
+            self_program_id: self.self_program_id,
+            caller_program_id: self.caller_program_id,
+            instruction_data: self.instruction_data,
+            pre_states,
+            post_states: self.post_states,
+            chained_calls: self.chained_calls,
+            block_validity_window: self.block_validity_window,
+            timestamp_validity_window: self.timestamp_validity_window,
+        }
+    }
+}
+
+#[cfg(feature = "host")]
+impl From<ProgramOutput> for BareProgramOutput {
+    fn from(output: ProgramOutput) -> Self {
+        Self {
+            self_program_id: output.self_program_id,
+            caller_program_id: output.caller_program_id,
+            instruction_data: output.instruction_data,
+            post_states: output.post_states,
+            chained_calls: output.chained_calls,
+            block_validity_window: output.block_validity_window,
+            timestamp_validity_window: output.timestamp_validity_window,
+        }
+    }
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct FirstSightAccount {
+    pub account: Account,
+    /// The credential the host attests for a regular account. A PDA's authorization is always
+    /// derived from a claim or from a caller's seeds, so this bit is ignored there.
+    pub is_authorized: bool,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]

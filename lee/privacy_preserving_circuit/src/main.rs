@@ -7,7 +7,9 @@ mod output;
 fn main() {
     let PrivacyPreservingCircuitInput {
         program_outputs,
+        top_level_pre_state_refs,
         account_identities,
+        first_sight_accounts,
         program_id,
         dummy_inputs,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
@@ -16,6 +18,8 @@ fn main() {
         &account_identities,
         program_id,
         program_outputs,
+        top_level_pre_state_refs,
+        first_sight_accounts,
     );
 
     let output = output::compute_circuit_output(execution_state, &account_identities, dummy_inputs);
