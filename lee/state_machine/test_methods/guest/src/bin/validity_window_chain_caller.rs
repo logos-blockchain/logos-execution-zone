@@ -1,8 +1,8 @@
+use borsh::to_vec;
 use lee_core::program::{
     AccountPostState, BlockValidityWindow, ChainedCall, ProgramId, ProgramInput, ProgramOutput,
     TimestampValidityWindow, read_lee_inputs,
 };
-use risc0_zkvm::serde::to_vec;
 
 /// A program that sets a block validity window on its output and chains to another program with a
 /// potentially different block validity window.
@@ -21,7 +21,7 @@ fn main() {
             pre_states,
             instruction: (block_validity_window, chained_program_id, chained_block_validity_window),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let [pre] = <[_; 1]>::try_from(pre_states.clone()).expect("Expected exactly one pre state");
@@ -42,7 +42,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![pre],
         vec![AccountPostState::new(post)],
     )

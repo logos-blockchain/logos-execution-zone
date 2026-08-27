@@ -56,6 +56,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn malformed_journal() -> Program {
+        Program::new_unchecked(
+            test_methods::MALFORMED_JOURNAL_ID,
+            Cow::Borrowed(test_methods::MALFORMED_JOURNAL_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn nonce_changer() -> Program {
         Program::new_unchecked(
             test_methods::NONCE_CHANGER_ID,

@@ -446,7 +446,7 @@ mod tests {
     use crate::event_filter::{SelectorFilter, covered_over_range};
 
     // Host-side mirror of the `event_emitter` test guest's instruction.
-    #[derive(serde::Serialize)]
+    #[derive(borsh::BorshSerialize)]
     struct EmitterInstruction {
         events: Vec<ProgramEvent>,
         chain: Vec<(ProgramId, InstructionData)>,

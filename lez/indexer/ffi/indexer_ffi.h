@@ -165,13 +165,13 @@ typedef struct FfiVec_FfiNonce {
 
 typedef struct FfiVec_FfiNonce FfiNonceList;
 
-typedef struct FfiVec_u32 {
-  uint32_t *entries;
+typedef struct FfiVec_u8 {
+  uint8_t *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_u32;
+} FfiVec_u8;
 
-typedef struct FfiVec_u32 FfiInstructionDataList;
+typedef struct FfiVec_u8 FfiInstructionDataList;
 
 typedef struct FfiPublicMessage {
   struct FfiProgramId program_id;
@@ -243,12 +243,6 @@ typedef struct FfiVec_FfiPublicAction {
 } FfiVec_FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
-
-typedef struct FfiVec_u8 {
-  uint8_t *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_u8;
 
 typedef struct FfiVec_u8 FfiVecU8;
 
