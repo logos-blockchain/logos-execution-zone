@@ -142,14 +142,14 @@ async fn submit_stakes_for_both_keys(
         .await?;
     let submitted_at_block = last_block(context).await?;
 
-    let scenario = world.stake_mut()?;
-    scenario.set_snapshot(snapshot);
-    scenario.record_submission(SubmissionRecord {
+    let record = world.stake_mut()?;
+    record.set_snapshot(snapshot);
+    record.record_submission(SubmissionRecord {
         hash: first_hash,
         amount,
         submitted_at_block,
     });
-    scenario.record_second_submission(SubmissionRecord {
+    record.record_second_submission(SubmissionRecord {
         hash: second_hash,
         amount,
         submitted_at_block,
