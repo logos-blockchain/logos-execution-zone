@@ -10,7 +10,7 @@ use lee_core::{
     program::{
         AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
-        TimestampValidityWindow, validate_execution,
+        TimestampValidityWindow, pre_states_match_accounts, validate_execution,
     },
 };
 use risc0_zkvm::guest::env;
@@ -157,6 +157,20 @@ impl ExecutionState {
             assert_eq!(
                 chained_call.instruction_data, program_output.instruction_data,
                 "Mismatched instruction data between chained call and program output"
+            );
+
+            // The caller only names accounts; the protocol delivers them. The callee's journal is
+            // the only evidence of what it ran on, so it must account for exactly the named
+            // accounts, in order. Without this, a prover can run an honest callee on accounts its
+            // caller never named and redirect the call's effects. Only a real caller->callee edge
+            // is bound; the synthetic bootstrap call is built from the first output itself.
+            assert!(
+                caller_data.program_id.is_none()
+                    || pre_states_match_accounts(
+                        &chained_call.accounts,
+                        &program_output.pre_states
+                    ),
+                "Callee ran on accounts the chained call did not name"
             );
 
             // Check that `program_output` is consistent with the execution of the corresponding
