@@ -155,9 +155,10 @@ pub enum InvalidProgramBehaviorError {
     ChainedCallAccountsMismatch { program_id: ProgramId },
 
     #[error(
-        "Program {program_id:?} journalled pre_states the execution walk does not derive for it"
+        "Program {program_id:?} journalled a call context or pre_states the execution walk does \
+         not derive for it"
     )]
-    JournalledPreStatesMismatch { program_id: ProgramId },
+    JournalledOutputMismatch { program_id: ProgramId },
 }
 
 #[cfg(test)]

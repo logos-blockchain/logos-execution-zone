@@ -699,7 +699,7 @@ fn nested_callee_that_omits_its_named_accounts_cannot_prove() {
         matches!(
             &error,
             LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::JournalledPreStatesMismatch { program_id }
+                InvalidProgramBehaviorError::JournalledOutputMismatch { program_id }
             ) if *program_id == forwarder_id
         ),
         "expected the forwarder's journalled pre_states to mismatch the derivation, got: {error:?}"
@@ -787,10 +787,7 @@ fn a_lying_prover_redirects_a_chained_call_to_an_account_it_never_named() {
             .prove(env_builder.build().expect("env builds"), program.elf())
             .expect("program proves")
             .receipt;
-        let output = borsh::from_slice(
-            lee_core::from_frame(&receipt.journal.bytes).expect("journal is framed"),
-        )
-        .expect("journal decodes");
+        let output = lee_core::parse_journal(&receipt.journal.bytes).expect("journal decodes");
         (receipt, output)
     }
 

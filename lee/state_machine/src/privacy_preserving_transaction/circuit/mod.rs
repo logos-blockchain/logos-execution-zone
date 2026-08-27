@@ -134,7 +134,6 @@ pub fn execute_and_prove_with_padded_inputs(
     let indexed_input_accounts = index_by_account_id(build_input_accounts())
         .map_err(|e| LeeError::InvalidInput(e.to_string()))?;
 
-    let top_level_program_id = initial_program.id();
     let mut env_builder = ExecutorEnv::builder();
 
     // The entry call is proven on the caller's own accounts: no caller named them and no seeds
@@ -153,14 +152,13 @@ pub fn execute_and_prove_with_padded_inputs(
 
     let mut program_effects: Vec<ProgramEffects> = Vec::new();
     let mut entry_output = Some(entry_output);
-    // The host has always rejected one call earlier than the circuit's own cap does, and keeps
-    // doing so: the tally is spent before anything is proven.
+    // The host rejects one call earlier than the walk's own cap, before anything is proven.
     let mut invocations = 0;
 
     // The host runs the circuit's own walk, so what it feeds each program is what the circuit
     // will re-derive and verify the journal against.
     let top_level_call = EntryCall {
-        program_id: top_level_program_id,
+        program_id: initial_program.id(),
         instruction_data,
         accounts: top_level_accounts,
     };
@@ -200,8 +198,8 @@ pub fn execute_and_prove_with_padded_inputs(
             // derivation, so a journal that disagrees here can never discharge its assumption.
             // Failing now costs one program proof instead of the whole circuit proof.
             ensure!(
-                output.pre_states == derived_pre_states,
-                InvalidProgramBehaviorError::JournalledPreStatesMismatch {
+                output.call == call && output.pre_states == derived_pre_states,
+                InvalidProgramBehaviorError::JournalledOutputMismatch {
                     program_id: call.self_program_id
                 }
             );

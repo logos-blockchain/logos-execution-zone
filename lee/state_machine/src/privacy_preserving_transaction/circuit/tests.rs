@@ -1027,7 +1027,7 @@ fn private_pda_update_at_root_call_may_not_declare_authorization() {
         matches!(
             &result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::JournalledPreStatesMismatch { .. }
+                InvalidProgramBehaviorError::JournalledOutputMismatch { .. }
             ))
         ),
         "expected the journalled pre_states to disagree with the walk, got: {result:?}"
@@ -1087,7 +1087,7 @@ fn private_pda_init_at_root_call_may_not_declare_authorization() {
         matches!(
             &result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::JournalledPreStatesMismatch { .. }
+                InvalidProgramBehaviorError::JournalledOutputMismatch { .. }
             ))
         ),
         "expected the journalled pre_states to disagree with the walk, got: {result:?}"

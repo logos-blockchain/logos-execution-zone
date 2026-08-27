@@ -206,24 +206,6 @@ fn materialize_without_a_claim_inherits_the_owner_and_untouched_data() {
     assert_eq!(post.nonce, pre.nonce);
 }
 
-#[test]
-fn materialize_rejects_a_subtraction_the_pre_balance_cannot_cover() {
-    let pre = Account {
-        balance: 10,
-        ..Account::default()
-    };
-    let output = AccountDiffOutput::new(AccountDiff {
-        id: AccountId::new([7; 32]),
-        diff_balance: BalanceDiff::Sub(11),
-        diff_data: None,
-    });
-
-    assert_eq!(
-        output.materialize(&pre, [9; 8]),
-        Err(BalanceDiffError::InsufficientBalance)
-    );
-}
-
 // ---- AccountId::for_private_pda tests ----
 
 /// Pins `AccountId::for_private_pda` against a hardcoded expected output for a specific

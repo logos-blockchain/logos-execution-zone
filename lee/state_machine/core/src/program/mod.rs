@@ -380,6 +380,12 @@ impl AccountDiffOutput {
         Self { diff, claim: None }
     }
 
+    /// An unclaimed output that leaves `id`'s balance and data untouched.
+    #[must_use]
+    pub const fn unchanged(id: AccountId) -> Self {
+        Self::new(AccountDiff::unchanged(id))
+    }
+
     #[must_use]
     pub const fn new_claimed(diff: AccountDiff, claim: Claim) -> Self {
         Self {
@@ -475,23 +481,16 @@ impl<T: Copy + PartialOrd> ValidityWindow<T> {
         Ok(())
     }
 
-    /// Narrowest window contained in all of `windows`; unbounded when `windows` is empty.
-    /// `Err(InvalidWindow)` if the intersection is empty.
-    pub fn try_intersect(windows: impl Iterator<Item = Self>) -> Result<Self, InvalidWindow>
+    /// Narrowest window contained in both; `Err(InvalidWindow)` if the intersection is empty.
+    pub fn intersect(self, other: Self) -> Result<Self, InvalidWindow>
     where
         T: Ord,
     {
-        let (from, to): (Option<T>, Option<T>) =
-            windows.fold((None, None), |(from, to), window| {
-                (
-                    from.max(window.from),
-                    match (to, window.to) {
-                        (Some(current), Some(end)) => Some(current.min(end)),
-                        (current, end) => current.or(end),
-                    },
-                )
-            });
-        (from, to).try_into()
+        let to = match (self.to, other.to) {
+            (Some(current), Some(end)) => Some(current.min(end)),
+            (current, end) => current.or(end),
+        };
+        (self.from.max(other.from), to).try_into()
     }
 
     /// Inclusive lower bound. `None` means no lower bound.
@@ -605,27 +604,22 @@ pub struct ProgramOutput {
 }
 
 impl ProgramOutput {
-    pub const fn new(
+    pub fn new(
         self_program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
         instruction_data: InstructionData,
         pre_states: Vec<AccountWithMetadata>,
         post_states: Vec<AccountDiffOutput>,
     ) -> Self {
-        Self {
+        ProgramInput {
             call: CallContext {
                 self_program_id,
                 caller_program_id,
                 instruction_data,
             },
             pre_states,
-            effects: ProgramEffects {
-                post_states,
-                chained_calls: Vec::new(),
-                block_validity_window: ValidityWindow::new_unbounded(),
-                timestamp_validity_window: ValidityWindow::new_unbounded(),
-            },
         }
+        .into_output(post_states)
     }
 
     pub fn write(self) {
@@ -792,18 +786,38 @@ pub enum ProgramCall<T> {
     Execute { input: ProgramInput, instruction: T },
 }
 
-/// The rules a claim on a PUBLIC account must satisfy. Private accounts are deliberately exempt:
-/// unauthorized private claiming is allowed, so the circuit only runs this on its public arm.
+/// A default-owned account whose state changed without any program claiming it. Both walks
+/// reject this at end of execution; the claim rules below are what makes a change legitimate.
+#[must_use]
+pub fn is_unclaimed_modified_default(pre: &Account, post: &Account) -> bool {
+    pre.program_owner == DEFAULT_PROGRAM_OWNER
+        && pre != post
+        && post.program_owner == DEFAULT_PROGRAM_OWNER
+}
+
+/// A claim of ANY kind requires a default-owned pre state; the per-kind rules in
+/// [`validate_public_claim`] apply on top, and only to public accounts.
+pub fn validate_claim_precondition(pre: &AccountWithMetadata) -> Result<(), ClaimError> {
+    if pre.account.program_owner == DEFAULT_PROGRAM_OWNER {
+        Ok(())
+    } else {
+        Err(ClaimError::ClaimedNonDefaultAccount {
+            account_id: pre.account_id,
+        })
+    }
+}
+
+/// The per-kind rules a claim on a PUBLIC account must satisfy, on top of
+/// [`validate_claim_precondition`].
+///
+/// Private accounts are deliberately exempt: unauthorized private claiming is allowed, so the
+/// circuit only runs this on its public arm.
 pub fn validate_public_claim(
     claim: Claim,
     pre: &AccountWithMetadata,
     executing_program_id: ProgramId,
 ) -> Result<(), ClaimError> {
     let account_id = pre.account_id;
-    if pre.account.program_owner != DEFAULT_PROGRAM_OWNER {
-        return Err(ClaimError::ClaimedNonDefaultAccount { account_id });
-    }
-
     match claim {
         Claim::Authorized => {
             if pre.is_authorized {

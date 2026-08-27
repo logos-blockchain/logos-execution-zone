@@ -8,8 +8,9 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Nonce},
     program::{
-        CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER, EntryCall, MAX_NUMBER_CHAINED_CALLS,
-        match_caller_seed_as_public_pda, validate_execution, validate_public_claim,
+        CallerData, ChainedCall, EntryCall, MAX_NUMBER_CHAINED_CALLS,
+        is_unclaimed_modified_default, match_caller_seed_as_public_pda,
+        validate_claim_precondition, validate_execution, validate_public_claim,
     },
 };
 use log::debug;
@@ -202,8 +203,6 @@ impl ValidatedStateDiff {
                 }
             );
 
-            // Verify execution corresponds to a well-behaved program.
-            // See the # Programs section for the definition of the `validate_execution` method.
             validate_execution(
                 &program_output.pre_states,
                 &program_output.effects.post_states,
@@ -234,7 +233,8 @@ impl ValidatedStateDiff {
                 // The public-execution path only sees public accounts, so the public claim
                 // rules are the whole story here.
                 if let Some(claim) = diff_output.claim() {
-                    validate_public_claim(claim, pre, chained_call.program_id)
+                    validate_claim_precondition(pre)
+                        .and_then(|()| validate_public_claim(claim, pre, chained_call.program_id))
                         .map_err(InvalidProgramBehaviorError::Claim)?;
                 }
 
@@ -278,19 +278,13 @@ impl ValidatedStateDiff {
         }
 
         // Check that all modified uninitialized accounts where claimed
-        for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
-            let pre = state.get_account_by_id(*account_id);
-            if pre.program_owner != DEFAULT_PROGRAM_OWNER {
-                return None;
-            }
-            if pre == *post {
-                return None;
-            }
-            Some((*account_id, post))
+        if let Some(account_id) = state_diff.iter().find_map(|(account_id, post)| {
+            is_unclaimed_modified_default(&state.get_account_by_id(*account_id), post)
+                .then_some(*account_id)
         }) {
-            ensure!(
-                post.program_owner != DEFAULT_PROGRAM_OWNER,
+            return Err(
                 InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
+                    .into(),
             );
         }
 

@@ -60,8 +60,8 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
         .execute(env_builder.build().unwrap(), program.elf())
         .unwrap();
 
-    let payload = lee_core::from_frame(&session_info.journal.bytes).unwrap();
-    let output: lee_core::program::ProgramOutput = borsh::from_slice(payload).unwrap();
+    let output: lee_core::program::ProgramOutput =
+        lee_core::parse_journal(&session_info.journal.bytes).unwrap();
 
     // The journal must be byte-identical to `to_frame(borsh(output))`: the privacy circuit
     // reconstructs exactly these bytes for `env::verify`, so any drift breaks recursion.

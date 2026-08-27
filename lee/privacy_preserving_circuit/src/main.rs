@@ -1,4 +1,4 @@
-use std::{convert::Infallible, fmt};
+use std::convert::Infallible;
 
 use lee_core::{
     PrivacyPreservingCircuitInput,
@@ -9,21 +9,6 @@ use lee_core::{
 use risc0_zkvm::guest::env;
 
 mod output;
-
-/// The prover supplied fewer `ProgramEffects` than the walk has calls to serve.
-struct InsufficientEffects;
-
-impl fmt::Display for InsufficientEffects {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Insufficient program effects for chained calls")
-    }
-}
-
-impl fmt::Debug for InsufficientEffects {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
 
 fn main() {
     let PrivacyPreservingCircuitInput {
@@ -36,11 +21,14 @@ fn main() {
     let input_accounts = index_by_account_id(input_accounts).unwrap_or_else(|e| panic!("{e}"));
 
     let mut effects = program_effects.into_iter();
-    let execution_state =
-        ExecutionState::derive(&input_accounts, top_level_call, |call, pre_states| {
-            verify_call(&mut effects, call, pre_states)
-        })
-        .unwrap_or_else(|e| panic!("{e}"));
+    let execution_state = ExecutionState::derive(
+        &input_accounts,
+        top_level_call,
+        |call, pre_states| -> Result<_, Infallible> {
+            Ok(verify_call(&mut effects, call, pre_states))
+        },
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
 
     assert!(
         effects.next().is_none(),
@@ -60,8 +48,10 @@ fn verify_call(
     effects: &mut impl Iterator<Item = ProgramEffects>,
     call: CallContext,
     pre_states: Vec<AccountWithMetadata>,
-) -> Result<ProgramOutput, InsufficientEffects> {
-    let effects = effects.next().ok_or(InsufficientEffects)?;
+) -> ProgramOutput {
+    let effects = effects
+        .next()
+        .expect("Insufficient program effects for chained calls");
     let program_id = call.self_program_id;
     let program_output = ProgramOutput {
         call,
@@ -70,5 +60,5 @@ fn verify_call(
     };
     env::verify(program_id, &lee_core::to_borsh_frame(&program_output))
         .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
-    Ok(program_output)
+    program_output
 }
