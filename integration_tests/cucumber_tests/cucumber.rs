@@ -179,7 +179,12 @@ async fn async_main() -> anyhow::Result<()> {
 
     // A run that matched no scenario reports no failures; exiting green on it
     // would let a typo'd tag filter pass CI having tested nothing.
-    if [writer.passed_steps(), writer.skipped_steps(), writer.failed_steps()] == [0; 3] {
+    if [
+        writer.passed_steps(),
+        writer.skipped_steps(),
+        writer.failed_steps(),
+    ] == [0; 3]
+    {
         anyhow::bail!(
             "No scenarios ran: the tag/name filters matched nothing, or the feature \
              directory is empty"
