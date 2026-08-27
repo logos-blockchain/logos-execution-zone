@@ -68,34 +68,22 @@ impl ExecutionState {
             .filter_map(|input| Some((input.account_id, input.identity.npk_vpk_if_private_pda()?)))
             .collect();
 
-        let block_valid_from = program_effects
-            .iter()
-            .filter_map(|effects| effects.block_validity_window.start())
-            .max();
-        let block_valid_until = program_effects
-            .iter()
-            .filter_map(|effects| effects.block_validity_window.end())
-            .min();
-        let ts_valid_from = program_effects
-            .iter()
-            .filter_map(|effects| effects.timestamp_validity_window.start())
-            .max();
-        let ts_valid_until = program_effects
-            .iter()
-            .filter_map(|effects| effects.timestamp_validity_window.end())
-            .min();
-
-        let block_validity_window: BlockValidityWindow = (block_valid_from, block_valid_until)
-            .try_into()
-            .expect(
-                "There should be non empty intersection in the program output block validity windows",
-            );
-        let timestamp_validity_window: TimestampValidityWindow =
-            (ts_valid_from, ts_valid_until)
-                .try_into()
-                .expect(
-                    "There should be non empty intersection in the program output timestamp validity windows",
-                );
+        let block_validity_window = BlockValidityWindow::try_intersect(
+            program_effects
+                .iter()
+                .map(|effects| effects.block_validity_window),
+        )
+        .expect(
+            "There should be non empty intersection in the program output block validity windows",
+        );
+        let timestamp_validity_window = TimestampValidityWindow::try_intersect(
+            program_effects
+                .iter()
+                .map(|effects| effects.timestamp_validity_window),
+        )
+        .expect(
+            "There should be non empty intersection in the program output timestamp validity windows",
+        );
 
         let mut execution_state = Self {
             pre_states: Vec::new(),

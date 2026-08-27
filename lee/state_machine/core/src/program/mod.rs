@@ -389,6 +389,25 @@ impl<T: Copy + PartialOrd> ValidityWindow<T> {
         Ok(())
     }
 
+    /// Narrowest window contained in all of `windows`; unbounded when `windows` is empty.
+    /// `Err(InvalidWindow)` if the intersection is empty.
+    pub fn try_intersect(windows: impl Iterator<Item = Self>) -> Result<Self, InvalidWindow>
+    where
+        T: Ord,
+    {
+        let (from, to): (Option<T>, Option<T>) =
+            windows.fold((None, None), |(from, to), window| {
+                (
+                    from.max(window.from),
+                    match (to, window.to) {
+                        (Some(current), Some(end)) => Some(current.min(end)),
+                        (current, end) => current.or(end),
+                    },
+                )
+            });
+        (from, to).try_into()
+    }
+
     /// Inclusive lower bound. `None` means no lower bound.
     #[must_use]
     pub const fn start(&self) -> Option<T> {

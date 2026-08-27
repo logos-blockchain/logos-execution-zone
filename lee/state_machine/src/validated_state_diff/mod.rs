@@ -6,7 +6,7 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
+    account::{Account, AccountId, AccountWithMetadata, Nonce, apply_balance_diff},
     program::{
         CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
         validate_execution,
@@ -71,7 +71,7 @@ impl ValidatedStateDiff {
 
         // All account_ids must be different
         ensure!(
-            message.account_ids.iter().collect::<HashSet<_>>().len() == message.account_ids.len(),
+            n_unique(&message.account_ids) == message.account_ids.len(),
             LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
         );
 
@@ -123,10 +123,7 @@ impl ValidatedStateDiff {
                 .accounts
                 .iter()
                 .map(|account_id| {
-                    let account = state_diff
-                        .get(account_id)
-                        .cloned()
-                        .unwrap_or_else(|| state.get_account_by_id(*account_id));
+                    let account = overlaid_account(state, &state_diff, *account_id);
                     AccountWithMetadata::new(account, is_authorized(account_id), *account_id)
                 })
                 .collect();
@@ -162,10 +159,7 @@ impl ValidatedStateDiff {
                 let account_id = pre.account_id;
                 // Check that the program output pre_states coincide with the values in the public
                 // state or with any modifications to those values during the chain of calls.
-                let expected_pre = state_diff
-                    .get(&account_id)
-                    .cloned()
-                    .unwrap_or_else(|| state.get_account_by_id(account_id));
+                let expected_pre = overlaid_account(state, &state_diff, account_id);
                 ensure!(
                     pre.account == expected_pre,
                     InvalidProgramBehaviorError::InconsistentAccountPreState {
@@ -420,13 +414,7 @@ impl ValidatedStateDiff {
 
         let signer_account_ids = tx.signer_account_ids();
         // Check nonces corresponds to the current nonces on the public state.
-        for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
-            let current_nonce = state.get_account_by_id(*account_id).nonce;
-            ensure!(
-                current_nonce == *nonce,
-                LeeError::InvalidInput("Nonce mismatch".into())
-            );
-        }
+        check_signer_nonces(state, &signer_account_ids, &message.nonces)?;
 
         // Verify validity window
         ensure!(
@@ -528,13 +516,7 @@ fn authenticate_public_transaction_signers(
     );
 
     let signer_account_ids = tx.signer_account_ids();
-    for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
-        let current_nonce = state.get_account_by_id(*account_id).nonce;
-        ensure!(
-            current_nonce == *nonce,
-            LeeError::InvalidInput("Nonce mismatch".into())
-        );
-    }
+    check_signer_nonces(state, &signer_account_ids, &message.nonces)?;
 
     Ok(signer_account_ids)
 }
@@ -562,6 +544,32 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         .is_valid_for(&output)
         .then_some(())
         .ok_or(LeeError::InvalidPrivacyPreservingProof)
+}
+
+fn overlaid_account(
+    state: &V03State,
+    state_diff: &HashMap<AccountId, Account>,
+    account_id: AccountId,
+) -> Account {
+    state_diff
+        .get(&account_id)
+        .cloned()
+        .unwrap_or_else(|| state.get_account_by_id(account_id))
+}
+
+fn check_signer_nonces(
+    state: &V03State,
+    account_ids: &[AccountId],
+    nonces: &[Nonce],
+) -> Result<(), LeeError> {
+    for (account_id, nonce) in account_ids.iter().zip(nonces) {
+        let current_nonce = state.get_account_by_id(*account_id).nonce;
+        ensure!(
+            current_nonce == *nonce,
+            LeeError::InvalidInput("Nonce mismatch".into())
+        );
+    }
+    Ok(())
 }
 
 fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
