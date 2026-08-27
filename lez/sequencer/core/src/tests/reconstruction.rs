@@ -663,8 +663,9 @@ fn deposit_event_record(
 
 //     seq_b.run_production_turn().await.unwrap();
 
-//     let vault_id = vault_core::compute_vault_account_id(programs::vault().deployed_account_id(),
-// recipient);     let bridge_id = system_accounts::bridge_account_id();
+//     let vault_id =
+//         vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), recipient);
+//     let bridge_id = system_accounts::bridge_account_id();
 //     let state_b = seq_b.chain().lock().await.head_state().clone();
 //     let state_a = seq_a.chain().lock().await.head_state().clone();
 //     for account in [vault_id, bridge_id, recipient] {
