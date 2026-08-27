@@ -7,8 +7,8 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     from_frame,
     program::{
-        CallerData, ChainedCall, InstructionData, ProgramEffects, ProgramId, ProgramOutput,
-        compute_public_authorized_pdas, match_caller_seed_as_private_pda,
+        CallerData, ChainedCall, InstructionData, MAX_NUMBER_CHAINED_CALLS, ProgramEffects,
+        ProgramId, ProgramOutput, compute_public_authorized_pdas, match_caller_seed_as_private_pda,
     },
     to_frame,
 };
@@ -18,7 +18,6 @@ use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, ensure,
     error::{InvalidProgramBehaviorError, LeeError},
     program::Program,
-    state::MAX_NUMBER_CHAINED_CALLS,
 };
 
 /// Proof of the privacy preserving execution circuit.

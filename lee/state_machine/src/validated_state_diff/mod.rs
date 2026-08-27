@@ -8,8 +8,8 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Nonce, apply_balance_diff},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
-        validate_execution,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS,
+        compute_public_authorized_pdas, validate_execution,
     },
 };
 use log::debug;
@@ -23,7 +23,6 @@ use crate::{
     program::Program,
     program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
-    state::MAX_NUMBER_CHAINED_CALLS,
 };
 
 pub struct StateDiff {
