@@ -250,6 +250,7 @@ fn cross_zone_test_config() -> SequencerConfig {
                 allowed_routes: vec![CrossZoneRoute {
                     src_program_id: programs::ping_sender().id(),
                     target_program_id: programs::ping_receiver().id(),
+                    mint_cap: None,
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
             }],
@@ -3658,4 +3659,16 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         record.pending_unstake.map(|pending| pending.amount),
         Some(system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE)
     );
+}
+
+/// The route struct refuses unknown keys, so a misspelled `mint_cap` in an
+/// operator config fails startup instead of silently seeding uncapped.
+#[test]
+fn a_misspelled_mint_cap_key_fails_route_parse() {
+    let route = serde_json::from_value::<CrossZoneRoute>(serde_json::json!({
+        "src_program_id": [0, 0, 0, 0, 0, 0, 0, 1],
+        "target_program_id": [0, 0, 0, 0, 0, 0, 0, 2],
+        "mintcap": 1_000,
+    }));
+    assert!(route.is_err(), "an unknown key must fail the parse");
 }
