@@ -37,6 +37,11 @@ impl EventFilter {
         }
     }
 
+    #[must_use]
+    pub fn keeps_nothing(&self) -> bool {
+        matches!(self, Self::Sources(sources) if sources.is_empty())
+    }
+
     /// Whether every event in the requested `(program, selector)` domain is stored
     /// under this filter; `None` widens the dimension to "all".
     #[must_use]
@@ -135,6 +140,13 @@ mod tests {
 
     fn sources(entries: Vec<(ProgramId, SelectorFilter)>) -> EventFilter {
         EventFilter::Sources(entries.into_iter().collect())
+    }
+
+    #[test]
+    fn only_an_empty_source_set_keeps_nothing() {
+        assert!(EventFilter::default().keeps_nothing());
+        assert!(!EventFilter::Archival.keeps_nothing());
+        assert!(!sources(vec![(PROGRAM_A, SelectorFilter::All)]).keeps_nothing());
     }
 
     #[test]

@@ -48,6 +48,15 @@ impl IndexerStore {
 
         let current_state = dbio.final_state()?;
         let filter_segments = reconcile_filter_segments(&dbio, event_filter)?;
+        if filter_segments
+            .last()
+            .is_some_and(|(filter, _)| filter.keeps_nothing())
+        {
+            warn!(
+                "Configured event filter keeps no events: none are captured and every event \
+                 query is rejected as uncovered"
+            );
+        }
 
         Ok(Self {
             dbio: Arc::new(dbio),
