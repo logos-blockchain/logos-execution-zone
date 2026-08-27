@@ -9,7 +9,9 @@ use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, utils::sync_private, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
+    utils::{deploy_targets, deploy_transaction, sync_private},
+    verify_commitment_is_in_state,
 };
 use lee::{
     AccountId, PrivacyPreservingTransaction,
@@ -165,6 +167,26 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let auth_transfer_id = auth_transfer.id();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
+
+    // `pda_spend_proxy` is a test-only program, not part of any genesis program set, so it must
+    // be deployed for real before anything can dispatch to it: `ProgramWithDependencies`'s
+    // `program_account_id` is PDA-addressed (not the legacy bijection), and the privacy circuit's
+    // proof verification looks up that address via `V03State::get_program`, which only finds
+    // programs that were actually claimed via `Deploy`.
+    let proxy_bytecode = proxy.elf().to_vec();
+    let (proxy_header, proxy_segment) = deploy_targets(&proxy_bytecode);
+    assert_eq!(
+        proxy_header, proxy_id,
+        "Deploy's header PDA must match the program's dispatch address"
+    );
+    let deploy_tx = LeeTransaction::Public(deploy_transaction(
+        proxy_header,
+        proxy_segment,
+        proxy_bytecode,
+    ));
+    ctx.sequencer_client().send_transaction(deploy_tx).await?;
+    log::info!("Waiting for pda_spend_proxy deploy block");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let auth_transfer_account_id =
         program_loader_core::immutable_deploy_account_id(auth_transfer_id);
