@@ -115,7 +115,7 @@ pub enum BalanceDiffError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AccountDiff {
     pub id: AccountId,
-    pub diff_balance: BalanceDiff,
+    pub diff_balance: Option<BalanceDiff>,
     pub diff_data: Option<Data>,
 }
 
@@ -224,13 +224,14 @@ impl Display for AccountId {
 
 pub fn apply_balance_diff(
     current: Balance,
-    diff: BalanceDiff,
+    diff: Option<BalanceDiff>,
 ) -> Result<Balance, BalanceDiffError> {
     match diff {
-        BalanceDiff::Add(amount) => current
+        None => Ok(current),
+        Some(BalanceDiff::Add(amount)) => current
             .checked_add(amount)
             .ok_or(BalanceDiffError::Overflow),
-        BalanceDiff::Sub(amount) => current
+        Some(BalanceDiff::Sub(amount)) => current
             .checked_sub(amount)
             .ok_or(BalanceDiffError::InsufficientBalance),
     }
@@ -376,44 +377,50 @@ mod tests {
     }
 
     #[test]
+    fn apply_balance_diff_none_is_noop() {
+        let result = apply_balance_diff(10, None);
+        assert_eq!(result, Ok(10));
+    }
+
+    #[test]
     fn apply_balance_diff_add_succeeds() {
-        let result = apply_balance_diff(10, BalanceDiff::Add(5));
+        let result = apply_balance_diff(10, Some(BalanceDiff::Add(5)));
         assert_eq!(result, Ok(15));
     }
 
     #[test]
     fn apply_balance_diff_add_zero_is_noop() {
-        let result = apply_balance_diff(10, BalanceDiff::Add(0));
+        let result = apply_balance_diff(10, Some(BalanceDiff::Add(0)));
         assert_eq!(result, Ok(10));
     }
 
     #[test]
     fn apply_balance_diff_add_overflow_is_rejected() {
-        let result = apply_balance_diff(Balance::MAX, BalanceDiff::Add(1));
+        let result = apply_balance_diff(Balance::MAX, Some(BalanceDiff::Add(1)));
         assert_eq!(result, Err(BalanceDiffError::Overflow));
     }
 
     #[test]
     fn apply_balance_diff_sub_succeeds() {
-        let result = apply_balance_diff(10, BalanceDiff::Sub(5));
+        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(5)));
         assert_eq!(result, Ok(5));
     }
 
     #[test]
     fn apply_balance_diff_sub_zero_is_noop() {
-        let result = apply_balance_diff(10, BalanceDiff::Sub(0));
+        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(0)));
         assert_eq!(result, Ok(10));
     }
 
     #[test]
     fn apply_balance_diff_sub_down_to_exactly_zero_succeeds() {
-        let result = apply_balance_diff(10, BalanceDiff::Sub(10));
+        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(10)));
         assert_eq!(result, Ok(0));
     }
 
     #[test]
     fn apply_balance_diff_sub_insufficient_balance_is_rejected() {
-        let result = apply_balance_diff(10, BalanceDiff::Sub(11));
+        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(11)));
         assert_eq!(result, Err(BalanceDiffError::InsufficientBalance));
     }
 
