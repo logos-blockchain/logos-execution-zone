@@ -23,6 +23,8 @@ impl Deposit {
     }
 }
 
+// The bridge emitter for this event is disabled; withdrawals panic today, so no
+// Withdraw event is ever produced.
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Withdraw {
     pub sender_id: AccountId,
