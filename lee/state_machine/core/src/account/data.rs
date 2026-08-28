@@ -4,9 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 
-/// TODO: Temporarily raised cap to 700 KiB from 100 KiB. This is a placeholder
-/// until multiple accounts are used to store the entire elf.
-pub const DATA_MAX_LENGTH: ByteSize = ByteSize::kib(700);
+pub const DATA_MAX_LENGTH: ByteSize = ByteSize::kib(100);
 #[expect(
     clippy::as_conversions,
     clippy::cast_possible_truncation,

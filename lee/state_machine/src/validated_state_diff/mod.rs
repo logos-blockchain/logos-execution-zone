@@ -127,10 +127,14 @@ impl ValidatedStateDiff {
                 // like every guest program in this codebase, relying here on `catch_unwind` to
                 // play the same role the zkVM executor plays for a real guest: converting a
                 // rejected input into a graceful `Err` instead of unwinding past this call.
-                let program_loader_core::Instruction::Deploy { update_auth } =
-                    borsh::from_slice(&chained_call.instruction_data).map_err(|e| {
-                        LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
-                    })?;
+                let program_loader_core::Instruction::Deploy {
+                    image_id,
+                    segment_count,
+                    first_segment,
+                    update_auth,
+                } = borsh::from_slice(&chained_call.instruction_data).map_err(|e| {
+                    LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
+                })?;
                 // The bytecode itself travels via the transaction's own `raw_payload`, not
                 // `instruction_data` and not `chained_call.raw_payload` (which no guest can ever
                 // set) — see `Message::raw_payload`'s doc comment for why. Deploy only ever runs
@@ -140,12 +144,14 @@ impl ValidatedStateDiff {
                 let bytecode = message.raw_payload.clone().ok_or_else(|| {
                     LeeError::InvalidInput("Deploy requires a raw_payload".into())
                 })?;
-                let deploy_pre_states = chained_call.pre_states.clone();
                 let post_states = std::panic::catch_unwind(|| {
                     program_loader_core::execute_deploy(
                         chained_call.program_account_id,
-                        deploy_pre_states,
-                        bytecode,
+                        &chained_call.pre_states,
+                        &bytecode,
+                        image_id,
+                        segment_count,
+                        first_segment,
                         update_auth,
                     )
                 })
@@ -164,7 +170,7 @@ impl ValidatedStateDiff {
                 // guessed from its address — see `V03State::get_program`'s doc comment for
                 // why that distinction matters once a program's address can outlive its
                 // current bytecode (upgrades).
-                let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)
+                let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)?
                 else {
                     return Err(LeeError::InvalidInput("Unknown program".into()));
                 };
@@ -562,7 +568,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         .program_image_claims
         .iter()
         .map(|claim| {
-            let (image_id, _elf) = state.get_program(claim.account_id).ok_or_else(|| {
+            let (image_id, _elf) = state.get_program(claim.account_id)?.ok_or_else(|| {
                 LeeError::InvalidInput(format!("Unknown program {}", claim.account_id))
             })?;
             Ok(ProgramImageClaim {

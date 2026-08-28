@@ -14,3 +14,6 @@ bytemuck.workspace = true
 risc0-zkvm.workspace = true
 risc0-binfmt.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+test_programs.workspace = true
