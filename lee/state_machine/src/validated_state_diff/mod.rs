@@ -552,9 +552,11 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         .program_image_claims
         .iter()
         .map(|claim| {
-            let (image_id, _elf) = state.get_program(claim.account_id).ok_or_else(|| {
-                LeeError::InvalidInput(format!("Unknown program {}", claim.account_id))
-            })?;
+            let image_id = state
+                .get_program_image_id(claim.account_id)
+                .ok_or_else(|| {
+                    LeeError::InvalidInput(format!("Unknown program {}", claim.account_id))
+                })?;
             Ok(ProgramImageClaim {
                 account_id: claim.account_id,
                 image_id,

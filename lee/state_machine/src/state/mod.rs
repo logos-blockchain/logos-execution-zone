@@ -354,6 +354,17 @@ impl V03State {
     }
 
     #[must_use]
+    pub fn get_program_image_id(&self, program_account_id: AccountId) -> Option<ProgramId> {
+        let account = self.get_account_by_id_ref(program_account_id)?;
+        if account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
+            return None;
+        }
+        ProgramData::try_from(&account.data)
+            .ok()
+            .map(|header| header.image_id)
+    }
+
+    #[must_use]
     pub fn get_proof_for_commitment(&self, commitment: &Commitment) -> Option<MembershipProof> {
         self.private_state.0.get_proof_for(commitment)
     }
