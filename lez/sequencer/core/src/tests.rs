@@ -3691,12 +3691,8 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
 fn deploy_targets(bytecode: &[u8]) -> (AccountId, Vec<AccountId>) {
     let user_elf = program_loader_core::extract_user_elf(bytecode).unwrap();
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-    let plan = program_loader_core::plan_deploy(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        image_id,
-        None,
-        &user_elf,
-    );
+    let plan =
+        program_loader_core::plan_deploy(PROGRAM_LOADER_ACCOUNT_ID, image_id, None, &user_elf);
     (
         plan.header.account_id,
         plan.segments.into_iter().map(|s| s.account_id).collect(),
@@ -4676,8 +4672,7 @@ fn loader_rejects_an_unauthorized_party_touching_an_existing_header() {
     let owner_key = PrivateKey::try_new([19; 32]).unwrap();
     let update_auth = AccountId::from(&PublicKey::new_from_private_key(&owner_key));
     let loader_id: AccountId = PROGRAM_LOADER_ACCOUNT_ID;
-    let header =
-        program_loader_core::header_account_id(loader_id, image_id, 0, Some(update_auth));
+    let header = program_loader_core::header_account_id(loader_id, image_id, 0, Some(update_auth));
     let segment0 =
         program_loader_core::segment_account_id(loader_id, image_id, 0, Some(update_auth));
 
@@ -4742,17 +4737,9 @@ fn loader_finalize_requires_current_update_auths_signature() {
     let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
     let loader_id: AccountId = PROGRAM_LOADER_ACCOUNT_ID;
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-    let header =
-        program_loader_core::header_account_id(loader_id, image_id, 0, Some(update_auth));
+    let header = program_loader_core::header_account_id(loader_id, image_id, 0, Some(update_auth));
     let segment_ids: Vec<AccountId> = (0..segment_count)
-        .map(|i| {
-            program_loader_core::segment_account_id(
-                loader_id,
-                image_id,
-                i,
-                Some(update_auth),
-            )
-        })
+        .map(|i| program_loader_core::segment_account_id(loader_id, image_id, i, Some(update_auth)))
         .collect();
 
     let remaining_segments = usize::try_from(segment_count.checked_sub(1).unwrap()).unwrap();
@@ -4802,12 +4789,7 @@ fn loader_full_upgrade_flow_end_to_end() {
         program_loader_core::header_account_id(loader_id, image_id_v1, 0, Some(update_auth));
     let segment_ids_v1: Vec<AccountId> = (0..segment_count_v1)
         .map(|i| {
-            program_loader_core::segment_account_id(
-                loader_id,
-                image_id_v1,
-                i,
-                Some(update_auth),
-            )
+            program_loader_core::segment_account_id(loader_id, image_id_v1, i, Some(update_auth))
         })
         .collect();
 
@@ -4867,12 +4849,7 @@ fn loader_full_upgrade_flow_end_to_end() {
     let segment_count_v2 = program_loader_core::segment_count_for(&user_elf_v2);
     let segment_ids_v2: Vec<AccountId> = (0..segment_count_v2)
         .map(|i| {
-            program_loader_core::segment_account_id(
-                loader_id,
-                image_id_v1,
-                i,
-                Some(update_auth),
-            )
+            program_loader_core::segment_account_id(loader_id, image_id_v1, i, Some(update_auth))
         })
         .collect();
 
@@ -4957,12 +4934,9 @@ fn loader_rotate_update_auth_end_to_end() {
     let old_key = PrivateKey::try_new([25; 32]).unwrap();
     let old_auth = AccountId::from(&PublicKey::new_from_private_key(&old_key));
     let loader_id: AccountId = PROGRAM_LOADER_ACCOUNT_ID;
-    let header =
-        program_loader_core::header_account_id(loader_id, image_id, 0, Some(old_auth));
+    let header = program_loader_core::header_account_id(loader_id, image_id, 0, Some(old_auth));
     let segment_ids: Vec<AccountId> = (0..segment_count)
-        .map(|i| {
-            program_loader_core::segment_account_id(loader_id, image_id, i, Some(old_auth))
-        })
+        .map(|i| program_loader_core::segment_account_id(loader_id, image_id, i, Some(old_auth)))
         .collect();
 
     let remaining = usize::try_from(segment_count.checked_sub(1).unwrap()).unwrap();

@@ -15,12 +15,8 @@ fn insert_program_matches_plan_deploy() {
     state.insert_program(&program);
 
     let user_elf = program_loader_core::extract_user_elf(program.elf()).unwrap();
-    let plan = program_loader_core::plan_deploy(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        program.id(),
-        None,
-        &user_elf,
-    );
+    let plan =
+        program_loader_core::plan_deploy(PROGRAM_LOADER_ACCOUNT_ID, program.id(), None, &user_elf);
     assert!(
         plan.segments.len() > 1,
         "a real program should span multiple segments at the 96 KiB chunk size"

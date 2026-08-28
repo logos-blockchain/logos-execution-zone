@@ -328,12 +328,8 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
 pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, Vec<AccountId>) {
     let user_elf = program_loader_core::extract_user_elf(bytecode).unwrap();
     let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
-    let plan = program_loader_core::plan_deploy(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        image_id,
-        None,
-        &user_elf,
-    );
+    let plan =
+        program_loader_core::plan_deploy(PROGRAM_LOADER_ACCOUNT_ID, image_id, None, &user_elf);
     (
         plan.header.account_id,
         plan.segments.into_iter().map(|s| s.account_id).collect(),

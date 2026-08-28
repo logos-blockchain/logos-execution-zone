@@ -300,8 +300,7 @@ pub fn plan_deploy_range(
             let segment_number = first_segment
                 .checked_add(u32::try_from(i).expect("segment index fits in u32"))
                 .expect("segment number fits in u32");
-            let seed =
-                segment_pda_seed(genesis_image_id, segment_number, genesis_update_auth);
+            let seed = segment_pda_seed(genesis_image_id, segment_number, genesis_update_auth);
             PlannedAccount {
                 account_id: AccountId::for_public_pda(&loader_account_id, &seed),
                 seed,
