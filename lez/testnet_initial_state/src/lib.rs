@@ -465,12 +465,19 @@ mod tests {
         let with = initial_state(true);
         let without = initial_state(false);
         for id in cross_zone_ids {
-            assert!(with.get_program(id).is_some(), "registered when declared");
-            assert!(without.get_program(id).is_none(), "absent when not declared");
+            assert!(
+                with.get_program(id).unwrap().is_some(),
+                "registered when declared"
+            );
+            assert!(
+                without.get_program(id).unwrap().is_none(),
+                "absent when not declared"
+            );
         }
         assert!(
             without
                 .get_program(programs::faucet().deployed_account_id())
+                .unwrap()
                 .is_some(),
             "non-cross-zone builtins are unaffected by the gate"
         );

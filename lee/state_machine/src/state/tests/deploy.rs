@@ -1,17 +1,16 @@
-use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
+use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramData};
 
 use super::*;
 
 /// Ad hoc proof that a program's bytecode can be split across multiple PDA accounts and
 /// reconstructed into something that executes identically to the original.
 ///
-/// No production code path exercises this yet — `execute_deploy`/`get_program` are still
-/// single-segment only (a real `Deploy` writes exactly one segment). But
-/// `program_loader_core::segment_pda_seed` already takes a segment index as an input (currently
-/// always `0` in production — see its doc comment), so the addressing scheme this test drives by
-/// hand is the real one, not a stand-in. This test writes several segment accounts directly via
-/// `force_insert_account`, fetches them back in order, concatenates, and confirms both the bytes
-/// and the execution output match a direct run against the untouched original.
+/// No production code path *writes* more than one segment yet — a real `Deploy` still writes
+/// exactly one — but `get_program` itself already reconstructs across however many segments a
+/// header declares, so this test drives that reconstruction for real: it writes several segment
+/// accounts plus a `ProgramData` header directly via `force_insert_account`, then calls
+/// `get_program` on the header and confirms both the returned bytes and the execution output
+/// match a direct run against the untouched original.
 #[test]
 fn manually_segmented_program_reconstructs_and_executes_identically() {
     let program = crate::test_methods::claimer();
@@ -27,6 +26,8 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         "test needs a real multi-chunk split, got {} chunk(s)",
         chunks.len()
     );
+    // segment_count currently holds the last segment's index, not a count.
+    let segment_count = u32::try_from(chunks.len() - 1).unwrap();
 
     let mut state = V03State::new();
     let segment_account_ids: Vec<AccountId> = (0..chunks.len())
@@ -50,13 +51,37 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         );
     }
 
-    let reconstructed_binary: Vec<u8> = segment_account_ids
-        .iter()
-        .flat_map(|account_id| state.get_account_by_id(*account_id).data.to_vec())
-        .collect();
+    let header_account_id = program_loader_core::header_account_id(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        program.id(),
+        segment_count,
+        update_auth,
+    );
+    state.force_insert_account(
+        header_account_id,
+        Account {
+            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+            data: Data::from(&ProgramData {
+                image_id: program.id(),
+                segment_count,
+                update_auth,
+            }),
+            ..Account::default()
+        },
+    );
+
+    let (found_image_id, reconstructed_binary) = state
+        .get_program(header_account_id)
+        .expect("a fully-landed multi-segment program must reconstruct without error")
+        .expect("a fully-landed multi-segment program must be found");
+    assert_eq!(
+        found_image_id,
+        program.id(),
+        "get_program must recompute the same image_id as the original"
+    );
     assert_eq!(
         reconstructed_binary, full_binary,
-        "concatenating the segments back in order must reproduce the original binary exactly"
+        "get_program must concatenate the segments back in order to reproduce the original exactly"
     );
 
     let reconstructed_program = Program::new(reconstructed_binary.into()).unwrap();

@@ -4450,7 +4450,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
         "a configless genesis must carry no cross-zone transaction"
     );
     for id in cross_zone_ids {
-        assert!(state.get_program(id).is_none());
+        assert!(state.get_program(id).unwrap().is_none());
     }
 
     let temp_dir = tempdir().unwrap();
@@ -4480,7 +4480,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
         "the four InitConfigs then the inbox config, in the fixed order"
     );
     for id in cross_zone_ids {
-        assert!(state.get_program(id).is_some());
+        assert!(state.get_program(id).unwrap().is_some());
     }
 }
 
@@ -4527,6 +4527,35 @@ fn loader_deploys_program() {
     let deployed_segment = state.get_account_by_id(segment);
     assert_eq!(deployed_segment.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
     assert_eq!(deployed_segment.data.to_vec(), bytecode);
+}
+
+/// `get_program` must find a `Deploy`-created program directly: decode the header, reconstruct
+/// the bytecode from its segment account(s), and return it exactly as deployed.
+#[test]
+fn loader_deployed_program_is_found_by_get_program() {
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
+    let (header, segment) = deploy_targets(&bytecode);
+
+    let tx = deploy_transaction(header, segment, bytecode.clone());
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("Deploy should succeed against unclaimed targets");
+
+    let (found_image_id, found_bytecode) = state
+        .get_program(header)
+        .expect("a freshly-deployed program must reconstruct without error")
+        .expect("a freshly-deployed program must be found");
+    assert_eq!(found_image_id, image_id);
+    assert_eq!(found_bytecode, bytecode);
+}
+
+#[test]
+fn get_program_returns_none_for_an_undeployed_account() {
+    let state = V03State::new();
+    assert_eq!(state.get_program(AccountId::new([42; 32])).unwrap(), None);
 }
 
 /// A `Deploy`-created program must be a fully ordinary dispatch target afterward: `get_program`

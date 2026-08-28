@@ -567,7 +567,7 @@ fn execute_chained_call(
             ),
         ))
     } else {
-        let Some((program_id, elf)) = state.get_program(chained_call.program_account_id) else {
+        let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)? else {
             return Err(LeeError::InvalidInput("Unknown program".into()));
         };
         let program = Program::new_unchecked(program_id, Cow::Owned(elf));
