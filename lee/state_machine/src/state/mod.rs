@@ -313,34 +313,68 @@ impl V03State {
     /// Looks up a deployed program's real `image_id` and bytecode by its `AccountId`.
     ///
     /// Recognizes only programs deployed via the native `Deploy` dispatch shortcut, owned by
-    /// [`PROGRAM_LOADER_ACCOUNT_ID`]: `account.data` decodes as a [`ProgramData`] header
-    /// holding the real `image_id`, and the bytecode itself lives in a second,
-    /// separately-addressed segment account derived from that header (see
-    /// `program_loader_core::segment_account_id`).
+    /// [`PROGRAM_LOADER_ACCOUNT_ID`]: `account.data` decodes as a [`ProgramData`] header holding
+    /// the real `image_id`, and the bytecode itself is reconstructed by concatenating every
+    /// segment account from index `0` through `header.segment_count` inclusive (see
+    /// `program_loader_core::segment_account_id`), in order.
     ///
     /// Returning the real `image_id` — rather than callers deriving one from the address — is
     /// what makes upgrading a `Deploy`-created program possible: the address never changes, only
     /// the `image_id` written into its header account does.
     ///
-    /// An account not owned by [`PROGRAM_LOADER_ACCOUNT_ID`] isn't a deployed program,
-    /// whatever its contents — this is the single place that distinction is enforced, so callers
-    /// never have to remember to re-check it themselves.
-    #[must_use]
-    pub fn get_program(&self, program_account_id: AccountId) -> Option<(ProgramId, Vec<u8>)> {
-        let account = self.get_account_by_id_ref(program_account_id)?;
+    /// An account not owned by [`PROGRAM_LOADER_ACCOUNT_ID`] isn't a deployed program, whatever
+    /// its contents — this is the single place that distinction is enforced, so callers never
+    /// have to remember to re-check it themselves. `Ok(None)` means no such program exists —
+    /// including a multi-segment `Deploy` that hasn't (yet) landed every one of its segments; a
+    /// caller mid-sequence sees exactly the same result as a program that was never deployed at
+    /// all. `Err(LeeError::InvalidProgramBytecode(_))` means every segment exists but they don't
+    /// reconstruct to the `image_id` the header declares — a corrupted or malformed segment set,
+    /// distinguishable from plain absence.
+    pub fn get_program(
+        &self,
+        program_account_id: AccountId,
+    ) -> Result<Option<(ProgramId, Vec<u8>)>, LeeError> {
+        let Some(account) = self.get_account_by_id_ref(program_account_id) else {
+            return Ok(None);
+        };
         if account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
-            return None;
+            return Ok(None);
         }
-        let header = ProgramData::try_from(&account.data).ok()?;
-        let segment_account_id = program_loader_core::segment_account_id(
-            PROGRAM_LOADER_ACCOUNT_ID,
-            header.image_id,
-            header.segment_count,
-            header.update_auth,
-        );
-        let segment = self.get_account_by_id_ref(segment_account_id)?;
-        (segment.program_owner == PROGRAM_LOADER_ACCOUNT_ID)
-            .then(|| (header.image_id, segment.data.to_vec()))
+        let Ok(header) = ProgramData::try_from(&account.data) else {
+            return Ok(None);
+        };
+
+        let mut elf = Vec::new();
+        // `segment_count` currently holds the (only) segment's index, always 0 — not a count —
+        // so this must be inclusive to visit it at all.
+        for segment_number in 0..=header.segment_count {
+            let segment_account_id = program_loader_core::segment_account_id(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                header.image_id,
+                segment_number,
+                header.update_auth,
+            );
+            let Some(segment) = self.get_account_by_id_ref(segment_account_id) else {
+                return Ok(None);
+            };
+            if segment.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
+                return Ok(None);
+            }
+            elf.extend_from_slice(&segment.data);
+        }
+
+        let real_image_id: ProgramId = risc0_binfmt::compute_image_id(&elf)
+            .map_err(LeeError::InvalidProgramBytecode)?
+            .into();
+        if real_image_id != header.image_id {
+            return Err(LeeError::InvalidProgramBytecode(anyhow::anyhow!(
+                "reconstructed elf for {program_account_id} has image_id {real_image_id:?}, \
+                 header declares {:?}",
+                header.image_id
+            )));
+        }
+
+        Ok(Some((header.image_id, elf)))
     }
 
     #[must_use]

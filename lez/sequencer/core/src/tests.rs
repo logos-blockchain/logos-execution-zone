@@ -3750,6 +3750,35 @@ fn loader_deploys_program() {
     assert_eq!(deployed_segment.data.to_vec(), bytecode);
 }
 
+/// `get_program` must find a `Deploy`-created program directly: decode the header, reconstruct
+/// the bytecode from its segment account(s), and return it exactly as deployed.
+#[test]
+fn loader_deployed_program_is_found_by_get_program() {
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
+    let (header, segment) = deploy_targets(&bytecode);
+
+    let tx = deploy_transaction(header, segment, bytecode.clone());
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("Deploy should succeed against unclaimed targets");
+
+    let (found_image_id, found_bytecode) = state
+        .get_program(header)
+        .expect("a freshly-deployed program must reconstruct without error")
+        .expect("a freshly-deployed program must be found");
+    assert_eq!(found_image_id, image_id);
+    assert_eq!(found_bytecode, bytecode);
+}
+
+#[test]
+fn get_program_returns_none_for_an_undeployed_account() {
+    let state = V03State::new();
+    assert_eq!(state.get_program(AccountId::new([42; 32])).unwrap(), None);
+}
+
 /// A `Deploy`-created program must be a fully ordinary dispatch target afterward: `get_program`
 /// has to find it by decoding the `ProgramData` header and locating its separate segment account,
 /// and dispatch has to actually execute it.

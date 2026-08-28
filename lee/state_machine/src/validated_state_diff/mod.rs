@@ -154,7 +154,7 @@ impl ValidatedStateDiff {
                 // guessed from its address — see `V03State::get_program`'s doc comment for
                 // why that distinction matters once a program's address can outlive its
                 // current bytecode (upgrades).
-                let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)
+                let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)?
                 else {
                     return Err(LeeError::InvalidInput("Unknown program".into()));
                 };
