@@ -16,10 +16,6 @@ pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
 /// TODO: Placeholder `program_owner` for uninitialized `Account`.
 pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
 
-/// TODO: Temporary placeholder for program deployment program id; this serves as
-/// `program_owner` for program `Account`s.
-pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
-
 /// Reserved `AccountId` for the native "Deploy" dispatch shortcut.
 ///
 /// `SHA256(domain_separator || label)`, where `domain_separator` is
@@ -35,7 +31,7 @@ pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
 /// cap, whereas the equivalent native computation costs low tens of milliseconds. A caller
 /// targets this address directly as a `Message`/`ChainedCall`'s `AccountId`, same as any other
 /// program.
-pub const DEPLOYMENT_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new(hex!(
+pub const PROGRAM_LOADER_ACCOUNT_ID: AccountId = AccountId::new(hex!(
     "599e2c6c2b89ff39bc3094b3276f1fcaa7173800a71d9896a1ba9bd1458a91c9"
 ));
 
@@ -44,10 +40,10 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 pub type ProgramId = [u32; 8];
 
 /// The account-data layout of a program's header account, deployed via the `Deploy` native
-/// dispatch shortcut (see [`DEPLOYMENT_PROGRAM_ACCOUNT_ID`]).
+/// dispatch shortcut (see [`PROGRAM_LOADER_ACCOUNT_ID`]).
 ///
 /// Deliberately holds only small, fixed-size fields — never the program's bytecode, which lives
-/// in a separate account (see `program_loader_core::deploy_segment_account_id`). Keeping the two
+/// in a separate account (see `program_loader_core::segment_account_id`). Keeping the two
 /// apart means anything that needs to authenticate a program's *identity* (e.g. the
 /// privacy-preserving circuit confirming which `image_id` an `AccountId` currently maps to) only
 /// ever has to read this handful of bytes, not the full program — the only account-authentication
@@ -219,7 +215,7 @@ impl AccountId {
     ///
     /// Keyed on the program's `AccountId` (its actual dispatch address), not its `ProgramId`
     /// (bytecode image id): two different deployments of identical bytecode get different
-    /// `AccountId`s (see `program_loader_core::deploy_header_account_id`'s `update_auth`
+    /// `AccountId`s (see `program_loader_core::header_account_id`'s `update_auth`
     /// parameter), and each must own a disjoint family of PDAs.
     #[must_use]
     pub fn for_public_pda(program_account_id: &Self, seed: &PdaSeed) -> Self {

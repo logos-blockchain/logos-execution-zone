@@ -9,7 +9,7 @@ use lee_core::{
     PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, PROGRAM_LOADER_ACCOUNT_ID,
         ProgramOutput, compute_public_authorized_pdas, validate_execution,
     },
 };
@@ -119,11 +119,10 @@ impl ValidatedStateDiff {
                 chained_call.pre_states,
                 chained_call.instruction_data
             );
-            let mut program_output = if chained_call.program_account_id
-                == DEPLOYMENT_PROGRAM_ACCOUNT_ID
+            let mut program_output = if chained_call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID
             {
                 // Runs `Deploy` as native Rust instead of interpreting a guest ELF — see
-                // `DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc comment for why.
+                // `PROGRAM_LOADER_ACCOUNT_ID`'s doc comment for why.
                 // `execute_deploy` validates its input via `assert!`/`.expect(...)`, exactly
                 // like every guest program in this codebase, relying here on `catch_unwind` to
                 // play the same role the zkVM executor plays for a real guest: converting a

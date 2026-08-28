@@ -20,7 +20,7 @@ pub struct Message {
     /// through the serializer's `serialize_bytes`. `Message` itself, in contrast, is
     /// borsh-encoded on the wire, which packs `Vec<u8>` byte-for-byte. So a large payload that
     /// only needs to reach *native* dispatch logic (never a real guest — e.g. `Deploy`'s program
-    /// bytecode, which is handled natively, see `DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc
+    /// bytecode, which is handled natively, see `PROGRAM_LOADER_ACCOUNT_ID`'s doc
     /// comment) belongs here instead of in `instruction_data`, avoiding that ~4x bloat entirely
     /// rather than just packing it more efficiently.
     ///

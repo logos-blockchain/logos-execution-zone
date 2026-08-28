@@ -14,7 +14,7 @@ use lee::{
 };
 use lee_core::{
     account::Nonce,
-    program::{DEPLOYMENT_PROGRAM_ACCOUNT_ID, PdaSeed, ProgramId},
+    program::{PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramId},
 };
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
@@ -3690,14 +3690,14 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
 /// Derives the `(header, segment)` account pair `bytecode` would deploy to.
 fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
     let image_id: ProgramId = risc0_binfmt::compute_image_id(bytecode).unwrap().into();
-    let header = program_loader_core::deploy_header_account_id(
-        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+    let header = program_loader_core::header_account_id(
+        PROGRAM_LOADER_ACCOUNT_ID,
         image_id,
         0,
         AccountId::default(),
     );
-    let segment = program_loader_core::deploy_segment_account_id(
-        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+    let segment = program_loader_core::segment_account_id(
+        PROGRAM_LOADER_ACCOUNT_ID,
         image_id,
         0,
         AccountId::default(),
@@ -3711,7 +3711,7 @@ fn deploy_transaction(
     bytecode: Vec<u8>,
 ) -> PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
-        DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+        PROGRAM_LOADER_ACCOUNT_ID,
         vec![header, segment],
         vec![],
         program_loader_core::Instruction::Deploy { bytecode },
@@ -3738,7 +3738,7 @@ fn loader_deploys_program() {
         .expect("Deploy should succeed against unclaimed targets");
 
     let deployed_header = state.get_account_by_id(header);
-    assert_eq!(deployed_header.program_owner, DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+    assert_eq!(deployed_header.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
     let program_data = program_loader_core::ProgramData::try_from(&deployed_header.data)
         .expect("deployed header account data should decode as ProgramData");
     assert_eq!(program_data.image_id, image_id);
@@ -3746,10 +3746,7 @@ fn loader_deploys_program() {
     assert_eq!(program_data.update_auth, AccountId::default());
 
     let deployed_segment = state.get_account_by_id(segment);
-    assert_eq!(
-        deployed_segment.program_owner,
-        DEPLOYMENT_PROGRAM_ACCOUNT_ID
-    );
+    assert_eq!(deployed_segment.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
     assert_eq!(deployed_segment.data.to_vec(), bytecode);
 }
 
@@ -3847,7 +3844,7 @@ fn loader_rejects_wrong_target_account() {
 
 #[test]
 fn loader_rejects_wrong_number_of_accounts() {
-    let loader_id: ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let loader_id: ProgramId = PROGRAM_LOADER_ACCOUNT_ID.into();
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
@@ -3889,7 +3886,7 @@ fn loader_rejects_wrong_number_of_accounts() {
             entry point, natively emitting its own follow-up chained calls after deploying \
             (see loader_deploys_program)."]
 fn loader_deploys_program_via_chained_call() {
-    let loader_id: ProgramId = DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let loader_id: ProgramId = PROGRAM_LOADER_ACCOUNT_ID.into();
     let forwarder = test_programs::chained_call_forwarder();
     let mut state = V03State::new().with_programs([forwarder.clone()]);
 
@@ -3918,7 +3915,7 @@ fn loader_deploys_program_via_chained_call() {
         .expect("Deploy via chained call should succeed");
 
     let deployed_header = state.get_account_by_id(header);
-    assert_eq!(deployed_header.program_owner, DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+    assert_eq!(deployed_header.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
 
     let program_data = program_loader_core::ProgramData::try_from(&deployed_header.data)
         .expect("deployed header account data should decode as ProgramData");

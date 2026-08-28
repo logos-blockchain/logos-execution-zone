@@ -13,7 +13,7 @@ use integration_tests::{
     deploy_transaction, encoded_tx_size,
 };
 use lee::program::Program;
-use lee_core::program::DEPLOYMENT_PROGRAM_ACCOUNT_ID;
+use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
@@ -165,7 +165,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
                 let LeeTransaction::Public(public_tx) = tx else {
                     return None;
                 };
-                if public_tx.message.program_account_id != DEPLOYMENT_PROGRAM_ACCOUNT_ID {
+                if public_tx.message.program_account_id != PROGRAM_LOADER_ACCOUNT_ID {
                     return None;
                 }
                 let program_loader_core::Instruction::Deploy { bytecode } =
