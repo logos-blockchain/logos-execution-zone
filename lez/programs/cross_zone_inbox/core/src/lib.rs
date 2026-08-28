@@ -174,7 +174,7 @@ impl SeenShard {
     /// Out of reach only because of the L1 inscription cap: a block inscribes as
     /// one op near 1.75 MiB and a minimal emitting transaction is about 257
     /// bytes, capping a peer block near 7,100 deliveries. Raising that L1 cap
-    /// past roughly 6.3 MiB puts this back in reach.
+    /// past roughly 900 KiB puts this back in reach.
     pub const MAX_DELIVERIES: usize = {
         let remaining_bytes = DATA_MAX_LENGTH.as_u64() - 36;
         let count = remaining_bytes

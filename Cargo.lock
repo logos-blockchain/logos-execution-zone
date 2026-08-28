@@ -9420,6 +9420,7 @@ dependencies = [
  "lee_core",
  "risc0-binfmt",
  "risc0-zkvm",
+ "test_programs",
 ]
 
 [[package]]

@@ -1,85 +1,98 @@
-use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
+use lee_core::{
+    account::Data,
+    program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramData},
+};
 
 use super::*;
 
-/// Ad hoc proof that a program's bytecode can be split across multiple PDA accounts and
-/// reconstructed into something that executes identically to the original.
-///
-/// No production code path exercises this yet — `execute_deploy`/`get_program` are still
-/// single-segment only (a real `Deploy` writes exactly one segment). But
-/// `program_loader_core::segment_pda_seed` already takes a segment index as an input (currently
-/// always `0` in production — see its doc comment), so the addressing scheme this test drives by
-/// hand is the real one, not a stand-in. This test writes several segment accounts directly via
-/// `force_insert_account`, fetches them back in order, concatenates, and confirms both the bytes
-/// and the execution output match a direct run against the untouched original.
+/// `insert_program` (genesis) must produce exactly the account shape
+/// `program_loader_core::plan_deploy` reports for the same bytecode — the invariant that makes
+/// genesis and a live `Deploy` indistinguishable to `get_program`.
 #[test]
-fn manually_segmented_program_reconstructs_and_executes_identically() {
+fn insert_program_matches_plan_deploy() {
     let program = crate::test_methods::claimer();
-    let full_binary = program.elf();
-    let update_auth = AccountId::default();
-
-    // However many chunks, as long as it's more than one — this is testing reconstruction
-    // across several accounts, not any particular chunk size.
-    let chunk_size = full_binary.len().div_ceil(4).max(1);
-    let chunks: Vec<&[u8]> = full_binary.chunks(chunk_size).collect();
-    assert!(
-        chunks.len() > 1,
-        "test needs a real multi-chunk split, got {} chunk(s)",
-        chunks.len()
-    );
-
     let mut state = V03State::new();
-    let segment_account_ids: Vec<AccountId> = (0..chunks.len())
-        .map(|i| {
-            program_loader_core::segment_account_id(
-                PROGRAM_LOADER_ACCOUNT_ID,
-                program.id(),
-                u32::try_from(i).unwrap(),
-                update_auth,
-            )
-        })
-        .collect();
-    for (account_id, chunk) in segment_account_ids.iter().zip(&chunks) {
-        state.force_insert_account(
-            *account_id,
-            Account {
-                program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-                data: Data::try_from(chunk.to_vec()).unwrap(),
-                ..Account::default()
-            },
-        );
-    }
+    state.insert_program(&program);
 
-    let reconstructed_binary: Vec<u8> = segment_account_ids
-        .iter()
-        .flat_map(|account_id| state.get_account_by_id(*account_id).data.to_vec())
-        .collect();
-    assert_eq!(
-        reconstructed_binary, full_binary,
-        "concatenating the segments back in order must reproduce the original binary exactly"
-    );
-
-    let reconstructed_program = Program::new(reconstructed_binary.into()).unwrap();
-    assert_eq!(
-        reconstructed_program.id(),
+    let user_elf = program_loader_core::extract_user_elf(program.elf()).unwrap();
+    let plan = program_loader_core::plan_deploy(
+        PROGRAM_LOADER_ACCOUNT_ID,
         program.id(),
-        "the reconstructed binary must recompute to the same image_id"
+        AccountId::default(),
+        &user_elf,
+    );
+    assert!(
+        plan.segments.len() > 1,
+        "a real program should span multiple segments at the 96 KiB chunk size"
     );
 
-    let pre_states = vec![AccountWithMetadata::new(
-        Account::default(),
-        true,
-        AccountId::new([21; 32]),
-    )];
-    let instruction_data = Program::serialize_instruction(()).unwrap();
-    let self_account_id = program.deployed_account_id();
+    assert!(state.public_state.contains_key(&plan.header.account_id));
+    for segment in &plan.segments {
+        assert!(state.public_state.contains_key(&segment.account_id));
+    }
+}
 
-    let direct_output = program
-        .execute(self_account_id, None, &pre_states, &instruction_data)
-        .expect("direct execution against the original binary should succeed");
-    let reconstructed_output = reconstructed_program
-        .execute(self_account_id, None, &pre_states, &instruction_data)
-        .expect("execution against the manually-reconstructed binary should succeed");
+/// A genesis-seeded multi-segment program round-trips through `get_program` back to its original
+/// full two-ELF binary.
+#[test]
+fn get_program_reconstructs_a_genesis_seeded_program() {
+    let program = crate::test_methods::claimer();
+    let mut state = V03State::new();
+    state.insert_program(&program);
 
-    assert_eq!(direct_output, reconstructed_output);
+    let (image_id, elf) = state
+        .get_program(program.deployed_account_id())
+        .expect("reconstruction should succeed")
+        .expect("program should be found");
+
+    assert_eq!(image_id, program.id());
+    assert_eq!(elf, program.elf());
+}
+
+/// A header pointing at a `segment_count` beyond what's actually been written is treated as
+/// absent, not corrupted — the account simply isn't fully deployed.
+#[test]
+fn get_program_returns_none_for_a_missing_segment() {
+    let program = crate::test_methods::claimer();
+    let mut state = V03State::new();
+    state.insert_program(&program);
+
+    let header_account_id = program.deployed_account_id();
+    let mut header_account = state.public_state[&header_account_id].clone();
+    let mut header_data = ProgramData::try_from(&header_account.data).unwrap();
+    header_data.segment_count += 1; // claims one more segment than actually exists
+    header_account.data = Data::from(&header_data);
+    state.public_state.insert(header_account_id, header_account);
+
+    let result = state.get_program(header_account_id).unwrap();
+    assert_eq!(result, None);
+}
+
+/// A corrupted segment's reconstructed `image_id` won't match the header's claim —
+/// `get_program` must reject that distinguishably from plain absence.
+#[test]
+fn get_program_rejects_a_corrupted_segment() {
+    let program = crate::test_methods::claimer();
+    let mut state = V03State::new();
+    state.insert_program(&program);
+
+    let first_segment_account_id = program_loader_core::segment_account_id(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        program.id(),
+        0,
+        AccountId::default(),
+    );
+    let mut first_segment = state.public_state[&first_segment_account_id].clone();
+    let mut corrupted = first_segment.data.to_vec();
+    corrupted[0] ^= 0xFF;
+    first_segment.data = corrupted.try_into().unwrap();
+    state
+        .public_state
+        .insert(first_segment_account_id, first_segment);
+
+    let result = state.get_program(program.deployed_account_id());
+    assert!(
+        matches!(result, Err(LeeError::InvalidProgramBytecode(_))),
+        "expected a bytecode-mismatch error, got: {result:?}"
+    );
 }
