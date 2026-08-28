@@ -36,6 +36,7 @@ mod authenticated_transfer;
 mod changer_claimer;
 mod circuit;
 mod claiming;
+mod deploy;
 mod events;
 mod flash_swap;
 mod genesis;
