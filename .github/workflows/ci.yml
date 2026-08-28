@@ -363,6 +363,14 @@ jobs:
           image: ${{ needs.ci-image.outputs.image }}
           run: just build-artifacts
 
+      - name: Upload built artifacts for extraction
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-built-artifacts
+          path: artifacts/
+          retention-days: 1
+
       - name: Check if artifacts match repository
         run: |
           if ! git diff --exit-code artifacts/; then
