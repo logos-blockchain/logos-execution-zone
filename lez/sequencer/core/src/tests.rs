@@ -3742,7 +3742,7 @@ fn loader_deploys_program() {
     let program_data = program_loader_core::ProgramData::try_from(&deployed_header.data)
         .expect("deployed header account data should decode as ProgramData");
     assert_eq!(program_data.image_id, image_id);
-    assert_eq!(program_data.segment_number, 0);
+    assert_eq!(program_data.segment_count, 0);
     assert_eq!(program_data.update_auth, AccountId::default());
 
     let deployed_segment = state.get_account_by_id(segment);

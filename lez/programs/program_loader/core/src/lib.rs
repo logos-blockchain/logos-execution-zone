@@ -24,21 +24,17 @@ pub enum Instruction {
 /// Derives the PDA seed for a deployed program's `ProgramData` header account.
 ///
 /// Combines the program's content-derived identity (`image_id`), its position in a (currently
-/// always single-segment) split (`segment_number`), and who may redeploy it (`update_auth`).
+/// always single-segment) split (`segment_count`), and who may redeploy it (`update_auth`).
 ///
 /// Domain-separated from other PDA-seed derivations in the codebase, including
 /// [`segment_pda_seed`], so a header seed can never collide with a segment seed (or
 /// anything else) even when the input triple coincides.
 #[must_use]
-pub fn header_pda_seed(
-    image_id: ProgramId,
-    segment_number: u32,
-    update_auth: AccountId,
-) -> PdaSeed {
+pub fn header_pda_seed(image_id: ProgramId, segment_count: u32, update_auth: AccountId) -> PdaSeed {
     pda_seed(
         DEPLOY_HEADER_SEED_DOMAIN_SEPARATOR,
         image_id,
-        segment_number,
+        segment_count,
         update_auth,
     )
 }
@@ -53,13 +49,13 @@ pub fn header_pda_seed(
 #[must_use]
 pub fn segment_pda_seed(
     image_id: ProgramId,
-    segment_number: u32,
+    segment_count: u32,
     update_auth: AccountId,
 ) -> PdaSeed {
     pda_seed(
         DEPLOY_SEGMENT_SEED_DOMAIN_SEPARATOR,
         image_id,
-        segment_number,
+        segment_count,
         update_auth,
     )
 }
@@ -67,7 +63,7 @@ pub fn segment_pda_seed(
 fn pda_seed(
     domain_separator: AccountId,
     image_id: ProgramId,
-    segment_number: u32,
+    segment_count: u32,
     update_auth: AccountId,
 ) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
@@ -77,7 +73,7 @@ fn pda_seed(
     let image_id_bytes: &[u8] =
         bytemuck::try_cast_slice(&image_id).expect("ProgramId should be castable to &[u8]");
     bytes[32..64].copy_from_slice(image_id_bytes);
-    bytes[64..68].copy_from_slice(&segment_number.to_le_bytes());
+    bytes[64..68].copy_from_slice(&segment_count.to_le_bytes());
     bytes[68..].copy_from_slice(update_auth.as_ref());
 
     PdaSeed::new(
@@ -92,12 +88,12 @@ fn pda_seed(
 pub fn header_account_id(
     loader_account_id: AccountId,
     image_id: ProgramId,
-    segment_number: u32,
+    segment_count: u32,
     update_auth: AccountId,
 ) -> AccountId {
     AccountId::for_public_pda(
         &loader_account_id,
-        &header_pda_seed(image_id, segment_number, update_auth),
+        &header_pda_seed(image_id, segment_count, update_auth),
     )
 }
 
@@ -105,19 +101,19 @@ pub fn header_account_id(
 pub fn segment_account_id(
     loader_account_id: AccountId,
     image_id: ProgramId,
-    segment_number: u32,
+    segment_count: u32,
     update_auth: AccountId,
 ) -> AccountId {
     AccountId::for_public_pda(
         &loader_account_id,
-        &segment_pda_seed(image_id, segment_number, update_auth),
+        &segment_pda_seed(image_id, segment_count, update_auth),
     )
 }
 
 /// The dispatch address a program with `image_id` lives at once deployed via `Deploy` with no
 /// upgrade authority.
 ///
-/// `segment_number` 0, `update_auth` `AccountId::default()`. What every genesis-seeded builtin,
+/// `segment_count` 0, `update_auth` `AccountId::default()`. What every genesis-seeded builtin,
 /// and any `Deploy` submitted with a default `update_auth`, dispatches at.
 #[must_use]
 pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
@@ -143,10 +139,10 @@ pub fn execute_deploy(
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode)
         .expect("bytecode must decode as a valid RISC0 program binary")
         .into();
-    let segment_number = 0_u32;
+    let segment_count = 0_u32;
     let update_auth = AccountId::default();
-    let header_seed = header_pda_seed(image_id, segment_number, update_auth);
-    let segment_seed = segment_pda_seed(image_id, segment_number, update_auth);
+    let header_seed = header_pda_seed(image_id, segment_count, update_auth);
+    let segment_seed = segment_pda_seed(image_id, segment_count, update_auth);
     let header_pda = AccountId::for_public_pda(&self_account_id, &header_seed);
     let segment_pda = AccountId::for_public_pda(&self_account_id, &segment_seed);
 
@@ -175,7 +171,7 @@ pub fn execute_deploy(
 
     let program_data = ProgramData {
         image_id,
-        segment_number,
+        segment_count,
         update_auth,
     };
 

@@ -206,20 +206,20 @@ impl V03State {
     /// dispatch/proving machinery genesis has no signer to drive.
     pub(crate) fn insert_program(&mut self, program: &Program) {
         let image_id = program.id();
-        let segment_number = 0;
+        let segment_count = 0;
         let update_auth = AccountId::default();
 
         let header_account_id = program_loader_core::header_account_id(
             PROGRAM_LOADER_ACCOUNT_ID,
             image_id,
-            segment_number,
+            segment_count,
             update_auth,
         );
         let header_account = Account {
             program_owner: PROGRAM_LOADER_ACCOUNT_ID,
             data: Data::from(&ProgramData {
                 image_id,
-                segment_number,
+                segment_count,
                 update_auth,
             }),
             ..Account::default()
@@ -228,7 +228,7 @@ impl V03State {
         let segment_account_id = program_loader_core::segment_account_id(
             PROGRAM_LOADER_ACCOUNT_ID,
             image_id,
-            segment_number,
+            segment_count,
             update_auth,
         );
         let segment_account = Account {
@@ -345,7 +345,7 @@ impl V03State {
         let segment_account_id = program_loader_core::segment_account_id(
             PROGRAM_LOADER_ACCOUNT_ID,
             header.image_id,
-            header.segment_number,
+            header.segment_count,
             header.update_auth,
         );
         let segment = self.get_account_by_id_ref(segment_account_id)?;
