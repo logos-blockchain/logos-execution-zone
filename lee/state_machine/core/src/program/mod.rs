@@ -75,7 +75,7 @@ impl From<&ProgramData> for crate::account::Data {
         let mut data = Vec::with_capacity(std::mem::size_of_val(program_data));
         BorshSerialize::serialize(program_data, &mut data)
             .expect("borsh serialization should not fail");
-        Self::try_from(data).expect("elf must fit under DATA_MAX_LENGTH")
+        Self::try_from(data).expect("program header must fit under DATA_MAX_LENGTH")
     }
 }
 
