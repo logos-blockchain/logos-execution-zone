@@ -13,7 +13,6 @@ use crate::{
     merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
     program::Program,
-    program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
     validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
@@ -289,15 +288,6 @@ impl V03State {
     ) -> Result<(), LeeError> {
         let diff =
             ValidatedStateDiff::from_privacy_preserving_transaction(tx, self, block_id, timestamp)?;
-        self.apply_state_diff(diff);
-        Ok(())
-    }
-
-    pub fn transition_from_program_deployment_transaction(
-        &mut self,
-        tx: &ProgramDeploymentTransaction,
-    ) -> Result<(), LeeError> {
-        let diff = ValidatedStateDiff::from_program_deployment_transaction(tx)?;
         self.apply_state_diff(diff);
         Ok(())
     }
