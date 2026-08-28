@@ -14,6 +14,7 @@ use crate::{
         context::{LezScenarioContext, LezSequencerRegistryScenarioContext},
         default::CUCUMBER_NODE_CONFIG_OVERRIDE,
         error::{StepError, StepResult},
+        stake_scenario::StakeScenario,
     },
     testing_framework::shutdown_lez_deployment,
 };
@@ -194,6 +195,8 @@ pub struct CucumberWorld {
     pub lez: Option<LezScenarioContext>,
     /// Scenario-owned view of the multi-sequencer registry.
     pub sequencer_registry: Option<LezSequencerRegistryScenarioContext>,
+    /// Node-level (L3) stake lifecycle scenario state.
+    pub stake: Option<StakeScenario>,
     /// Runtime observations collected by scenario steps.
     pub environment: EnvironmentState,
     /// A unique per-scenario context string used to isolate runtime resources.
@@ -263,6 +266,28 @@ impl CucumberWorld {
         self.sequencer_registry
             .as_ref()
             .ok_or(StepError::FixtureNotDeployed)
+    }
+
+    /// Stores the stake lifecycle scenario state, rejecting duplicate setup.
+    pub fn set_stake(&mut self, scenario: StakeScenario) -> StepResult {
+        if self.stake.is_some() {
+            return Err(StepError::FixtureAlreadyDeployed);
+        }
+
+        self.stake = Some(scenario);
+        Ok(())
+    }
+
+    /// Returns the stake lifecycle scenario state, or a typed error before
+    /// setup.
+    pub fn stake(&self) -> Result<&StakeScenario, StepError> {
+        self.stake.as_ref().ok_or(StepError::FixtureNotDeployed)
+    }
+
+    /// Returns the stake lifecycle scenario state mutably, or a typed error
+    /// before setup.
+    pub fn stake_mut(&mut self) -> Result<&mut StakeScenario, StepError> {
+        self.stake.as_mut().ok_or(StepError::FixtureNotDeployed)
     }
 
     /// Stop all runtime services and release both scenario and registry-owned
@@ -340,6 +365,7 @@ impl CucumberWorld {
                 "sequencer_registry",
                 &self.sequencer_registry.as_ref().map(|_| "deployed"),
             )
+            .field("stake", &self.stake.as_ref().map(|_| "initialized"))
             .field("environment", &self.environment)
             .field(
                 "runtime_teardown_attempted",
@@ -411,6 +437,7 @@ impl Default for CucumberWorld {
             deployment: DeployContext::new(AppHostTopology, NodeClients::default()),
             lez: None,
             sequencer_registry: None,
+            stake: None,
             environment: EnvironmentState::default(),
             test_context: None,
             scenario_base_dir: PathBuf::default(),

@@ -9,6 +9,7 @@ use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
 use common::HashType;
 use lee::{AccountId, PrivateKey, PublicKey};
+use lee_core::program::{InstructionData, ProgramId};
 use tempfile::TempDir;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
 use testing_framework_core::scenario::DynError;
@@ -94,6 +95,12 @@ enum WalletRequest {
         from: Label,
         to: Label,
         amount: u128,
+        response: oneshot::Sender<Result<HashType, String>>,
+    },
+    SendProgramTransaction {
+        accounts: Vec<AccountIdentity>,
+        instruction_data: InstructionData,
+        program_id: ProgramId,
         response: oneshot::Sender<Result<HashType, String>>,
     },
     WalletPassword {
@@ -373,6 +380,19 @@ impl WalletActor {
                                 .map_err(|error| error.to_string());
                                 let _unused = response.send(result);
                             }
+                            WalletRequest::SendProgramTransaction {
+                                accounts,
+                                instruction_data,
+                                program_id,
+                                response,
+                            } => {
+                                let result = components
+                                    .wallet
+                                    .send_pub_tx(accounts, instruction_data, program_id)
+                                    .await
+                                    .map_err(|error| format!("{error:?}"));
+                                let _unused = response.send(result);
+                            }
                             WalletRequest::WalletPassword { response } => {
                                 let _unused = response.send(Ok(components.password.clone()));
                             }
@@ -560,6 +580,28 @@ impl LezRuntime {
         self.request(|response| WalletRequest::SetPublicAccountLabel {
             account_id,
             label,
+            response,
+        })
+        .await
+    }
+
+    /// Signs and submits a public transaction against an arbitrary program.
+    ///
+    /// `AccountIdentity::Public` entries are signed with the wallet's key for
+    /// that account; `AccountIdentity::PublicNoSign` entries are carried as
+    /// unsigned pre-state accounts. The returned hash only means the
+    /// sequencer's mempool admitted the transaction; whether it executes is
+    /// decided during block building.
+    pub async fn send_program_transaction(
+        &self,
+        accounts: Vec<AccountIdentity>,
+        instruction_data: InstructionData,
+        program_id: ProgramId,
+    ) -> Result<HashType, DynError> {
+        self.request(|response| WalletRequest::SendProgramTransaction {
+            accounts,
+            instruction_data,
+            program_id,
             response,
         })
         .await

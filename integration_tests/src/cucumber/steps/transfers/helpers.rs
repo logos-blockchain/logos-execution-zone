@@ -271,24 +271,20 @@ pub async fn wait_for_transfer_inclusion(
     description: &str,
 ) -> Result<u64, StepError> {
     const POLL_INTERVAL: Duration = Duration::from_secs(2);
-    let wait = async {
-        loop {
-            if let Some((transaction, block_id)) = client
-                .get_transaction(artifact.hash)
-                .await
-                .map_err(StepError::query_failed)?
-            {
+    super::super::wait_until(POLL_INTERVAL, timeout, description, || async move {
+        match client
+            .get_transaction(artifact.hash)
+            .await
+            .map_err(StepError::query_failed)?
+        {
+            Some((transaction, block_id)) => {
                 assert_transaction_kind(artifact, &transaction)?;
-                return Ok::<u64, StepError>(block_id);
+                Ok(Some(block_id))
             }
-            tokio::time::sleep(POLL_INTERVAL).await;
+            None => Ok(None),
         }
-    };
-    tokio::time::timeout(timeout, wait)
-        .await
-        .map_err(|_elapsed| StepError::Timeout {
-            message: format!("{description} within {timeout:?}"),
-        })?
+    })
+    .await
 }
 
 pub async fn assert_private_commitment_in_state(
