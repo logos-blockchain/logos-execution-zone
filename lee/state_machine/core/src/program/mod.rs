@@ -61,7 +61,11 @@ pub type ProgramId = [u32; 8];
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramData {
     pub image_id: ProgramId,
-    pub segment_number: u32,
+    /// Used to re-derive this program's bytecode segment `AccountId` (see
+    /// `program_loader_core::segment_account_id`). Currently always `0` — programs aren't yet
+    /// split across multiple segments, so this doubles as both the (only) segment's index and
+    /// its count.
+    pub segment_count: u32,
     pub update_auth: AccountId,
 }
 
