@@ -102,8 +102,7 @@ impl GroupKeyHolder {
     /// Each distinct `(program_account_id, pda_seed)` pair produces a distinct SSK in the full
     /// 256-bit space, so adversarial seed-grinding cannot collide two PDAs' derived keys under
     /// the same group. Keyed on the program's dispatch `AccountId` rather than its `ProgramId`
-    /// for the same reason `AccountId::for_public_pda`/`for_private_pda` are: two different
-    /// deployments of identical bytecode must derive different key families. Uses the codebase's
+    /// for the same reason `AccountId::for_public_pda` is — see that doc. Uses the codebase's
     /// 32-byte protocol-versioned domain-separation convention.
     fn secret_spending_key_for_pda(
         &self,

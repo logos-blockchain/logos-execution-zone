@@ -41,11 +41,9 @@ pub fn header_pda_seed(image_id: ProgramId, segment_count: u32, update_auth: Acc
 
 /// Derives the PDA seed for a deployed program's bytecode segment account.
 ///
-/// Same inputs as [`header_pda_seed`], domain-separated so the two never collide. Kept as
-/// a distinct account from the header specifically so that authenticating a program's identity
-/// (e.g. for privacy-preserving proof verification) never has to touch its bytecode: the only
-/// account-authentication primitive available is whole-account equality, so what's bundled into
-/// one account sets the floor for how cheap that authentication can be.
+/// Same inputs as [`header_pda_seed`], domain-separated so the two never collide. Kept as a
+/// distinct account from the header so identity checks never have to touch bytecode — see
+/// `lee_core::program::ProgramData`'s doc for why that separation matters.
 #[must_use]
 pub fn segment_pda_seed(
     image_id: ProgramId,

@@ -311,18 +311,15 @@ pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
 /// The account naming who sent a delivery, which the inbox passes at position 0
 /// of the chained call so the target can authenticate its own sources.
 ///
-/// Nothing writes or claims it, so the state machine's uninitialized-account rule
-/// skips it for being unchanged rather than for being default: anyone may send it
-/// balance, and the inbox and the targets all round-trip it untouched. Unlike the
-/// claimed PDAs elsewhere in this crate, this address is never verified against a
-/// real image id by the state machine (it is not a `Claim::Pda`), so it is a
-/// plain hash of the inbox's and source's real dispatch addresses rather than a
-/// `for_public_pda` derivation — both the inbox and every target already know
-/// these addresses without needing to recover any `ProgramId`.
+/// Nothing writes or claims it, so the uninitialized-account rule skips it for being unchanged,
+/// not for being default — anyone may send it balance, and every hop round-trips it untouched.
+/// It's a plain hash of the inbox's and source's real dispatch addresses, not a `for_public_pda`
+/// derivation, since it's never checked against a real image id (not a `Claim::Pda`) and both
+/// sides already know these addresses directly.
 ///
-/// The address is derivable by anyone, so it is not a secret and not a
-/// capability. What makes it mean something is that a target checks it only after
-/// pinning its caller to the inbox, and only the inbox can be that caller.
+/// The address is derivable by anyone — not a secret, not a capability. What makes it meaningful
+/// is that a target only checks it after pinning its caller to the inbox, and only the inbox can
+/// be that caller.
 #[must_use]
 pub fn inbox_source_marker_account_id(
     inbox_account_id: AccountId,

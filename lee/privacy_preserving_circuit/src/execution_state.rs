@@ -22,33 +22,30 @@ pub struct ExecutionState {
     post_states: HashMap<AccountId, Account>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
-    /// Positions (in `pre_states`) of private-PDA accounts whose supplied npk has been bound to
-    /// their `AccountId` via a proven `AccountId::for_private_pda(program_account_id, seed, npk,
-    /// vpk, identifier)` check.
-    /// Two proof paths populate this set: a `Claim::Pda(seed)` in a program's `post_state` on
-    /// that `pre_state`, or a caller's `ChainedCall.pda_seeds` entry matching that `pre_state`
-    /// under the private derivation. Binding is an idempotent property, not an event: the same
-    /// position can legitimately be bound through both paths in the same tx (e.g. a program
-    /// claims a private PDA and then delegates it to a callee), and the map uses `contains_key`,
-    /// not `assert!(insert)`. After the main loop, every private-PDA position must appear in this
-    /// map; otherwise the npk is unbound and the circuit rejects.
+    /// Positions (in `pre_states`) of private-PDA accounts whose npk has been bound to their
+    /// `AccountId` via a proven `AccountId::for_private_pda(program_account_id, seed, npk, vpk,
+    /// identifier)` check.
+    ///
+    /// Populated by either of two proof paths: a `Claim::Pda(seed)` in a program's `post_state`,
+    /// or a caller's `ChainedCall.pda_seeds` entry matching under the private derivation.
+    /// Binding is idempotent, not a one-time event — the same position can legitimately be bound
+    /// by both paths in one tx (a program claims a private PDA, then delegates it to a callee),
+    /// so this uses `contains_key`, not `assert!(insert)`. Every private-PDA position must appear
+    /// here by the end of the main loop, or the circuit rejects the npk as unbound.
+    ///
     /// The stored `(AccountId, PdaSeed)` is the owning program's dispatch address and seed, used
-    /// in `compute_circuit_output` to construct `PrivateAccountKind::Pda { program_account_id,
-    /// seed, identifier }`.
+    /// in `compute_circuit_output` to build `PrivateAccountKind::Pda { program_account_id, seed,
+    /// identifier }`.
     private_pda_bound_positions: HashMap<usize, (AccountId, PdaSeed)>,
     /// Across the whole transaction, each `(program_account_id, seed)` pair may resolve to at
-    /// most one `AccountId`. A seed under a program can derive a family of accounts, one public
-    /// PDA and one private PDA per distinct npk. Without this check, a single `pda_seeds: [S]`
-    /// entry in a chained call could authorize multiple family members at once (different npks
-    /// under the same seed) and let a callee mix balances across them. Every claim and every
-    /// caller-authorization resolution is recorded here, either as a new
-    /// `(program_account_id, seed)` → `AccountId` entry or as an equality check against the
-    /// existing one, making the rule: one `(program_account_id, seed)` → one account per tx.
+    /// most one `AccountId` — a seed under a program derives a family of accounts, one public
+    /// PDA and one private PDA per distinct npk. Every claim and caller-authorization resolution
+    /// is recorded or re-verified here via [`assert_family_binding`], which has the full
+    /// rationale for why that one-to-one rule matters.
     pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
-    /// Map from a private-PDA `pre_state`'s position in `account_identities` to the (npk, vpk,
-    /// identifier) supplied for that position. Built once in `derive_from_outputs` by walking
-    /// `account_identities` and consulting `npk_vpk_if_private_pda`. Used later by the claim and
-    /// caller-seeds authorization paths to verify
+    /// Maps a private-PDA `pre_state`'s position in `account_identities` to its (npk, vpk,
+    /// identifier). Built once in `derive_from_outputs`. Used by the claim and caller-seeds
+    /// authorization paths to verify
     /// `AccountId::for_private_pda(program_account_id, seed, npk, vpk, identifier) ==
     /// pre_state.account_id`.
     private_pda_by_position: HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
@@ -57,11 +54,11 @@ pub struct ExecutionState {
     globally_authorized: HashSet<AccountId>,
 }
 
-/// A chained call's caller context, threaded down its own lineage only (never shared across
-/// sibling branches): who called it, and the accounts authorized along the path from the root
-/// down to this call. `authorized_accounts` is monotonically growing per lineage — each child
-/// inherits its parent's set plus whatever the parent itself authorized in its own `pre_states`
-/// — so authorization earned in one branch never leaks into an unrelated sibling branch.
+/// A chained call's caller context: who called it, and the accounts authorized on the path from
+/// the root down to this call. Threaded down its own lineage only, never shared across sibling
+/// branches. `authorized_accounts` only grows — each child inherits its parent's set plus
+/// whatever the parent authorized in its own `pre_states` — so authorization earned in one
+/// branch never leaks into a sibling.
 struct CallerData {
     caller_account_id: Option<AccountId>,
     authorized_accounts: HashSet<AccountId>,
@@ -612,12 +609,11 @@ fn bind_private_pda_position(
 
 /// Judge a non-private-PDA `pre_state` at its first sighting and resolve its journal mask.
 ///
-/// Either the account is a public PDA the caller delegates via `caller_pda_seeds`, in which case
-/// the public mask must be cleared before export (see the `pre.is_authorized = false` comment at
-/// the call site), or it's a regular account, whose authorization (if any) becomes globally
-/// visible for the rest of the call tree. Only reachable when
-/// `caller.caller_account_id.is_some()`; top-level flows have no caller-emitted seeds, so a
-/// first-sight PDA there must come through the claim path instead.
+/// Two cases: a public PDA the caller delegates via `caller_pda_seeds` (its mask must be cleared
+/// before export — see the `pre.is_authorized = false` comment at the call site), or a regular
+/// account, whose authorization becomes globally visible for the rest of the call tree. Only
+/// reachable when `caller.caller_account_id.is_some()` — top-level flows have no caller-emitted
+/// seeds, so a first-sight PDA there goes through the claim path instead.
 fn authorize_first_sight_without_pda_witness(
     pda_family_binding: &mut HashMap<(AccountId, PdaSeed), AccountId>,
     globally_authorized: &mut HashSet<AccountId>,
@@ -648,21 +644,23 @@ fn authorize_first_sight_without_pda_witness(
     }
 }
 
-/// Resolve the authorization state of a `pre_state` seen again in a chained call and record
-/// any resulting bindings.
+/// Resolve the authorization state of a `pre_state` seen again in a chained call and record any
+/// resulting bindings.
 ///
-/// Authorized through exactly one of three sources, each scoped differently: a `caller_pda_seeds`
-/// match is recomputed fresh for this call and never cached, since delegation is call-specific,
-/// not transaction-wide; `globally_authorized` covers a non-PDA account authorized anywhere in the
-/// tree, since that authorization is backed by a signature-like proof valid for the whole
-/// transaction; `caller.authorized_accounts` covers an account the caller itself authorized in its
-/// own `pre_states`, inherited only down that caller's own lineage. Conflating any of these would
-/// let authorization earned in one branch leak into an unrelated sibling branch. When a caller
-/// seed matches, also records the `(caller, seed) → account_id` family binding and, for the
-/// private form, marks the position in `private_pda_bound_positions`. Only reachable when
-/// `caller.caller_account_id.is_some()`, top-level flows have no caller-emitted seeds, so binding
-/// at top level must come from the claim path. Free function so callers can pass individual
-/// `&mut self.*` field borrows without holding a borrow on the surrounding struct's other fields.
+/// Three sources, each scoped differently: a `caller_pda_seeds` match is recomputed fresh per
+/// call, since delegation is call-specific; `globally_authorized` covers a non-PDA account
+/// authorized anywhere in the tree, backed by a signature-like proof valid for the whole
+/// transaction; `caller.authorized_accounts` covers what the caller itself authorized in its own
+/// `pre_states`, inherited only down that caller's lineage. Mixing these up would let
+/// authorization earned in one branch leak into a sibling.
+///
+/// A caller-seed match also records the `(caller, seed) → account_id` family binding and, for
+/// the private form, marks the position in `private_pda_bound_positions`. Only reachable when
+/// `caller.caller_account_id.is_some()` — top-level flows have no caller-emitted seeds, so
+/// binding there comes from the claim path instead.
+///
+/// Free function so callers can pass individual `&mut self.*` field borrows without holding a
+/// borrow on the rest of the struct.
 #[expect(
     clippy::too_many_arguments,
     reason = "breaking out a context struct does not buy us anything here"

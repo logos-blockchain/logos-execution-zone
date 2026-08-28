@@ -18,19 +18,15 @@ pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
 
 /// Reserved `AccountId` for the native "Deploy" dispatch shortcut.
 ///
-/// `SHA256(domain_separator || label)`, where `domain_separator` is
-/// `/LEE/v0.3/AccountId/State/` and `label` is `DeploymentProgram`, each padded with trailing
-/// zero bytes to 32 bytes before concatenation — the same domain-separation construction used
-/// throughout this module, just with no variable input, since this is a single fixed address
-/// rather than a per-caller derivation.
+/// `SHA256(domain_separator || label)` with `domain_separator = /LEE/v0.3/AccountId/State/` and
+/// `label = DeploymentProgram`, both padded to 32 bytes. Same construction as every other PDA
+/// derivation in this module, just with no variable input — this address is fixed.
 ///
-/// Dispatch recognizes this exact `AccountId` and runs the deploy logic as native Rust instead
-/// of interpreting a guest ELF: computing a program's image id inside the zkVM costs roughly
-/// 1,400-1,500 cycles per byte of deployed bytecode (measured against every real program in
-/// this repo), pushing a real deployment to 500M-900M cycles against the 32M public-execution
-/// cap, whereas the equivalent native computation costs low tens of milliseconds. A caller
-/// targets this address directly as a `Message`/`ChainedCall`'s `AccountId`, same as any other
-/// program.
+/// Dispatch runs the deploy logic as native Rust instead of a guest ELF. Computing a program's
+/// image id inside the zkVM costs ~1,400-1,500 cycles per byte (measured against every real
+/// program in this repo): a real deployment would run 500M-900M cycles against the 32M
+/// public-execution cap. Natively it's low tens of milliseconds. Callers target this address
+/// directly, like any other program.
 pub const PROGRAM_LOADER_ACCOUNT_ID: AccountId = AccountId::new(hex!(
     "599e2c6c2b89ff39bc3094b3276f1fcaa7173800a71d9896a1ba9bd1458a91c9"
 ));
@@ -39,25 +35,22 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 pub type ProgramId = [u32; 8];
 
-/// The account-data layout of a program's header account, deployed via the `Deploy` native
-/// dispatch shortcut (see [`PROGRAM_LOADER_ACCOUNT_ID`]).
+/// A deployed program's header account data, written via `Deploy` (see
+/// [`PROGRAM_LOADER_ACCOUNT_ID`]).
 ///
-/// Deliberately holds only small, fixed-size fields — never the program's bytecode, which lives
-/// in a separate account (see `program_loader_core::segment_account_id`). Keeping the two
-/// apart means anything that needs to authenticate a program's *identity* (e.g. the
-/// privacy-preserving circuit confirming which `image_id` an `AccountId` currently maps to) only
-/// ever has to read this handful of bytes, not the full program — the only account-authentication
-/// primitive available today is whole-account equality, so what's bundled into one account sets
-/// the floor for how cheap that authentication can be.
+/// Holds only small, fixed-size fields. The bytecode itself lives in a separate segment account
+/// (see `program_loader_core::segment_account_id`), so anything checking a program's identity —
+/// e.g. the privacy-preserving circuit matching an `AccountId` to an `image_id` — only has to
+/// read this struct, not the full program.
 ///
-/// `image_id` is read fresh from this account on every dispatch/verification rather than
-/// re-derived from the account's address, specifically so that upgrading a program (writing a
-/// new `image_id` into the same, stable `AccountId`) is the entire upgrade mechanism — no
-/// separate "which version" bookkeeping needed.
+/// `image_id` isn't derived from the account's address; it's read directly from this field.
+/// That's what will let a future upgrade write a new `image_id` to the same `AccountId` — not
+/// implemented yet: `execute_deploy` currently writes a header with a bare
+/// `assert_eq!(header_target.account, Account::default())`, so a header can only ever be written
+/// once.
 ///
-/// Lives here rather than in `program_loader_core` so that `V03State::get_program` — a generic,
-/// program-agnostic lookup — can decode it without depending on a specific program's crate.
-/// `program_loader_core` re-exports this type.
+/// Defined here, not in `program_loader_core`, so `V03State::get_program` can decode it without
+/// depending on that crate. `program_loader_core` re-exports it.
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramData {
     pub image_id: ProgramId,

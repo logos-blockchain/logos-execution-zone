@@ -10,13 +10,12 @@ use crate::{
 
 /// A claim that `account_id`'s program account currently has `image_id`.
 ///
-/// Supplied by the prover as circuit input (untrusted), used inside the circuit for
-/// `env::verify` in place of a `Deploy`-created program's address (which, unlike a legacy
-/// program's, doesn't encode its image id), and echoed unchanged into the circuit's output.
-/// Anchoring `image_id` to `account_id` is **not** enforced inside the circuit — it's enforced
-/// by the sequencer, which independently checks every claim against real chain state
-/// (`V03State::get_program`) before accepting the proof. A side effect of this, for now: every
-/// program invoked anywhere in a private transaction's call graph is publicly visible via this
+/// Supplied by the prover as circuit input (untrusted). The circuit uses it for `env::verify` in
+/// place of a `Deploy`-created program's address — unlike a legacy program's, that address
+/// doesn't encode its image id — and echoes it unchanged into the circuit's output. The circuit
+/// itself does **not** check `image_id` against `account_id`; the sequencer does, independently,
+/// against real chain state (`V03State::get_program`) before accepting the proof. Side effect for
+/// now: every program invoked in a private transaction's call graph is publicly visible via this
 /// claim list.
 #[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
