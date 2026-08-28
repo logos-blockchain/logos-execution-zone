@@ -174,14 +174,14 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     // proof verification looks up that address via `V03State::get_program`, which only finds
     // programs that were actually claimed via `Deploy`.
     let proxy_bytecode = proxy.elf().to_vec();
-    let (proxy_header, proxy_segment) = deploy_targets(&proxy_bytecode);
+    let (proxy_header, proxy_segments) = deploy_targets(&proxy_bytecode);
     assert_eq!(
         proxy_header, proxy_id,
         "Deploy's header PDA must match the program's dispatch address"
     );
     let deploy_tx = LeeTransaction::Public(deploy_transaction(
         proxy_header,
-        proxy_segment,
+        &proxy_segments,
         &proxy_bytecode,
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
