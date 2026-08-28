@@ -27,15 +27,15 @@ pub enum Instruction {
 /// always single-segment) split (`segment_number`), and who may redeploy it (`update_auth`).
 ///
 /// Domain-separated from other PDA-seed derivations in the codebase, including
-/// [`deploy_segment_pda_seed`], so a header seed can never collide with a segment seed (or
+/// [`segment_pda_seed`], so a header seed can never collide with a segment seed (or
 /// anything else) even when the input triple coincides.
 #[must_use]
-pub fn deploy_header_pda_seed(
+pub fn header_pda_seed(
     image_id: ProgramId,
     segment_number: u32,
     update_auth: AccountId,
 ) -> PdaSeed {
-    deploy_seed(
+    pda_seed(
         DEPLOY_HEADER_SEED_DOMAIN_SEPARATOR,
         image_id,
         segment_number,
@@ -45,18 +45,18 @@ pub fn deploy_header_pda_seed(
 
 /// Derives the PDA seed for a deployed program's bytecode segment account.
 ///
-/// Same inputs as [`deploy_header_pda_seed`], domain-separated so the two never collide. Kept as
+/// Same inputs as [`header_pda_seed`], domain-separated so the two never collide. Kept as
 /// a distinct account from the header specifically so that authenticating a program's identity
 /// (e.g. for privacy-preserving proof verification) never has to touch its bytecode: the only
 /// account-authentication primitive available is whole-account equality, so what's bundled into
 /// one account sets the floor for how cheap that authentication can be.
 #[must_use]
-pub fn deploy_segment_pda_seed(
+pub fn segment_pda_seed(
     image_id: ProgramId,
     segment_number: u32,
     update_auth: AccountId,
 ) -> PdaSeed {
-    deploy_seed(
+    pda_seed(
         DEPLOY_SEGMENT_SEED_DOMAIN_SEPARATOR,
         image_id,
         segment_number,
@@ -64,7 +64,7 @@ pub fn deploy_segment_pda_seed(
     )
 }
 
-fn deploy_seed(
+fn pda_seed(
     domain_separator: AccountId,
     image_id: ProgramId,
     segment_number: u32,
@@ -89,7 +89,7 @@ fn deploy_seed(
 }
 
 #[must_use]
-pub fn deploy_header_account_id(
+pub fn header_account_id(
     loader_account_id: AccountId,
     image_id: ProgramId,
     segment_number: u32,
@@ -97,12 +97,12 @@ pub fn deploy_header_account_id(
 ) -> AccountId {
     AccountId::for_public_pda(
         &loader_account_id,
-        &deploy_header_pda_seed(image_id, segment_number, update_auth),
+        &header_pda_seed(image_id, segment_number, update_auth),
     )
 }
 
 #[must_use]
-pub fn deploy_segment_account_id(
+pub fn segment_account_id(
     loader_account_id: AccountId,
     image_id: ProgramId,
     segment_number: u32,
@@ -110,7 +110,7 @@ pub fn deploy_segment_account_id(
 ) -> AccountId {
     AccountId::for_public_pda(
         &loader_account_id,
-        &deploy_segment_pda_seed(image_id, segment_number, update_auth),
+        &segment_pda_seed(image_id, segment_number, update_auth),
     )
 }
 
@@ -121,8 +121,8 @@ pub fn deploy_segment_account_id(
 /// and any `Deploy` submitted with a default `update_auth`, dispatches at.
 #[must_use]
 pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
-    deploy_header_account_id(
-        lee_core::program::DEPLOYMENT_PROGRAM_ACCOUNT_ID,
+    header_account_id(
+        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         image_id,
         0,
         AccountId::default(),
@@ -132,7 +132,7 @@ pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
 /// Executes the `Deploy` instruction.
 ///
 /// Verifies `bytecode` decodes as a valid RISC0 program binary, derives its header and segment
-/// PDAs, and claims both. Called natively from dispatch's `DEPLOYMENT_PROGRAM_ACCOUNT_ID`
+/// PDAs, and claims both. Called natively from dispatch's `PROGRAM_LOADER_ACCOUNT_ID`
 /// shortcut (see that constant's doc comment in `lee_core::program`).
 #[must_use]
 pub fn execute_deploy(
@@ -145,8 +145,8 @@ pub fn execute_deploy(
         .into();
     let segment_number = 0_u32;
     let update_auth = AccountId::default();
-    let header_seed = deploy_header_pda_seed(image_id, segment_number, update_auth);
-    let segment_seed = deploy_segment_pda_seed(image_id, segment_number, update_auth);
+    let header_seed = header_pda_seed(image_id, segment_number, update_auth);
+    let segment_seed = segment_pda_seed(image_id, segment_number, update_auth);
     let header_pda = AccountId::for_public_pda(&self_account_id, &header_seed);
     let segment_pda = AccountId::for_public_pda(&self_account_id, &segment_seed);
 

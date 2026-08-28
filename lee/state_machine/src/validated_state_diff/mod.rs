@@ -9,7 +9,7 @@ use lee_core::{
     PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, DEPLOYMENT_PROGRAM_ACCOUNT_ID, ProgramId,
+        ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, PROGRAM_LOADER_ACCOUNT_ID, ProgramId,
         ProgramOutput, TransactionEvent, compute_public_authorized_pdas,
         pre_states_match_accounts, validate_execution,
     },
@@ -525,7 +525,7 @@ struct CallerData {
 }
 
 /// Executes a chained call, dispatching to the native `Deploy` fast path when the call targets
-/// [`DEPLOYMENT_PROGRAM_ACCOUNT_ID`], or interpreting the target's guest ELF otherwise.
+/// [`PROGRAM_LOADER_ACCOUNT_ID`], or interpreting the target's guest ELF otherwise.
 ///
 /// Returns the callee's real `image_id` alongside its output: for `Deploy` it's the fixed
 /// reserved account's own bijection (Deploy isn't itself upgradeable), otherwise it's the
@@ -541,9 +541,9 @@ fn execute_chained_call(
     caller_account_id: Option<AccountId>,
     real_pre_states: &[AccountWithMetadata],
 ) -> Result<(ProgramId, ProgramOutput), LeeError> {
-    if chained_call.program_account_id == DEPLOYMENT_PROGRAM_ACCOUNT_ID {
+    if chained_call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
         // Runs `Deploy` as native Rust instead of interpreting a guest ELF.
-        let program_id = ProgramId::from(DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+        let program_id = ProgramId::from(PROGRAM_LOADER_ACCOUNT_ID);
         let program_loader_core::Instruction::Deploy { bytecode } =
             borsh::from_slice(&chained_call.instruction_data)
                 .map_err(|e| LeeError::InvalidInput(format!("invalid Deploy instruction: {e}")))?;
