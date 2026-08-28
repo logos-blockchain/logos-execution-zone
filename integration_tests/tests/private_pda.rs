@@ -182,7 +182,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let deploy_tx = LeeTransaction::Public(deploy_transaction(
         proxy_header,
         proxy_segment,
-        proxy_bytecode,
+        &proxy_bytecode,
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
     log::info!("Waiting for pda_spend_proxy deploy block");
