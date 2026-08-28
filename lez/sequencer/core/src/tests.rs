@@ -3703,31 +3703,148 @@ fn deploy_targets(bytecode: &[u8]) -> (AccountId, Vec<AccountId>) {
     )
 }
 
+/// Builds a single-transaction Deploy covering the whole of `bytecode`: `first_segment: 0`,
+/// declared `image_id`/`segment_count` derived honestly from the real bytes, no signer required
+/// (verified immediately against the real bytes by `execute_deploy`, not trusted).
 fn deploy_transaction(
     header: AccountId,
     segments: &[AccountId],
     bytecode: &[u8],
 ) -> PublicTransaction {
-    // Falls back to sending `bytecode` through unmodified when it isn't a well-formed two-ELF
-    // `ProgramBinary` (e.g. deliberately-garbage test input) — extraction is best-effort here so
-    // malformed input still reaches `execute_deploy`'s own rejection path, rather than the test
-    // helper itself panicking before the real system ever sees it.
+    // Falls back to sending `bytecode` through unmodified, and a dummy `image_id`, when it isn't
+    // a well-formed two-ELF `ProgramBinary` (e.g. deliberately-garbage test input) — extraction
+    // and `compute_image_id` are best-effort here so malformed input still reaches
+    // `execute_deploy`'s own rejection path, rather than this helper itself panicking first.
     let user_elf =
         program_loader_core::extract_user_elf(bytecode).unwrap_or_else(|_| bytecode.to_vec());
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap_or([0; 8]);
+    let segment_count = u32::try_from(segments.len()).unwrap();
+    deploy_batch_transaction(
+        header,
+        segments,
+        &user_elf,
+        image_id,
+        segment_count,
+        0,
+        AccountId::default(),
+        &[],
+        0,
+    )
+}
+
+/// Builds one transaction covering an arbitrary contiguous segment range of a (possibly
+/// multi-transaction) deploy. `signers` is the raw witness set — independent of what
+/// `update_auth` declares, so tests can exercise "declared but not signed" and "signed by the
+/// wrong key" alongside the happy path. `nonce` is every signer's current on-chain nonce — every
+/// signer here is at most a single reused `update_auth` key across a test, so one shared value is
+/// enough; callers reusing the same key across multiple transactions must bump it themselves
+/// (signing increments a signer's nonce regardless of whether the program writes to it).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test helper — grouping args would obscure intent"
+)]
+fn deploy_batch_transaction(
+    header: AccountId,
+    batch_segments: &[AccountId],
+    batch_user_elf: &[u8],
+    image_id: ProgramId,
+    segment_count: u32,
+    first_segment: u32,
+    update_auth: AccountId,
+    signers: &[&PrivateKey],
+    nonce: u128,
+) -> PublicTransaction {
+    let is_complete =
+        first_segment == 0 && u32::try_from(batch_segments.len()).unwrap() == segment_count;
     let mut account_ids = vec![header];
-    account_ids.extend_from_slice(segments);
+    if !is_complete {
+        account_ids.push(update_auth);
+    }
+    account_ids.extend_from_slice(batch_segments);
+    let nonces = signers.iter().map(|_| Nonce(nonce)).collect();
     let message = lee::public_transaction::Message::try_new(
         PROGRAM_LOADER_ACCOUNT_ID,
         account_ids,
-        vec![],
+        nonces,
         program_loader_core::Instruction::Deploy {
-            update_auth: AccountId::default(),
+            image_id,
+            segment_count,
+            first_segment,
+            update_auth,
         },
     )
     .unwrap()
-    .with_raw_payload(user_elf);
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+    .with_raw_payload(batch_user_elf.to_vec());
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, signers);
     PublicTransaction::new(message, witness_set)
+}
+
+/// Builds the full sequence of transactions a real multi-transaction deployer would send,
+/// partitioning `bytecode`'s segments per `batch_sizes` (in segments, not bytes). `update_auth`
+/// must be the `AccountId` corresponding to `signer`.
+fn deploy_transactions(
+    bytecode: &[u8],
+    batch_sizes: &[usize],
+    update_auth: AccountId,
+    signer: &PrivateKey,
+) -> Vec<PublicTransaction> {
+    let user_elf = program_loader_core::extract_user_elf(bytecode).unwrap();
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
+    let segment_count = program_loader_core::segment_count_for(&user_elf);
+    assert_eq!(
+        batch_sizes.iter().sum::<usize>(),
+        usize::try_from(segment_count).unwrap(),
+        "batch_sizes must cover exactly segment_count segments"
+    );
+
+    let mut first_segment = 0_u32;
+    let mut byte_offset = 0_usize;
+    let mut transactions = Vec::with_capacity(batch_sizes.len());
+    for (nonce, &batch_len) in batch_sizes.iter().enumerate() {
+        let batch_segments: Vec<AccountId> = (0..batch_len)
+            .map(|i| {
+                let segment_number = first_segment
+                    .checked_add(u32::try_from(i).unwrap())
+                    .unwrap();
+                program_loader_core::segment_account_id(
+                    PROGRAM_LOADER_ACCOUNT_ID,
+                    image_id,
+                    segment_number,
+                    update_auth,
+                )
+            })
+            .collect();
+        let header = program_loader_core::header_account_id(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            image_id,
+            0,
+            update_auth,
+        );
+        let batch_byte_len = batch_len
+            .checked_mul(program_loader_core::MAX_SEGMENT_DATA_LEN)
+            .unwrap()
+            .min(user_elf.len().checked_sub(byte_offset).unwrap());
+        let batch_end = byte_offset.checked_add(batch_byte_len).unwrap();
+        let batch_user_elf = &user_elf[byte_offset..batch_end];
+
+        transactions.push(deploy_batch_transaction(
+            header,
+            &batch_segments,
+            batch_user_elf,
+            image_id,
+            segment_count,
+            first_segment,
+            update_auth,
+            &[signer],
+            u128::try_from(nonce).unwrap(),
+        ));
+
+        first_segment = first_segment
+            .checked_add(u32::try_from(batch_len).unwrap())
+            .unwrap();
+        byte_offset = batch_end;
+    }
+    transactions
 }
 
 #[test]
@@ -3874,6 +3991,8 @@ fn loader_rejects_wrong_number_of_accounts() {
     let mut state = V03State::new();
 
     let bytecode = test_programs::claimer().elf().to_vec();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
     let (header, segments) = deploy_targets(&bytecode);
     let extra = AccountId::new([9; 32]);
 
@@ -3886,11 +4005,14 @@ fn loader_rejects_wrong_number_of_accounts() {
         account_ids,
         vec![],
         program_loader_core::Instruction::Deploy {
+            image_id,
+            segment_count: u32::try_from(segments.len()).unwrap(),
+            first_segment: 0,
             update_auth: AccountId::default(),
         },
     )
     .unwrap()
-    .with_raw_payload(bytecode);
+    .with_raw_payload(user_elf);
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -3899,6 +4021,385 @@ fn loader_rejects_wrong_number_of_accounts() {
     assert!(
         result.is_err(),
         "Deploying with the wrong number of accounts should fail, but got: {result:?}"
+    );
+}
+
+#[test]
+fn loader_deploys_program_across_multiple_transactions() {
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
+    let segment_count = program_loader_core::segment_count_for(&user_elf);
+    assert!(
+        segment_count >= 2,
+        "test assumes claimer spans multiple segments"
+    );
+
+    let key = PrivateKey::try_new([11; 32]).unwrap();
+    let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
+    let header =
+        program_loader_core::header_account_id(PROGRAM_LOADER_ACCOUNT_ID, image_id, 0, update_auth);
+    let segment_ids: Vec<AccountId> = (0..segment_count)
+        .map(|i| {
+            program_loader_core::segment_account_id(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                image_id,
+                i,
+                update_auth,
+            )
+        })
+        .collect();
+
+    let remaining_segments = usize::try_from(segment_count.checked_sub(1).unwrap()).unwrap();
+    let txs = deploy_transactions(&bytecode, &[1, remaining_segments], update_auth, &key);
+    assert_eq!(txs.len(), 2);
+    for (i, tx) in txs.into_iter().enumerate() {
+        state
+            .transition_from_public_transaction(&tx, u64::try_from(i + 1).unwrap(), 0)
+            .unwrap_or_else(|e| panic!("batch {i} should succeed: {e:?}"));
+    }
+
+    let (deployed_image_id, reconstructed) = state
+        .get_program(header)
+        .unwrap()
+        .expect("both batches landed, program should be complete");
+    assert_eq!(deployed_image_id, image_id);
+    let deployed_header = state.get_account_by_id(header);
+    let program_data = program_loader_core::ProgramData::try_from(&deployed_header.data).unwrap();
+    assert_eq!(program_data.update_auth, update_auth);
+
+    let mut segments_concatenated = Vec::new();
+    for &segment in &segment_ids {
+        segments_concatenated.extend_from_slice(&state.get_account_by_id(segment).data);
+    }
+    assert_eq!(segments_concatenated, user_elf);
+    assert_eq!(
+        reconstructed,
+        program_loader_core::reconstruct_program_binary(&user_elf)
+    );
+}
+
+#[test]
+fn loader_deploy_batches_can_land_out_of_order() {
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
+    let segment_count = program_loader_core::segment_count_for(&user_elf);
+    assert!(
+        segment_count >= 2,
+        "test assumes claimer spans multiple segments"
+    );
+
+    let key = PrivateKey::try_new([12; 32]).unwrap();
+    let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
+    let header =
+        program_loader_core::header_account_id(PROGRAM_LOADER_ACCOUNT_ID, image_id, 0, update_auth);
+    let segment_ids: Vec<AccountId> = (0..segment_count)
+        .map(|i| {
+            program_loader_core::segment_account_id(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                image_id,
+                i,
+                update_auth,
+            )
+        })
+        .collect();
+
+    // Batch covering segments [1..segment_count) lands first.
+    let tail_offset = program_loader_core::MAX_SEGMENT_DATA_LEN.min(user_elf.len());
+    let tx_tail = deploy_batch_transaction(
+        header,
+        &segment_ids[1..],
+        &user_elf[tail_offset..],
+        image_id,
+        segment_count,
+        1,
+        update_auth,
+        &[&key],
+        0,
+    );
+    state
+        .transition_from_public_transaction(&tx_tail, 1, 0)
+        .expect("a later batch landing first should still succeed");
+
+    assert_eq!(
+        state.get_program(header).unwrap(),
+        None,
+        "program is incomplete until segment 0 lands too"
+    );
+
+    // Batch covering segment [0] lands second, completing the deploy.
+    let tx_head = deploy_batch_transaction(
+        header,
+        &segment_ids[..1],
+        &user_elf[..tail_offset],
+        image_id,
+        segment_count,
+        0,
+        update_auth,
+        &[&key],
+        1,
+    );
+    state
+        .transition_from_public_transaction(&tx_head, 2, 0)
+        .expect("completing batch should succeed");
+
+    assert!(state.get_program(header).unwrap().is_some());
+}
+
+#[test]
+fn loader_get_program_returns_none_for_abandoned_multi_tx_deploy() {
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
+    let segment_count = program_loader_core::segment_count_for(&user_elf);
+    assert!(
+        segment_count >= 2,
+        "test assumes claimer spans multiple segments"
+    );
+
+    let key = PrivateKey::try_new([13; 32]).unwrap();
+    let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    let remaining_segments = usize::try_from(segment_count.checked_sub(1).unwrap()).unwrap();
+    let txs = deploy_transactions(&bytecode, &[1, remaining_segments], update_auth, &key);
+    let header = {
+        let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
+        program_loader_core::header_account_id(PROGRAM_LOADER_ACCOUNT_ID, image_id, 0, update_auth)
+    };
+
+    // Only the first batch ever lands — the deployer abandons the rest of the sequence.
+    state
+        .transition_from_public_transaction(&txs[0], 1, 0)
+        .expect("first batch should succeed on its own");
+
+    assert_eq!(
+        state.get_program(header).unwrap(),
+        None,
+        "an abandoned multi-tx deploy must not be mistaken for a complete program"
+    );
+}
+
+#[test]
+fn loader_rejects_a_partial_deploy_batch_with_default_update_auth() {
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
+    let segment_count = program_loader_core::segment_count_for(&user_elf);
+    assert!(
+        segment_count >= 2,
+        "test assumes claimer spans multiple segments"
+    );
+
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
+    let update_auth = AccountId::default();
+    let header =
+        program_loader_core::header_account_id(PROGRAM_LOADER_ACCOUNT_ID, image_id, 0, update_auth);
+    let segment0 = program_loader_core::segment_account_id(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+
+    // Genuinely partial (first_segment 0, but fewer segments than declared segment_count), and
+    // no update_auth to fall back on — this is exactly the griefing shape the account list
+    // conditional exists to block.
+    let tx = deploy_batch_transaction(
+        header,
+        &[segment0],
+        &user_elf[..program_loader_core::MAX_SEGMENT_DATA_LEN.min(user_elf.len())],
+        image_id,
+        segment_count,
+        0,
+        update_auth,
+        &[],
+        0,
+    );
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        result.is_err(),
+        "a partial Deploy with a default update_auth should fail, but got: {result:?}"
+    );
+}
+
+#[test]
+fn loader_rejects_a_partial_deploy_batch_without_a_valid_signature() {
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
+    let segment_count = program_loader_core::segment_count_for(&user_elf);
+    assert!(
+        segment_count >= 2,
+        "test assumes claimer spans multiple segments"
+    );
+
+    let key = PrivateKey::try_new([14; 32]).unwrap();
+    let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
+    let header =
+        program_loader_core::header_account_id(PROGRAM_LOADER_ACCOUNT_ID, image_id, 0, update_auth);
+    let segment0 = program_loader_core::segment_account_id(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+
+    // update_auth is real and declared correctly, but the transaction carries no witness for it.
+    let tx = deploy_batch_transaction(
+        header,
+        &[segment0],
+        &user_elf[..program_loader_core::MAX_SEGMENT_DATA_LEN.min(user_elf.len())],
+        image_id,
+        segment_count,
+        0,
+        update_auth,
+        &[],
+        0,
+    );
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        result.is_err(),
+        "a partial Deploy without update_auth's signature should fail, but got: {result:?}"
+    );
+}
+
+#[test]
+fn loader_rejects_header_racing_with_a_different_segment_count() {
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
+    let segment_count = program_loader_core::segment_count_for(&user_elf);
+    assert!(
+        segment_count >= 2,
+        "test assumes claimer spans multiple segments"
+    );
+
+    let key = PrivateKey::try_new([15; 32]).unwrap();
+    let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
+    // The header PDA depends on (image_id, update_auth) only, not on segment_count — verified
+    // separately by header_pda_is_independent_of_segment_count in loader_core.
+    let header =
+        program_loader_core::header_account_id(PROGRAM_LOADER_ACCOUNT_ID, image_id, 0, update_auth);
+    let segment0 = program_loader_core::segment_account_id(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+    let segment1 = program_loader_core::segment_account_id(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        image_id,
+        1,
+        update_auth,
+    );
+
+    let tx1 = deploy_batch_transaction(
+        header,
+        &[segment0],
+        &user_elf[..program_loader_core::MAX_SEGMENT_DATA_LEN.min(user_elf.len())],
+        image_id,
+        segment_count,
+        0,
+        update_auth,
+        &[&key],
+        0,
+    );
+    state
+        .transition_from_public_transaction(&tx1, 1, 0)
+        .expect("first batch should claim the header with segment_count segments declared");
+
+    // Same image_id and update_auth (same header address), but a different declared
+    // segment_count, targeting a fresh segment slot so only the header check is in play.
+    let tx2 = deploy_batch_transaction(
+        header,
+        &[segment1],
+        &user_elf[program_loader_core::MAX_SEGMENT_DATA_LEN.min(user_elf.len())..],
+        image_id,
+        segment_count + 1,
+        1,
+        update_auth,
+        &[&key],
+        1,
+    );
+    let result = state.transition_from_public_transaction(&tx2, 2, 0);
+
+    assert!(
+        result.is_err(),
+        "racing the same header with a different declared segment_count should fail, but got: {result:?}"
+    );
+}
+
+#[test]
+fn loader_rejects_overlapping_segment_rewrite() {
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let user_elf = program_loader_core::extract_user_elf(&bytecode).unwrap();
+    let segment_count = program_loader_core::segment_count_for(&user_elf);
+    assert!(
+        segment_count >= 2,
+        "test assumes claimer spans multiple segments"
+    );
+
+    let key = PrivateKey::try_new([16; 32]).unwrap();
+    let update_auth = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let image_id = program_loader_core::compute_image_id(&user_elf).unwrap();
+    let header =
+        program_loader_core::header_account_id(PROGRAM_LOADER_ACCOUNT_ID, image_id, 0, update_auth);
+    let segment0 = program_loader_core::segment_account_id(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        image_id,
+        0,
+        update_auth,
+    );
+
+    let batch_bytes = &user_elf[..program_loader_core::MAX_SEGMENT_DATA_LEN.min(user_elf.len())];
+    let tx1 = deploy_batch_transaction(
+        header,
+        &[segment0],
+        batch_bytes,
+        image_id,
+        segment_count,
+        0,
+        update_auth,
+        &[&key],
+        0,
+    );
+    state
+        .transition_from_public_transaction(&tx1, 1, 0)
+        .expect("first write to segment 0 should succeed");
+
+    // Same segment_count and update_auth (header re-claim is idempotently fine), but segment 0
+    // was already written — must be rejected regardless of the header being otherwise consistent.
+    let tx2 = deploy_batch_transaction(
+        header,
+        &[segment0],
+        batch_bytes,
+        image_id,
+        segment_count,
+        0,
+        update_auth,
+        &[&key],
+        1,
+    );
+    let result = state.transition_from_public_transaction(&tx2, 2, 0);
+
+    assert!(
+        result.is_err(),
+        "rewriting an already-written segment should fail, but got: {result:?}"
     );
 }
 
@@ -3919,6 +4420,9 @@ fn loader_deploys_program_via_chained_call() {
 
     let inner_instruction_data =
         lee::program::Program::serialize_instruction(program_loader_core::Instruction::Deploy {
+            image_id,
+            segment_count: u32::try_from(segments.len()).unwrap(),
+            first_segment: 0,
             update_auth: AccountId::default(),
         })
         .unwrap();

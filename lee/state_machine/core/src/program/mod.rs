@@ -63,6 +63,13 @@ pub struct ProgramData {
     pub image_id: ProgramId,
     /// How many bytecode segment accounts follow, so a reader knows how many to fetch without
     /// probing (see `program_loader_core::segment_account_id`).
+    ///
+    /// Caller-declared on every `Deploy` transaction (a transaction covering only part of the
+    /// program can't derive it from its own fragment), so this is only trustworthy once
+    /// `V03State::get_program` has cross-checked every segment's bytes actually reconstruct to
+    /// `image_id` — not something a single transaction's own execution verifies for a partial
+    /// batch. See `program_loader_core::execute_deploy` for exactly what is and isn't checked
+    /// when.
     pub segment_count: u32,
     pub update_auth: AccountId,
 }
