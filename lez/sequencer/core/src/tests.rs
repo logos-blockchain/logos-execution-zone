@@ -3906,10 +3906,7 @@ fn loader_deploys_program_via_chained_call() {
         forwarder.deployed_account_id(),
         vec![header, segment],
         vec![],
-        (
-            RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID,
-            inner_instruction_data,
-        ),
+        (PROGRAM_LOADER_ACCOUNT_ID, inner_instruction_data),
     )
     .unwrap()
     .with_raw_payload(user_elf);
