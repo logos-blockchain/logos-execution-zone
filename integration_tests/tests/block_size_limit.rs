@@ -10,9 +10,9 @@ use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::SequencerPartialConfig, deploy_program_transactions,
-    encoded_tx_size, new_segment_transaction,
+    encoded_tx_size,
 };
-use lee::PrivateKey;
+use lee::{AccountId, PrivateKey};
 use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
@@ -22,10 +22,20 @@ use tokio::test;
 
 #[test]
 async fn reject_oversized_transaction() -> Result<()> {
+    // Unsigned: the size check this test exercises runs before any signature/authorization
+    // check, so there's nothing to gain from a real key here.
     let bytecode = test_programs::claimer().elf().to_vec();
-    let key = PrivateKey::try_new([1; 32]).unwrap();
-    let (_segment, tx) = new_segment_transaction(bytecode, &key);
-    let tx = LeeTransaction::Public(tx);
+    let message = lee::public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        vec![AccountId::new([1; 32])],
+        vec![],
+        program_loader_core::Instruction::NewSegment {
+            bytecode,
+            next_segment: None,
+        },
+    )?;
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set));
     let tx_size = encoded_tx_size(&tx);
 
     let ctx = MultiZoneTestContextBuilder::default()
@@ -64,14 +74,23 @@ async fn reject_oversized_transaction() -> Result<()> {
 
 #[test]
 async fn accept_transaction_within_limit() -> Result<()> {
-    // One real segment-sized chunk of a guest binary — a whole real program no longer fits in
-    // one segment under the current cap, but this test only cares about ordinary transaction
-    // acceptance, not about a complete, dispatchable deploy.
+    // One real segment-sized chunk of a guest binary: a whole real program no longer fits in one
+    // segment under the current cap. Unsigned, like `reject_oversized_transaction` above —
+    // `send_transaction`'s Ok/Err here reflects size and signature-shape checks only, not
+    // authorization, which is only checked at actual state execution.
     let bytecode =
         test_programs::claimer().elf()[..program_loader_core::MAX_SEGMENT_DATA_LEN].to_vec();
-    let key = PrivateKey::try_new([2; 32]).unwrap();
-    let (_segment, tx) = new_segment_transaction(bytecode, &key);
-    let tx = LeeTransaction::Public(tx);
+    let message = lee::public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        vec![AccountId::new([2; 32])],
+        vec![],
+        program_loader_core::Instruction::NewSegment {
+            bytecode,
+            next_segment: None,
+        },
+    )?;
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set));
     let tx_size = encoded_tx_size(&tx);
 
     let ctx = MultiZoneTestContextBuilder::default()
