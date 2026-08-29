@@ -57,6 +57,32 @@ pub const SUPPRESS_VERBOSE_PRINTS: &str = "SUPPRESS_VERBOSE_PRINTS";
 
 pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
 
+const SYNC_PERSIST_CHECKPOINT_BLOCKS: usize = 100;
+
+#[derive(Default)]
+struct SyncPersistenceCheckpoint {
+    blocks_since_last_persist: usize,
+}
+
+impl SyncPersistenceCheckpoint {
+    const fn record_block(&mut self) -> bool {
+        self.blocks_since_last_persist = self
+            .blocks_since_last_persist
+            .checked_add(1)
+            .expect("checkpoint counter is reset before overflow");
+        if self.blocks_since_last_persist < SYNC_PERSIST_CHECKPOINT_BLOCKS {
+            return false;
+        }
+
+        self.blocks_since_last_persist = 0;
+        true
+    }
+
+    const fn needs_final_persist(&self) -> bool {
+        self.blocks_since_last_persist > 0
+    }
+}
+
 pub enum AccDecodeData {
     Skip,
     Decode(lee_core::SharedSecretKey, AccountId),
@@ -927,6 +953,7 @@ impl WalletCore {
         // Get the latest nullifiers for all owned accounts.
         let mut index = self.storage.key_chain().build_latest_nullifier_index();
         let bar = indicatif::ProgressBar::new(num_of_blocks);
+        let mut checkpoint = SyncPersistenceCheckpoint::default();
         while let Some(block) = blocks.try_next().await? {
             for tx in block.body.transactions {
                 let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
@@ -941,8 +968,16 @@ impl WalletCore {
             }
 
             self.storage.set_last_synced_block(block.header.block_id);
-            self.store_persistent_data()?;
+            // Keep the account state and its watermark durable together. If syncing
+            // fails or is cancelled between checkpoints, reopening replays only the
+            // unpersisted tail instead of trusting a partial update.
+            if checkpoint.record_block() {
+                self.store_persistent_data()?;
+            }
             bar.inc(1);
+        }
+        if checkpoint.needs_final_persist() {
+            self.store_persistent_data()?;
         }
         bar.finish();
 
@@ -1095,6 +1130,8 @@ mod tests {
 
     use bip39::Mnemonic;
 
+    use super::SyncPersistenceCheckpoint;
+
     #[test]
     fn mnemonic_roundtrip() {
         let mnemonic =
@@ -1109,5 +1146,20 @@ mod tests {
         let mn_ret = Mnemonic::from_str(mn_string).unwrap();
 
         assert_eq!(mnemonic, mn_ret);
+    }
+
+    #[test]
+    fn sync_persistence_checkpoints_full_chunks_and_final_tail() {
+        let mut checkpoint = SyncPersistenceCheckpoint::default();
+        let mut persisted_after = Vec::new();
+
+        for block in 1..=201 {
+            if checkpoint.record_block() {
+                persisted_after.push(block);
+            }
+        }
+
+        assert_eq!(persisted_after, vec![100, 200]);
+        assert!(checkpoint.needs_final_persist());
     }
 }
