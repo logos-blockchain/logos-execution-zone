@@ -570,9 +570,11 @@ fn load_state(
             .and_then(|balance| balance.checked_sub(state.counterparty_fees_burned))
             .ok_or("escrow fee accounting underflow")?
     };
-    assert_eq!(
-        escrow.account.balance, deposits,
-        "escrow balance does not match deposits and prepaid fee burns"
+    // Anyone can transfer funds to the PDA. Treat unsolicited surplus as inert so it cannot
+    // block protocol progress, while still rejecting any deficit in the accounted deposits.
+    assert!(
+        escrow.account.balance >= deposits,
+        "escrow balance is below deposits minus prepaid fee burns"
     );
     Ok(state)
 }
@@ -671,4 +673,73 @@ fn verify_proof(public_key: [u8; 32], tx_hash: [u8; 32], proof: &MantleSignature
 fn settle_completed(state: &mut BondState) {
     state.phase = Phase::Settled;
     state.settlement = Some(Settlement::Completed);
+}
+
+#[cfg(test)]
+mod tests {
+    use cacp_bond_core::{BondAgreement, AGREEMENT_VERSION};
+    use ed25519_dalek::SigningKey;
+    use lee_core::account::{Account, AccountId};
+
+    use super::*;
+
+    fn state_accounts(
+        escrow_balance: u128,
+    ) -> ([u32; 8], AccountWithMetadata, AccountWithMetadata) {
+        let program_id = [7; 8];
+        let agreement = BondAgreement {
+            version: AGREEMENT_VERSION,
+            initiator: AccountId::new([1; 32]),
+            counterparty: AccountId::new([2; 32]),
+            tx_hash: [3; 32],
+            initiator_mantle_key: SigningKey::from_bytes(&[4; 32]).verifying_key().to_bytes(),
+            counterparty_mantle_key: SigningKey::from_bytes(&[5; 32]).verifying_key().to_bytes(),
+            stake_amount: 1_000,
+            challenge_fee: 100,
+            response_fee: 100,
+            response_window_blocks: 3,
+        };
+        let agreement_id = agreement.id(program_id);
+        let state = BondState {
+            agreement_id,
+            agreement,
+            expires_at_block: 3,
+            initiator_fees_burned: 0,
+            counterparty_fees_burned: 0,
+            phase: Phase::AwaitingAccept,
+            settlement: None,
+        };
+        let state_meta = AccountWithMetadata {
+            account: Account {
+                data: state.to_bytes().try_into().expect("test state fits"),
+                ..Account::default()
+            },
+            is_authorized: false,
+            account_id: state_account_id(program_id, &agreement_id),
+        };
+        let escrow = AccountWithMetadata {
+            account: Account {
+                balance: escrow_balance,
+                ..Account::default()
+            },
+            is_authorized: false,
+            account_id: escrow_account_id(program_id, &agreement_id),
+        };
+        (program_id, state_meta, escrow)
+    }
+
+    #[test]
+    fn unsolicited_escrow_surplus_does_not_block_the_agreement() {
+        let (program_id, state_meta, escrow) = state_accounts(2_401);
+
+        assert!(load_state(program_id, &state_meta, &escrow).is_ok());
+    }
+
+    #[test]
+    #[should_panic(expected = "escrow balance is below deposits minus prepaid fee burns")]
+    fn underfunded_escrow_is_still_rejected() {
+        let (program_id, state_meta, escrow) = state_accounts(2_399);
+
+        let _ = load_state(program_id, &state_meta, &escrow);
+    }
 }
