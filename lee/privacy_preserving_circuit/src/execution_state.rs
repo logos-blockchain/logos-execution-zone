@@ -159,13 +159,11 @@ impl ExecutionState {
                 "Mismatched instruction data between chained call and program output"
             );
 
-            // The caller only names accounts; the protocol delivers them. The callee's journal is
-            // the only evidence of what it ran on, so it must account for exactly the named
-            // accounts, in order. Without this, a prover can run an honest callee on accounts its
-            // caller never named and redirect the call's effects. Only a real caller->callee edge
-            // is bound; the synthetic bootstrap call is built from the first output itself.
+            // Check accounts used are exactly those the call was performed with.
             assert!(
+                // If the call is top-level, nothing to check.
                 caller_data.program_id.is_none()
+                    // Else, match.
                     || pre_states_match_accounts(
                         &chained_call.accounts,
                         &program_output.pre_states

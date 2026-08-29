@@ -144,8 +144,8 @@ pub enum InvalidProgramBehaviorError {
     UnknownChainedCallAccount { account_id: AccountId },
 
     #[error(
-        "Program {program_id:?} ran on accounts its caller did not name: a chained call's \
-         accounts must match the callee's journalled pre_states exactly, in order"
+        "Program {program_id:?} ran on accounts its caller either did not name or did not name \
+         in appropriate order."
     )]
     ChainedCallAccountsMismatch { program_id: ProgramId },
 }

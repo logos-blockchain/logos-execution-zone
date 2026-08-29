@@ -145,13 +145,11 @@ impl ValidatedStateDiff {
                 chained_call.program_id, program_output
             );
 
-            // The caller only names accounts; the protocol delivers them. The callee's journal is
-            // the only evidence of what it ran on, so it must account for exactly the named
-            // accounts, in order. Only a real caller->callee edge is bound: the synthetic
-            // top-level call's accounts are the transaction's own declared accounts, already
-            // covered by `DeclaredAccountMissingFromOutput`.
+            // Check accounts used are exactly those the call was performed with.
             ensure!(
+                // If the call is top-level, nothing to check.
                 caller_data.program_id.is_none()
+                    // Else, match.
                     || pre_states_match_accounts(
                         &chained_call.accounts,
                         &program_output.pre_states
