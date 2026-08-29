@@ -158,6 +158,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         config: &SequencerConfig,
         store: &SequencerStore<S>,
         stored_head_state: &lee::V03State,
+        extra_genesis_programs: &[lee::program::Program],
     ) -> ChainState {
         let final_snapshot = store
             .get_final_snapshot()
@@ -166,7 +167,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let (final_state, final_tip) = match final_snapshot {
             Some((state, meta)) => (state, Some(Tip::from(meta))),
             // Nothing finalized yet: replay the whole stored chain.
-            None => (build_initial_state(config), None),
+            None => (build_initial_state(config, extra_genesis_programs), None),
         };
         let boundary = final_tip.as_ref().map_or(0, |tip| tip.block_id);
 
@@ -204,6 +205,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         signing_key: &lee::PrivateKey,
         bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
         config: &SequencerConfig,
+        extra_genesis_programs: &[lee::program::Program],
     ) {
         let first_block_id = storage_ref
             .ask(GetFirstBlockId)
@@ -213,7 +215,12 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             return;
         }
 
-        let (block, state) = genesis_block_and_state(signing_key, bootstrap_sequencer_key, config);
+        let (block, state) = genesis_block_and_state(
+            signing_key,
+            bootstrap_sequencer_key,
+            config,
+            extra_genesis_programs,
+        );
         storage_ref
             .ask(RecordNewBlock {
                 block,
@@ -234,6 +241,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     pub async fn start_from_config(
         config: SequencerConfig,
         storage_ref: ActorRef<S>,
+        extra_genesis_programs: Vec<lee::program::Program>,
     ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
         sequencer_core_metrics::init();
 
@@ -268,8 +276,14 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         }
         let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-        Self::seed_genesis_if_absent(&storage_ref, &signing_key, bootstrap_sequencer_key, &config)
-            .await;
+        Self::seed_genesis_if_absent(
+            &storage_ref,
+            &signing_key,
+            bootstrap_sequencer_key,
+            &config,
+            &extra_genesis_programs,
+        )
+        .await;
 
         let store = SequencerStore::new(storage_ref, signing_key)
             .await
@@ -287,7 +301,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         );
 
         let chain = Arc::new(Mutex::new(
-            Self::restore_chain_state(&config, &store, &state).await,
+            Self::restore_chain_state(&config, &store, &state, &extra_genesis_programs).await,
         ));
 
         let initial_checkpoint = store
@@ -1774,8 +1788,10 @@ fn genesis_block_and_state(
     signing_key: &lee::PrivateKey,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     config: &SequencerConfig,
+    extra_genesis_programs: &[lee::program::Program],
 ) -> (Block, lee::V03State) {
-    let (genesis_state, genesis_txs) = build_genesis_state(config, bootstrap_sequencer_key);
+    let (genesis_state, genesis_txs) =
+        build_genesis_state(config, bootstrap_sequencer_key, extra_genesis_programs);
     let genesis_block = HashableBlockData {
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
@@ -1791,7 +1807,10 @@ fn genesis_block_and_state(
 /// the only accounts seeded outside any transaction. Everything else, including
 /// the bootstrap sequencer's own stake, is applied as a genesis transaction in
 /// [`build_genesis_state`] so followers replay it instead of guessing it.
-fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
+fn build_initial_state(
+    config: &SequencerConfig,
+    extra_genesis_programs: &[lee::program::Program],
+) -> lee::V03State {
     #[cfg(not(feature = "testnet"))]
     let base = testnet_initial_state::initial_state();
 
@@ -1804,6 +1823,7 @@ fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
     let holdings = bridge_lock_holdings(&config.genesis)
         .map(|(holder, amount)| cross_zone::build_holding_account(holder, amount));
     base.with_public_accounts(holdings)
+        .with_programs(extra_genesis_programs.iter().cloned())
 }
 
 /// Builds the initial genesis state from [`build_initial_state`] plus configured
@@ -1813,8 +1833,9 @@ fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
 fn build_genesis_state(
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
+    extra_genesis_programs: &[lee::program::Program],
 ) -> (lee::V03State, Vec<LeeTransaction>) {
-    let mut state = build_initial_state(config);
+    let mut state = build_initial_state(config, extra_genesis_programs);
 
     // Fingerprint the directly-seeded state, before genesis txs, so it matches the indexer's.
     log::info!(

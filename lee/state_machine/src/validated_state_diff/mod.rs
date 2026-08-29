@@ -121,26 +121,47 @@ impl ValidatedStateDiff {
             );
             let mut program_output = if chained_call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID
             {
-                // Runs `Deploy` as native Rust instead of interpreting a guest ELF — see
-                // `PROGRAM_LOADER_ACCOUNT_ID`'s doc comment for why.
-                // `execute_deploy` validates its input via `assert!`/`.expect(...)`, exactly
+                // Runs the program loader's instructions as native Rust instead of interpreting
+                // a guest ELF — see `PROGRAM_LOADER_ACCOUNT_ID`'s doc comment for why. Each
+                // `execute_*` function validates its input via `assert!`/`.expect(...)`, exactly
                 // like every guest program in this codebase, relying here on `catch_unwind` to
                 // play the same role the zkVM executor plays for a real guest: converting a
                 // rejected input into a graceful `Err` instead of unwinding past this call.
-                let program_loader_core::Instruction::Deploy { bytecode } =
+                let instruction: program_loader_core::Instruction =
                     borsh::from_slice(&chained_call.instruction_data).map_err(|e| {
-                        LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
+                        LeeError::InvalidInput(format!("invalid program_loader instruction: {e}"))
                     })?;
                 let deploy_pre_states = chained_call.pre_states.clone();
-                let post_states = std::panic::catch_unwind(|| {
-                    program_loader_core::execute_deploy(
-                        chained_call.program_account_id,
+                let post_states = std::panic::catch_unwind(|| match instruction {
+                    program_loader_core::Instruction::NewSegment {
+                        bytecode,
+                        next_segment,
+                    } => program_loader_core::execute_new_segment(
                         deploy_pre_states,
                         bytecode,
-                    )
+                        next_segment,
+                    ),
+                    program_loader_core::Instruction::UploadHeader {
+                        first_segment,
+                        immutable,
+                    } => program_loader_core::execute_upload_header(
+                        deploy_pre_states,
+                        first_segment,
+                        immutable,
+                    ),
+                    program_loader_core::Instruction::UpdateHeader {
+                        first_segment,
+                        immutable,
+                    } => program_loader_core::execute_update_header(
+                        deploy_pre_states,
+                        first_segment,
+                        immutable,
+                    ),
                 })
                 .map_err(|_panic_payload| {
-                    LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
+                    LeeError::ProgramExecutionFailed(
+                        "program_loader rejected the given input".into(),
+                    )
                 })?;
                 ProgramOutput::new(
                     chained_call.program_account_id,

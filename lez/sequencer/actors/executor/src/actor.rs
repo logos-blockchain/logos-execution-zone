@@ -63,12 +63,17 @@ impl<BP: BlockPublisherTrait + Send + 'static, S: StorageActorTrait> ExecutorAct
     pub fn new(
         config: SequencerConfig,
         storage_ref: ActorRef<S>,
+        extra_genesis_programs: Vec<lee::program::Program>,
     ) -> impl Future<Output = Self> + Send + 'static {
         async move {
             // TODO: Leave storage_ref as a top-level field only in `ExecutorActor`,
             // while moving `SequencerCore` code into this actor.
-            let (sequencer, mempool_handle) =
-                SequencerCore::<BP, S>::start_from_config(config, storage_ref.clone()).await;
+            let (sequencer, mempool_handle) = SequencerCore::<BP, S>::start_from_config(
+                config,
+                storage_ref.clone(),
+                extra_genesis_programs,
+            )
+            .await;
 
             let driver_cancellation = sequencer.block_publisher().driver_cancellation();
             let background_tasks = sequencer.background_tasks();

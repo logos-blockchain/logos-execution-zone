@@ -492,6 +492,7 @@ impl Drop for TestContext {
 )]
 pub struct ZoneTestContextBuilder {
     genesis_transactions: Option<Vec<GenesisAction>>,
+    extra_genesis_programs: Vec<lee::program::Program>,
     sequencer_partial_config: Option<config::SequencerPartialConfig>,
     follower_sequencer_partial_config: Option<config::SequencerPartialConfig>,
     enable_indexer: bool,
@@ -508,6 +509,7 @@ impl ZoneTestContextBuilder {
     pub fn new(mn_config: MultiNodeTestContextConfig) -> Self {
         Self {
             genesis_transactions: None,
+            extra_genesis_programs: Vec::new(),
             sequencer_partial_config: None,
             follower_sequencer_partial_config: None,
             enable_indexer: true,
@@ -542,6 +544,18 @@ impl ZoneTestContextBuilder {
     #[must_use]
     pub fn with_genesis(mut self, genesis_transactions: Vec<GenesisAction>) -> Self {
         self.genesis_transactions = Some(genesis_transactions);
+        self
+    }
+
+    /// Seed extra test-only programs into genesis (see `SequencerSetup::with_extra_genesis_programs`).
+    /// Implies [`Self::from_scratch`] — the prebuilt dump can't contain an ad hoc test program.
+    #[must_use]
+    pub fn with_extra_genesis_programs(
+        mut self,
+        extra_genesis_programs: Vec<lee::program::Program>,
+    ) -> Self {
+        self.extra_genesis_programs = extra_genesis_programs;
+        self.from_scratch = true;
         self
     }
 
@@ -616,6 +630,7 @@ impl ZoneTestContextBuilder {
     pub async fn build(self, bedrock_addr: SocketAddr) -> Result<TestContextZone> {
         let Self {
             genesis_transactions,
+            extra_genesis_programs,
             sequencer_partial_config,
             follower_sequencer_partial_config,
             enable_indexer,
@@ -694,6 +709,7 @@ impl ZoneTestContextBuilder {
             &initial_public_accounts,
             &initial_private_accounts,
             genesis_transactions.clone(),
+            extra_genesis_programs.clone(),
             config::SEQUENCER_SIGNING_KEY,
             mn_config.bedrock_channel,
             cross_zone_config.clone(),
@@ -733,6 +749,7 @@ impl ZoneTestContextBuilder {
                 &initial_public_accounts,
                 &initial_private_accounts,
                 genesis_transactions.clone(),
+                extra_genesis_programs.clone(),
                 sequencer_key,
                 mn_config.bedrock_channel,
                 cross_zone_config.clone(),
@@ -1082,6 +1099,7 @@ async fn build_sequencer_components(
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     genesis_transactions: Option<Vec<GenesisAction>>,
+    extra_genesis_programs: Vec<lee::program::Program>,
     sequencer_key: [u8; 32],
     bedrock_channel_id: ChannelId,
     cross_zone_config: Option<CrossZoneConfig>,
@@ -1112,6 +1130,7 @@ async fn build_sequencer_components(
     if !use_prebuilt {
         sequencer_setup = sequencer_setup
             .with_genesis(genesis_actions)
+            .with_extra_genesis_programs(extra_genesis_programs)
             .with_bedrock_signing_key(sequencer_key);
     }
     sequencer_setup = sequencer_setup.with_channel_id(bedrock_channel_id);

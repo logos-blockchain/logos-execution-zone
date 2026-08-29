@@ -169,7 +169,7 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let executor = ExecutorActor::spawn(
-        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone()).await,
+        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone(), Vec::new()).await,
     );
 
     storage_ref
@@ -233,7 +233,7 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
 
     let storage_ref = MockStorageActor::spawn(mock_storage);
     let executor = ExecutorActor::spawn(
-        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone()).await,
+        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone(), Vec::new()).await,
     );
 
     let range = (STALLED_FIRST..=STALLED_LAST)

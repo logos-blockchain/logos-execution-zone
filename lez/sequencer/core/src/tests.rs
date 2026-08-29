@@ -13,6 +13,7 @@ use lee::{
     Account, AccountId, Data, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
 };
 use lee_core::{
+    BlockId,
     account::Nonce,
     program::{PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramId},
 };
@@ -94,7 +95,7 @@ async fn start_sequencer(
 ) {
     let storage = StorageActor::new(&config.db_path()).expect("Failed to open database");
     let storage_ref = StorageActor::spawn(storage);
-    SequencerCoreWithMockClients::start_from_config(config, storage_ref).await
+    SequencerCoreWithMockClients::start_from_config(config, storage_ref, Vec::new()).await
 }
 
 /// A follow update carrying nothing, to fill in the fields a test does not
@@ -378,7 +379,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
 
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-    let (genesis_state, genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
+    let (genesis_state, genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key), &[]);
     let genesis_hashable_data = HashableBlockData {
         block_id: 1,
         transactions: genesis_txs,
@@ -1685,16 +1686,65 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let (mut sequencer, mempool_handle) = common_setup().await;
 
     let clock_chain_caller = test_programs::clock_chain_caller();
-    // Deploy the clock_chain_caller test program.
+    // Deploy the clock_chain_caller test program: one signed NewSegment per chunk (tail-to-head),
+    // then a signed UploadHeader — each its own transaction and production turn.
     let bytecode = clock_chain_caller.elf().to_vec();
-    let (clock_chain_caller_header, clock_chain_caller_segment) = deploy_targets(&bytecode);
-    let deploy_tx = LeeTransaction::Public(deploy_transaction(
-        clock_chain_caller_header,
-        clock_chain_caller_segment,
-        bytecode,
+    let chunks: Vec<&[u8]> = bytecode
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    let segment_keys: Vec<PrivateKey> = (0..chunks.len())
+        .map(|i| PrivateKey::try_new([160 + u8::try_from(i).unwrap(); 32]).unwrap())
+        .collect();
+    let segment_ids: Vec<AccountId> = segment_keys
+        .iter()
+        .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
+        .collect();
+    let header_key = PrivateKey::try_new([179; 32]).unwrap();
+    let clock_chain_caller_header = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+
+    for (i, chunk) in chunks.iter().enumerate().rev() {
+        let next_segment = segment_ids.get(i + 1).copied();
+        let mut account_ids = vec![segment_ids[i]];
+        account_ids.extend(next_segment);
+        let segment_message = lee::public_transaction::Message::try_new(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            account_ids,
+            vec![Nonce(0)],
+            program_loader_core::Instruction::NewSegment {
+                bytecode: (*chunk).to_vec(),
+                next_segment,
+            },
+        )
+        .unwrap();
+        let segment_tx = LeeTransaction::Public(PublicTransaction::new(
+            segment_message.clone(),
+            lee::public_transaction::WitnessSet::for_message(&segment_message, &[&segment_keys[i]]),
+        ));
+        mempool_handle
+            .push((TransactionOrigin::User, segment_tx))
+            .await
+            .unwrap();
+        sequencer.run_production_turn().await.unwrap();
+    }
+
+    let mut header_account_ids = vec![clock_chain_caller_header];
+    header_account_ids.extend(segment_ids.iter().copied());
+    let header_message = lee::public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        header_account_ids,
+        vec![Nonce(0)],
+        program_loader_core::Instruction::UploadHeader {
+            first_segment: segment_ids[0],
+            immutable: true,
+        },
+    )
+    .unwrap();
+    let header_tx = LeeTransaction::Public(PublicTransaction::new(
+        header_message.clone(),
+        lee::public_transaction::WitnessSet::for_message(&header_message, &[&header_key]),
     ));
     mempool_handle
-        .push((TransactionOrigin::User, deploy_tx))
+        .push((TransactionOrigin::User, header_tx))
         .await
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
@@ -3615,7 +3665,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let (state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
+    let (state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key), &[]);
 
     let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
     assert_eq!(
@@ -3646,7 +3696,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
 fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let (mut state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
+    let (mut state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key), &[]);
 
     let stake_id = bootstrap_stake_account_id(&config);
     let destination = AccountId::from(&PublicKey::new_from_private_key(
@@ -3687,83 +3737,145 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     );
 }
 
-/// Derives the `(header, segment)` account pair `bytecode` would deploy to.
-fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
-    let image_id: ProgramId = risc0_binfmt::compute_image_id(bytecode).unwrap().into();
-    let header = program_loader_core::header_account_id(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        image_id,
-        0,
-        AccountId::default(),
-    );
-    let segment = program_loader_core::segment_account_id(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        image_id,
-        0,
-        AccountId::default(),
-    );
-    (header, segment)
+/// Uploads `bytecode` as a chunked, tail-to-head segment chain, one signed `NewSegment` tx per
+/// chunk. Segment keys are `[key_seed + i; 32]`; pick seeds with enough headroom to avoid
+/// collisions. Returns segment `AccountId`s, first to last.
+fn upload_program_segments(
+    state: &mut V03State,
+    bytecode: &[u8],
+    key_seed: u8,
+    block_id: BlockId,
+) -> Vec<AccountId> {
+    let chunks: Vec<&[u8]> = bytecode
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    assert!(!chunks.is_empty(), "bytecode must not be empty");
+
+    let segment_keys: Vec<PrivateKey> = (0..chunks.len())
+        .map(|i| {
+            let seed = key_seed
+                .checked_add(u8::try_from(i).expect("chunk count fits in a u8"))
+                .expect("key_seed left enough headroom for every chunk");
+            PrivateKey::try_new([seed; 32]).unwrap()
+        })
+        .collect();
+    let segment_ids: Vec<AccountId> = segment_keys
+        .iter()
+        .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
+        .collect();
+
+    for (i, chunk) in chunks.iter().enumerate().rev() {
+        let next_segment = segment_ids.get(i + 1).copied();
+        submit_loader_instruction(
+            state,
+            &segment_keys[i],
+            next_segment.into_iter().collect(),
+            program_loader_core::Instruction::NewSegment {
+                bytecode: (*chunk).to_vec(),
+                next_segment,
+            },
+            block_id,
+        )
+        .unwrap_or_else(|e| panic!("NewSegment {i} should succeed against an unclaimed target: {e:?}"));
+    }
+
+    segment_ids
 }
 
-fn deploy_transaction(
-    header: AccountId,
-    segment: AccountId,
+/// Uploads `bytecode`'s segment chain (see [`upload_program_segments`]) then a header pointing
+/// at it, signed by `header_key`. Returns the header's `AccountId`.
+fn deploy_program(
+    state: &mut V03State,
     bytecode: Vec<u8>,
-) -> PublicTransaction {
+    key_seed: u8,
+    header_key: &PrivateKey,
+    block_id: BlockId,
+) -> AccountId {
+    let segment_ids = upload_program_segments(state, &bytecode, key_seed, block_id);
+    let header_id = AccountId::from(&PublicKey::new_from_private_key(header_key));
+
+    submit_loader_instruction(
+        state,
+        header_key,
+        segment_ids.clone(),
+        program_loader_core::Instruction::UploadHeader {
+            first_segment: segment_ids[0],
+            immutable: true,
+        },
+        block_id,
+    )
+    .expect("UploadHeader should succeed against an unclaimed target");
+
+    header_id
+}
+
+/// Submits a `program_loader` instruction as a public transaction targeting the `AccountId`
+/// `key` bijects to, with `extra_accounts` appended read-only after that target.
+fn submit_loader_instruction(
+    state: &mut V03State,
+    key: &PrivateKey,
+    extra_accounts: Vec<AccountId>,
+    instruction: program_loader_core::Instruction,
+    block_id: BlockId,
+) -> Result<(), lee::error::LeeError> {
+    let target = AccountId::from(&PublicKey::new_from_private_key(key));
+    let nonce = state.get_account_by_id(target).nonce;
+    let mut account_ids = vec![target];
+    account_ids.extend(extra_accounts);
     let message = lee::public_transaction::Message::try_new(
         PROGRAM_LOADER_ACCOUNT_ID,
-        vec![header, segment],
-        vec![],
-        program_loader_core::Instruction::Deploy { bytecode },
+        account_ids,
+        vec![nonce],
+        instruction,
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
-    PublicTransaction::new(message, witness_set)
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[key]);
+    let tx = PublicTransaction::new(message, witness_set);
+    state.transition_from_public_transaction(&tx, block_id, 0)
 }
 
 #[test]
 fn loader_deploys_program() {
     let mut state = V03State::new();
+    let header_key = PrivateKey::try_new([39; 32]).unwrap();
 
     let bytecode = test_programs::claimer().elf().to_vec();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
-    let (header, segment) = deploy_targets(&bytecode);
+    let chunk_count = bytecode
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .count();
 
-    assert_eq!(state.get_account_by_id(header), Account::default());
-    assert_eq!(state.get_account_by_id(segment), Account::default());
-
-    let tx = deploy_transaction(header, segment, bytecode.clone());
-    state
-        .transition_from_public_transaction(&tx, 1, 0)
-        .expect("Deploy should succeed against unclaimed targets");
+    let header = deploy_program(&mut state, bytecode.clone(), 20, &header_key, 1);
 
     let deployed_header = state.get_account_by_id(header);
     assert_eq!(deployed_header.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
-    let program_data = program_loader_core::ProgramData::try_from(&deployed_header.data)
-        .expect("deployed header account data should decode as ProgramData");
-    assert_eq!(program_data.image_id, image_id);
-    assert_eq!(program_data.segment_count, 0);
-    assert_eq!(program_data.update_auth, AccountId::default());
+    let header_data = program_loader_core::ProgramHeader::try_from(&deployed_header.data)
+        .expect("deployed header account data should decode as ProgramHeader");
+    assert_eq!(header_data.image_id, image_id);
+    assert!(header_data.immutable);
 
-    let deployed_segment = state.get_account_by_id(segment);
-    assert_eq!(deployed_segment.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
-    assert_eq!(deployed_segment.data.to_vec(), bytecode);
+    let first_segment = state.get_account_by_id(header_data.program_first_segment);
+    assert_eq!(first_segment.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
+    let first_segment_data = program_loader_core::ProgramSegment::try_from(&first_segment.data)
+        .expect("deployed segment account data should decode as ProgramSegment");
+    assert_eq!(
+        first_segment_data.bytecode,
+        bytecode[..program_loader_core::MAX_SEGMENT_DATA_LEN.min(bytecode.len())]
+    );
+    assert_eq!(first_segment_data.next_segment.is_some(), chunk_count > 1);
 }
 
-/// `get_program` must find a `Deploy`-created program directly: decode the header, reconstruct
-/// the bytecode from its segment account(s), and return it exactly as deployed.
+/// `get_program` must find a deployed program directly: decode the header, reconstruct the
+/// bytecode by walking its segment chain, and return it exactly as deployed.
 #[test]
 fn loader_deployed_program_is_found_by_get_program() {
     let mut state = V03State::new();
+    let header_key = PrivateKey::try_new([59; 32]).unwrap();
 
     let bytecode = test_programs::claimer().elf().to_vec();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
-    let (header, segment) = deploy_targets(&bytecode);
 
-    let tx = deploy_transaction(header, segment, bytecode.clone());
-    state
-        .transition_from_public_transaction(&tx, 1, 0)
-        .expect("Deploy should succeed against unclaimed targets");
+    let header = deploy_program(&mut state, bytecode.clone(), 40, &header_key, 1);
 
     let (found_image_id, found_bytecode) = state
         .get_program(header)
@@ -3779,20 +3891,16 @@ fn get_program_returns_none_for_an_undeployed_account() {
     assert_eq!(state.get_program(AccountId::new([42; 32])).unwrap(), None);
 }
 
-/// A `Deploy`-created program must be a fully ordinary dispatch target afterward: `get_program`
-/// has to find it by decoding the `ProgramData` header and locating its separate segment account,
-/// and dispatch has to actually execute it.
+/// A deployed program must be a fully ordinary dispatch target afterward: `get_program` has to
+/// find it by decoding the header and walking its segment chain, and dispatch has to actually
+/// execute it.
 #[test]
 fn loader_deployed_program_is_invocable_via_dispatch() {
     let mut state = V03State::new();
+    let header_key = PrivateKey::try_new([79; 32]).unwrap();
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let (header, segment) = deploy_targets(&bytecode);
-
-    let tx = deploy_transaction(header, segment, bytecode);
-    state
-        .transition_from_public_transaction(&tx, 1, 0)
-        .expect("Deploy should succeed against unclaimed targets");
+    let header = deploy_program(&mut state, bytecode, 60, &header_key, 1);
 
     // `claimer` claims its one pre_state account with `Claim::Authorized`, which requires the
     // account to be signed for and to start out default-owned.
@@ -3808,130 +3916,265 @@ fn loader_deployed_program_is_invocable_via_dispatch() {
 
     state
         .transition_from_public_transaction(&invoke_tx, 2, 0)
-        .expect("a Deploy-created program must be dispatchable and executable");
+        .expect("a deployed program must be dispatchable and executable");
 
     assert_eq!(state.get_account_by_id(account_id).program_owner, header);
 }
 
 #[test]
-fn loader_rejects_redeploying_an_already_deployed_program() {
+fn loader_rejects_new_segment_against_an_already_claimed_target() {
     let mut state = V03State::new();
+    let segment_key = PrivateKey::try_new([207; 32]).unwrap();
 
-    let bytecode = test_programs::claimer().elf().to_vec();
-    let (header, segment) = deploy_targets(&bytecode);
+    let bytecode = vec![7_u8; 1024];
+    submit_loader_instruction(
+        &mut state,
+        &segment_key,
+        vec![],
+        program_loader_core::Instruction::NewSegment {
+            bytecode: bytecode.clone(),
+            next_segment: None,
+        },
+        1,
+    )
+    .expect("first NewSegment should succeed");
 
-    let tx = deploy_transaction(header, segment, bytecode.clone());
-    state
-        .transition_from_public_transaction(&tx, 1, 0)
-        .expect("First deploy should succeed");
-
-    let tx = deploy_transaction(header, segment, bytecode);
-    let result = state.transition_from_public_transaction(&tx, 2, 0);
+    let result = submit_loader_instruction(
+        &mut state,
+        &segment_key,
+        vec![],
+        program_loader_core::Instruction::NewSegment {
+            bytecode,
+            next_segment: None,
+        },
+        2,
+    );
 
     assert!(
         result.is_err(),
-        "Redeploying to an already-claimed program account should fail, but got: {result:?}"
+        "writing a segment to an already-claimed account should fail, but got: {result:?}"
     );
 }
 
+/// `image_id` is only ever recomputed when a header is written, so invalid bytecode is accepted
+/// by `NewSegment` (segments are opaque bytes) and only rejected once `UploadHeader` tries to
+/// hash the reconstructed chain.
 #[test]
 fn loader_rejects_invalid_bytecode() {
     let mut state = V03State::new();
+    let segment_key = PrivateKey::try_new([208; 32]).unwrap();
+    let header_key = PrivateKey::try_new([209; 32]).unwrap();
+    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
 
-    // execute_deploy panics on compute_image_id before it ever looks at the target accounts, so
-    // any accounts work here.
     let bytecode = b"this is not a valid RISC0 program binary".to_vec();
-    let header = AccountId::new([7; 32]);
-    let segment = AccountId::new([8; 32]);
+    submit_loader_instruction(
+        &mut state,
+        &segment_key,
+        vec![],
+        program_loader_core::Instruction::NewSegment {
+            bytecode,
+            next_segment: None,
+        },
+        1,
+    )
+    .expect("NewSegment doesn't validate bytecode, so this should succeed");
 
-    let tx = deploy_transaction(header, segment, bytecode);
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
+    let result = submit_loader_instruction(
+        &mut state,
+        &header_key,
+        vec![segment_id],
+        program_loader_core::Instruction::UploadHeader {
+            first_segment: segment_id,
+            immutable: true,
+        },
+        2,
+    );
 
     assert!(
         result.is_err(),
-        "Deploying invalid bytecode should fail, but got: {result:?}"
+        "UploadHeader over invalid bytecode should fail, but got: {result:?}"
     );
 }
 
 #[test]
-fn loader_rejects_wrong_target_account() {
+fn loader_rejects_claim_without_authorization() {
     let mut state = V03State::new();
-
-    let bytecode = test_programs::claimer().elf().to_vec();
-    let (_correct_header, segment) = deploy_targets(&bytecode);
-    // Deliberately not the PDA this bytecode's image_id would derive to.
-    let wrong_header = AccountId::new([7; 32]);
-
-    let tx = deploy_transaction(wrong_header, segment, bytecode);
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
-
-    assert!(
-        result.is_err(),
-        "Deploying to the wrong target account should fail, but got: {result:?}"
-    );
-}
-
-#[test]
-fn loader_rejects_wrong_number_of_accounts() {
-    let loader_id: ProgramId = PROGRAM_LOADER_ACCOUNT_ID.into();
-    let mut state = V03State::new();
-
-    let bytecode = test_programs::claimer().elf().to_vec();
-    let (header, segment) = deploy_targets(&bytecode);
-    let extra = AccountId::new([9; 32]);
+    // Not signed for below — nothing authorizes this specific target account.
+    let unsigned_target = AccountId::new([210; 32]);
+    let signer_key = PrivateKey::try_new([211; 32]).unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        loader_id.into(),
-        vec![header, segment, extra],
-        vec![],
-        program_loader_core::Instruction::Deploy { bytecode },
+        PROGRAM_LOADER_ACCOUNT_ID,
+        vec![unsigned_target],
+        vec![Nonce(0)],
+        program_loader_core::Instruction::NewSegment {
+            bytecode: vec![7_u8; 1024],
+            next_segment: None,
+        },
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+    // Signs the message, but the signing key doesn't correspond to `unsigned_target`.
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&signer_key]);
     let tx = PublicTransaction::new(message, witness_set);
 
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
     assert!(
         result.is_err(),
-        "Deploying with the wrong number of accounts should fail, but got: {result:?}"
+        "claiming an account nobody signed for should fail, but got: {result:?}"
+    );
+}
+
+#[test]
+fn loader_rejects_upload_header_with_wrong_number_of_segment_accounts() {
+    let mut state = V03State::new();
+    let segment_key = PrivateKey::try_new([212; 32]).unwrap();
+    let header_key = PrivateKey::try_new([213; 32]).unwrap();
+    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
+
+    submit_loader_instruction(
+        &mut state,
+        &segment_key,
+        vec![],
+        program_loader_core::Instruction::NewSegment {
+            bytecode: vec![7_u8; 1024],
+            next_segment: None,
+        },
+        1,
+    )
+    .expect("NewSegment should succeed");
+
+    // The chain is one segment long, but an extra unrelated account is supplied alongside it.
+    let extra = AccountId::new([214; 32]);
+    let result = submit_loader_instruction(
+        &mut state,
+        &header_key,
+        vec![segment_id, extra],
+        program_loader_core::Instruction::UploadHeader {
+            first_segment: segment_id,
+            immutable: true,
+        },
+        2,
+    );
+
+    assert!(
+        result.is_err(),
+        "UploadHeader with more accounts than the real chain length should fail, but got: {result:?}"
+    );
+}
+
+#[test]
+fn loader_update_header_repoints_to_a_new_segment_chain() {
+    let mut state = V03State::new();
+    let header_key = PrivateKey::try_new([119; 32]).unwrap();
+
+    let header = deploy_program(
+        &mut state,
+        test_programs::claimer().elf().to_vec(),
+        100,
+        &header_key,
+        1,
+    );
+    let original_image_id = state.get_program_image_id(header).unwrap();
+
+    let new_bytecode = test_programs::chain_caller().elf().to_vec();
+    let new_image_id: ProgramId = risc0_binfmt::compute_image_id(&new_bytecode).unwrap().into();
+    let new_segment_ids = upload_program_segments(&mut state, &new_bytecode, 120, 2);
+
+    // The same key that created the header re-authorizes rewriting it — no separate update key,
+    // ordinary account authorization is what governs this.
+    submit_loader_instruction(
+        &mut state,
+        &header_key,
+        new_segment_ids.clone(),
+        program_loader_core::Instruction::UpdateHeader {
+            first_segment: new_segment_ids[0],
+            immutable: true,
+        },
+        3,
+    )
+    .expect("UpdateHeader should succeed when signed by the header's own key");
+
+    let (found_image_id, found_bytecode) = state
+        .get_program(header)
+        .expect("updated program must reconstruct without error")
+        .expect("updated program must still be found at the same header address");
+    assert_eq!(found_image_id, new_image_id);
+    assert_ne!(found_image_id, original_image_id);
+    assert_eq!(found_bytecode, new_bytecode);
+}
+
+#[test]
+fn loader_rejects_update_header_without_authorization() {
+    let mut state = V03State::new();
+    let header_key = PrivateKey::try_new([149; 32]).unwrap();
+
+    let header = deploy_program(
+        &mut state,
+        test_programs::claimer().elf().to_vec(),
+        130,
+        &header_key,
+        1,
+    );
+
+    let new_segment_ids =
+        upload_program_segments(&mut state, &test_programs::chain_caller().elf().to_vec(), 150, 2);
+    let new_first_segment = new_segment_ids[0];
+
+    // Signed by a key with no relationship to `header` at all — not even the original deployer's.
+    let attacker_key = PrivateKey::try_new([227; 32]).unwrap();
+    let message = lee::public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        [vec![header], new_segment_ids].concat(),
+        vec![Nonce(0)],
+        program_loader_core::Instruction::UpdateHeader {
+            first_segment: new_first_segment,
+            immutable: true,
+        },
+    )
+    .unwrap();
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&attacker_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+    let result = state.transition_from_public_transaction(&tx, 3, 0);
+
+    assert!(
+        result.is_err(),
+        "UpdateHeader signed by an unrelated key should fail, but got: {result:?}"
     );
 }
 
 #[test]
 #[ignore = "known limitation, not an addressing problem: a program that wants to chain-call \
-            Deploy must carry the target bytecode through its own instruction_data to build the \
-            ChainedCall, which costs ~1,400-1,500 cycles/byte of real guest interpretation and \
-            blows the 32M-cycle public-execution cap for any realistically-sized program. \
-            AccountId-based dispatch (marvin/program-as-account-3-1) fixed locating a \
-            Deploy-created (PDA-addressed) program, but that was never the blocker here: the \
-            forwarder never gets far enough to need it, since it exhausts its cycle budget just \
-            carrying the bytecode through its own execution. Making an arbitrary program able to \
-            decide mid-flow to deploy something new, as one step among others it orchestrates, \
-            needs a mechanism where the bytecode reaches Deploy without being copied through any \
+            program_loader must carry the target bytecode through its own instruction_data to \
+            build the ChainedCall, which costs ~1,400-1,500 cycles/byte of real guest \
+            interpretation and blows the 32M-cycle public-execution cap for any \
+            realistically-sized program. Making an arbitrary program able to decide mid-flow to \
+            deploy something new, as one step among others it orchestrates, needs a mechanism \
+            where the bytecode reaches program_loader without being copied through any \
             intermediary guest's interpreted execution (e.g. a commitment carried in \
             instruction_data with the real payload resolved out-of-band by the dispatcher) — \
-            deferred to a future PR. The supported pattern today is Deploy as the top-level \
-            entry point, natively emitting its own follow-up chained calls after deploying \
-            (see loader_deploys_program)."]
+            deferred to a future PR. The supported pattern today is program_loader as the \
+            top-level entry point (see loader_deploys_program)."]
 fn loader_deploys_program_via_chained_call() {
     let loader_id: ProgramId = PROGRAM_LOADER_ACCOUNT_ID.into();
     let forwarder = test_programs::chained_call_forwarder();
     let mut state = V03State::new().with_programs([forwarder.clone()]);
 
+    let segment_key = PrivateKey::try_new([215; 32]).unwrap();
+    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
     let bytecode = test_programs::claimer().elf().to_vec();
-    let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
-    let (header, segment) = deploy_targets(&bytecode);
 
-    let inner_instruction_data =
-        lee::program::Program::serialize_instruction(program_loader_core::Instruction::Deploy {
-            bytecode: bytecode.clone(),
-        })
-        .unwrap();
+    let inner_instruction_data = lee::program::Program::serialize_instruction(
+        program_loader_core::Instruction::NewSegment {
+            bytecode,
+            next_segment: None,
+        },
+    )
+    .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
         forwarder.deployed_account_id(),
-        vec![header, segment],
+        vec![segment_id],
         vec![],
         (loader_id, inner_instruction_data),
     )
@@ -3941,15 +4184,8 @@ fn loader_deploys_program_via_chained_call() {
 
     state
         .transition_from_public_transaction(&tx, 1, 0)
-        .expect("Deploy via chained call should succeed");
+        .expect("NewSegment via chained call should succeed");
 
-    let deployed_header = state.get_account_by_id(header);
-    assert_eq!(deployed_header.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
-
-    let program_data = program_loader_core::ProgramData::try_from(&deployed_header.data)
-        .expect("deployed header account data should decode as ProgramData");
-    assert_eq!(program_data.image_id, image_id);
-
-    let deployed_segment = state.get_account_by_id(segment);
-    assert_eq!(deployed_segment.data.to_vec(), bytecode);
+    let deployed_segment = state.get_account_by_id(segment_id);
+    assert_eq!(deployed_segment.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
 }

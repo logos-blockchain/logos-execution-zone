@@ -32,6 +32,7 @@ pub struct SequencerSetup {
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
     genesis_transactions: Option<Vec<GenesisAction>>,
+    extra_genesis_programs: Vec<lee::program::Program>,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
     bedrock_signing_key: Option<[u8; ED25519_SECRET_KEY_SIZE]>,
     gossip: Option<sequencer_core::config::GossipConfig>,
@@ -45,6 +46,7 @@ impl SequencerSetup {
             bedrock_addr,
             channel_id: config::bedrock_channel_id(),
             genesis_transactions: None,
+            extra_genesis_programs: Vec::new(),
             cross_zone: None,
             bedrock_signing_key: None,
             gossip: None,
@@ -72,6 +74,17 @@ impl SequencerSetup {
     #[must_use]
     pub fn with_genesis(mut self, genesis_transactions: Vec<GenesisAction>) -> Self {
         self.genesis_transactions = Some(genesis_transactions);
+        self
+    }
+
+    /// Seed extra test-only programs into genesis, placed like any other builtin — useful since a
+    /// live `Deploy`'s address is otherwise unpredictable.
+    #[must_use]
+    pub fn with_extra_genesis_programs(
+        mut self,
+        extra_genesis_programs: Vec<lee::program::Program>,
+    ) -> Self {
+        self.extra_genesis_programs = extra_genesis_programs;
         self
     }
 
@@ -127,6 +140,7 @@ impl SequencerSetup {
             bedrock_addr,
             channel_id,
             genesis_transactions,
+            extra_genesis_programs,
             cross_zone,
             bedrock_signing_key,
             gossip,
@@ -179,9 +193,13 @@ impl SequencerSetup {
         )
         .context("Failed to create Sequencer config")?;
 
-        sequencer_service::run(config, SocketAddr::from(([127, 0, 0, 1], 0)))
-            .await
-            .context("Failed to run Sequencer Service")
+        sequencer_service::run(
+            config,
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            extra_genesis_programs,
+        )
+        .await
+        .context("Failed to run Sequencer Service")
     }
 }
 

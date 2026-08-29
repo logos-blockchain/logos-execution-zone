@@ -9,8 +9,8 @@ use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
-    utils::{deploy_targets, deploy_transaction, sync_private},
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS,
+    utils::sync_private,
     verify_commitment_is_in_state,
 };
 use lee::{
@@ -30,6 +30,7 @@ use lee_core::{
     program::PdaSeed,
 };
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig};
 use tokio::test;
 use wallet::{AccountIdentity, WalletCore};
 
@@ -146,7 +147,16 @@ async fn spend_private_pda(
 ///   receive(id=0), receive(id=1) → sync → spend(id=0), spend(id=1) → sync → assert.
 #[test]
 async fn private_pda_family_members_receive_and_spend() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
+    // Seeded into genesis: a live `Deploy` has no predictable address to give
+    // `ProgramWithDependencies` anymore, since segment/header addresses aren't derivable.
+    let proxy = test_programs::pda_spend_proxy();
+    let mut ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_extra_genesis_programs(vec![proxy.clone()]),
+        )
+        .build()
+        .await?;
 
     // ── Build alice's key chain ──────────────────────────────────────────────────────────────────
     let (alice_id, _alice_chain_index) = ctx.wallet_mut().create_new_account_private(None);
@@ -161,32 +171,11 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         (kc.nullifier_public_key, kc.viewing_public_key.clone())
     };
 
-    let proxy = test_programs::pda_spend_proxy();
     let auth_transfer = programs::authenticated_transfer();
     let proxy_id = proxy.deployed_account_id();
     let auth_transfer_id = auth_transfer.id();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
-
-    // `pda_spend_proxy` is a test-only program, not part of any genesis program set, so it must
-    // be deployed for real before anything can dispatch to it: `ProgramWithDependencies`'s
-    // `program_account_id` is PDA-addressed (not the legacy bijection), and the privacy circuit's
-    // proof verification looks up that address via `V03State::get_program`, which only finds
-    // programs that were actually claimed via `Deploy`.
-    let proxy_bytecode = proxy.elf().to_vec();
-    let (proxy_header, proxy_segment) = deploy_targets(&proxy_bytecode);
-    assert_eq!(
-        proxy_header, proxy_id,
-        "Deploy's header PDA must match the program's dispatch address"
-    );
-    let deploy_tx = LeeTransaction::Public(deploy_transaction(
-        proxy_header,
-        proxy_segment,
-        proxy_bytecode,
-    ));
-    ctx.sequencer_client().send_transaction(deploy_tx).await?;
-    log::info!("Waiting for pda_spend_proxy deploy block");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let auth_transfer_account_id =
         program_loader_core::immutable_deploy_account_id(auth_transfer_id);

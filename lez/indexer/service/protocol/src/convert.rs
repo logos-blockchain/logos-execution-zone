@@ -268,7 +268,6 @@ impl From<lee::public_transaction::Message> for PublicMessage {
             account_ids,
             nonces,
             instruction_data,
-            raw_payload: _,
         } = value;
         Self {
             program_account_id: program_account_id.into(),

@@ -35,34 +35,28 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 pub type ProgramId = [u32; 8];
 
-/// A deployed program's header account data, written via `Deploy` (see
-/// [`PROGRAM_LOADER_ACCOUNT_ID`]).
+/// A deployed program's header account data, written via `program_loader`'s `UploadHeader`/
+/// `UpdateHeader` (see [`PROGRAM_LOADER_ACCOUNT_ID`]).
 ///
-/// Holds only small, fixed-size fields. The bytecode itself lives in a separate segment account
-/// (see `program_loader_core::segment_account_id`), so anything checking a program's identity —
-/// e.g. the privacy-preserving circuit matching an `AccountId` to an `image_id` — only has to
-/// read this struct, not the full program.
-///
-/// `image_id` isn't derived from the account's address; it's read directly from this field.
-/// That's what will let a future upgrade write a new `image_id` to the same `AccountId` — not
-/// implemented yet: `execute_deploy` currently writes a header with a bare
-/// `assert_eq!(header_target.account, Account::default())`, so a header can only ever be written
-/// once.
+/// Small and fixed-size; the bytecode lives in a separate segment chain (see [`ProgramSegment`]),
+/// so identity checks (e.g. the privacy circuit matching an `AccountId` to an `image_id`) only
+/// need to read this struct. `image_id` is always recomputed from the chain on write, never
+/// trusted from a caller — that's what lets `UpdateHeader` change it while keeping the same
+/// `AccountId`.
 ///
 /// Defined here, not in `program_loader_core`, so `V03State::get_program` can decode it without
 /// depending on that crate. `program_loader_core` re-exports it.
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct ProgramData {
+pub struct ProgramHeader {
     pub image_id: ProgramId,
-    /// Used to re-derive this program's bytecode segment `AccountId` (see
-    /// `program_loader_core::segment_account_id`). Currently always `0` — programs aren't yet
-    /// split across multiple segments, so this doubles as both the (only) segment's index and
-    /// its count.
-    pub segment_count: u32,
-    pub update_auth: AccountId,
+    /// The first node of this program's bytecode segment chain — see [`ProgramSegment`].
+    pub program_first_segment: AccountId,
+    /// Self-declared, not enforced: `program_loader` never checks it. A program stays updatable
+    /// only for as long as someone remains authorized over the header account.
+    pub immutable: bool,
 }
 
-impl TryFrom<&crate::account::Data> for ProgramData {
+impl TryFrom<&crate::account::Data> for ProgramHeader {
     type Error = std::io::Error;
 
     fn try_from(data: &crate::account::Data) -> Result<Self, Self::Error> {
@@ -70,12 +64,39 @@ impl TryFrom<&crate::account::Data> for ProgramData {
     }
 }
 
-impl From<&ProgramData> for crate::account::Data {
-    fn from(program_data: &ProgramData) -> Self {
-        let mut data = Vec::with_capacity(std::mem::size_of_val(program_data));
-        BorshSerialize::serialize(program_data, &mut data)
-            .expect("borsh serialization should not fail");
+impl From<&ProgramHeader> for crate::account::Data {
+    fn from(header: &ProgramHeader) -> Self {
+        let mut data = Vec::with_capacity(std::mem::size_of_val(header));
+        BorshSerialize::serialize(header, &mut data).expect("borsh serialization should not fail");
         Self::try_from(data).expect("program header must fit under DATA_MAX_LENGTH")
+    }
+}
+
+/// One node of a deployed program's bytecode, linked rather than formula-addressed:
+/// `next_segment` is `None` for the chain's last node, or the next chunk's `AccountId` otherwise.
+/// Segment addresses carry no derivation requirement — a deployer claims any default account it
+/// likes, as long as the chain from [`ProgramHeader::program_first_segment`] reaches each one in
+/// order. Write-once: no instruction edits a segment after `NewSegment` creates it.
+#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ProgramSegment {
+    pub bytecode: Vec<u8>,
+    pub next_segment: Option<AccountId>,
+}
+
+impl TryFrom<&crate::account::Data> for ProgramSegment {
+    type Error = std::io::Error;
+
+    fn try_from(data: &crate::account::Data) -> Result<Self, Self::Error> {
+        BorshDeserialize::try_from_slice(data.as_ref())
+    }
+}
+
+impl From<&ProgramSegment> for crate::account::Data {
+    fn from(segment: &ProgramSegment) -> Self {
+        let mut data = Vec::new();
+        BorshSerialize::serialize(segment, &mut data)
+            .expect("borsh serialization should not fail");
+        Self::try_from(data).expect("program segment must fit under DATA_MAX_LENGTH")
     }
 }
 
@@ -212,8 +233,9 @@ impl AccountId {
     ///
     /// Keyed on the program's `AccountId` (its actual dispatch address), not its `ProgramId`
     /// (bytecode image id): two different deployments of identical bytecode get different
-    /// `AccountId`s (see `program_loader_core::header_account_id`'s `update_auth`
-    /// parameter), and each must own a disjoint family of PDAs.
+    /// `AccountId`s, since a header's address carries no derivation requirement — each deployer
+    /// just claims whatever account it likes (see [`ProgramHeader`]) — and each must own a
+    /// disjoint family of PDAs.
     #[must_use]
     pub fn for_public_pda(program_account_id: &Self, seed: &PdaSeed) -> Self {
         use risc0_zkvm::sha::{Impl, Sha256 as _};

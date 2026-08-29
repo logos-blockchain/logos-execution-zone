@@ -322,47 +322,114 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
         })?
 }
 
-/// Derives the `(header, segment)` account pair `bytecode` would deploy to via `Deploy`, mirroring
-/// `sequencer_core`'s private test helper of the same name.
+/// Builds the transaction that uploads `bytecode` as a single new segment, signed by `key`.
+/// Returns the segment's `AccountId` and the transaction. Useful on its own for tests that only
+/// care about transaction size/shape, not about invoking the deployed program afterward.
 #[must_use]
-pub fn deploy_targets(bytecode: &[u8]) -> (AccountId, AccountId) {
-    let image_id: lee_core::program::ProgramId =
-        risc0_binfmt::compute_image_id(bytecode).unwrap().into();
-    let header = program_loader_core::header_account_id(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        image_id,
-        0,
-        AccountId::default(),
-    );
-    let segment = program_loader_core::segment_account_id(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        image_id,
-        0,
-        AccountId::default(),
-    );
-    (header, segment)
-}
-
-/// Builds the `PublicTransaction` that deploys `bytecode` to `(header, segment)`.
-///
-/// `(header, segment)` are the targets [`deploy_targets`] derives for it. Tests should invoke
-/// programs at the returned `header` address afterward, not the program's own bijection
-/// `AccountId::from(image_id)`.
-#[must_use]
-pub fn deploy_transaction(
-    header: AccountId,
-    segment: AccountId,
+pub fn new_segment_transaction(
     bytecode: Vec<u8>,
-) -> lee::PublicTransaction {
+    key: &lee::PrivateKey,
+) -> (AccountId, lee::PublicTransaction) {
+    let segment = AccountId::from(&lee::PublicKey::new_from_private_key(key));
     let message = lee::public_transaction::Message::try_new(
         PROGRAM_LOADER_ACCOUNT_ID,
-        vec![header, segment],
-        vec![],
-        program_loader_core::Instruction::Deploy { bytecode },
+        vec![segment],
+        vec![lee_core::account::Nonce(0)],
+        program_loader_core::Instruction::NewSegment {
+            bytecode,
+            next_segment: None,
+        },
     )
-    .expect("deploy instruction data should always be serializable");
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
-    lee::PublicTransaction::new(message, witness_set)
+    .expect("NewSegment instruction data should always be serializable");
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[key]);
+    (segment, lee::PublicTransaction::new(message, witness_set))
+}
+
+/// Uploads `bytecode` as a chunked, tail-to-head segment chain, one signed `NewSegment` tx per
+/// chunk, in submission order. Segment keys are `[key_seed + i; 32]`; pick seeds with enough
+/// headroom to avoid collisions. Returns segment `AccountId`s (first to last) and their txs.
+#[must_use]
+pub fn segment_upload_transactions(
+    bytecode: &[u8],
+    key_seed: u8,
+) -> (Vec<AccountId>, Vec<lee::PublicTransaction>) {
+    let chunks: Vec<&[u8]> = bytecode
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    assert!(!chunks.is_empty(), "bytecode must not be empty");
+
+    let segment_keys: Vec<lee::PrivateKey> = (0..chunks.len())
+        .map(|i| {
+            let seed = key_seed
+                .checked_add(u8::try_from(i).expect("chunk count fits in a u8"))
+                .expect("key_seed left enough headroom for every chunk");
+            lee::PrivateKey::try_new([seed; 32]).unwrap()
+        })
+        .collect();
+    let segment_ids: Vec<AccountId> = segment_keys
+        .iter()
+        .map(|key| AccountId::from(&lee::PublicKey::new_from_private_key(key)))
+        .collect();
+
+    let mut txs = Vec::with_capacity(chunks.len());
+    for (i, chunk) in chunks.iter().enumerate().rev() {
+        let next_segment = segment_ids.get(i + 1).copied();
+        let mut account_ids = vec![segment_ids[i]];
+        account_ids.extend(next_segment);
+        let message = lee::public_transaction::Message::try_new(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            account_ids,
+            vec![lee_core::account::Nonce(0)],
+            program_loader_core::Instruction::NewSegment {
+                bytecode: (*chunk).to_vec(),
+                next_segment,
+            },
+        )
+        .expect("NewSegment instruction data should always be serializable");
+        let witness_set =
+            lee::public_transaction::WitnessSet::for_message(&message, &[&segment_keys[i]]);
+        txs.push(lee::PublicTransaction::new(message, witness_set));
+    }
+    (segment_ids, txs)
+}
+
+/// Builds the `UploadHeader` transaction for a chain already uploaded via
+/// [`segment_upload_transactions`], signed by `header_key`.
+#[must_use]
+pub fn upload_header_transaction(
+    all_segment_ids: &[AccountId],
+    header_key: &lee::PrivateKey,
+) -> (AccountId, lee::PublicTransaction) {
+    let header = AccountId::from(&lee::PublicKey::new_from_private_key(header_key));
+    let mut account_ids = vec![header];
+    account_ids.extend_from_slice(all_segment_ids);
+    let message = lee::public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        account_ids,
+        vec![lee_core::account::Nonce(0)],
+        program_loader_core::Instruction::UploadHeader {
+            first_segment: all_segment_ids[0],
+            immutable: true,
+        },
+    )
+    .expect("UploadHeader instruction data should always be serializable");
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[header_key]);
+    (header, lee::PublicTransaction::new(message, witness_set))
+}
+
+/// Every transaction needed to deploy `bytecode` for real: its full segment chain (see
+/// [`segment_upload_transactions`]) followed by the `UploadHeader`, in submission order. All must
+/// land in a block, in order, before the program is invocable at the returned header `AccountId`.
+#[must_use]
+pub fn deploy_program_transactions(
+    bytecode: &[u8],
+    key_seed: u8,
+    header_key: &lee::PrivateKey,
+) -> (AccountId, Vec<lee::PublicTransaction>) {
+    let (segment_ids, mut txs) = segment_upload_transactions(bytecode, key_seed);
+    let (header, header_tx) = upload_header_transaction(&segment_ids, header_key);
+    txs.push(header_tx);
+    (header, txs)
 }
 
 /// The exact wire size the sequencer measures a transaction by (see

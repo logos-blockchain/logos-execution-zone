@@ -149,6 +149,7 @@ impl SequencerHandle {
 pub fn run(
     config: SequencerConfig,
     listen_addr: SocketAddr,
+    extra_genesis_programs: Vec<lee::program::Program>,
 ) -> impl Future<Output = Result<SequencerHandle>> + Send + 'static {
     async move {
         let block_timeout = config.block_create_timeout;
@@ -163,7 +164,8 @@ pub fn run(
         let storage_ref = StorageActor::spawn(storage);
         info!("Storage Actor spawned");
 
-        let executor = ExecutorActor::new(config, storage_ref.clone()).await;
+        let executor =
+            ExecutorActor::new(config, storage_ref.clone(), extra_genesis_programs).await;
         let mempool_handle = executor.mempool_handle();
         let executor_ref = ExecutorActor::spawn(executor);
         info!("Executor Actor spawned");
