@@ -524,12 +524,12 @@ struct CallerData {
     authorized_accounts: HashSet<AccountId>,
 }
 
-/// Executes a chained call, dispatching to the native `Deploy` fast path when the call targets
-/// [`PROGRAM_LOADER_ACCOUNT_ID`], or interpreting the target's guest ELF otherwise.
+/// Executes a chained call, dispatching to the native `program_loader` fast path when the call
+/// targets [`PROGRAM_LOADER_ACCOUNT_ID`], or interpreting the target's guest ELF otherwise.
 ///
-/// Returns the callee's real `image_id` alongside its output: for `Deploy` it's the fixed
-/// reserved account's own bijection (Deploy isn't itself upgradeable), otherwise it's the
-/// `image_id` sourced from the program's own account via `V03State::get_program` rather than
+/// Returns the callee's real `image_id` alongside its output: for `program_loader` it's the
+/// fixed reserved account's own bijection (the loader isn't itself upgradeable), otherwise it's
+/// the `image_id` sourced from the program's own account via `V03State::get_program` rather than
 /// guessed from its address — an ordinary program's address can outlive its current bytecode
 /// (upgrades).
 ///
@@ -542,19 +542,44 @@ fn execute_chained_call(
     real_pre_states: &[AccountWithMetadata],
 ) -> Result<(ProgramId, ProgramOutput), LeeError> {
     if chained_call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
-        // Runs `Deploy` as native Rust instead of interpreting a guest ELF.
+        // Runs the program loader's instructions as native Rust instead of interpreting a guest
+        // ELF — see `PROGRAM_LOADER_ACCOUNT_ID`'s doc comment for why.
         let program_id = ProgramId::from(PROGRAM_LOADER_ACCOUNT_ID);
-        let program_loader_core::Instruction::Deploy { bytecode } =
-            borsh::from_slice(&chained_call.instruction_data)
-                .map_err(|e| LeeError::InvalidInput(format!("invalid Deploy instruction: {e}")))?;
-        let deploy_pre_states = real_pre_states.to_vec();
+        let instruction: program_loader_core::Instruction =
+            borsh::from_slice(&chained_call.instruction_data).map_err(|e| {
+                LeeError::InvalidInput(format!("invalid program_loader instruction: {e}"))
+            })?;
+        let loader_pre_states = real_pre_states.to_vec();
         // FIXME: catch_unwind won't catch aborts; remove once lez programs have better
         // error handling than panicking on invalid input.
-        let post_states = std::panic::catch_unwind(|| {
-            program_loader_core::execute_deploy(program_id.into(), deploy_pre_states, bytecode)
+        let post_states = std::panic::catch_unwind(|| match instruction {
+            program_loader_core::Instruction::NewSegment {
+                bytecode,
+                next_segment,
+            } => program_loader_core::execute_new_segment(
+                loader_pre_states,
+                bytecode,
+                next_segment,
+            ),
+            program_loader_core::Instruction::UploadHeader {
+                first_segment,
+                immutable,
+            } => program_loader_core::execute_upload_header(
+                loader_pre_states,
+                first_segment,
+                immutable,
+            ),
+            program_loader_core::Instruction::UpdateHeader {
+                first_segment,
+                immutable,
+            } => program_loader_core::execute_update_header(
+                loader_pre_states,
+                first_segment,
+                immutable,
+            ),
         })
         .map_err(|_panic_payload| {
-            LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
+            LeeError::ProgramExecutionFailed("program_loader rejected the given input".into())
         })?;
         Ok((
             program_id,

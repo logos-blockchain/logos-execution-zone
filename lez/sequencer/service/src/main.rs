@@ -49,8 +49,12 @@ async fn main() -> Result<()> {
     if let Some(metrics_address) = config.metrics_address {
         install_prometheus_recorder(metrics_address)?;
     }
-    let sequencer_handle =
-        sequencer_service::run(config, SocketAddr::new(args.listen_address, args.port)).await?;
+    let sequencer_handle = sequencer_service::run(
+        config,
+        SocketAddr::new(args.listen_address, args.port),
+        Vec::new(),
+    )
+    .await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {

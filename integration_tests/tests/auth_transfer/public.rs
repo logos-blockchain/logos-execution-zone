@@ -1,21 +1,14 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention,
-    utils::{
-        account_balance, deploy_targets, deploy_transaction, encoded_tx_size, get_account,
-        new_account, send, send_claiming_new_account,
-    },
+    utils::{account_balance, get_account, new_account, send, send_claiming_new_account},
 };
 use lee::{PublicKey, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::{
-    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
-    config::{MultiNodeTestContextConfig, SequencerPartialConfig},
-};
+use test_fixtures::{MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig};
 use tokio::test;
 use wallet::{
     account::Label,
@@ -397,30 +390,17 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 #[test]
 async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let faucet_chain_caller = test_programs::faucet_chain_caller();
-    let bytecode = faucet_chain_caller.elf().to_vec();
-    let (faucet_chain_caller_header, faucet_chain_caller_segment) = deploy_targets(&bytecode);
-    let deploy_tx = LeeTransaction::Public(deploy_transaction(
-        faucet_chain_caller_header,
-        faucet_chain_caller_segment,
-        bytecode,
-    ));
+    // Seeded into genesis: a live Deploy has no predictable dispatch address anymore.
+    let faucet_chain_caller_header =
+        program_loader_core::immutable_deploy_account_id(faucet_chain_caller.id());
 
-    let tx_size = encoded_tx_size(&deploy_tx);
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
-                .with_sequencer_partial_config(SequencerPartialConfig {
-                    max_block_size: ByteSize::b(tx_size + 10 * 1024),
-                    ..SequencerPartialConfig::default()
-                }),
+                .with_extra_genesis_programs(vec![faucet_chain_caller.clone()]),
         )
         .build()
         .await?;
-
-    ctx.sequencer_client().send_transaction(deploy_tx).await?;
-
-    log::info!("Waiting for deploy block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let faucet_account_id = system_accounts::faucet_account_id();
     let attacker = ctx.existing_public_accounts()[0];

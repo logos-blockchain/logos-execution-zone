@@ -1,21 +1,16 @@
-use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramData};
+use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramSegment};
 
 use super::*;
 
-/// Ad hoc proof that a program's bytecode can be split across multiple PDA accounts and
-/// reconstructed into something that executes identically to the original.
-///
-/// No production code path *writes* more than one segment yet — a real `Deploy` still writes
-/// exactly one — but `get_program` itself already reconstructs across however many segments a
-/// header declares, so this test drives that reconstruction for real: it writes several segment
-/// accounts plus a `ProgramData` header directly via `force_insert_account`, then calls
-/// `get_program` on the header and confirms both the returned bytes and the execution output
-/// match a direct run against the untouched original.
+/// Proof that a program's bytecode split across multiple segment accounts reconstructs into
+/// something that executes identically to the original: writes several segments (linked
+/// tail-to-head, at arbitrary addresses) plus a `ProgramHeader` directly via
+/// `force_insert_account`, then confirms `get_program` returns the same bytes and execution
+/// output as a direct run against the untouched original.
 #[test]
 fn manually_segmented_program_reconstructs_and_executes_identically() {
     let program = crate::test_methods::claimer();
     let full_binary = program.elf();
-    let update_auth = AccountId::default();
 
     // However many chunks, as long as it's more than one — this is testing reconstruction
     // across several accounts, not any particular chunk size.
@@ -26,45 +21,38 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         "test needs a real multi-chunk split, got {} chunk(s)",
         chunks.len()
     );
-    // segment_count currently holds the last segment's index, not a count.
-    let segment_count = u32::try_from(chunks.len() - 1).unwrap();
 
     let mut state = V03State::new();
+
+    // Segment addresses carry no derivation requirement — arbitrary, distinct accounts.
     let segment_account_ids: Vec<AccountId> = (0..chunks.len())
-        .map(|i| {
-            program_loader_core::segment_account_id(
-                PROGRAM_LOADER_ACCOUNT_ID,
-                program.id(),
-                u32::try_from(i).unwrap(),
-                update_auth,
-            )
-        })
+        .map(|i| AccountId::new([u8::try_from(i + 1).unwrap(); 32]))
         .collect();
-    for (account_id, chunk) in segment_account_ids.iter().zip(&chunks) {
+
+    // Linked tail-to-head: the last chunk's segment has no `next_segment`.
+    for (i, chunk) in chunks.iter().enumerate().rev() {
         state.force_insert_account(
-            *account_id,
+            segment_account_ids[i],
             Account {
                 program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-                data: Data::try_from(chunk.to_vec()).unwrap(),
+                data: Data::from(&ProgramSegment {
+                    bytecode: chunk.to_vec(),
+                    next_segment: segment_account_ids.get(i + 1).copied(),
+                }),
                 ..Account::default()
             },
         );
     }
 
-    let header_account_id = program_loader_core::header_account_id(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        program.id(),
-        segment_count,
-        update_auth,
-    );
+    let header_account_id = AccountId::new([0xff; 32]);
     state.force_insert_account(
         header_account_id,
         Account {
             program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::from(&ProgramData {
+            data: Data::from(&ProgramHeader {
                 image_id: program.id(),
-                segment_count,
-                update_auth,
+                program_first_segment: segment_account_ids[0],
+                immutable: true,
             }),
             ..Account::default()
         },
