@@ -586,6 +586,44 @@ fn delegated_pda_is_not_authorized_in_sibling_call() {
 }
 
 #[test]
+fn public_pda_first_sight_grant_does_not_extend_to_sibling_calls() {
+    let delegator = crate::test_methods::selective_pda_delegator();
+    let callee = crate::test_methods::auth_asserting_noop();
+    let sibling = crate::test_methods::auth_asserting_noop();
+    let seed = PdaSeed::new([77; 32]);
+
+    let account_id = AccountId::for_public_pda(&delegator.id(), &seed);
+    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let callee_id = callee.id();
+    let sibling_id = sibling.id();
+    let program_with_deps = ProgramWithDependencies::new(
+        delegator,
+        [(callee_id, callee), (sibling_id, sibling)].into(),
+    );
+
+    let result = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction((
+            seed,
+            seed,
+            callee_id,
+            Program::serialize_instruction(()).unwrap(),
+            Some((sibling_id, true)),
+        ))
+        .unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    );
+
+    assert!(
+        matches!(result, Err(LeeError::CircuitProvingError(_))),
+        "a sibling handed the public PDA's account_id but no pda_seeds must not see it as \
+         authorized, but got: {result:?}"
+    );
+}
+
+#[test]
 fn delegated_pda_stays_authorized_in_delegated_subtree() {
     let delegator = crate::test_methods::selective_pda_delegator();
     let forwarder = crate::test_methods::non_delegating_forwarder();
