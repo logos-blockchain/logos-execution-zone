@@ -22,12 +22,13 @@ use crate::{
         AddPendingCrossZoneDispatches, AddPendingDepositEvent, ApplyStoreUpdate,
         CleanPendingBlocksUpTo, ConsumeUnseenWithdrawCount, DbDump, DeadLetterDispatchRecord,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
+        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetChannelCursor,
+        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
+        GetZoneCheckpointBytes, MarkBlockAsFinalized, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
         RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
         SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
         ZoneAnchorRecord,
@@ -114,6 +115,18 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
+        pub fn handle_get_slash_record_bytes(
+            &mut self,
+            msg: GetSlashRecordBytes,
+            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
+        ) -> Result<Option<Vec<u8>>>;
+
+        pub fn handle_put_slash_record_bytes(
+            &mut self,
+            msg: PutSlashRecordBytes,
+            ctx: &mut Context<Self, Result<()>>
+        ) -> Result<()>;
+
         pub fn handle_delete_zone_checkpoint(
             &mut self,
             msg: DeleteZoneCheckpoint,
@@ -131,6 +144,12 @@ mockall::mock! {
             msg: SetZoneAnchor,
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
+
+        pub fn handle_get_channel_cursor(
+            &mut self,
+            msg: GetChannelCursor,
+            ctx: &mut Context<Self, Result<Option<[u8; 32]>>>
+        ) -> Result<Option<[u8; 32]>>;
 
         pub fn handle_get_published_high_water(
             &mut self,
@@ -457,6 +476,30 @@ impl Message<SetZoneCheckpointBytes> for MockStorageActor {
     }
 }
 
+impl Message<GetSlashRecordBytes> for MockStorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetSlashRecordBytes,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_slash_record_bytes(msg, ctx)
+    }
+}
+
+impl Message<PutSlashRecordBytes> for MockStorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: PutSlashRecordBytes,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_put_slash_record_bytes(msg, ctx)
+    }
+}
+
 impl Message<DeleteZoneCheckpoint> for MockStorageActor {
     type Reply = Result<()>;
 
@@ -490,6 +533,18 @@ impl Message<SetZoneAnchor> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_set_zone_anchor(msg, ctx)
+    }
+}
+
+impl Message<GetChannelCursor> for MockStorageActor {
+    type Reply = Result<Option<[u8; 32]>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetChannelCursor,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_channel_cursor(msg, ctx)
     }
 }
 

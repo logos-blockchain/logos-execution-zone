@@ -27,6 +27,26 @@ cryptarchia:
     numerator: 1
     denominator: 2
   learning_rate: 0.5
+  uncle_reference_window_in_block: 12
+  pow_config:
+    blend:
+      base_difficulty: 19
+      target_transactions_per_block: 512
+      max_step: 2
+      damping_num: 1
+      damping_den_offset: 1
+    reward:
+      reward_pool_genesis: 1000000000
+      epoch_reward_genesis: 1000000
+      initial_difficulty_seed: 1000
+      ema_smoothing_factor: 9
+      ema_smoothing_precision: 10
+      target_claims_per_block: 100
+      rate_num: 0
+      rate_den: 1
+      target_claim_per_block: 1
+      expected_blocks_per_epoch: 1
+      slot_window: 100
   sdp_config:
     service_params:
       BN:
@@ -41,13 +61,14 @@ cryptarchia:
       version: Bedrock
       parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
       slot: 0
-      block_root: '379bace32490b92ea47583b9aad4a32b059312a920d45b3b7386cffbc2737e18'
+      body_root: '2d0c91f1530d5771115f23a8fde6e9bc575ae56e271f23c55841c17ce1beaa45'
       proof_of_leadership:
         proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
         entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
         leader_key: '0000000000000000000000000000000000000000000000000000000000000000'
         voucher_cm: '0000000000000000000000000000000000000000000000000000000000000000'
     signature: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+    uncle_headers: []
     transactions:
     - mantle_tx:
         ops:
@@ -170,7 +191,7 @@ cryptarchia:
             - /ip4/65.109.51.37/udp/3400/quic-v1
             provider_id: '59c662860b737f4e2515599adb3434856db8070b373a449ff66955ad3da6b473'
             zk_id: '6b2bcd3029fba573cff0c332dc4de7430faf5e261383d693d8dbb5b97665660a'
-            locked_note_id: '67e2ec02c536a82f0eb80800fcfb8f2d66c5423d57cd081dfb0f237234f6ac26'
+            service_note_id: '67e2ec02c536a82f0eb80800fcfb8f2d66c5423d57cd081dfb0f237234f6ac26'
       ops_proofs:
       - !ZkSig
         pi_a: '0000000000000000000000000000000000000000000000000000000000000000'

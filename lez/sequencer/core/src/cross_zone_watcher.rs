@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use chain_state::zone_indexer::ZoneIndexer;
 use common::{
     HashType,
     block::{Block, PeerChainTip},
@@ -16,9 +17,7 @@ use kameo::actor::ActorRef;
 use lee::PublicKey;
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_zone_sdk::{
-    CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
-};
+use logos_blockchain_zone_sdk::{CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
@@ -672,6 +671,7 @@ mod tests {
         storage_ref
             .ask(RecordNewBlock {
                 block: produce_dummy_block(0, None, vec![]),
+                channel_cursor: None,
                 withdrawals: vec![],
                 state: Arc::new(lee::V03State::new()),
                 checkpoint_bytes: None,

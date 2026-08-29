@@ -20,6 +20,7 @@ async fn spawn_with_blocks(path: &Path, blocks: Vec<Block>) -> ActorRef<StorageA
         storage_ref
             .ask(RecordNewBlock {
                 block,
+                channel_cursor: None,
                 withdrawals: vec![],
                 state: Arc::new(V03State::new()),
                 checkpoint_bytes: None,
@@ -73,6 +74,7 @@ async fn recorded_transaction_is_looked_up_by_hash() {
     storage_ref
         .ask(RecordNewBlock {
             block,
+            channel_cursor: None,
             withdrawals: vec![],
             state: Arc::new(V03State::new()),
             checkpoint_bytes: None,
@@ -148,6 +150,7 @@ async fn replaced_block_leaves_no_stale_index_entries() {
         .ask(ApplyStoreUpdate {
             checkpoint: None,
             blocks: vec![(adopted.clone(), false)],
+            channel_cursor: None,
             head_tip: Some(BlockMeta::from(&adopted)),
             head_state: Arc::new(V03State::new()),
             final_snapshot: None,
@@ -158,6 +161,7 @@ async fn replaced_block_leaves_no_stale_index_entries() {
             consumed_withdrawals: vec![],
             new_withdraw_intents: vec![],
             zone_anchor: None,
+            lower_published_high_water: None,
         })
         .await
         .expect("Failed to apply the update");

@@ -17,6 +17,9 @@ use crate::Result;
 /// Persists `block` with the effects it covers.
 pub struct RecordNewBlock {
     pub block: Block,
+    /// The `MsgId` the block was inscribed under; `None` leaves the stored
+    /// cursor untouched.
+    pub channel_cursor: Option<[u8; 32]>,
     pub withdrawals: Vec<WithdrawalReconciliationKey>,
     pub state: Arc<V03State>,
     pub checkpoint_bytes: Option<Vec<u8>>,
@@ -59,6 +62,12 @@ pub struct SetZoneCheckpointBytes {
 
 pub struct DeleteZoneCheckpoint;
 
+pub struct GetSlashRecordBytes;
+
+pub struct PutSlashRecordBytes {
+    pub bytes: Vec<u8>,
+}
+
 pub struct GetZoneAnchor;
 
 pub struct SetZoneAnchor {
@@ -66,6 +75,9 @@ pub struct SetZoneAnchor {
 }
 
 pub struct GetPublishedHighWater;
+
+/// The `MsgId` of the newest channel inscription processed, block or not.
+pub struct GetChannelCursor;
 
 /// Raises the published high water mark to `block_id`, never lowering it.
 pub struct RaisePublishedHighWater {
@@ -144,6 +156,10 @@ pub struct ApplyStoreUpdate {
     /// `(block, finalized)` payloads to write.
     pub blocks: Vec<(Block, bool)>,
 
+    /// The `MsgId` of the newest inscription this update processed, block or
+    /// not; `None` leaves the stored cursor untouched.
+    pub channel_cursor: Option<[u8; 32]>,
+
     /// Head tip to pin the stored chain to; `None` only for an empty chain.
     pub head_tip: Option<BlockMeta>,
     /// State after the last applied block.
@@ -170,6 +186,9 @@ pub struct ApplyStoreUpdate {
 
     /// Advance the channel-read anchor.
     pub zone_anchor: Option<ZoneAnchorRecord>,
+
+    /// Lower the published high water mark to this height if it is above.
+    pub lower_published_high_water: Option<BlockId>,
 }
 
 /// Zone id of a cross-zone peer.

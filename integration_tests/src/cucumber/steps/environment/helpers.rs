@@ -32,7 +32,7 @@ pub(crate) async fn deploy_lez_stack(
     let app = LezLocalApp::new()
         .with_bedrock(bedrock)
         .with_scenario_base_dir(scenario_base_dir)
-        .with_priority_fee(10_000);
+        .with_priority_fee_percent(12);
     let app = if initialize_private_accounts {
         app
     } else {
@@ -105,7 +105,7 @@ pub(crate) async fn deploy_lez_sequencer_registry(
         })?;
     let sequencer_config = SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(5),
-        priority_fee: 10_000,
+        priority_fee_percent: 12,
         ..SequencerPartialConfig::default()
     };
     let registry = LezSequencerRegistryApp::new(sequencer_config, bedrock.primary_api_addr())

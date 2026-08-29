@@ -13,12 +13,13 @@ use crate::{
         AddPendingCrossZoneDispatches, AddPendingDepositEvent, ApplyStoreUpdate,
         CleanPendingBlocksUpTo, ConsumeUnseenWithdrawCount, DbDump, DeadLetterDispatchRecord,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
+        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetChannelCursor,
+        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
+        GetZoneCheckpointBytes, MarkBlockAsFinalized, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
         RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
         SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
         ZoneAnchorRecord,
@@ -43,10 +44,13 @@ pub trait StorageActorTrait:
     + Message<GetFinalSnapshot, Reply = Result<Option<(V03State, BlockMeta)>>>
     + Message<GetZoneCheckpointBytes, Reply = Result<Option<Vec<u8>>>>
     + Message<SetZoneCheckpointBytes, Reply = Result<()>>
+    + Message<GetSlashRecordBytes, Reply = Result<Option<Vec<u8>>>>
+    + Message<PutSlashRecordBytes, Reply = Result<()>>
     + Message<DeleteZoneCheckpoint, Reply = Result<()>>
     + Message<GetZoneAnchor, Reply = Result<Option<ZoneAnchorRecord>>>
     + Message<SetZoneAnchor, Reply = Result<()>>
     + Message<GetPublishedHighWater, Reply = Result<Option<BlockId>>>
+    + Message<GetChannelCursor, Reply = Result<Option<[u8; 32]>>>
     + Message<RaisePublishedHighWater, Reply = Result<()>>
     + Message<GetPendingDepositEvents, Reply = Result<Vec<PendingDepositEventRecord>>>
     + Message<AddPendingDepositEvent, Reply = Result<bool>>

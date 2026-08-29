@@ -39,7 +39,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
             node_url: "http://not-used".parse().expect("Failed to parse URL"),
             auth: None,
             funding_key: BigUint::default().into(),
-            priority_fee: sequencer_core::config::default_priority_fee(),
+            priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
         },
         genesis: Vec::new(),
         cross_zone: None,
@@ -141,6 +141,14 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
 
     mock_storage
         .expect_handle_get_zone_anchor()
+        .returning(|_, _| Ok(None));
+
+    mock_storage
+        .expect_handle_get_channel_cursor()
+        .returning(|_, _| Ok(None));
+
+    mock_storage
+        .expect_handle_get_slash_record_bytes()
         .returning(|_, _| Ok(None));
 
     mock_storage

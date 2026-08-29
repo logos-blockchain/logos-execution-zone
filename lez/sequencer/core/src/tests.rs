@@ -36,7 +36,7 @@ use tempfile::tempdir;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
 use crate::{
-    MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, TransactionOrigin,
+    LiveCommittee, MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, TransactionOrigin,
     apply_follow_update,
     block_publisher::FollowUpdate,
     build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, build_genesis_state,
@@ -47,7 +47,7 @@ use crate::{
     },
     deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
     extract_cross_zone_dispatch_key, finalize_unstake_is_includable, is_sequencer_only_program,
-    mock::{SequencerCoreWithMockClients, mock_checkpoint},
+    mock::{SequencerCoreWithMockClients, checkpoint_at, mock_checkpoint, mock_msg_of},
     resubmittable_txs,
 };
 
@@ -56,6 +56,9 @@ mod reconstruction;
 /// The peer zone a cross-zone test receives from. Distinct from the test
 /// channel id (`[0; 32]`), which the inbox guest rejects as a source.
 const PEER_ZONE: [u8; 32] = [0xbe_u8; 32];
+
+/// The inscription a test slash names; only has to match the approvals.
+const TEST_INSCRIPTION: [u8; 32] = [0xA1; 32];
 
 #[derive(borsh::BorshSerialize)]
 struct DepositMetadataForEncoding {
@@ -104,6 +107,7 @@ fn empty_follow_update() -> FollowUpdate {
         finalized: Vec::new(),
         deposits: Vec::new(),
         withdrawals: Vec::new(),
+        undecodable: Vec::new(),
     }
 }
 
@@ -136,7 +140,7 @@ fn setup_sequencer_config() -> SequencerConfig {
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
             auth: None,
             funding_key: ZkPublicKey::zero(),
-            priority_fee: config::default_priority_fee(),
+            priority_fee_percent: config::default_priority_fee_percent(),
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: vec![],
@@ -374,6 +378,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
     storage_ref
         .ask(RecordNewBlock {
             block: genesis_block,
+            channel_cursor: None,
             withdrawals: vec![],
             state: Arc::new(genesis_state),
             checkpoint_bytes: None,
@@ -576,7 +581,7 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
         &mempool_handle,
         FollowUpdate {
             adopted: vec![],
-            orphaned: vec![(MsgId::from(minted_block.header.hash.0), minted_block)],
+            orphaned: vec![minted_block],
             ..empty_follow_update()
         },
     )
@@ -592,6 +597,9 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
             .await,
         "the receipt reverts with the orphaned block"
     );
+
+    // Orphaning it takes the channel tip back with it.
+    sequencer.block_publisher().set_channel_tip(None);
 
     // Next turn: the still-pending record is drained and re-minted on the new
     // head, exactly once.
@@ -907,7 +915,8 @@ async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            finalized: vec![(MsgId::from(delivery_block.header.hash.0), delivery_block)],
+            checkpoint: checkpoint_at(mock_msg_of(&delivery_block)),
+            finalized: vec![delivery_block],
             ..empty_follow_update()
         },
     )
@@ -1263,10 +1272,18 @@ async fn build_block_from_mempool() {
         .await
         .unwrap();
 
-    let result = sequencer.build_block_from_mempool(Some(&[])).await;
+    let result = sequencer
+        .build_block_from_mempool(Some(&empty_committee()))
+        .await;
     assert!(result.is_ok());
     // Building itself does not advance the head; only apply-after-publish does.
     assert_eq!(sequencer.chain_height().await, genesis_height);
+}
+
+/// The live committee the mock publisher reports: no keys, at the config entry
+/// [`mock::checkpoint_at`] calls finalized.
+fn empty_committee() -> LiveCommittee {
+    LiveCommittee::at(Vec::new(), MsgId::root())
 }
 
 #[tokio::test]
@@ -1276,7 +1293,7 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
 
     assert!(
         sequencer
-            .build_block_from_mempool(Some(&[]))
+            .build_block_from_mempool(Some(&empty_committee()))
             .await
             .unwrap()
             .committee_update
@@ -1295,21 +1312,21 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            finalized: vec![(MsgId::from(genesis.header.hash.0), genesis)],
+            finalized: vec![genesis],
             ..empty_follow_update()
         },
     )
     .await;
 
     let wanted = sequencer
-        .build_block_from_mempool(Some(&[]))
+        .build_block_from_mempool(Some(&empty_committee()))
         .await
         .unwrap()
         .committee_update
         .expect("the stake is irreversible now, so the committee should follow it");
     assert!(
         sequencer
-            .build_block_from_mempool(Some(&wanted))
+            .build_block_from_mempool(Some(&LiveCommittee::at(wanted, MsgId::root())))
             .await
             .unwrap()
             .committee_update
@@ -1321,7 +1338,6 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
 #[test]
 fn the_committee_gate_holds_back_neither_ordinary_txs_nor_unknown_accounts() {
     let state = V03State::new();
-    let absence = crate::committee_discovery::CommitteeAbsence::default();
     let finalize_unstake = build_finalize_unstake_tx(
         AccountId::new([1; 32]),
         sequencer_stake_core::PendingUnstake {
@@ -1335,13 +1351,11 @@ fn the_committee_gate_holds_back_neither_ordinary_txs_nor_unknown_accounts() {
     assert!(finalize_unstake_is_includable(
         &state,
         &finalize_unstake,
-        &absence,
         None
     ));
     assert!(finalize_unstake_is_includable(
         &state,
         &common::test_utils::produce_dummy_empty_transaction(),
-        &absence,
         None
     ));
 }
@@ -2269,7 +2283,7 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            adopted: vec![(MsgId::from([1; 32]), peer_block)],
+            adopted: vec![peer_block],
             ..empty_follow_update()
         },
     )
@@ -2289,12 +2303,428 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
     assert!(sequencer.store.block_at_id(2).await.unwrap().is_some());
 }
 
-/// The channel orphaning our own still-unfinalized blocks rewinds the head and
-/// prunes them from the store, so nothing in the chain state remembers we ever
-/// produced them. Producing again there would put a second, different block at
-/// a height the channel already carries — the fork that has to be prevented.
+/// A publish that never reaches the channel must leave its height free, or the
+/// mark outlives the block and the node skips every later turn.
 #[tokio::test]
-async fn head_rewound_below_published_height_blocks_production() {
+async fn a_failed_publish_leaves_its_height_free() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+
+    let first = sequencer.run_production_turn().await.unwrap();
+    let mark = sequencer.store.published_high_water().await.unwrap();
+    assert_eq!(mark, Some(first));
+
+    sequencer.block_publisher().fail_publishes();
+    let failed = sequencer.run_production_turn().await;
+    assert!(failed.is_err(), "the canned publish failure must surface");
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        mark,
+        "a block that never reached the channel must not claim its height"
+    );
+    assert!(
+        sequencer.rewound_below_published().await.is_none(),
+        "the next turn must still be allowed to run"
+    );
+}
+
+/// A head rewound after the turn gate has already passed must not republish a
+/// height the channel already carries.
+#[tokio::test]
+async fn a_rewind_after_the_turn_gate_does_not_republish_a_taken_height() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    sequencer.run_production_turn().await.unwrap();
+    let published_tip = sequencer.run_production_turn().await.unwrap();
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(published_tip)
+    );
+
+    // The tip is orphaned but stays inscribed, so the mark must hold.
+    let tip_block = sequencer
+        .store
+        .block_at_id(published_tip)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(MsgId::from([8_u8; 32])),
+            orphaned: vec![tip_block.clone()],
+            adopted: vec![tip_block],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    // Rewind the head without touching the mark, as a reorg landing mid-turn
+    // would.
+    let readopted = sequencer
+        .store
+        .block_at_id(published_tip)
+        .await
+        .unwrap()
+        .unwrap();
+    sequencer.chain().lock().await.revert_orphan(&readopted);
+    assert_eq!(sequencer.next_block_height().await, published_tip);
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(published_tip),
+        "the mark still covers the height the turn is about to reuse"
+    );
+
+    let republished = sequencer.run_production_turn().await;
+    assert!(
+        republished.is_err(),
+        "a turn must not inscribe a height the mark already covers"
+    );
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(published_tip),
+        "the refused turn leaves the mark untouched"
+    );
+}
+
+/// A block is chained on the entry its head sat on, so a tip that moved between
+/// building and publishing refuses the inscription instead of taking a height
+/// the channel already carries.
+#[tokio::test]
+async fn a_block_is_refused_when_the_channel_tip_moved_under_it() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+
+    let first = sequencer.run_production_turn().await.unwrap();
+    let mark = sequencer.store.published_high_water().await.unwrap();
+    assert_eq!(mark, Some(first));
+
+    // Someone else's inscription took the tip since our head was built.
+    sequencer
+        .block_publisher()
+        .set_channel_tip(Some(MsgId::from([42_u8; 32])));
+
+    let refused = sequencer.run_production_turn().await;
+    assert!(
+        refused.is_err(),
+        "a block chained on a stale entry must not be inscribed"
+    );
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        mark,
+        "the refused block leaves its height free"
+    );
+}
+
+/// A skippable inscription (garbage, a config op) owns the channel tip without
+/// moving the head. The cursor follows it, so the next block still lands —
+/// pinned on the junk entry, its content chained on the last valid block.
+#[tokio::test]
+async fn production_chains_on_an_ignorable_inscription_at_the_tip() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let first = sequencer.run_production_turn().await.unwrap();
+
+    // A peer's garbage inscription takes the tip; the sdk reports it only as
+    // the checkpoint's tip, with an empty delta.
+    let junk = MsgId::from([42_u8; 32]);
+    sequencer.block_publisher().set_channel_tip(Some(junk));
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(junk),
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    let next = sequencer
+        .run_production_turn()
+        .await
+        .expect("the pin must follow the channel tip past an ignorable inscription");
+    assert_eq!(next, first + 1, "the junk owns no height");
+}
+
+/// A reorg that drops the entry the pin names must fall back to the entry the
+/// reorg left behind, or every later publish is refused on a dead parent.
+#[tokio::test]
+async fn an_orphan_of_the_pinned_block_rewinds_to_the_surviving_entry() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    sequencer.run_production_turn().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
+    let block3 = sequencer.store.block_at_id(3).await.unwrap().unwrap();
+    let block2_msg = mock_msg_of(&block2);
+    let block3_msg = mock_msg_of(&block3);
+    assert_eq!(
+        sequencer.chain().lock().await.pin_parent(),
+        Some(block3_msg),
+        "our newest publish owns the tip"
+    );
+
+    // The reorg drops our newest inscription; the one below it still stands,
+    // and the checkpoint names it.
+    sequencer
+        .block_publisher()
+        .set_channel_tip(Some(block2_msg));
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(block2_msg),
+            orphaned: vec![block3],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.chain().lock().await.pin_parent(),
+        Some(block2_msg),
+        "the pin must rewind onto the entry still on the branch"
+    );
+    sequencer
+        .run_production_turn()
+        .await
+        .expect("the next block must pin on the entry the reorg left at the tip");
+}
+
+/// An orphaned entry that is not a block never reaches `orphaned` — nothing in
+/// the head reverts for it — so only the checkpoint can rewind the pin off it.
+#[tokio::test]
+async fn an_orphan_of_an_ignorable_entry_rewinds_the_pin() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    sequencer.run_production_turn().await.unwrap();
+    let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
+    let block2_msg = mock_msg_of(&block2);
+
+    // A peer's garbage inscription takes the tip without moving the head.
+    let junk = MsgId::from([42_u8; 32]);
+    sequencer.block_publisher().set_channel_tip(Some(junk));
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(junk),
+            ..empty_follow_update()
+        },
+    )
+    .await;
+    assert_eq!(sequencer.chain().lock().await.pin_parent(), Some(junk));
+
+    // The reorg drops only the garbage, so the head sees nothing at all.
+    sequencer
+        .block_publisher()
+        .set_channel_tip(Some(block2_msg));
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(block2_msg),
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.chain().lock().await.pin_parent(),
+        Some(block2_msg),
+        "the pin must come off an entry no report could revert"
+    );
+    sequencer
+        .run_production_turn()
+        .await
+        .expect("the next block must pin on the block the garbage sat on");
+}
+
+/// Two ignorable entries stacked on the channel: dropping the newer one must
+/// land the pin on the older, which neither tier can name — the checkpoint
+/// alone holds it.
+#[tokio::test]
+async fn an_orphan_of_the_newest_ignorable_entry_falls_back_to_the_one_below() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    sequencer.run_production_turn().await.unwrap();
+    let first_junk = MsgId::from([41_u8; 32]);
+    let second_junk = MsgId::from([42_u8; 32]);
+    sequencer
+        .block_publisher()
+        .set_channel_tip(Some(second_junk));
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(second_junk),
+            ..empty_follow_update()
+        },
+    )
+    .await;
+    assert_eq!(
+        sequencer.chain().lock().await.pin_parent(),
+        Some(second_junk)
+    );
+
+    // The reorg drops only the newer garbage.
+    sequencer
+        .block_publisher()
+        .set_channel_tip(Some(first_junk));
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(first_junk),
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.chain().lock().await.pin_parent(),
+        Some(first_junk),
+        "the pin must land on the ignorable entry the reorg left at the tip"
+    );
+    sequencer
+        .run_production_turn()
+        .await
+        .expect("the next block must pin on the surviving ignorable entry");
+}
+
+/// A fully finalized channel still pins: a pin of `None` is not "unpinned is
+/// fine", it selects the racy publish. And the LIB-pruning orphan report that
+/// follows finalization must not move the pin off an entry the channel holds.
+#[tokio::test]
+async fn the_pin_stays_on_a_finalized_entry_through_its_pruning_report() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    sequencer.run_production_turn().await.unwrap();
+    let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
+    let block2_msg = mock_msg_of(&block2);
+
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(block2_msg),
+            finalized: vec![block2.clone()],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+    assert_eq!(
+        sequencer.chain().lock().await.pin_parent(),
+        Some(block2_msg),
+        "the finalized entry carries the pin"
+    );
+
+    // LIB pruning reports our finalized inscription as orphaned a poll or two
+    // later; the channel still holds it, so the checkpoint's tip stays put.
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(block2_msg),
+            orphaned: vec![block2],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.chain().lock().await.pin_parent(),
+        Some(block2_msg),
+        "an entry the channel still holds keeps the pin"
+    );
+    sequencer
+        .run_production_turn()
+        .await
+        .expect("the next block must pin on the finalized tip");
+}
+
+/// A pin on an entry we published ourselves at startup must still produce,
+/// even while the channel read is too old to show it.
+#[tokio::test]
+async fn the_pin_the_bootstrap_publishes_leave_survives_a_lagging_channel_read() {
+    let mut config = setup_sequencer_config();
+    // No channel yet, so startup creates it and publishes our stored blocks.
+    config.bedrock_config.channel_id = ChannelId::from(crate::mock::ABSENT_CHANNEL_ID);
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+
+    let pin = sequencer.chain().lock().await.pin_parent();
+    assert!(pin.is_some(), "the bootstrap publishes leave a pin");
+
+    // The read does not show our genesis yet.
+    sequencer
+        .block_publisher()
+        .set_stale_tip_read(MsgId::from([42_u8; 32]));
+
+    assert!(
+        sequencer.pin_behind_channel_tip().await.is_none(),
+        "a pin on our own bootstrap inscription must not be read as behind"
+    );
+    sequencer
+        .run_production_turn()
+        .await
+        .expect("the first turn must produce, pinned on what the bootstrap published");
+}
+
+/// The sdk can deliver a checkpoint it built before our publishes, whose tip is
+/// root on a channel that did not exist yet. Believing it would rewind the pin
+/// onto a channel we have since filled.
+#[tokio::test]
+async fn a_buffered_startup_checkpoint_cannot_rewind_the_pin() {
+    let mut config = setup_sequencer_config();
+    config.bedrock_config.channel_id = ChannelId::from(crate::mock::ABSENT_CHANNEL_ID);
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let pin = sequencer.chain().lock().await.pin_parent();
+    assert!(pin.is_some(), "the bootstrap publishes leave a pin");
+
+    // Built before our publishes, so it names none of them and its tip is root.
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(MsgId::root()),
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.chain().lock().await.pin_parent(),
+        pin,
+        "a stale startup tip must not rewind the pin off what the bootstrap published"
+    );
+    sequencer
+        .run_production_turn()
+        .await
+        .expect("the turn after a stale startup checkpoint must still produce");
+}
+
+/// zone-sdk does not resubmit an orphan, so an orphan report that re-adopts
+/// nothing frees the height for the next turn. A re-adopted block keeps it.
+#[tokio::test]
+async fn a_dropped_orphan_frees_the_published_height() {
     let config = setup_sequencer_config();
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
@@ -2305,68 +2735,117 @@ async fn head_rewound_below_published_height_blocks_production() {
         Some(published_tip),
         "publishing records the high water mark"
     );
-    assert!(
-        sequencer.rewound_below_published().await.is_none(),
-        "an intact head is free to produce"
-    );
 
     let mut produced: Vec<Block> = Vec::new();
     for id in [first, published_tip] {
         produced.push(sequencer.store.block_at_id(id).await.unwrap().unwrap());
     }
 
-    // The sdk reports both of them as orphaned.
+    // The sdk orphans the tip and re-adopts it under a fresh inscription.
     apply_follow_update(
         sequencer.block_store().storage_ref(),
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            orphaned: produced
-                .iter()
-                .map(|block| (MsgId::from([0_u8; 32]), block.clone()))
-                .collect(),
+            orphaned: vec![produced[1].clone()],
+            adopted: vec![produced[1].clone()],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(published_tip),
+        "a re-adopted block keeps the mark"
+    );
+    assert!(sequencer.rewound_below_published().await.is_none());
+
+    // The sdk orphans both and re-adopts neither.
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            orphaned: produced.iter().map(Clone::clone).collect(),
+            ..empty_follow_update()
+        },
+    )
+    .await;
+    // Dropping them takes the channel tip back with them.
+    sequencer.block_publisher().set_channel_tip(None);
+
+    assert_eq!(sequencer.next_block_height().await, first);
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(first - 1),
+        "the mark follows the rewound head"
+    );
+    assert!(
+        sequencer.rewound_below_published().await.is_none(),
+        "the freed height is ours to produce again"
+    );
+    assert_eq!(
+        sequencer.run_production_turn().await.unwrap(),
+        first,
+        "production resumes at the freed height"
+    );
+}
+
+/// A block the channel put back is still on the channel, so its height stays
+/// reserved even when another orphan in the same update was dropped.
+#[tokio::test]
+async fn a_readopted_block_above_the_head_keeps_the_published_height() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let first = sequencer.run_production_turn().await.unwrap();
+    let second = sequencer.run_production_turn().await.unwrap();
+    let third = sequencer.run_production_turn().await.unwrap();
+    let mut produced: Vec<Block> = Vec::new();
+    for id in [first, second, third] {
+        produced.push(sequencer.store.block_at_id(id).await.unwrap().unwrap());
+    }
+
+    // A finalized floor, so the orphan report below cannot rewind past `first`.
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            finalized: vec![produced[0].clone()],
             ..empty_follow_update()
         },
     )
     .await;
 
-    assert!(
-        sequencer
-            .store
-            .latest_block_meta()
-            .await
-            .unwrap()
-            .unwrap()
-            .id
-            < published_tip,
-        "the orphan report rewound the stored tip"
+    // The channel drops both, then puts the tip back on a parent we do not hold,
+    // so it lands above the head instead of applying.
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            orphaned: produced[1..].iter().map(Clone::clone).collect(),
+            adopted: vec![produced[2].clone()],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.next_block_height().await,
+        second,
+        "the head rewound to the finalized floor"
+    );
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(third),
+        "a dropped orphan alongside it must not free the readopted height"
     );
     assert_eq!(
         sequencer.rewound_below_published().await,
-        Some(published_tip),
-        "the mark outlives the pruning and blocks the turn"
-    );
-
-    // Those inscriptions were on the channel all along: finalizing them rebases
-    // the head onto them, and production is free again. The guard is a wait.
-    apply_follow_update(
-        sequencer.block_store().storage_ref(),
-        &sequencer.chain(),
-        &mempool_handle,
-        FollowUpdate {
-            finalized: produced
-                .iter()
-                .map(|block| (MsgId::from([1_u8; 32]), block.clone()))
-                .collect(),
-            ..empty_follow_update()
-        },
-    )
-    .await;
-
-    assert_eq!(sequencer.next_block_height().await, published_tip + 1);
-    assert!(
-        sequencer.rewound_below_published().await.is_none(),
-        "a recovered head resumes producing"
+        Some(third),
+        "so the turn is still held"
     );
 }
 
@@ -2430,7 +2909,7 @@ async fn follow_adopted_peer_block_applies_and_persists() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            adopted: vec![(MsgId::from([1; 32]), peer_block.clone())],
+            adopted: vec![peer_block.clone()],
             ..empty_follow_update()
         },
     )
@@ -2480,7 +2959,7 @@ async fn follow_redelivery_of_own_block_is_deduped() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            adopted: vec![(MsgId::from(block2.header.hash.0), block2)],
+            adopted: vec![block2],
             ..empty_follow_update()
         },
     )
@@ -2523,7 +3002,7 @@ async fn follow_orphan_reverts_head_and_requeues_user_txs() {
         &mempool_handle,
         FollowUpdate {
             adopted: vec![],
-            orphaned: vec![(MsgId::from(block2.header.hash.0), block2)],
+            orphaned: vec![block2],
             ..empty_follow_update()
         },
     )
@@ -2580,7 +3059,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            finalized: vec![(MsgId::from(block2.header.hash.0), block2.clone())],
+            finalized: vec![block2.clone()],
             ..empty_follow_update()
         },
     )
@@ -2590,7 +3069,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            orphaned: vec![(MsgId::from(block2.header.hash.0), block2)],
+            orphaned: vec![block2],
             ..empty_follow_update()
         },
     )
@@ -2634,7 +3113,7 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
         FollowUpdate {
             adopted: vec![],
             orphaned: vec![],
-            finalized: vec![(MsgId::from(block2.header.hash.0), block2)],
+            finalized: vec![block2],
             ..empty_follow_update()
         },
     )
@@ -2690,7 +3169,7 @@ async fn follow_finalized_delivery_drops_its_pending_record() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            finalized: vec![(MsgId::from(delivery_block.header.hash.0), delivery_block)],
+            finalized: vec![delivery_block],
             ..empty_follow_update()
         },
     )
@@ -2739,7 +3218,7 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            finalized: vec![(MsgId::from([9; 32]), parked)],
+            finalized: vec![parked],
             ..empty_follow_update()
         },
     )
@@ -2778,7 +3257,7 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
         FollowUpdate {
             adopted: vec![],
             orphaned: vec![],
-            finalized: vec![(MsgId::from([2; 32]), peer_block.clone())],
+            finalized: vec![peer_block.clone()],
             ..empty_follow_update()
         },
     )
@@ -2844,7 +3323,7 @@ async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_r
         FollowUpdate {
             adopted: vec![],
             orphaned: vec![],
-            finalized: vec![(MsgId::from([9; 32]), parked)],
+            finalized: vec![parked],
             ..empty_follow_update()
         },
     )
@@ -2916,8 +3395,8 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            adopted: vec![(MsgId::from([21; 32]), block2_prime.clone())],
-            orphaned: vec![(MsgId::from([20; 32]), block2)],
+            adopted: vec![block2_prime.clone()],
+            orphaned: vec![block2],
             ..empty_follow_update()
         },
     )
@@ -2950,6 +3429,62 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
     assert_eq!(requeued, tx);
 }
 
+/// An orphan the same update puts back is on the head with its transactions
+/// applied, so requeueing them would duplicate work the block already carries.
+#[tokio::test]
+async fn a_readopted_orphan_does_not_requeue_its_transactions() {
+    let config = setup_sequencer_config();
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let tx = common::test_utils::create_transaction_native_token_transfer(
+        acc1,
+        0,
+        acc2,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, tx))
+        .await
+        .unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
+    assert!(
+        sequencer.mempool.pop().is_none(),
+        "production must have drained the transaction into the block"
+    );
+
+    // The channel drops the block and puts the very same one back.
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            orphaned: vec![block2.clone()],
+            adopted: vec![block2.clone()],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    let head_tip = sequencer
+        .chain()
+        .lock()
+        .await
+        .head_tip()
+        .expect("head tip set");
+    assert_eq!(
+        head_tip.hash, block2.header.hash,
+        "the re-adopted block is back on the head"
+    );
+    assert!(
+        sequencer.mempool.pop().is_none(),
+        "a re-adopted block must not requeue its transactions"
+    );
+}
+
 #[tokio::test]
 async fn restart_reanchors_on_the_persisted_final_snapshot() {
     let config = setup_sequencer_config();
@@ -2972,7 +3507,7 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
             FollowUpdate {
                 adopted: vec![],
                 orphaned: vec![],
-                finalized: vec![(MsgId::from(block2.header.hash.0), block2)],
+                finalized: vec![block2],
                 ..empty_follow_update()
             },
         )
@@ -3003,11 +3538,7 @@ async fn record_produced_block_skips_persistence_on_lost_race() {
 
     // A peer block wins height 2 while "our" block is in flight.
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
-    sequencer
-        .chain()
-        .lock()
-        .await
-        .apply_adopted(MsgId::from([9; 32]), &peer_block);
+    sequencer.chain().lock().await.apply_adopted(&peer_block);
 
     // Our competing block at the same height: same parent, different content.
     let acc1 = initial_public_user_accounts()[0].account_id;
@@ -3022,7 +3553,7 @@ async fn record_produced_block_skips_persistence_on_lost_race() {
     let our_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![tx]);
     sequencer
         .record_produced_block(
-            MsgId::from(our_block.header.hash.0),
+            mock_msg_of(&our_block),
             our_block.clone(),
             vec![],
             &mock_checkpoint(),
@@ -3045,7 +3576,7 @@ async fn record_produced_block_skips_persistence_when_block_no_longer_chains() {
     let stale = common::test_utils::produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
     sequencer
         .record_produced_block(
-            MsgId::from(stale.header.hash.0),
+            mock_msg_of(&stale),
             stale.clone(),
             vec![],
             &mock_checkpoint(),
@@ -3086,12 +3617,9 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            adopted: vec![
-                (MsgId::from([2; 32]), block2.clone()),
-                (MsgId::from([3; 32]), block3.clone()),
-            ],
+            adopted: vec![block2.clone(), block3.clone()],
             orphaned: vec![],
-            finalized: vec![(MsgId::from([2; 32]), block2)],
+            finalized: vec![block2],
             ..empty_follow_update()
         },
     )
@@ -3658,4 +4186,182 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         record.pending_unstake.map(|pending| pending.amount),
         Some(system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE)
     );
+}
+
+/// The sink burned stakes land in.
+fn slash_sink_id() -> AccountId {
+    sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake().id())
+}
+
+/// Stakes `amount` for a fresh key and returns everything a slash test needs.
+fn slashable_state(
+    amount: u128,
+) -> (
+    V03State,
+    sequencer_stake_core::SequencerKey,
+    AccountId,
+    PrivateKey,
+) {
+    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let ownership_key = PrivateKey::try_new([42; 32]).unwrap();
+    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let sequencer_key = test_sequencer_key(0x44);
+
+    let mut state = stake_test_state(funding_id, amount);
+    let stake = stake_transaction(
+        &state,
+        (funding_id, &funding_key),
+        (ownership_id, &ownership_key),
+        sequencer_key,
+        amount,
+    );
+    state
+        .transition_from_public_transaction(&stake, 1, 0)
+        .expect("Stake should succeed");
+
+    (state, sequencer_key, ownership_id, ownership_key)
+}
+
+/// An approval signed by `seed`'s Bedrock key.
+fn test_approval(
+    seed: u8,
+    sequencer_key: sequencer_stake_core::SequencerKey,
+) -> sequencer_stake_core::SlashApproval {
+    let key = Ed25519Key::from_bytes(&[seed; 32]);
+    let message = sequencer_stake_core::slash_approval_message(sequencer_key, TEST_INSCRIPTION);
+    sequencer_stake_core::SlashApproval {
+        signer: sequencer_stake_core::SequencerKey::new(key.public_key().to_bytes())
+            .expect("a Bedrock public key is a valid Ed25519 public key"),
+        signature: key.sign_payload(&message).to_bytes().to_vec(),
+    }
+}
+
+fn slash_transaction(
+    ownership_id: AccountId,
+    sequencer_key: sequencer_stake_core::SequencerKey,
+    approvals: Vec<sequencer_stake_core::SlashApproval>,
+) -> PublicTransaction {
+    let LeeTransaction::Public(tx) =
+        crate::slashing::build_slash_tx(ownership_id, sequencer_key, TEST_INSCRIPTION, approvals)
+            .expect("Slash tx should build")
+    else {
+        unreachable!("build_slash_tx builds a public transaction")
+    };
+    tx
+}
+
+#[test]
+fn a_slash_burns_the_tracked_stake_to_the_sink() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, _ownership_key) = slashable_state(amount);
+
+    let slash = slash_transaction(
+        ownership_id,
+        sequencer_key,
+        vec![test_approval(0x44, sequencer_key)],
+    );
+    state
+        .transition_from_public_transaction(&slash, 2, 0)
+        .expect("Slash should succeed");
+
+    assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
+    assert_eq!(state.get_account_by_id(slash_sink_id()).balance, amount);
+    assert_eq!(stake_entry(&state, sequencer_key), None);
+
+    // A replay has no entry left to burn.
+    assert!(
+        state
+            .transition_from_public_transaction(&slash, 3, 0)
+            .is_err()
+    );
+}
+
+#[test]
+fn a_slash_claws_back_a_pending_unstake() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, ownership_key) = slashable_state(amount);
+    let destination = AccountId::new([77; 32]);
+
+    let unstake = unstake_request_transaction(
+        &state,
+        (ownership_id, &ownership_key),
+        system_accounts::sequencer_stake_config_account_id(),
+        amount,
+        destination,
+    );
+    state
+        .transition_from_public_transaction(&unstake, 2, 0)
+        .expect("UnstakeRequest should succeed");
+
+    let slash = slash_transaction(
+        ownership_id,
+        sequencer_key,
+        vec![test_approval(0x44, sequencer_key)],
+    );
+    state
+        .transition_from_public_transaction(&slash, 3, 0)
+        .expect("Slash should succeed");
+
+    // The pending release burned with the rest; nothing is left to finalize.
+    assert_eq!(state.get_account_by_id(slash_sink_id()).balance, amount);
+    assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
+    let LeeTransaction::Public(finalize) = build_finalize_unstake_tx(
+        ownership_id,
+        sequencer_stake_core::PendingUnstake {
+            amount,
+            destination,
+        },
+    )
+    .unwrap() else {
+        unreachable!("build_finalize_unstake_tx builds a public transaction")
+    };
+    assert!(
+        state
+            .transition_from_public_transaction(&finalize, 4, 0)
+            .is_err()
+    );
+}
+
+#[test]
+fn a_slash_without_enough_approvals_is_rejected() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, _ownership_key) = slashable_state(amount);
+
+    // No signatures, no authorization.
+    let unapproved = slash_transaction(ownership_id, sequencer_key, Vec::new());
+    assert!(
+        state
+            .transition_from_public_transaction(&unapproved, 2, 0)
+            .is_err()
+    );
+
+    // An unaccredited signer counts for nothing.
+    let outsider = slash_transaction(
+        ownership_id,
+        sequencer_key,
+        vec![test_approval(0x55, sequencer_key)],
+    );
+    assert!(
+        state
+            .transition_from_public_transaction(&outsider, 2, 0)
+            .is_err()
+    );
+
+    // Nor an accredited signer over a different inscription.
+    let mut wrong_inscription = test_approval(0x44, sequencer_key);
+    wrong_inscription.signature = {
+        let key = Ed25519Key::from_bytes(&[0x44; 32]);
+        let message = sequencer_stake_core::slash_approval_message(sequencer_key, [0xFF; 32]);
+        key.sign_payload(&message).to_bytes().to_vec()
+    };
+    let mismatched = slash_transaction(ownership_id, sequencer_key, vec![wrong_inscription]);
+    assert!(
+        state
+            .transition_from_public_transaction(&mismatched, 2, 0)
+            .is_err()
+    );
+
+    assert_eq!(state.get_account_by_id(ownership_id).balance, amount);
+    assert_eq!(state.get_account_by_id(slash_sink_id()).balance, 0);
 }

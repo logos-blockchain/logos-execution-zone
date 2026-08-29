@@ -362,13 +362,10 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
 
     // Sequencer B: the cold-start backfill finalizes A's chain into its store.
     let (seq_b, mempool_b) = start_sequencer(setup_sequencer_config()).await;
-    let mut finalized: Vec<(MsgId, Block)> = Vec::new();
+    let mut finalized: Vec<Block> = Vec::new();
     for id in seq_b.block_store().genesis_id()..=tip_a.id {
         let block = seq_a.block_store().block_at_id(id).await.unwrap().unwrap();
-        finalized.push((
-            MsgId::from([u8::try_from(id).expect("should be u8"); 32]),
-            block,
-        ));
+        finalized.push(block);
     }
     apply_follow_update(
         seq_b.block_store().storage_ref(),
@@ -469,7 +466,7 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
         &seq_b.chain(),
         &mempool_b,
         FollowUpdate {
-            adopted: vec![(MsgId::from([7_u8; 32]), competitor)],
+            adopted: vec![competitor],
             ..empty_follow_update()
         },
     )
