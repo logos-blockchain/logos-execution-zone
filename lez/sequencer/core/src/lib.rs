@@ -8,7 +8,8 @@ use std::{
 use anyhow::{Context as _, Result, anyhow};
 use borsh::BorshDeserialize;
 use chain_state::{
-    AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState, Tip,
+    AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState,
+    FollowOutcome, Tip,
 };
 use common::{
     HashType,
@@ -145,8 +146,6 @@ pub struct SequencerCore<
     slash_record: slashing::SlashRecord,
     /// Signs this node's approval of a slash.
     bedrock_signing_key: block_publisher::Ed25519Key,
-    /// Our newest published inscription; a pin on it is fresh before the channel shows it.
-    own_tip_msg: Option<MsgId>,
 }
 
 impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
@@ -196,7 +195,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             .await
             .unwrap_or_else(|err| panic!("Failed to read the stored channel cursor: {err:#}"))
         {
-            chain.set_channel_cursor(MsgId::from(cursor));
+            chain.restore_cursor(MsgId::from(cursor));
         } else if let Some(checkpoint) = store
             .get_zone_checkpoint()
             .await
@@ -204,7 +203,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         {
             // A store from before the cursor cell existed still pins: the sdk
             // checkpoint carries the channel tip it was built on.
-            chain.set_channel_cursor(checkpoint.last_msg_id);
+            chain.restore_cursor(checkpoint.last_msg_id);
         } else {
             // Nothing followed yet; the bootstrap publishes seed the pin.
         }
@@ -377,9 +376,6 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 .expect("Failed to seed published high water mark");
         }
 
-        // The newest entry we published, if we published any.
-        let mut own_tip_msg = None;
-
         // Publish our blocks only when we are bootstrapping a channel that does
         // not exist yet (no channel tip). If the channel already exists (another
         // sequencer created it), we adopted its blocks during reconstruction
@@ -428,8 +424,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 chain
                     .lock()
                     .await
-                    .set_channel_cursor(outcome.checkpoint.last_msg_id);
-                own_tip_msg = Some(outcome.checkpoint.last_msg_id);
+                    .record_own_inscription(outcome.checkpoint.last_msg_id, block.header.hash);
                 last_checkpoint = Some(outcome.checkpoint);
                 store
                     .raise_published_high_water(block.header.block_id)
@@ -458,7 +453,6 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             last_committee_submission_slot: None,
             slash_record,
             bedrock_signing_key,
-            own_tip_msg,
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
@@ -658,15 +652,10 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             return Ok(());
         }
 
-        // Above the final tier the head is reorg-able, so finalized history
-        // wins: `apply_finalized` finalizes the matching prefix and rebases the
-        // head onto what the channel settled. Validation happens inside it.
-        match chain.apply_finalized(block, slot) {
-            AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied => {
-                // The channel replays in order, so this inscription is the tip
-                // so far.
-                chain.set_channel_cursor(this_msg);
-            }
+        // Above the final tier the head is reorg-able, so finalized history wins:
+        // the head rebases onto what the channel settled. Validation happens inside.
+        match chain.apply_reconstructed(block, slot, this_msg) {
+            AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied => {}
             AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
                 return Err(anyhow!(
                     "Channel block {block_id} does not extend local tip {:?}: {err}",
@@ -895,12 +884,9 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let checkpoint_bytes = block_store::checkpoint_bytes(checkpoint)?;
 
         let mut chain = self.chain.lock().await;
-        match chain.apply_produced(&block) {
+        match chain.apply_produced(&block, this_msg) {
             AcceptOutcome::Applied => {
                 let block_id = block.header.block_id;
-                // Our inscription is the channel tip from here.
-                chain.set_channel_cursor(this_msg);
-                self.own_tip_msg = Some(this_msg);
                 self.store
                     .record_new_block(
                         block,
@@ -1534,10 +1520,14 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     /// The live channel tip when it has moved past our pin, meaning the next
     /// publish would be refused and the caller should skip its turn.
     pub async fn pin_behind_channel_tip(&self) -> Option<MsgId> {
-        let pin = self.chain.lock().await.pin_parent()?;
-        if self.own_tip_msg == Some(pin) {
-            return None;
-        }
+        let pin = {
+            let chain = self.chain.lock().await;
+            // A read can trail a publish of ours, so it cannot judge one.
+            if chain.pin_is_ours() {
+                return None;
+            }
+            chain.pin_parent()?
+        };
         match self.block_publisher.channel_tip_message().await {
             Ok(Some(tip)) if tip != pin => Some(tip),
             Ok(_) => None,
@@ -1703,13 +1693,23 @@ async fn apply_follow_update<S: StorageActorTrait>(
             );
         }
 
-        // Orphans first, then adopted blocks in channel order. Outcomes align
-        // with `adopted`.
-        let _no_adoptions = chain.apply_channel_update(&orphaned, &[]);
-        let outcomes: Vec<AcceptOutcome> = adopted
-            .iter()
-            .map(|block| chain.apply_adopted(block))
-            .collect();
+        // The whole delta in one call. Outcomes align with the blocks passed in.
+        let FollowOutcome {
+            adopted: outcomes,
+            finalized: finalized_outcomes,
+            cursor_moved: _,
+        } = chain.apply_follow(
+            &orphaned,
+            &adopted,
+            &finalized,
+            // FIXME: thread the finalized inscription's L1 slot instead of
+            // `Slot::from(0)`; only used for the invalid-finalized stall.
+            // logos-blockchain PR #3147 surfaces it as `FinalizedTx.l1_slot` —
+            // wire it through `FollowUpdate::finalized` once the zone-sdk pin is
+            // bumped past that (a separate PR).
+            Slot::from(0),
+            checkpoint.last_msg_id,
+        );
 
         // An adoption that does not apply freezes the head where it is, and
         // every later one then fails the same way. Nothing else reports it.
@@ -1741,13 +1741,8 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // or dropping its deposit records would lose them for good.
         let mut irreversible: Vec<&Block> = Vec::new();
         let mut final_advanced = false;
-        for block in &finalized {
-            // FIXME: thread the finalized inscription's L1 slot instead of
-            // `Slot::from(0)`; only used for the invalid-finalized stall.
-            // logos-blockchain PR #3147 surfaces it as `FinalizedTx.l1_slot` —
-            // wire it through `FollowUpdate::finalized` once the zone-sdk pin is
-            // bumped past that (a separate PR).
-            match chain.apply_finalized(block, Slot::from(0)) {
+        for (block, outcome) in finalized.iter().zip(&finalized_outcomes) {
+            match outcome {
                 AcceptOutcome::Applied => {
                     to_persist.push((block, true));
                     irreversible.push(block);
@@ -1768,11 +1763,6 @@ async fn apply_follow_update<S: StorageActorTrait>(
                 }
             }
         }
-
-        // The checkpoint rode in with this delta, so its `last_msg_id` is the
-        // channel tip on the view just applied: the surviving entry after an
-        // orphan, and entries the head never carries (garbage, config ops).
-        chain.set_channel_cursor(checkpoint.last_msg_id);
 
         // User txs of orphaned blocks, returned to the mempool below.
         //

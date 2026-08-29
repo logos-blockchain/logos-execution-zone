@@ -1,9 +1,9 @@
 //! Two-tier chain state: a reorg-able `head` the sequencer builds on, plus an
 //! irreversible `final` tier.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use common::block::Block;
+use common::{HashType, block::Block};
 use lee::V03State;
 use log::warn;
 use logos_blockchain_core::mantle::ops::channel::MsgId;
@@ -13,6 +13,25 @@ use crate::{
     AcceptOutcome, BlockIngestError, StallReason,
     apply::{Tip, apply_block},
 };
+
+/// An inscription of ours the channel has not reported on yet.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct OwnPublish {
+    /// The entry it chained on.
+    parent: MsgId,
+    /// The entry it created.
+    msg: MsgId,
+}
+
+/// What one channel update did to each tier, aligned with the blocks passed in.
+pub struct FollowOutcome {
+    /// One per adopted block, in order.
+    pub adopted: Vec<AcceptOutcome>,
+    /// One per finalized block, in order.
+    pub finalized: Vec<AcceptOutcome>,
+    /// Whether the update's channel tip was believed and became the new pin.
+    pub cursor_moved: bool,
+}
 
 /// The head tier (reorg-able, from `adopted`/`orphaned`) over the final tier
 /// (irreversible, from `finalized`).
@@ -34,6 +53,10 @@ pub struct ChainState {
     /// inscription (garbage, an invalid block, a config op) moves the channel
     /// tip without moving the head, and the next publish must chain on it.
     channel_cursor: Option<MsgId>,
+
+    /// Our own inscriptions the channel has not reported on yet, keyed by the
+    /// block each carried.
+    own_publishes: HashMap<HashType, OwnPublish>,
 }
 
 impl ChainState {
@@ -54,6 +77,7 @@ impl ChainState {
             head_blocks: Vec::new(),
             final_stall: None,
             channel_cursor: None,
+            own_publishes: HashMap::new(),
         }
     }
 
@@ -110,9 +134,40 @@ impl ChainState {
         self.channel_cursor
     }
 
-    /// Moves the cursor to `msg`; callers pass inscriptions in channel order.
-    pub const fn set_channel_cursor(&mut self, msg: MsgId) {
+    /// Whether the pin names an inscription of ours the channel has yet to report.
+    #[must_use]
+    pub fn pin_is_ours(&self) -> bool {
+        self.own_publishes
+            .values()
+            .any(|publish| Some(publish.msg) == self.channel_cursor)
+    }
+
+    /// Moves the cursor to an entry the channel reported.
+    const fn set_channel_cursor(&mut self, msg: MsgId) {
         self.channel_cursor = Some(msg);
+    }
+
+    /// Restores a persisted cursor at startup. Records nothing as ours: a
+    /// previous run's inscriptions are not in flight for this one.
+    pub const fn restore_cursor(&mut self, msg: MsgId) {
+        self.set_channel_cursor(msg);
+    }
+
+    /// Records an inscription of ours over a block the head already holds, and
+    /// pins on it. The entry it chained on is whatever the pin was.
+    pub fn record_own_inscription(&mut self, msg: MsgId, block: HashType) {
+        let parent = self.channel_cursor.unwrap_or_else(MsgId::root);
+        self.own_publishes.insert(block, OwnPublish { parent, msg });
+        self.channel_cursor = Some(msg);
+    }
+
+    /// Drops our record of every block this update reports on. The sdk omits our
+    /// own landed block from `adopted` except on a branch change, so `finalized`
+    /// carries the ordinary case.
+    fn resolve_own_publishes(&mut self, reports: [&[Block]; 3]) {
+        for block in reports.into_iter().flatten() {
+            self.own_publishes.remove(&block.header.hash);
+        }
     }
 
     #[must_use]
@@ -198,14 +253,19 @@ impl ChainState {
     /// the channel yet, so it may only *extend* the head. A head already at
     /// (or past) this height means a peer's block won the race on the
     /// channel — ours is stale and the caller drops it.
-    pub fn apply_produced(&mut self, block: &Block) -> AcceptOutcome {
+    pub fn apply_produced(&mut self, block: &Block, this_msg: MsgId) -> AcceptOutcome {
         if self
             .head_tip()
             .is_some_and(|tip| block.header.block_id <= tip.block_id)
         {
             return AcceptOutcome::AlreadyApplied;
         }
-        self.apply_adopted(block)
+        let outcome = self.apply_adopted(block);
+        // Only a block that became the head is ours to pin on.
+        if matches!(outcome, AcceptOutcome::Applied) {
+            self.record_own_inscription(this_msg, block.header.hash);
+        }
+        outcome
     }
 
     /// Reverts an orphaned head block and everything after it, then re-derives head.
@@ -235,6 +295,73 @@ impl ChainState {
             .iter()
             .map(|block| self.apply_adopted(block))
             .collect()
+    }
+
+    /// A finalized block replayed off the channel at startup. The channel
+    /// replays in order, so a block that applies leaves its own inscription as
+    /// the tip so far.
+    pub fn apply_reconstructed(
+        &mut self,
+        block: &Block,
+        l1_slot: Slot,
+        this_msg: MsgId,
+    ) -> AcceptOutcome {
+        let outcome = self.apply_finalized(block, l1_slot);
+        if matches!(
+            outcome,
+            AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied
+        ) {
+            self.set_channel_cursor(this_msg);
+        }
+        outcome
+    }
+
+    /// One channel update applied as a whole: the head reorg, the finalized
+    /// blocks, and the channel tip they leave behind. The only way a
+    /// channel-reported tip reaches the cursor.
+    pub fn apply_follow(
+        &mut self,
+        orphaned: &[Block],
+        adopted: &[Block],
+        finalized: &[Block],
+        finalized_slot: Slot,
+        channel_tip: MsgId,
+    ) -> FollowOutcome {
+        // Before the tip is judged, so this update's news frees its own parents.
+        self.resolve_own_publishes([orphaned, adopted, finalized]);
+
+        let adopted_outcomes = self.apply_channel_update(orphaned, adopted);
+        let finalized_outcomes = finalized
+            .iter()
+            .map(|block| self.apply_finalized(block, finalized_slot))
+            .collect();
+
+        let cursor_moved = self.cursor_may_move_to(channel_tip);
+        if cursor_moved {
+            self.set_channel_cursor(channel_tip);
+        }
+        FollowOutcome {
+            adopted: adopted_outcomes,
+            finalized: finalized_outcomes,
+            cursor_moved,
+        }
+    }
+
+    /// Whether a channel update may move the cursor onto `channel_tip`. A tip we
+    /// already chained an unreported block on publishes on the wrong parent.
+    fn cursor_may_move_to(&self, channel_tip: MsgId) -> bool {
+        if let Some(publish) = self
+            .own_publishes
+            .values()
+            .find(|publish| publish.parent == channel_tip)
+        {
+            warn!(
+                "Ignoring channel tip {channel_tip:?}: our unreported {:?} already chains on it",
+                publish.msg
+            );
+            return false;
+        }
+        true
     }
 
     /// Rebuilds one head entry from a persisted block, applying it in place (the
@@ -693,7 +820,7 @@ mod tests {
         let tx = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
         let ours = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
         assert!(matches!(
-            chain.apply_produced(&ours),
+            chain.apply_produced(&ours, msg(2)),
             AcceptOutcome::AlreadyApplied
         ));
         assert_eq!(chain.head_tip().expect("head tip").hash, peer.header.hash);
@@ -709,7 +836,7 @@ mod tests {
 
         let ours = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
-            chain.apply_produced(&ours),
+            chain.apply_produced(&ours, msg(2)),
             AcceptOutcome::Applied
         ));
         assert_eq!(chain.head_tip().expect("head tip").hash, ours.header.hash);
@@ -777,6 +904,119 @@ mod tests {
         // Garbage moved the channel tip; the head stays, the pin follows.
         chain.set_channel_cursor(msg(9));
         assert_eq!(chain.pin_parent(), Some(msg(9)));
+    }
+
+    /// A head holding a block of ours, published on `parent` and pinned on `ours`.
+    fn chain_with_our_block(parent: MsgId, ours: MsgId) -> (ChainState, Block) {
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        assert!(matches!(
+            chain.apply_adopted(&genesis),
+            AcceptOutcome::Applied
+        ));
+        chain.restore_cursor(parent);
+
+        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        assert!(matches!(
+            chain.apply_produced(&block, ours),
+            AcceptOutcome::Applied
+        ));
+        assert_eq!(chain.pin_parent(), Some(ours));
+        (chain, block)
+    }
+
+    /// The first inscription on a channel chains on root, so root is a used
+    /// parent from then on and a tip naming it is refused like any other.
+    #[test]
+    fn a_root_tip_is_refused_once_we_have_published_the_first_inscription() {
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        assert!(matches!(
+            chain.apply_adopted(&genesis),
+            AcceptOutcome::Applied
+        ));
+        // Nothing published yet: root is the parent the first inscription needs.
+        assert!(
+            chain
+                .apply_follow(&[], &[], &[], Slot::from(0), MsgId::root())
+                .cursor_moved
+        );
+
+        chain.record_own_inscription(msg(1), genesis.header.hash);
+
+        let outcome = chain.apply_follow(&[], &[], &[], Slot::from(0), MsgId::root());
+        assert!(!outcome.cursor_moved);
+        assert_eq!(
+            chain.pin_parent(),
+            Some(msg(1)),
+            "a root tip must not rewind the pin off our inscription"
+        );
+    }
+
+    /// Pinning back on an entry we already built on would put a second block at
+    /// one height, and the channel keeps only one of them.
+    #[test]
+    fn a_tip_naming_an_entry_we_already_chained_on_is_refused() {
+        let (mut chain, _ours) = chain_with_our_block(msg(2), msg(3));
+
+        let outcome = chain.apply_follow(&[], &[], &[], Slot::from(0), msg(2));
+
+        assert!(!outcome.cursor_moved);
+        assert_eq!(
+            chain.pin_parent(),
+            Some(msg(3)),
+            "the pin must stay on our block, not fall back to its parent"
+        );
+    }
+
+    /// A garbage inscription or a config op moves the tip while naming no block,
+    /// and must still be followed.
+    #[test]
+    fn a_tip_elsewhere_is_taken_even_when_no_block_of_ours_is_named() {
+        let (mut chain, _ours) = chain_with_our_block(msg(2), msg(3));
+
+        let outcome = chain.apply_follow(&[], &[], &[], Slot::from(0), msg(9));
+
+        assert!(outcome.cursor_moved);
+        assert_eq!(chain.pin_parent(), Some(msg(9)));
+    }
+
+    /// News about our block frees the entry it chained on, however it arrives.
+    #[test]
+    fn an_update_naming_our_block_frees_the_entry_it_chained_on() {
+        for report in ["adopted", "orphaned", "finalized"] {
+            let (mut chain, ours) = chain_with_our_block(msg(2), msg(3));
+            let held = vec![ours];
+            let (orphaned, adopted, finalized) = match report {
+                "adopted" => (Vec::new(), held, Vec::new()),
+                "orphaned" => (held, Vec::new(), Vec::new()),
+                _ => (Vec::new(), Vec::new(), held),
+            };
+
+            let outcome =
+                chain.apply_follow(&orphaned, &adopted, &finalized, Slot::from(0), msg(2));
+
+            assert!(
+                outcome.cursor_moved,
+                "an update reporting our block as {report} must free its parent"
+            );
+            assert_eq!(chain.pin_parent(), Some(msg(2)));
+        }
+    }
+
+    /// The pin counts as ours only until the channel rules on the block behind it.
+    #[test]
+    fn the_pin_is_ours_until_the_channel_reports_the_block() {
+        let (mut chain, ours) = chain_with_our_block(msg(2), msg(3));
+        assert!(chain.pin_is_ours());
+
+        chain.apply_follow(&[], &[], &[ours], Slot::from(0), msg(3));
+
+        assert_eq!(chain.pin_parent(), Some(msg(3)));
+        assert!(
+            !chain.pin_is_ours(),
+            "a block the channel has finalized is no longer in flight"
+        );
     }
 
     #[test]

@@ -2686,6 +2686,41 @@ async fn the_pin_the_bootstrap_publishes_leave_survives_a_lagging_channel_read()
         .expect("the first turn must produce, pinned on what the bootstrap published");
 }
 
+/// The sdk can deliver a checkpoint it built before our publishes, whose tip is
+/// root on a channel that did not exist yet. Believing it would rewind the pin
+/// onto a channel we have since filled.
+#[tokio::test]
+async fn a_buffered_startup_checkpoint_cannot_rewind_the_pin() {
+    let mut config = setup_sequencer_config();
+    config.bedrock_config.channel_id = ChannelId::from(crate::mock::ABSENT_CHANNEL_ID);
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let pin = sequencer.chain().lock().await.pin_parent();
+    assert!(pin.is_some(), "the bootstrap publishes leave a pin");
+
+    // Built before our publishes, so it names none of them and its tip is root.
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(MsgId::root()),
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.chain().lock().await.pin_parent(),
+        pin,
+        "a stale startup tip must not rewind the pin off what the bootstrap published"
+    );
+    sequencer
+        .run_production_turn()
+        .await
+        .expect("the turn after a stale startup checkpoint must still produce");
+}
+
 /// zone-sdk does not resubmit an orphan, so an orphan report that re-adopts
 /// nothing frees the height for the next turn. A re-adopted block keeps it.
 #[tokio::test]
