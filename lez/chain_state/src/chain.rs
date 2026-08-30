@@ -153,6 +153,12 @@ impl ChainState {
         self.set_channel_cursor(msg);
     }
 
+    /// An entry a replay holds no block for — garbage, or a payload this build
+    /// cannot decode. It moved the channel tip, so the pin follows it.
+    pub const fn skip_channel_entry(&mut self, msg: MsgId) {
+        self.set_channel_cursor(msg);
+    }
+
     /// Records an inscription of ours over a block the head already holds, and
     /// pins on it. The entry it chained on is whatever the pin was.
     pub fn record_own_inscription(&mut self, msg: MsgId, block: HashType) {

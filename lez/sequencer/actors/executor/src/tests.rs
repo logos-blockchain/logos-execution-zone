@@ -15,6 +15,7 @@ use lee::{
 use mockall::predicate::{always, eq, function};
 use num_bigint::BigUint;
 use sequencer_core::{
+    block_publisher::MsgId,
     config::{BedrockConfig, SequencerConfig},
     mock::MockBlockPublisher,
 };
@@ -22,7 +23,7 @@ use sequencer_storage_actor::mock::MockStorageActor;
 use tempfile::TempDir;
 use tokio::{sync::mpsc, test, time::timeout};
 
-use crate::{ExecutorActor, protocol};
+use crate::{ExecutorActor, actor::BlockedAttempts, protocol};
 
 fn sequencer_config() -> (SequencerConfig, TempDir) {
     let home = TempDir::new().expect("Failed to create temporary home directory");
@@ -197,6 +198,67 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
         .returning(|_, _| Ok(vec![]));
 
     mock_storage
+}
+
+/// A moving tip is catch-up, not a wedge, so the run restarts on a new tip.
+#[test]
+async fn a_blocked_run_restarts_whenever_the_channel_tip_changes() {
+    let mut blocked = BlockedAttempts::default();
+    let first = MsgId::from([1_u8; 32]);
+    let second = MsgId::from([2_u8; 32]);
+
+    assert_eq!(blocked.record(first), 1);
+    assert_eq!(blocked.record(first), 2);
+    assert_eq!(
+        blocked.record(second),
+        1,
+        "a different tip is a channel that moved, not a stuck one"
+    );
+    assert_eq!(blocked.record(second), 2);
+}
+
+/// A recovered node must not leave the gauge high.
+#[test]
+async fn clearing_a_blocked_run_reports_only_a_real_change() {
+    let mut blocked = BlockedAttempts::default();
+    assert!(!blocked.clear(), "nothing to clear before any skip");
+
+    blocked.record(MsgId::from([1_u8; 32]));
+    assert!(blocked.clear(), "a run that existed is worth reporting");
+    assert!(!blocked.clear(), "and only once");
+
+    assert_eq!(
+        blocked.record(MsgId::from([1_u8; 32])),
+        1,
+        "a cleared run starts over"
+    );
+}
+
+/// The scheduler's interval task gives up for good the first time it finds
+/// this actor stopped, so a turn that cannot publish must not surface as an
+/// error — that would end block production permanently.
+#[test]
+async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
+    let _res = env_logger::try_init();
+
+    let (config, _home) = sequencer_config();
+    let mock_storage = prepare_mock_storage_with_empty_genesis();
+    let storage_ref = MockStorageActor::spawn(mock_storage);
+
+    let executor = ExecutorActor::spawn(
+        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone()).await,
+    );
+    storage_ref
+        .tell(sequencer_storage_actor::mock::Checkpoint)
+        .await?;
+
+    executor
+        .ask(protocol::ProduceBlock)
+        .await
+        .expect("a turn that cannot publish must still reply Ok");
+    assert!(executor.is_alive(), "the actor must survive a failed turn");
+
+    Ok(())
 }
 
 #[test]

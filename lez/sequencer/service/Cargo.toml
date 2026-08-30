@@ -33,6 +33,11 @@ tokio-util.workspace = true
 futures.workspace = true
 
 [[bin]]
+name = "inscribe_garbage"
+path = "src/bin/inscribe_garbage.rs"
+required-features = ["inscribe_garbage"]
+
+[[bin]]
 name = "submit_stake"
 path = "src/bin/submit_stake.rs"
 required-features = ["submit_stake"]
@@ -43,6 +48,8 @@ default = []
 standalone = ["sequencer_core/mock"]
 # Enable mDNS-based local peer discovery for gossip.
 mdns = ["sequencer_core/mdns"]
+# Needed only by the inscribe_garbage bin. Never in a release build.
+inscribe_garbage = ["sequencer_core/test-utils"]
 # Needed only by the submit_stake bin.
 submit_stake = [
   "dep:lee",

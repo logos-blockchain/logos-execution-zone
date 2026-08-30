@@ -86,6 +86,49 @@ async fn channel_from_store<S: StorageActorTrait>(
     messages
 }
 
+/// Slashing exists because a sequencer can inscribe a non-block payload, and
+/// the channel keeps it forever. A replay that treated one as fatal would stop
+/// every later node from ever joining.
+#[tokio::test]
+async fn reconstruction_skips_an_undecodable_inscription() {
+    let config_a = setup_sequencer_config();
+    let (mut seq_a, _handle_a) = start_sequencer(config_a.clone()).await;
+    seq_a.run_production_turn().await.unwrap();
+    seq_a.run_production_turn().await.unwrap();
+    let tip_a = seq_a
+        .block_store()
+        .latest_block_meta()
+        .await
+        .unwrap()
+        .unwrap();
+
+    // A peer's garbage lands between two blocks of the replay.
+    let mut messages = channel_from_store(seq_a.block_store(), 10).await;
+    let junk_id = MsgId::from([0xAA_u8; 32]);
+    let junk = ZoneMessage::Block(ZoneBlock {
+        id: junk_id,
+        data: Inscription::try_from(b"not a block".as_slice()).expect("inscription"),
+    });
+    messages.insert(1, (junk, Slot::from(5)));
+    let tip_slot = messages.last().unwrap().1;
+
+    let config_b = setup_sequencer_config();
+    let (store_b, chain_b) = fresh_store_and_chain(&config_b).await;
+    let mock_b = MockBlockPublisher::with_canned_channel(
+        config_a.bedrock_config.channel_id,
+        Some(tip_slot),
+        messages,
+    );
+
+    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock_b, &store_b, &chain_b, true)
+        .await
+        .expect("an undecodable inscription must not abort reconstruction");
+
+    let tip_b = store_b.latest_block_meta().await.unwrap().unwrap();
+    assert_eq!(tip_b.id, tip_a.id, "the replay must still reach A's tip");
+    assert_eq!(tip_b.hash, tip_a.hash);
+}
+
 #[tokio::test]
 async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     // Sequencer A produces a few blocks; treat its chain as the channel.

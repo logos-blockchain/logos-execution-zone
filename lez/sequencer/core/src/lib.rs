@@ -622,12 +622,18 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             let ZoneMessage::Block(zone_block) = message else {
                 continue;
             };
-            let block: Block = borsh::from_slice(&zone_block.data).map_err(|err| {
-                anyhow!(
-                    "Failed to deserialize channel block at slot {}: {err}",
-                    slot.into_inner()
-                )
-            })?;
+            // An offence the channel already carries, so replaying it must not
+            // be fatal: skip the payload and let the pin follow the entry, the
+            // same way the follow path treats one.
+            let Ok(block) = borsh::from_slice::<Block>(&zone_block.data) else {
+                warn!(
+                    "Skipping an undecodable inscription {:?} at slot {}",
+                    zone_block.id,
+                    slot.into_inner(),
+                );
+                chain.lock().await.skip_channel_entry(zone_block.id);
+                continue;
+            };
             // Locked per message (not across the stream `await`): concurrent
             // follow events interleave safely — both paths apply idempotently
             // and persist under this same lock.
@@ -1529,6 +1535,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         &self.sequencer_config
     }
 
+    /// This node's Bedrock public key, hex — the identity the channel's
+    /// accredited keys and round-robin are keyed by.
+    #[must_use]
+    pub fn bedrock_public_key_hex(&self) -> String {
+        hex::encode(self.bedrock_signing_key.public_key().to_bytes())
+    }
+
     /// Marks all pending blocks with `block_id <= last_finalized_block_id` as
     /// finalized. Idempotent. Production no longer calls this: finalization
     /// flips now ride the follow path's atomic write via
@@ -1708,9 +1721,9 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         (self.next_block_height().await <= high_water).then_some(high_water)
     }
 
-    /// The live channel tip when it has moved past our pin, meaning the next
-    /// publish would be refused and the caller should skip its turn.
-    pub async fn pin_behind_channel_tip(&self) -> Option<MsgId> {
+    /// Our pin and the live channel tip when the tip has moved past it, meaning
+    /// the next publish would be refused and the caller should skip its turn.
+    pub async fn pin_behind_channel_tip(&self) -> Option<PinBehindTip> {
         let pin = {
             let chain = self.chain.lock().await;
             // A read can trail a publish of ours, so it cannot judge one.
@@ -1720,7 +1733,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             chain.pin_parent()?
         };
         match self.block_publisher.channel_tip_message().await {
-            Ok(Some(tip)) if tip != pin => Some(tip),
+            Ok(Some(tip)) if tip != pin => Some(PinBehindTip { pin, tip }),
             Ok(_) => None,
             Err(err) => {
                 warn!(
@@ -1737,6 +1750,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     fn chain(&self) -> Arc<Mutex<ChainState>> {
         Arc::clone(&self.chain)
     }
+}
+
+/// A pin that trails the live channel tip: the parent we would publish on, and
+/// where the channel actually ends.
+pub struct PinBehindTip {
+    pub pin: MsgId,
+    pub tip: MsgId,
 }
 
 struct BlockWithMeta {
@@ -1885,12 +1905,24 @@ async fn apply_follow_update<S: StorageActorTrait>(
             );
         }
 
+        // A pin that stops moving while the channel keeps going is a wedge, so
+        // log each move.
+        let cursor_before = chain.channel_cursor();
+
         // The whole delta in one call. Outcomes align with the blocks passed in.
         let FollowOutcome {
             adopted: outcomes,
             finalized: finalized_outcomes,
             cursor_moved: _,
         } = chain.apply_follow(&orphaned, &adopted, &finalized, checkpoint.last_msg_id);
+
+        let cursor_after = chain.channel_cursor();
+        if cursor_before != cursor_after {
+            info!(
+                "Channel pin moved to {}",
+                cursor_after.map_or_else(|| "none".to_owned(), |msg| msg.to_string()),
+            );
+        }
 
         // An adoption that does not apply freezes the head where it is, and
         // every later one then fails the same way. Nothing else reports it.

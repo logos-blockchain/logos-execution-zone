@@ -9,14 +9,14 @@ use lee_core::account::{Account, AccountId};
 /// Minimum summed stake for a Bedrock sequencer key to be a committee candidate.
 pub const DEFAULT_MINIMUM_SEQUENCER_STAKE: u128 = 149;
 
-/// Channel administration defaults.
+/// Channel administration defaults, in slots (1 slot = 1s on the devnet).
 ///
-/// Slots, not seconds (1 slot = 1s on the current devnet): 20-slot turns,
-/// reclaimed after 10 idle slots if a sequencer stops posting — non-zero so
-/// round robin can move on when a committee has more than one accredited key.
-/// A lone-signature threshold still suffices for config changes.
-pub const DEFAULT_SEQUENCER_POSTING_TIMEFRAME: Slots = 20;
-pub const DEFAULT_SEQUENCER_POSTING_TIMEOUT: Slots = 10;
+/// A 300-slot turn is about twenty blocks at the 15s `block_create_timeout`,
+/// and a turn nobody posts in passes on after 25. The timeout must stay above
+/// that block interval, or a healthy sequencer loses its turn between its own
+/// blocks.
+pub const DEFAULT_SEQUENCER_POSTING_TIMEFRAME: Slots = 300;
+pub const DEFAULT_SEQUENCER_POSTING_TIMEOUT: Slots = 25;
 pub const DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD: u16 = 1;
 pub const DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD: u16 = 1;
 

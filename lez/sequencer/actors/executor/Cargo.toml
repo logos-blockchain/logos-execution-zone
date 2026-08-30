@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 sequencer_core.workspace = true
 sequencer_service_protocol.workspace = true
+sequencer_core_metrics = { workspace = true, features = ["record"] }
 common.workspace = true
 lee_core.workspace = true
 mempool.workspace = true
