@@ -1,4 +1,4 @@
-use std::{io::Write as _, path::PathBuf, str::FromStr};
+use std::{io::Write as _, str::FromStr};
 
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
@@ -23,7 +23,8 @@ use crate::{
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
             native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
-            token::TokenProgramAgnosticSubcommand, vault::VaultSubcommand,
+            program_loader::ProgramLoaderSubcommand, token::TokenProgramAgnosticSubcommand,
+            vault::VaultSubcommand,
         },
         statistics::StatisticsSubcommand,
     },
@@ -98,8 +99,9 @@ pub enum Command {
         /// Indicates, how deep in tree accounts may be. Affects command complexity.
         depth: u32,
     },
-    /// Deploy a program.
-    DeployProgram { binary_filepath: PathBuf },
+    /// program_loader interaction subcommand: deploy/update/inspect linked-list programs.
+    #[command(subcommand)]
+    ProgramLoader(ProgramLoaderSubcommand),
     /// Keycard hardware wallet management.
     #[command(subcommand)]
     Keycard(KeycardSubcommand),
@@ -310,20 +312,8 @@ pub async fn execute_subcommand(
 
             SubcommandReturnValue::Empty
         }
-        Command::DeployProgram { binary_filepath } => {
-            let bytecode: Vec<u8> = std::fs::read(&binary_filepath).context(format!(
-                "Failed to read program binary at {}",
-                binary_filepath.display()
-            ))?;
-            let response = wallet_core
-                .send_program_deployment_transaction(bytecode)
-                .await
-                .context("Transaction submission error")?;
-
-            wallet_core
-                .poll_and_finalize_public_transaction(response)
-                .await
-                .context("Transaction finalization error")?
+        Command::ProgramLoader(program_loader_subcommand) => {
+            program_loader_subcommand.handle_subcommand(wallet_core).await?
         }
         Command::Statistics(statistics_subcommand) => {
             statistics_subcommand.handle_subcommand(wallet_core).await?
