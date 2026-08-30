@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{io::Write as _, time::Duration};
 
 use anyhow::{Context as _, Result, ensure};
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
@@ -12,11 +12,13 @@ use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, verify_commitment_is_in_state};
 use wallet::{
     AccountIdentity,
+    account::AccountIdWithPrivacy,
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
         account::{AccountSubcommand, NewSubcommand},
         programs::{
-            native_token_transfer::AuthTransferSubcommand, token::TokenProgramAgnosticSubcommand,
+            native_token_transfer::AuthTransferSubcommand,
+            program_loader::ProgramLoaderSubcommand, token::TokenProgramAgnosticSubcommand,
         },
     },
     program_facades::{native_token_transfer::NativeTokenTransfer, token::Token},
@@ -112,6 +114,44 @@ pub async fn new_account(
         anyhow::bail!("Expected RegisterAccount return value");
     };
     Ok(account_id)
+}
+
+/// Deploys `program` via `program_loader`'s `Deploy` command: creates a fresh header account
+/// plus one fresh segment account per chunk `program`'s elf splits into, then wires them all up
+/// in a single command. Returns the header's `AccountId` (the program's dispatch address).
+pub async fn deploy_program(
+    ctx: &mut TestContext,
+    program: lee::program::Program,
+    immutable: bool,
+) -> Result<AccountId> {
+    let elf = program.elf().to_vec();
+    let chunk_count = elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .count()
+        .max(1);
+
+    let header_id = new_account(ctx, false, None).await?;
+    let mut segment_ids = Vec::with_capacity(chunk_count);
+    for _ in 0..chunk_count {
+        segment_ids.push(new_account(ctx, false, None).await?);
+    }
+
+    let mut tempfile = tempfile::NamedTempFile::new()?;
+    tempfile.write_all(&elf)?;
+
+    let command = Command::ProgramLoader(ProgramLoaderSubcommand::Deploy {
+        elf: tempfile.path().to_owned(),
+        header: CliAccountMention::Id(AccountIdWithPrivacy::Public(header_id)),
+        segments: segment_ids
+            .into_iter()
+            .map(|id| CliAccountMention::Id(AccountIdWithPrivacy::Public(id)))
+            .collect(),
+        immutable,
+    });
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+
+    Ok(header_id)
 }
 
 /// Send `amount` from `from` to `to` via an authenticated transfer (identifier 0).
