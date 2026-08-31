@@ -181,6 +181,18 @@ pub fn increment_cross_zone_dispatches_retired_total() {
     cross_zone_dispatches_retired_total_counter().increment(1);
 }
 
+/// Whether the watcher for `peer` (a hex zone id) is suspended on the
+/// committee floor. A gauge so it falls again on recovery.
+pub fn record_cross_zone_peer_committee_suspended(peer: String, suspended: bool) {
+    gauge!(
+        description: "1 while a cross-zone peer watcher is suspended because the peer committee is below the configured floor",
+        unit: Unit::Count,
+        names::CROSS_ZONE_PEER_COMMITTEE_SUSPENDED,
+        "peer" => peer
+    )
+    .set(if suspended { 1.0 } else { 0.0 });
+}
+
 /// Retained dead letters. A gauge, not a counter: eviction and reconciliation
 /// make this fall as well as rise.
 pub fn record_cross_zone_dead_letter_dispatches(count: usize) {

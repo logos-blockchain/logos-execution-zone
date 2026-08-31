@@ -336,7 +336,7 @@ mod tests {
                 block: genesis.clone(),
                 channel_cursor: None,
                 withdrawals: vec![],
-                state: Arc::new(testnet_initial_state::initial_state()),
+                state: Arc::new(testnet_initial_state::initial_state(true)),
                 checkpoint_bytes: None,
             })
             .await

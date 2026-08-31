@@ -222,14 +222,14 @@ mod tests {
 
     #[test]
     fn genesis_applies_on_empty_tip() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
     }
 
     #[test]
     fn non_genesis_first_block_is_unexpected_id() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let block = produce_dummy_block(2, None, vec![]);
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(
@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn skip_ahead_block_is_unexpected_id() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn broken_chain_link_detected() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn hash_mismatch_detected() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let mut genesis = produce_dummy_block(1, None, vec![]);
         // Tampering with the header invalidates the stored hash.
         genesis.header.timestamp = 999;
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn empty_block_rejected() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         // A block with no transactions at all (not even the mandatory clock tx).
         let block = HashableBlockData {
             block_id: 1,
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn missing_clock_tail_is_invalid_clock() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         // Last tx is not the expected clock invocation for the timestamp.
         let block = HashableBlockData {
             block_id: 1,
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn applies_transfers_and_advances_state() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;

@@ -200,6 +200,24 @@ fn seed_ping_sender_config(state: &mut V03State) {
     )]);
 }
 
+/// The holding PDA a holder's bridgeable balance lives in.
+fn holding_id_of(holder_id: AccountId) -> AccountId {
+    bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder_id.into_value())
+}
+
+/// Seeds a funded holding PDA for `holder_id`, matching genesis.
+fn seed_holding(state: &mut V03State, holder_id: AccountId, balance: u128) {
+    let bridge_lock_id = programs::bridge_lock().id();
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        holding_id_of(holder_id),
+        Account {
+            program_owner: bridge_lock_id.into(),
+            balance,
+            ..Default::default()
+        },
+    )]);
+}
+
 /// Seeds the bridge-lock config account pinning the real outbox and the wrapped
 /// token, matching what genesis seeds for a real zone.
 fn seed_bridge_lock_config(state: &mut V03State) {
@@ -802,14 +820,7 @@ fn lock_escrows_balance_and_emits_to_outbox() {
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    state = state.with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: bridge_lock_id.into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     let payload = mint_payload();
@@ -821,11 +832,11 @@ fn lock_escrows_balance_and_emits_to_outbox() {
         .expect("lock must validate and execute");
     let public_diff = diff.public_diff();
 
-    let holder_after = public_diff[&holder_id].balance;
+    let holding_after = public_diff[&holding_id_of(holder_id)].balance;
     assert_eq!(
-        holder_after,
+        holding_after,
         INITIAL_BALANCE - LOCK_AMOUNT,
-        "holder debited"
+        "holding debited"
     );
 
     let escrow_after = public_diff[&escrow_id].balance;
@@ -903,6 +914,7 @@ fn lock_tx_to(
         vec![
             bridge_lock_core::config_account_id(bridge_lock_id),
             holder_id,
+            holding_id_of(holder_id),
             bridge_lock_core::escrow_account_id(bridge_lock_id),
             outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
         ],
@@ -925,14 +937,8 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: programs::bridge_lock().id().into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     let first = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
@@ -973,14 +979,8 @@ fn two_emitters_share_an_ordinal_without_colliding() {
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: bridge_lock_id.into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_ping_sender_config(&mut state);
     seed_bridge_lock_config(&mut state);
 
@@ -1058,19 +1058,12 @@ fn a_send_into_a_foreign_outbox_slot_is_rejected() {
 /// debit.
 #[test]
 fn a_lock_naming_another_target_program_is_rejected() {
-    let bridge_lock_id = programs::bridge_lock().id();
     let zone_b = [2_u8; 32];
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: bridge_lock_id.into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     let elsewhere = programs::ping_receiver().id();
@@ -1092,9 +1085,9 @@ fn a_lock_naming_another_target_program_is_rejected() {
         "rejected for the wrong reason: {err:?}"
     );
     assert_eq!(
-        state.get_account_by_id(holder_id).balance,
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
         INITIAL_BALANCE,
-        "a refused lock leaves the holder's balance alone"
+        "a refused lock leaves the holding's balance alone"
     );
 }
 
@@ -1103,20 +1096,13 @@ fn a_lock_naming_another_target_program_is_rejected() {
 /// destination, so the escrow has to be refused here instead.
 #[test]
 fn a_lock_naming_other_mint_accounts_is_rejected() {
-    let bridge_lock_id = programs::bridge_lock().id();
     let wrapped_token_id = programs::wrapped_token().id();
     let zone_b = [2_u8; 32];
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: bridge_lock_id.into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     // A holding under someone other than the payload's recipient: a mint the
@@ -1144,9 +1130,9 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
         "rejected for the wrong reason: {err:?}"
     );
     assert_eq!(
-        state.get_account_by_id(holder_id).balance,
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
         INITIAL_BALANCE,
-        "a refused lock leaves the holder's balance alone"
+        "a refused lock leaves the holding's balance alone"
     );
 }
 
@@ -1167,27 +1153,18 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
     // the address check stands between it and being read as the config.
     let decoy_key = PrivateKey::try_new([8; 32]).expect("valid key");
     let decoy_id = AccountId::from(&PublicKey::new_from_private_key(&decoy_key));
-    let mut state = base_state().with_public_accounts([
-        (
-            holder_id,
-            Account {
-                program_owner: bridge_lock_id.into(),
-                balance: INITIAL_BALANCE,
-                ..Default::default()
-            },
-        ),
-        (
-            decoy_id,
-            Account {
-                program_owner: bridge_lock_id.into(),
-                data: bridge_lock_core::config_bytes([3; 8], [4; 8])
-                    .to_vec()
-                    .try_into()
-                    .expect("pinned ids fit in account data"),
-                ..Default::default()
-            },
-        ),
-    ]);
+    let mut state = base_state().with_public_accounts([(
+        decoy_id,
+        Account {
+            program_owner: bridge_lock_id.into(),
+            data: bridge_lock_core::config_bytes([3; 8], [4; 8])
+                .to_vec()
+                .try_into()
+                .expect("pinned ids fit in account data"),
+            ..Default::default()
+        },
+    )]);
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     let lock = bridge_lock_core::Instruction::Lock {
@@ -1203,6 +1180,7 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
         vec![
             decoy_id,
             holder_id,
+            holding_id_of(holder_id),
             bridge_lock_core::escrow_account_id(bridge_lock_id),
             outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
         ],
@@ -1224,23 +1202,204 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
     );
 }
 
-/// A bridge with no pin cannot fall back to caller-named programs: it stops
-/// locking. The state a zone reaches by skipping the genesis init.
+/// Post-genesis anyone may claim any holder's holding PDA: the result is a
+/// zero-balance holding that funds nothing.
+#[test]
+fn a_post_genesis_init_holding_claims_a_zero_balance_holding() {
+    let bridge_lock_id = programs::bridge_lock().id();
+    let holder = [7_u8; 32];
+    let state = base_state();
+
+    let init = bridge_lock_core::Instruction::InitHolding { holder };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![bridge_lock_core::holding_account_id(
+            bridge_lock_id,
+            &holder,
+        )],
+        vec![],
+        init,
+    )
+    .expect("build init message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .expect("a stranger's InitHolding executes");
+    let holding =
+        &diff.public_diff()[&bridge_lock_core::holding_account_id(bridge_lock_id, &holder)];
+    assert_eq!(holding.balance, 0, "nothing funds a post-genesis holding");
+    assert_eq!(
+        holding.program_owner,
+        bridge_lock_id.into(),
+        "the claim lands with bridge_lock"
+    );
+}
+
+/// A repeated `InitHolding` must echo a funded holding untouched.
+#[test]
+fn a_repeated_init_holding_leaves_a_funded_holding_untouched() {
+    let bridge_lock_id = programs::bridge_lock().id();
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+
+    let init = bridge_lock_core::Instruction::InitHolding {
+        holder: holder_id.into_value(),
+    };
+    let message = Message::try_new(bridge_lock_id, vec![holding_id_of(holder_id)], vec![], init)
+        .expect("build init message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .expect("a repeated InitHolding is a no-op");
+    drop(state.apply_state_diff(diff));
+    assert_eq!(
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
+        INITIAL_BALANCE,
+        "a re-run must not reset a funded holding"
+    );
+}
+
+/// The debit lands on the holding PDA; the holder only signs.
+#[test]
+fn lock_debits_the_holding_not_the_holder() {
+    let zone_b = [9_u8; 32];
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state().with_public_accounts([(
+        holder_id,
+        Account {
+            balance: 55,
+            ..Default::default()
+        },
+    )]);
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let tx = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
+    let diff =
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).expect("the lock executes");
+    drop(state.apply_state_diff(diff));
+
+    assert_eq!(
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
+        INITIAL_BALANCE - LOCK_AMOUNT,
+        "the holding is what a lock debits"
+    );
+    assert_eq!(
+        state.get_account_by_id(holder_id).balance,
+        55,
+        "the holder's own balance is untouched"
+    );
+}
+
+/// A zero lock costs nothing yet would emit a real dispatch.
+#[test]
+fn a_zero_amount_lock_is_refused() {
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let bridge_lock_id = programs::bridge_lock().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let zone_b = [9_u8; 32];
+    let lock = bridge_lock_core::Instruction::Lock {
+        amount: 0,
+        target_zone: zone_b,
+        target_program_id: wrapped_token_id,
+        target_accounts: mint_target_accounts(wrapped_token_id),
+        payload: mint_payload_of(0),
+        ordinal: 0,
+    };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![
+            bridge_lock_core::config_account_id(bridge_lock_id),
+            holder_id,
+            holding_id_of(holder_id),
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+            outbox_pda(
+                programs::cross_zone_outbox().id(),
+                bridge_lock_id,
+                &zone_b,
+                0,
+            ),
+        ],
+        vec![0_u128.into()],
+        lock,
+    )
+    .expect("build lock message");
+    let tx = PublicTransaction::new(
+        message.clone(),
+        WitnessSet::for_message(&message, &[&holder_key]),
+    );
+    rejects_at(&state, &tx, 1, "locked amount must be positive");
+}
+
+/// A lock naming any account but the signer's derived holding is refused.
+#[test]
+fn a_lock_naming_someone_elses_holding_is_refused() {
+    let attacker_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let attacker_id = AccountId::from(&PublicKey::new_from_private_key(&attacker_key));
+    let victim_key = PrivateKey::try_new([8; 32]).expect("valid key");
+    let victim_id = AccountId::from(&PublicKey::new_from_private_key(&victim_key));
+    let mut state = base_state();
+    seed_holding(&mut state, victim_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let bridge_lock_id = programs::bridge_lock().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let zone_b = [9_u8; 32];
+    let lock = bridge_lock_core::Instruction::Lock {
+        amount: LOCK_AMOUNT,
+        target_zone: zone_b,
+        target_program_id: wrapped_token_id,
+        target_accounts: mint_target_accounts(wrapped_token_id),
+        payload: mint_payload(),
+        ordinal: 0,
+    };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![
+            bridge_lock_core::config_account_id(bridge_lock_id),
+            attacker_id,
+            holding_id_of(victim_id),
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+            outbox_pda(
+                programs::cross_zone_outbox().id(),
+                bridge_lock_id,
+                &zone_b,
+                0,
+            ),
+        ],
+        vec![0_u128.into()],
+        lock,
+    )
+    .expect("build lock message");
+    let tx = PublicTransaction::new(
+        message.clone(),
+        WitnessSet::for_message(&message, &[&attacker_key]),
+    );
+    rejects_at(&state, &tx, 1, "holder's bridge-lock holding");
+    assert_eq!(
+        state.get_account_by_id(holding_id_of(victim_id)).balance,
+        INITIAL_BALANCE,
+        "the victim's holding is untouched"
+    );
+}
+
+/// A bridge with no pin cannot fall back to caller-named programs: it stops locking.
 #[test]
 fn a_lock_before_the_pins_are_set_is_rejected() {
-    let bridge_lock_id = programs::bridge_lock().id();
     let zone_b = [2_u8; 32];
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: bridge_lock_id.into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
 
     let lock = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
     let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {

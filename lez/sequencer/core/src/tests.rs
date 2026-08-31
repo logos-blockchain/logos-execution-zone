@@ -257,6 +257,7 @@ fn cross_zone_test_config() -> SequencerConfig {
                     mint_cap: None,
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
+                min_committee_size: 0,
             }],
             source_authority: None,
             source_governance: None,
@@ -705,7 +706,11 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
 
     // The delivery never goes through the mempool: the record is the queue, and
     // production drains it. That is what makes the window between the watcher's
-    // durable read cursor and a block carrying the dispatch survivable.
+    // durable read cursor and a block carrying the dispatch survivable, and
+    // what lets a committee-floor suspension hold new reads without holding
+    // deliveries already recorded: the watcher spawned here reads nothing (its
+    // node URL is a dummy) and only ever records to the store, never the
+    // mempool.
     assert!(
         sequencer.mempool.pop().is_none(),
         "deliveries are drained from the store, never queued in the mempool"
@@ -4377,4 +4382,68 @@ fn a_misspelled_mint_cap_key_fails_route_parse() {
         "mintcap": 1_000,
     }));
     assert!(route.is_err(), "an unknown key must fail the parse");
+}
+
+/// Gating is atomic: no `cross_zone`, no cross-zone genesis transaction;
+/// empty-peers carries exactly the four `InitConfig`s, in order.
+#[test]
+fn genesis_cross_zone_transactions_follow_the_declaration() {
+    let cross_zone_ids = [
+        programs::cross_zone_inbox().id(),
+        programs::cross_zone_outbox().id(),
+        programs::ping_sender().id(),
+        programs::ping_receiver().id(),
+        programs::bridge_lock().id(),
+        programs::wrapped_token().id(),
+    ];
+    let tx_program = |tx: &LeeTransaction| match tx {
+        LeeTransaction::Public(public) => public.message().program_id,
+        LeeTransaction::PrivacyPreserving(_) | LeeTransaction::ProgramDeployment(_) => {
+            unreachable!("genesis holds only public transactions")
+        }
+    };
+
+    let temp_dir = tempdir().unwrap();
+    let mut config = setup_sequencer_config();
+    config.home = temp_dir.path().to_path_buf();
+    let key = test_bootstrap_sequencer_key(&config);
+    let (state, txs) = build_genesis_state(&config, Some(key));
+    assert!(
+        !txs.iter()
+            .any(|tx| cross_zone_ids.contains(&tx_program(tx))),
+        "a configless genesis must carry no cross-zone transaction"
+    );
+    for id in cross_zone_ids {
+        assert!(state.get_program(id).is_none());
+    }
+
+    let temp_dir = tempdir().unwrap();
+    let mut config = setup_sequencer_config();
+    config.home = temp_dir.path().to_path_buf();
+    config.cross_zone = Some(config::CrossZoneConfig {
+        peers: Vec::new(),
+        source_authority: None,
+        source_governance: None,
+    });
+    let key = test_bootstrap_sequencer_key(&config);
+    let (state, txs) = build_genesis_state(&config, Some(key));
+    let cross_zone_txs: Vec<_> = txs
+        .iter()
+        .map(tx_program)
+        .filter(|id| cross_zone_ids.contains(id))
+        .collect();
+    assert_eq!(
+        cross_zone_txs,
+        vec![
+            programs::wrapped_token().id(),
+            programs::ping_sender().id(),
+            programs::ping_receiver().id(),
+            programs::bridge_lock().id(),
+            programs::cross_zone_inbox().id(),
+        ],
+        "the four InitConfigs then the inbox config, in the fixed order"
+    );
+    for id in cross_zone_ids {
+        assert!(state.get_program(id).is_some());
+    }
 }

@@ -21,6 +21,13 @@ use lee::{GENESIS_BLOCK_ID, PublicKey};
 /// is roughly seconds to tens of seconds depending on each side's interval.
 pub const STUCK_SLOT_ALERT_PASSES: u32 = 5;
 
+/// How many consecutive failed committee reads keep the last known size.
+///
+/// Past this the floor fails closed again. An absent channel folds in here
+/// too: it also yields no messages, so within this bound nothing is consumed
+/// on its word either way.
+pub const KEPT_FLOOR_READ_FAILURES: u32 = STUCK_SLOT_ALERT_PASSES;
+
 /// Where a screened peer block sits relative to the chain pinned by `tip`.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Link {
@@ -170,6 +177,107 @@ impl<S: Copy + PartialEq + PartialOrd> StallState<S> {
     fn passed_the_stall(self, read_to: Option<S>) -> bool {
         self.stalled
             .is_none_or(|(stuck_on, _)| read_to.is_some_and(|slot| slot >= stuck_on))
+    }
+}
+
+/// The pass-to-pass committee-floor latch of one peer reader: whether the
+/// peer's live committee was last seen at or above the configured floor.
+///
+/// A committee below the floor is not misbehaviour: with join/exit queues a
+/// peer's committee legitimately dips while an exit drains. The floor is a
+/// trust policy, so the reader holds rather than dropping anything, and it
+/// resumes on its own once the committee recovers. The live (adopted) set is
+/// what is read, deliberately: suspension only errs in the reversible
+/// direction, while a finalized-only view would keep deliveries flowing for
+/// the whole finalization lag of a real committee collapse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommitteeFloorState {
+    min: u32,
+    /// Last successfully read committee size and the channel tip slot it was
+    /// read at.
+    ///
+    /// A read failure keeps it for [`KEPT_FLOOR_READ_FAILURES`] passes: the
+    /// floor is a policy on the committee, not a liveness probe, and a
+    /// transient failure suspending it would only flap. The keep is bounded
+    /// because the committee read and the message stream are different routes
+    /// whose failures are not fate-shared: a route that breaks while messages
+    /// still flow would otherwise disarm the floor for good, silently.
+    last_known: Option<(usize, u64)>,
+    /// Consecutive failed reads, 0 after any successful one.
+    failed_reads: u32,
+    /// Consecutive suspended passes, 0 while active.
+    suspended_passes: u32,
+}
+
+/// What [`CommitteeFloorState::after_read`] decided for this pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FloorVerdict {
+    /// Run the pass. `resumed` marks the suspended-to-active edge.
+    Active { resumed: bool },
+    /// Skip the pass. `passes` counts consecutive suspended passes including
+    /// this one, 1 on the transition, so the caller reports on the
+    /// [`alerts_at`] cadence. `last_read` is the size and channel tip slot
+    /// behind the verdict, `None` before any successful read.
+    Suspended {
+        passes: u32,
+        last_read: Option<(usize, u64)>,
+    },
+}
+
+impl CommitteeFloorState {
+    #[must_use]
+    pub const fn new(min_committee_size: u32) -> Self {
+        Self {
+            min: min_committee_size,
+            last_known: None,
+            failed_reads: 0,
+            suspended_passes: 0,
+        }
+    }
+
+    /// Whether a floor is set at all. Callers skip the channel-state read when
+    /// it is not, so a floorless peer costs no extra request and a floor of 0
+    /// can never suspend.
+    #[must_use]
+    pub const fn enforced(&self) -> bool {
+        self.min > 0
+    }
+
+    /// Folds one pass's channel-state read in: `Some((committee size, tip
+    /// slot))` on a successful read, `None` on a failed read or an absent
+    /// channel, both unknown rather than zero.
+    ///
+    /// Unknown before the first successful read suspends: with a floor set,
+    /// running on a committee never yet seen would be trusting exactly what
+    /// the floor exists to check.
+    pub fn after_read(&mut self, read: Option<(usize, u64)>) -> FloorVerdict {
+        if !self.enforced() {
+            return FloorVerdict::Active { resumed: false };
+        }
+        if let Some(read) = read {
+            self.failed_reads = 0;
+            self.last_known = Some(read);
+        } else {
+            self.failed_reads = self.failed_reads.saturating_add(1);
+        }
+        let known = if self.failed_reads > KEPT_FLOOR_READ_FAILURES {
+            None
+        } else {
+            self.last_known
+        };
+        let met = known
+            .is_some_and(|(size, _)| size >= usize::try_from(self.min).expect("u32 fits usize"));
+        if met {
+            let resumed = self.suspended_passes > 0;
+            self.suspended_passes = 0;
+            FloorVerdict::Active { resumed }
+        } else {
+            self.suspended_passes = self.suspended_passes.saturating_add(1);
+            FloorVerdict::Suspended {
+                passes: self.suspended_passes,
+                last_read: self.last_known,
+            }
+        }
     }
 }
 
@@ -527,5 +635,148 @@ mod tests {
         assert!(alerts_at(STUCK_SLOT_ALERT_PASSES));
         assert!(!alerts_at(STUCK_SLOT_ALERT_PASSES + 1));
         assert!(alerts_at(STUCK_SLOT_ALERT_PASSES * 3));
+    }
+
+    /// A floor of 0 is the off switch: no read, failed read, or empty
+    /// committee may suspend.
+    #[test]
+    fn a_zero_floor_never_suspends() {
+        let mut floor = CommitteeFloorState::new(0);
+        assert!(!floor.enforced());
+        for read in [None, Some((0, 1)), Some((100, 2))] {
+            assert_eq!(
+                floor.after_read(read),
+                FloorVerdict::Active { resumed: false }
+            );
+        }
+    }
+
+    /// With a floor set, a committee never yet seen is exactly what the floor
+    /// exists to check, so the reader starts suspended.
+    #[test]
+    fn an_unread_committee_fails_closed() {
+        let mut floor = CommitteeFloorState::new(3);
+        assert_eq!(
+            floor.after_read(None),
+            FloorVerdict::Suspended {
+                passes: 1,
+                last_read: None
+            }
+        );
+    }
+
+    #[test]
+    fn suspended_passes_count_consecutively_onto_the_alert_cadence() {
+        let mut floor = CommitteeFloorState::new(3);
+        for expected in 1..=STUCK_SLOT_ALERT_PASSES {
+            let verdict = floor.after_read(Some((2, u64::from(expected))));
+            assert_eq!(
+                verdict,
+                FloorVerdict::Suspended {
+                    passes: expected,
+                    last_read: Some((2, u64::from(expected)))
+                }
+            );
+        }
+        let FloorVerdict::Suspended { passes, .. } = floor.after_read(Some((2, 9))) else {
+            panic!("still below the floor");
+        };
+        assert_eq!(passes, STUCK_SLOT_ALERT_PASSES + 1);
+        assert!(alerts_at(STUCK_SLOT_ALERT_PASSES));
+        assert!(!alerts_at(passes));
+    }
+
+    /// A read failure after a healthy read keeps the last known size: the
+    /// floor is a committee policy, not a liveness probe. The keep is a grace
+    /// window, not a waiver: a run of failures outliving it fails closed, or a
+    /// broken committee-read route would disarm the floor for good, silently.
+    #[test]
+    fn a_run_of_failed_reads_outlives_the_grace_and_suspends() {
+        let mut floor = CommitteeFloorState::new(3);
+        assert_eq!(
+            floor.after_read(Some((3, 7))),
+            FloorVerdict::Active { resumed: false }
+        );
+        for _ in 0..KEPT_FLOOR_READ_FAILURES {
+            assert_eq!(
+                floor.after_read(None),
+                FloorVerdict::Active { resumed: false }
+            );
+        }
+        assert_eq!(
+            floor.after_read(None),
+            FloorVerdict::Suspended {
+                passes: 1,
+                last_read: Some((3, 7))
+            },
+            "past the grace the floor fails closed again"
+        );
+        assert_eq!(
+            floor.after_read(Some((3, 8))),
+            FloorVerdict::Active { resumed: true },
+            "one healthy read at the floor resumes and resets the grace"
+        );
+    }
+
+    /// A zero committee is a real observation, not an unknown: it suspends.
+    /// Above the floor is as spendable as at it.
+    #[test]
+    fn a_zero_committee_suspends_and_above_the_floor_runs() {
+        let mut floor = CommitteeFloorState::new(3);
+        assert_eq!(
+            floor.after_read(Some((0, 1))),
+            FloorVerdict::Suspended {
+                passes: 1,
+                last_read: Some((0, 1))
+            }
+        );
+        assert_eq!(
+            floor.after_read(Some((4, 2))),
+            FloorVerdict::Active { resumed: true }
+        );
+    }
+
+    /// The same failure while the last read was below the floor stays
+    /// suspended, and still carries that last read for the report.
+    #[test]
+    fn a_read_failure_below_the_floor_stays_suspended() {
+        let mut floor = CommitteeFloorState::new(3);
+        assert!(matches!(
+            floor.after_read(Some((2, 7))),
+            FloorVerdict::Suspended { passes: 1, .. }
+        ));
+        assert_eq!(
+            floor.after_read(None),
+            FloorVerdict::Suspended {
+                passes: 2,
+                last_read: Some((2, 7))
+            }
+        );
+    }
+
+    /// The boundary is at the floor itself, the resume edge fires exactly
+    /// once, and a re-dip starts a fresh count.
+    #[test]
+    fn recovery_at_the_floor_resumes_once_and_a_re_dip_restarts() {
+        let mut floor = CommitteeFloorState::new(3);
+        assert!(matches!(
+            floor.after_read(Some((2, 1))),
+            FloorVerdict::Suspended { .. }
+        ));
+        assert_eq!(
+            floor.after_read(Some((3, 2))),
+            FloorVerdict::Active { resumed: true }
+        );
+        assert_eq!(
+            floor.after_read(Some((3, 3))),
+            FloorVerdict::Active { resumed: false }
+        );
+        assert_eq!(
+            floor.after_read(Some((1, 4))),
+            FloorVerdict::Suspended {
+                passes: 1,
+                last_read: Some((1, 4))
+            }
+        );
     }
 }

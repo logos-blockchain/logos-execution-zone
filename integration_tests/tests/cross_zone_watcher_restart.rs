@@ -31,6 +31,7 @@ use ping_core::{
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use test_fixtures::config::source_only_cross_zone;
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(480);
@@ -64,6 +65,7 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
                 mint_cap: None,
             }],
             expected_block_signing_pubkeys: Vec::new(),
+            min_committee_size: 0,
         }],
         source_authority: None,
         source_governance: None,
@@ -72,6 +74,7 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
     let (seq_a, _seq_a_home) = SequencerSetup::new(partial, bedrock_addr)
         .with_channel_id(channel_a)
         .with_genesis(vec![])
+        .with_cross_zone(source_only_cross_zone())
         .setup()
         .await
         .context("Failed to set up zone A sequencer")?;

@@ -397,3 +397,61 @@ fn program_id_account_id_conversion_round_trips() {
     ];
     assert_eq!(ProgramId::from(AccountId::from(program_id)), program_id);
 }
+
+/// A byte-identical echo of an unowned account with history must validate.
+#[test]
+fn an_unowned_account_with_history_may_be_echoed_byte_identically() {
+    let account = Account {
+        nonce: 1_u128.into(),
+        balance: 55,
+        ..Account::default()
+    };
+    let pre = AccountWithMetadata::new(account.clone(), true, AccountId::new([7; 32]));
+    let post = AccountPostState::new(account);
+    assert!(validate_execution(&[pre], &[post], [9; 8]).is_ok());
+}
+
+/// Any modification of an unowned non-default account still needs ownership.
+#[test]
+fn modifying_an_unowned_account_with_history_is_still_refused() {
+    let account = Account {
+        nonce: 1_u128.into(),
+        balance: 55,
+        ..Account::default()
+    };
+    let pre = AccountWithMetadata::new(account.clone(), true, AccountId::new([7; 32]));
+    let mut grown = account;
+    grown.balance += 1;
+    let post = AccountPostState::new(grown);
+    assert!(matches!(
+        validate_execution(&[pre], &[post], [9; 8]),
+        Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id })
+            if account_id == AccountId::new([7; 32])
+    ));
+}
+
+/// The echo exemption is claimless only: `Claim` is applied after this check,
+/// so a claimed echo would seize the account.
+#[test]
+fn a_claimed_echo_of_an_unowned_account_with_history_is_refused() {
+    let account = Account {
+        nonce: 5_u128.into(),
+        balance: 1000,
+        ..Account::default()
+    };
+    let pre = AccountWithMetadata::new(account.clone(), true, AccountId::new([7; 32]));
+    let post = AccountPostState::new_claimed(account, Claim::Authorized);
+    assert!(matches!(
+        validate_execution(&[pre], &[post], [9; 8]),
+        Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id })
+            if account_id == AccountId::new([7; 32])
+    ));
+}
+
+/// A first claim of a fresh account passes: its pre is default.
+#[test]
+fn a_first_claim_of_a_fresh_account_still_passes() {
+    let pre = AccountWithMetadata::new(Account::default(), true, AccountId::new([7; 32]));
+    let post = AccountPostState::new_claimed(Account::default(), Claim::Authorized);
+    assert!(validate_execution(&[pre], &[post], [9; 8]).is_ok());
+}
