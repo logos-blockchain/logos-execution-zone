@@ -103,7 +103,7 @@ fn uncapped_entries(
 fn seed_wrapped_config(
     state: &mut V03State,
     authority: Option<AccountId>,
-    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+    sources: &[([u8; 32], lee_core::program::ProgramId)],
 ) {
     seed_wrapped_config_with_governance(state, None, authority, sources);
 }
@@ -113,22 +113,9 @@ fn seed_wrapped_config_with_governance(
     state: &mut V03State,
     governance: Option<lee_core::program::ProgramId>,
     authority: Option<AccountId>,
-    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+    sources: &[([u8; 32], lee_core::program::ProgramId)],
 ) {
-    let entries = sources
-        .into_iter()
-        .map(
-            |(src_zone, src_program_id)| wrapped_token_core::SourceEntry {
-                policy: wrapped_token_core::SourcePolicy {
-                    src_zone,
-                    src_program_id,
-                    mint_cap: None,
-                },
-                minted: 0,
-            },
-        )
-        .collect();
-    seed_wrapped_config_entries(state, governance, authority, entries);
+    seed_wrapped_config_entries(state, governance, authority, uncapped_entries(sources));
 }
 
 /// The same, with full entries: caps and counters exactly as the config holds
@@ -1463,7 +1450,7 @@ fn the_token_authority_path_holds() {
 
     // With no authority configured, nothing moves in either direction.
     let mut unset = base_state();
-    seed_wrapped_config(&mut unset, None, vec![]);
+    seed_wrapped_config(&mut unset, None, &[]);
     rejects_at(
         &unset,
         &update(authority, &key, 0, bridge_source.clone()),
@@ -1480,7 +1467,7 @@ fn the_token_authority_path_holds() {
     // With one configured: the wrong account, and the right account without its
     // own signature, are refused for their own reasons.
     let mut state = base_state();
-    seed_wrapped_config(&mut state, Some(authority), vec![]);
+    seed_wrapped_config(&mut state, Some(authority), &[]);
     rejects_at(
         &state,
         &update(other, &other_key, 0, bridge_source.clone()),
@@ -1861,7 +1848,7 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
     // No governance named: the chained call is refused.
     let mut closed = base_state();
     seed_inbox_config(&mut closed, self_zone);
-    seed_wrapped_config(&mut closed, Some(authority), vec![]);
+    seed_wrapped_config(&mut closed, Some(authority), &[]);
     rejects_at(
         &closed,
         &update(),
@@ -1875,7 +1862,7 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
     // check, before the caller check is even reached.
     let mut open = base_state();
     seed_inbox_config(&mut open, self_zone);
-    seed_wrapped_config_with_governance(&mut open, Some(inbox_id), Some(authority), vec![]);
+    seed_wrapped_config_with_governance(&mut open, Some(inbox_id), Some(authority), &[]);
     rejects_at(&open, &update(), 1, "must be the wrapped-token config PDA");
 }
 
@@ -1894,7 +1881,7 @@ fn the_governance_path_holds() {
     let authority = AccountId::for_public_pda(&proxy_id, &seed);
 
     let mut state = base_state().with_programs([test_programs::authority_proxy()]);
-    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
+    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);
 
     let update = |sources: Vec<([u8; 32], lee_core::program::ProgramId)>| {
         via_proxy(
@@ -2008,7 +1995,7 @@ fn the_governance_path_guards_hold() {
         &mut other,
         Some(programs::ping_sender().id()),
         Some(authority),
-        vec![],
+        &[],
     );
     rejects_at(
         &other,
@@ -2019,7 +2006,7 @@ fn the_governance_path_guards_hold() {
 
     // No governance configured: every chained caller is refused.
     let mut closed = base_state().with_programs([test_programs::authority_proxy()]);
-    seed_wrapped_config(&mut closed, Some(authority), vec![]);
+    seed_wrapped_config(&mut closed, Some(authority), &[]);
     seed_receiver_config(&mut closed, Some(authority), vec![]);
     rejects_at(
         &closed,
@@ -2067,7 +2054,7 @@ fn the_governance_path_guards_hold() {
 
     // The configured governance itself, but not delegating the authority.
     let mut undelegated = base_state().with_programs([test_programs::authority_proxy()]);
-    seed_wrapped_config_with_governance(&mut undelegated, Some(proxy_id), Some(authority), vec![]);
+    seed_wrapped_config_with_governance(&mut undelegated, Some(proxy_id), Some(authority), &[]);
     rejects_at(
         &undelegated,
         &call(None),
@@ -2133,7 +2120,7 @@ fn a_shared_authority_survives_the_first_claim() {
     let authority = AccountId::for_public_pda(&proxy_id, &seed);
 
     let mut state = base_state().with_programs([test_programs::authority_proxy()]);
-    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
+    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);
     seed_receiver_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
 
     let token_update = via_proxy(
@@ -2227,7 +2214,7 @@ fn an_authority_account_with_history_is_refused() {
     let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
 
     let mut state = base_state();
-    seed_wrapped_config(&mut state, Some(authority), vec![]);
+    seed_wrapped_config(&mut state, Some(authority), &[]);
     seed_receiver_config(&mut state, Some(authority), vec![]);
     // Unowned but already used: exactly what one prior signature leaves behind.
     state = state.with_public_accounts([(
@@ -2294,7 +2281,7 @@ fn the_remaining_authority_guards_hold() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, Some(authority), vec![]);
+    seed_wrapped_config(&mut state, Some(authority), &[]);
     seed_receiver_config(&mut state, Some(authority), vec![]);
 
     // Config address, on both receiver instructions.
@@ -2365,7 +2352,7 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, None, vec![]);
+    seed_wrapped_config(&mut state, None, &[]);
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -2413,7 +2400,7 @@ fn a_top_level_mint_is_refused() {
     let src_program_id = programs::bridge_lock().id();
 
     let mut state = base_state();
-    seed_wrapped_config(&mut state, None, vec![(src_zone, src_program_id)]);
+    seed_wrapped_config(&mut state, None, &[(src_zone, src_program_id)]);
 
     let marker_id = inbox_source_marker_account_id(inbox_id, &src_zone, src_program_id);
     let message = Message::try_new(
@@ -2477,7 +2464,7 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     seed_wrapped_config(
         &mut state,
         None,
-        vec![(src_zone, programs::bridge_lock().id())],
+        &[(src_zone, programs::bridge_lock().id())],
     );
 
     let msg = CrossZoneMessage {
@@ -2531,7 +2518,7 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     seed_wrapped_config(
         &mut state,
         None,
-        vec![(src_zone, programs::bridge_lock().id())],
+        &[(src_zone, programs::bridge_lock().id())],
     );
 
     let msg = CrossZoneMessage {
@@ -2580,7 +2567,7 @@ fn mint_replay_rejected() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
+    seed_wrapped_config(&mut state, None, &[(src_zone, [9_u32; 8])]);
 
     // Seed the seen-shard as already holding this delivery, so the inbox takes
     // the replay no-op branch. The shard is inbox-owned (claimed on a prior
