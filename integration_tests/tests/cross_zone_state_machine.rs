@@ -69,6 +69,39 @@ fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
     )]);
 }
 
+/// Uncapped policies from peer pairs, the shape most tests still exercise.
+fn uncapped_policies(
+    pairs: &[([u8; 32], lee_core::program::ProgramId)],
+) -> Vec<wrapped_token_core::SourcePolicy> {
+    pairs
+        .iter()
+        .map(
+            |&(src_zone, src_program_id)| wrapped_token_core::SourcePolicy {
+                src_zone,
+                src_program_id,
+                mint_cap: None,
+            },
+        )
+        .collect()
+}
+
+/// The entries the guest writes for `uncapped_policies` applied to a fresh list.
+fn uncapped_entries(
+    pairs: &[([u8; 32], lee_core::program::ProgramId)],
+) -> Vec<wrapped_token_core::SourceEntry> {
+    pairs
+        .iter()
+        .map(
+            |&(src_zone, src_program_id)| wrapped_token_core::SourceEntry {
+                src_zone,
+                src_program_id,
+                mint_cap: None,
+                minted: 0,
+            },
+        )
+        .collect()
+}
+
 /// Seeds the wrapped-token config pinning the inbox as minter and `sources` as the
 /// peer pairs it will mint for, matching what genesis seeds for a real zone.
 fn seed_wrapped_config(
@@ -91,7 +124,17 @@ fn seed_wrapped_config_with_governance(
         minter: programs::cross_zone_inbox().id(),
         governance,
         authority,
-        sources,
+        sources: sources
+            .into_iter()
+            .map(
+                |(src_zone, src_program_id)| wrapped_token_core::SourceEntry {
+                    src_zone,
+                    src_program_id,
+                    mint_cap: None,
+                    minted: 0,
+                },
+            )
+            .collect(),
     };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         wrapped_token_core::config_account_id(wrapped_token_id),
@@ -1079,7 +1122,9 @@ fn the_token_authority_path_holds() {
             wrapped_token_id,
             vec![config_id, account],
             nonce,
-            bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
+                sources: uncapped_policies(&sources),
+            }),
             signer,
         )
     };
@@ -1153,7 +1198,7 @@ fn the_token_authority_path_holds() {
     rejects_at(
         &state,
         &substituted(bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-            sources: bridge_source.clone(),
+            sources: uncapped_policies(&bridge_source),
         })),
         1,
         "must be the wrapped-token config PDA",
@@ -1181,7 +1226,11 @@ fn the_token_authority_path_holds() {
         &state.get_account_by_id(config_id).data.into_inner(),
     )
     .expect("config decodes");
-    assert_eq!(cfg.sources, bridge_source, "the new source is authorized");
+    assert_eq!(
+        cfg.sources,
+        uncapped_entries(&bridge_source),
+        "the new source is authorized"
+    );
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         wrapped_token_id.into(),
@@ -1202,7 +1251,8 @@ fn the_token_authority_path_holds() {
     )
     .expect("config decodes");
     assert_eq!(
-        updated_cfg.sources, sender_source,
+        updated_cfg.sources,
+        uncapped_entries(&sender_source),
         "the second change took effect"
     );
     assert_eq!(
@@ -1223,7 +1273,8 @@ fn the_token_authority_path_holds() {
     .expect("config decodes");
     assert_eq!(renounced_cfg.authority, None, "the authority is gone");
     assert_eq!(
-        renounced_cfg.sources, sender_source,
+        renounced_cfg.sources,
+        uncapped_entries(&sender_source),
         "renouncing leaves the sources it froze"
     );
     assert_eq!(
@@ -1480,7 +1531,7 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
             config_id,
             authority,
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-                sources: vec![(src_zone, programs::bridge_lock().id())],
+                sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id())]),
             }),
         )
     };
@@ -1530,7 +1581,9 @@ fn the_governance_path_holds() {
             config_id,
             authority,
             Some(seed),
-            bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
+                sources: uncapped_policies(&sources),
+            }),
         )
     };
     let renounce = || {
@@ -1557,7 +1610,10 @@ fn the_governance_path_holds() {
         &state.get_account_by_id(config_id).data.into_inner(),
     )
     .expect("config decodes");
-    assert_eq!(cfg.sources, vec![(src_zone, programs::bridge_lock().id())]);
+    assert_eq!(
+        cfg.sources,
+        uncapped_entries(&[(src_zone, programs::bridge_lock().id())])
+    );
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         wrapped_token_id.into(),
@@ -1619,7 +1675,7 @@ fn the_governance_path_guards_hold() {
             authority,
             delegated,
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-                sources: vec![(src_zone, programs::bridge_lock().id())],
+                sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id())]),
             }),
         )
     };
@@ -1765,7 +1821,7 @@ fn a_shared_authority_survives_the_first_claim() {
         authority,
         Some(seed),
         bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-            sources: vec![(src_zone, programs::bridge_lock().id())],
+            sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id())]),
         }),
     );
     let first = ValidatedStateDiff::from_public_transaction(&token_update, &state, 1, 0)
@@ -1865,7 +1921,7 @@ fn an_authority_account_with_history_is_refused() {
             wrapped_token_id,
             wrapped_token_core::config_account_id(wrapped_token_id),
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-                sources: vec![(src_zone, programs::bridge_lock().id())],
+                sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id())]),
             }),
         ),
         (

@@ -50,6 +50,7 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
             allowed_routes: vec![CrossZoneRoute {
                 src_program_id: programs::ping_sender().id(),
                 target_program_id: receiver_id,
+                mint_cap: None,
             }],
             expected_block_signing_pubkeys: Vec::new(),
         }],
