@@ -2238,7 +2238,7 @@ pub fn is_sequencer_only_program(program_id: lee::ProgramId) -> bool {
 
 fn build_supply_account_genesis_transaction(
     account_id: &AccountId,
-    balance: u128,
+    balance: lee::Balance,
 ) -> PublicTransaction {
     let faucet_program_id = programs::faucet().id();
     let vault_program_id = programs::vault().id();
@@ -2260,7 +2260,7 @@ fn build_supply_account_genesis_transaction(
     PublicTransaction::new(message, witness_set)
 }
 
-fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTransaction {
+fn build_supply_bridge_account_genesis_transaction(balance: lee::Balance) -> PublicTransaction {
     build_supply_holding_genesis_transaction(system_accounts::bridge_account_id(), balance)
 }
 
