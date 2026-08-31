@@ -4,7 +4,7 @@ use associated_token_account_core::{compute_ata_seed, get_associated_token_accou
 use lee_core::account::{Account, AccountId, AccountWithMetadata, Data};
 use token_core::{TokenDefinition, TokenHolding};
 
-const ATA_PROGRAM_ID: AccountId = AccountId::new([1u8; 32]);
+const ATA_ACCOUNT_ID: AccountId = AccountId::new([1u8; 32]);
 const TOKEN_PROGRAM_ID: lee_core::program::ProgramId = [2u32; 8];
 
 fn owner_id() -> AccountId {
@@ -17,7 +17,7 @@ fn definition_id() -> AccountId {
 
 fn ata_id() -> AccountId {
     get_associated_token_account_id(
-        &ATA_PROGRAM_ID,
+        &ATA_ACCOUNT_ID,
         &compute_ata_seed(owner_id(), definition_id()),
     )
 }
@@ -77,7 +77,7 @@ fn create_emits_chained_call_for_uninitialized_ata() {
         owner_account(),
         definition_account(),
         uninitialized_ata_account(),
-        ATA_PROGRAM_ID,
+        ATA_ACCOUNT_ID,
     );
 
     assert_eq!(post_states.len(), 3);
@@ -91,7 +91,7 @@ fn create_is_idempotent_for_initialized_ata() {
         owner_account(),
         definition_account(),
         initialized_ata_account(),
-        ATA_PROGRAM_ID,
+        ATA_ACCOUNT_ID,
     );
 
     assert_eq!(post_states.len(), 3);
@@ -114,15 +114,15 @@ fn create_panics_on_wrong_ata_address() {
         owner_account(),
         definition_account(),
         wrong_ata,
-        ATA_PROGRAM_ID,
+        ATA_ACCOUNT_ID,
     );
 }
 
 #[test]
 fn get_associated_token_account_id_is_deterministic() {
     let seed = compute_ata_seed(owner_id(), definition_id());
-    let id1 = get_associated_token_account_id(&ATA_PROGRAM_ID, &seed);
-    let id2 = get_associated_token_account_id(&ATA_PROGRAM_ID, &seed);
+    let id1 = get_associated_token_account_id(&ATA_ACCOUNT_ID, &seed);
+    let id2 = get_associated_token_account_id(&ATA_ACCOUNT_ID, &seed);
     assert_eq!(id1, id2);
 }
 
@@ -130,11 +130,11 @@ fn get_associated_token_account_id_is_deterministic() {
 fn get_associated_token_account_id_differs_by_owner() {
     let other_owner = AccountId::new([0x99u8; 32]);
     let id1 = get_associated_token_account_id(
-        &ATA_PROGRAM_ID,
+        &ATA_ACCOUNT_ID,
         &compute_ata_seed(owner_id(), definition_id()),
     );
     let id2 = get_associated_token_account_id(
-        &ATA_PROGRAM_ID,
+        &ATA_ACCOUNT_ID,
         &compute_ata_seed(other_owner, definition_id()),
     );
     assert_ne!(id1, id2);
@@ -144,10 +144,10 @@ fn get_associated_token_account_id_differs_by_owner() {
 fn get_associated_token_account_id_differs_by_definition() {
     let other_def = AccountId::new([0x99u8; 32]);
     let id1 = get_associated_token_account_id(
-        &ATA_PROGRAM_ID,
+        &ATA_ACCOUNT_ID,
         &compute_ata_seed(owner_id(), definition_id()),
     );
     let id2 =
-        get_associated_token_account_id(&ATA_PROGRAM_ID, &compute_ata_seed(owner_id(), other_def));
+        get_associated_token_account_id(&ATA_ACCOUNT_ID, &compute_ata_seed(owner_id(), other_def));
     assert_ne!(id1, id2);
 }

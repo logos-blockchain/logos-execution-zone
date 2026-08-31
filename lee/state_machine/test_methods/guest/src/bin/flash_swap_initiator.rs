@@ -57,9 +57,9 @@ pub enum FlashSwapInstruction {
     /// `amount_out`.
     Initiate {
         /// The dispatch address of the token program.
-        token_program_id: AccountId,
+        token_account_id: AccountId,
         /// The dispatch address of the callback program.
-        callback_program_id: AccountId,
+        callback_account_id: AccountId,
         amount_out: u128,
         callback_instruction_data: Vec<u8>,
     },
@@ -85,8 +85,8 @@ fn main() {
 
     match instruction {
         FlashSwapInstruction::Initiate {
-            token_program_id,
-            callback_program_id,
+            token_account_id,
+            callback_account_id,
             amount_out,
             callback_instruction_data,
         } => {
@@ -125,7 +125,7 @@ fn main() {
             let transfer_instruction =
                 borsh::to_vec(&amount_out).expect("transfer instruction serialization");
             let call_1 = ChainedCall {
-                program_account_id: token_program_id,
+                program_account_id: token_account_id,
                 pre_state_ids: vec![vault_pre.account_id, receiver_pre.account_id],
                 instruction_data: transfer_instruction,
                 pda_seeds: vec![PdaSeed::new([0_u8; 32])],
@@ -135,7 +135,7 @@ fn main() {
             // Receives the post-transfer states as its pre_states. The callback may run
             // arbitrary logic (arbitrage, etc.) and is expected to return funds to the vault.
             let call_2 = ChainedCall {
-                program_account_id: callback_program_id,
+                program_account_id: callback_account_id,
                 pre_state_ids: vec![vault_after_transfer.account_id, receiver_after_transfer.account_id],
                 instruction_data: callback_instruction_data,
                 pda_seeds: vec![],

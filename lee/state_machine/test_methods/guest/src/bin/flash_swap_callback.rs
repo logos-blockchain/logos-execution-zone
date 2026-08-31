@@ -37,7 +37,7 @@ pub struct CallbackInstruction {
     /// If false, keep the funds (simulates a malicious callback, triggers rollback).
     pub return_funds: bool,
     /// The dispatch address of the token program.
-    pub token_program_id: AccountId,
+    pub token_account_id: AccountId,
     pub amount: u128,
 }
 
@@ -66,7 +66,7 @@ fn main() {
             borsh::to_vec(&instruction.amount).expect("transfer instruction serialization");
 
         chained_calls.push(ChainedCall {
-            program_account_id: instruction.token_program_id,
+            program_account_id: instruction.token_account_id,
             pre_state_ids: vec![receiver_pre.account_id, vault_pre.account_id],
             instruction_data: transfer_instruction,
             pda_seeds: vec![PdaSeed::new([1_u8; 32])],

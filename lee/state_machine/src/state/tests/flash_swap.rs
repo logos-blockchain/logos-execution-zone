@@ -32,14 +32,14 @@ fn flash_swap_successful() {
     // Callback instruction: return funds
     let cb_instruction = CallbackInstruction {
         return_funds: true,
-        token_program_id: token.deployed_account_id(),
+        token_account_id: token.deployed_account_id(),
         amount: amount_out,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.deployed_account_id(),
-        callback_program_id: callback.deployed_account_id(),
+        token_account_id: token.deployed_account_id(),
+        callback_account_id: callback.deployed_account_id(),
         amount_out,
         callback_instruction_data: cb_data,
     };
@@ -85,14 +85,14 @@ fn flash_swap_callback_keeps_funds_rollback() {
     // Callback instruction: do NOT return funds
     let cb_instruction = CallbackInstruction {
         return_funds: false,
-        token_program_id: token.deployed_account_id(),
+        token_account_id: token.deployed_account_id(),
         amount: amount_out,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.deployed_account_id(),
-        callback_program_id: callback.deployed_account_id(),
+        token_account_id: token.deployed_account_id(),
+        callback_account_id: callback.deployed_account_id(),
         amount_out,
         callback_instruction_data: cb_data,
     };
@@ -143,14 +143,14 @@ fn flash_swap_self_call_targets_correct_program() {
 
     let cb_instruction = CallbackInstruction {
         return_funds: true,
-        token_program_id: token.deployed_account_id(),
+        token_account_id: token.deployed_account_id(),
         amount: 0,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.deployed_account_id(),
-        callback_program_id: callback.deployed_account_id(),
+        token_account_id: token.deployed_account_id(),
+        callback_account_id: callback.deployed_account_id(),
         amount_out: 0,
         callback_instruction_data: cb_data,
     };

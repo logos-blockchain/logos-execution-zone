@@ -12,7 +12,8 @@ pub enum Instruction {
     /// - Token definition account
     /// - Associated token account (default/uninitialized, or already initialized)
     ///
-    /// `token_program_id` is derived from `token_definition.account.program_owner`.
+    /// The token program's dispatch address is read from
+    /// `token_definition.account.program_owner`.
     Create,
 
     /// Transfer tokens FROM owner's ATA to a recipient holding account.
@@ -23,7 +24,8 @@ pub enum Instruction {
     /// - Sender ATA (owner's token holding)
     /// - Recipient token holding (any account; auto-created if default)
     ///
-    /// `token_program_id` is derived from `sender_ata.account.program_owner`.
+    /// The token program's dispatch address is read from
+    /// `sender_ata.account.program_owner`.
     Transfer { amount: u128 },
 
     /// Burn tokens FROM owner's ATA.
@@ -34,7 +36,7 @@ pub enum Instruction {
     /// - Owner's ATA (the holding to burn from)
     /// - Token definition account
     ///
-    /// `token_program_id` is derived from `holder_ata.account.program_owner`.
+    /// The token program's dispatch address is read from `holder_ata.account.program_owner`.
     Burn { amount: u128 },
 }
 
