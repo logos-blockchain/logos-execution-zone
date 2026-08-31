@@ -257,6 +257,7 @@ fn cross_zone_test_config() -> SequencerConfig {
                     mint_cap: None,
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
+                min_committee_size: 0,
             }],
             source_authority: None,
             source_governance: None,
@@ -705,7 +706,11 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
 
     // The delivery never goes through the mempool: the record is the queue, and
     // production drains it. That is what makes the window between the watcher's
-    // durable read cursor and a block carrying the dispatch survivable.
+    // durable read cursor and a block carrying the dispatch survivable, and
+    // what lets a committee-floor suspension hold new reads without holding
+    // deliveries already recorded: the watcher spawned here reads nothing (its
+    // node URL is a dummy) and only ever records to the store, never the
+    // mempool.
     assert!(
         sequencer.mempool.pop().is_none(),
         "deliveries are drained from the store, never queued in the mempool"

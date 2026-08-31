@@ -17,9 +17,9 @@ use common::{
     transaction::LeeTransaction,
 };
 use cross_zone::{
-    EmissionSource, Link, OffChain, StallState, alerts_at, build_dispatch_from_emission,
-    equivocation_report, extract_emission, link_to_tip, pinned_keys, screen_peer_block,
-    signed_by_any,
+    CommitteeFloorState, EmissionSource, FloorVerdict, Link, OffChain, StallState, alerts_at,
+    build_dispatch_from_emission, equivocation_report, extract_emission, link_to_tip, pinned_keys,
+    screen_peer_block, signed_by_any,
 };
 use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId, message_key,
@@ -473,13 +473,22 @@ struct PeerDiagnostics {
     stuck: Option<(u64, u32)>,
     last_pass_drained: bool,
     halted: bool,
+    /// The last pass was skipped on the committee floor. Always one pass
+    /// fresh: exactly one report call happens per pass, and only the
+    /// suspended kind sets this.
+    suspended: bool,
     evidence: TipEvidence,
 }
 
 impl PeerDiagnostics {
+    /// Halted outranks Suspended: an issued verdict is the graver, sticky
+    /// fact. Suspended outranks Holed: a stall observed before the dip is
+    /// stale information about a channel no longer being read.
     const fn health(&self) -> PeerHealth {
         if self.halted {
             PeerHealth::Halted
+        } else if self.suspended {
+            PeerHealth::Suspended
         } else if self.stuck.is_some() {
             PeerHealth::Holed
         } else if self.last_pass_drained && self.evidence.since.is_some() {
@@ -511,6 +520,12 @@ impl PeerWatch {
     ) -> Option<AbsenceEvidence> {
         let peers = self.lock();
         let entry = peers.get(&zone)?;
+        // A suspended peer proves nothing: a pass admitted just before the
+        // committee dipped can extend the run with post-dip reads, so the
+        // flag, not only the evidence reset, is what keeps a verdict off it.
+        if entry.suspended {
+            return None;
+        }
         let evidence = entry.evidence;
         if evidence.since? > wait_started || evidence.latest? < wait_started {
             return None;
@@ -529,6 +544,12 @@ impl PeerWatch {
             verified_tip: entry.verified_tip,
             lib_slot,
         })
+    }
+
+    /// Whether the peer's reader last skipped its pass on the committee
+    /// floor, so waiters can say why a block is not arriving.
+    fn is_suspended(&self, zone: ZoneId) -> bool {
+        self.lock().get(&zone).is_some_and(|entry| entry.suspended)
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<ZoneId, PeerDiagnostics>> {
@@ -556,6 +577,19 @@ impl PeerWatch {
     fn report_failed_pass(&self, zone: ZoneId) {
         let mut peers = self.lock();
         let entry = peers.entry(zone).or_default();
+        entry.suspended = false;
+        entry.last_pass_drained = false;
+        entry.evidence = TipEvidence::default();
+    }
+
+    /// Folds in a pass skipped on the committee floor. It read nothing, so
+    /// besides marking the suspension it breaks the caught-up evidence run:
+    /// an absence verdict must never escalate off evidence gathered before
+    /// the committee dipped.
+    fn report_suspended(&self, zone: ZoneId) {
+        let mut peers = self.lock();
+        let entry = peers.entry(zone).or_default();
+        entry.suspended = true;
         entry.last_pass_drained = false;
         entry.evidence = TipEvidence::default();
     }
@@ -563,6 +597,7 @@ impl PeerWatch {
     fn report_pass(&self, zone: ZoneId, report: &PassReport) {
         let mut peers = self.lock();
         let entry = peers.entry(zone).or_default();
+        entry.suspended = false;
         entry.cursor_slot = report.cursor_slot;
         entry.verified_tip = report.verified_tip;
         entry.stuck = report.stuck;
@@ -676,6 +711,7 @@ impl CrossZoneVerifier {
                 tip_node,
                 peer.channel_id,
                 expected_pubkeys,
+                peer.min_committee_size,
                 peers.clone(),
                 watch.clone(),
                 config.consensus_info_polling_interval,
@@ -975,10 +1011,15 @@ impl CrossZoneVerifier {
                 && waited.as_secs().is_multiple_of(LAG_LOG_INTERVAL.as_secs())
             {
                 log::info!(
-                    "Waiting for peer zone {} to finalize block {} ({}s); reader is behind",
+                    "Waiting for peer zone {} to finalize block {} ({}s); {}",
                     hex::encode(zone),
                     block_id,
-                    waited.as_secs()
+                    waited.as_secs(),
+                    if self.watch.is_suspended(zone) {
+                        "reader suspended on the committee floor"
+                    } else {
+                        "reader is behind"
+                    }
                 );
             }
             tokio::time::sleep(PEER_BLOCK_POLL_INTERVAL).await;
@@ -1057,6 +1098,31 @@ async fn channel_tip_reached(
     (cursor?.into_inner() >= tip_slot).then_some(tip_slot)
 }
 
+/// The peer channel's live committee size and tip slot, or `None` on a read
+/// failure or an absent channel, both unknown rather than zero. The
+/// sequencer's watcher holds the twin of this helper; the policy folding it is
+/// [`CommitteeFloorState`]. A sibling of [`channel_tip_reached`] rather than a
+/// widening of it: that read runs after a drained pass, and its freshness is
+/// what makes [`PeerWatch::confirmed_absence`] sound, so the pre-pass floor
+/// read must not stand in for it.
+async fn peer_committee(node: &NodeHttpClient, peer_zone: ZoneId) -> Option<(usize, u64)> {
+    let state = node
+        .channel_state(ChannelId::from(peer_zone))
+        .await
+        .ok()??;
+    Some((state.accredited_keys.len(), state.tip_slot.into_inner()))
+}
+
+/// The committee behind a floor verdict, for the suspension report.
+fn describe_committee(last_read: Option<(usize, u64)>) -> String {
+    match last_read {
+        Some((size, tip_slot)) => {
+            format!("{size} accredited keys last seen at channel tip slot {tip_slot}")
+        }
+        None => "size unknown, channel state never read".to_owned(),
+    }
+}
+
 /// The endpoint's LIB slot, or `None` on a read failure. Read on at-tip
 /// passes as freshness evidence for the escalation guard in
 /// [`PeerWatch::confirmed_absence`].
@@ -1107,11 +1173,16 @@ fn accept_peer_block(block: &Block, peer_zone: ZoneId, expected_pubkeys: &[Publi
     clippy::infinite_loop,
     reason = "the peer reader runs for the lifetime of the indexer process"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one spawn site; a config struct would only rename the arguments"
+)]
 async fn read_peer(
     zone_indexer: ZoneIndexer<NodeHttpClient>,
     tip_node: NodeHttpClient,
     peer_zone: ZoneId,
     expected_pubkeys: Vec<PublicKey>,
+    min_committee_size: u32,
     peers: PeerBlocks,
     watch: PeerWatch,
     poll_interval: Duration,
@@ -1125,7 +1196,36 @@ async fn read_peer(
     // In memory only: it says how loud to be about a slot this reader is stuck
     // on.
     let mut stall = StallState::default();
+    let mut floor = CommitteeFloorState::new(min_committee_size);
     loop {
+        // Above `next_messages`, so a suspended reader extends no new trust:
+        // nothing is verified or cached off blocks published under a
+        // sub-floor committee. Blocks verified before the dip still serve,
+        // and a dispatch naming an unverified one waits as `Unavailable`
+        // rather than escalating, because suspension cleared the evidence.
+        if floor.enforced() {
+            match floor.after_read(peer_committee(&tip_node, peer_zone).await) {
+                FloorVerdict::Suspended { passes, last_read } => {
+                    watch.report_suspended(peer_zone);
+                    if passes == 1 || alerts_at(passes) {
+                        error!(
+                            "Peer reader for {} suspended for {passes} passes: peer committee below the floor ({}, floor {min_committee_size}). No new blocks from that peer are verified or cached until its committee recovers; dispatches naming unverified blocks wait rather than escalate.",
+                            hex::encode(peer_zone),
+                            describe_committee(last_read)
+                        );
+                    }
+                    tokio::time::sleep(poll_interval).await;
+                    continue;
+                }
+                FloorVerdict::Active { resumed: true } => {
+                    log::info!(
+                        "Peer reader for {} resumed: peer committee back at or above the floor of {min_committee_size}.",
+                        hex::encode(peer_zone)
+                    );
+                }
+                FloorVerdict::Active { resumed: false } => {}
+            }
+        }
         match zone_indexer.next_messages(cursor).await {
             Ok(stream) => {
                 let pass =
@@ -2292,6 +2392,71 @@ mod tests {
         );
     }
 
+    /// Suspension breaks the caught-up run, so an absence verdict can never
+    /// escalate off evidence gathered before the committee dipped, and a run
+    /// after resumption starts from scratch.
+    #[tokio::test(start_paused = true)]
+    async fn suspension_clears_the_evidence_run_and_it_rebuilds_from_scratch() {
+        let watch = PeerWatch::default();
+        let start = Instant::now();
+        watch.report_pass(PEER_ZONE, &at_tip_report(2, 7));
+        watch.report_pass(PEER_ZONE, &at_tip_report(2, 7));
+        assert!(watch.confirmed_absence(PEER_ZONE, start, 0).is_some());
+
+        watch.report_suspended(PEER_ZONE);
+        assert!(
+            watch.confirmed_absence(PEER_ZONE, start, 0).is_none(),
+            "a suspension clears the run"
+        );
+
+        watch.report_pass(PEER_ZONE, &at_tip_report(2, 7));
+        let evidence = watch
+            .confirmed_absence(PEER_ZONE, start, 0)
+            .expect("a fresh at-tip run is evidence again");
+        assert_eq!(
+            evidence.drained_passes, 1,
+            "the run restarts from scratch after a suspension"
+        );
+    }
+
+    /// The precedence pairs the classification test cannot show one at a
+    /// time: a verdict outranks a suspension, a suspension outranks a stall,
+    /// and an ordinary pass clears the suspension again.
+    #[test]
+    fn suspension_precedence_and_recovery() {
+        let watch = PeerWatch::default();
+
+        watch.report_suspended(PEER_ZONE);
+        watch.mark_halted(PEER_ZONE);
+        assert_eq!(watch.statuses()[0].health, PeerHealth::Halted);
+        watch.clear_halted(PEER_ZONE);
+
+        watch.report_pass(
+            PEER_ZONE,
+            &PassReport {
+                cursor_slot: Some(3),
+                verified_tip: Some(1),
+                stuck: Some((4, 3)),
+                drained: false,
+                drained_at_tip: None,
+                lib_slot: None,
+            },
+        );
+        watch.report_suspended(PEER_ZONE);
+        assert_eq!(
+            watch.statuses()[0].health,
+            PeerHealth::Suspended,
+            "a stall observed before the dip is stale information"
+        );
+
+        watch.report_pass(PEER_ZONE, &at_tip_report(2, 7));
+        assert_eq!(
+            watch.statuses()[0].health,
+            PeerHealth::Live,
+            "one ordinary pass clears the suspension"
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_lagging_or_stalled_pass_resets_the_run() {
         let watch = PeerWatch::default();
@@ -2626,6 +2791,51 @@ mod tests {
         );
     }
 
+    /// Suspension holds new trust, not old: blocks verified before the dip
+    /// still serve waiters from the cache.
+    #[tokio::test]
+    async fn a_suspended_peer_still_serves_previously_verified_blocks() {
+        let verifier = verifier();
+        cache_chain(&verifier, linked_chain(2)).await;
+        verifier.watch.register(PEER_ZONE);
+        verifier.watch.report_suspended(PEER_ZONE);
+
+        verifier
+            .wait_for_peer_block(PEER_ZONE, 2, 0)
+            .await
+            .expect("a block verified before the dip still serves");
+    }
+
+    /// A dispatch naming a block past the suspension point waits out as
+    /// retryable, never as a verdict: the suspended flag refuses to prove
+    /// absence even while at-tip passes admitted around the dip report in.
+    #[tokio::test(start_paused = true)]
+    async fn suspension_mid_wait_stays_unavailable_at_timeout() {
+        let verifier = verifier();
+        cache_chain(&verifier, linked_chain(2)).await;
+        verifier.watch.register(PEER_ZONE);
+        verifier.watch.report_pass(PEER_ZONE, &at_tip_report(2, 7));
+
+        let wait = verifier.wait_for_peer_block(PEER_ZONE, 9, 0);
+        let reports = async {
+            tokio::time::sleep(Duration::from_secs(50)).await;
+            verifier.watch.report_suspended(PEER_ZONE);
+            for _ in 0_u32..40 {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                verifier.watch.report_suspended(PEER_ZONE);
+            }
+        };
+        let (result, ()) = tokio::join!(wait, reports);
+        assert!(
+            matches!(
+                result.expect_err("still unresolved"),
+                PeerBlockError::Unavailable { .. }
+            ),
+            "a suspended peer must stall the wait, not halt the zone"
+        );
+        assert_eq!(verifier.watch.statuses()[0].health, PeerHealth::Suspended);
+    }
+
     #[tokio::test]
     async fn refetch_refuses_a_block_hashing_differently_than_the_index() {
         let chain = linked_chain(2);
@@ -2752,6 +2962,7 @@ mod tests {
             },
         );
         watch.mark_halted([5; 32]);
+        watch.report_suspended([6; 32]);
 
         let statuses = watch.statuses();
         let health: Vec<PeerHealth> = statuses.iter().map(|status| status.health).collect();
@@ -2763,8 +2974,9 @@ mod tests {
                 PeerHealth::Holed,
                 PeerHealth::Lagging,
                 PeerHealth::Halted,
+                PeerHealth::Suspended,
             ],
-            "registered-only, at-tip, stuck, drained-behind, halted"
+            "registered-only, at-tip, stuck, drained-behind, halted, suspended"
         );
         assert_eq!(statuses[0].zone, hex::encode([1_u8; 32]));
         assert_eq!(statuses[2].stuck_slot_attempts, 3);

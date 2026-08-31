@@ -10,8 +10,9 @@
 //! shared trait is best lifted from that first real adapter, not from this one.
 
 pub use acceptance::{
-    Link, OffChain, STUCK_SLOT_ALERT_PASSES, ScreenRefusal, StallState, alerts_at,
-    equivocation_report, link_to_tip, pinned_keys, screen_peer_block, signed_by_any,
+    CommitteeFloorState, FloorVerdict, KEPT_FLOOR_READ_FAILURES, Link, OffChain,
+    STUCK_SLOT_ALERT_PASSES, ScreenRefusal, StallState, alerts_at, equivocation_report,
+    link_to_tip, pinned_keys, screen_peer_block, signed_by_any,
 };
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use cross_zone_inbox_core::{
@@ -403,6 +404,7 @@ mod tests {
                     mint_cap: None,
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
+                min_committee_size: 0,
             }],
             source_authority: None,
             source_governance: None,
@@ -425,6 +427,7 @@ mod tests {
                     mint_cap: Some(1_000),
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
+                min_committee_size: 0,
             }],
             source_authority: None,
             source_governance: None,
@@ -447,6 +450,7 @@ mod tests {
                 channel_id: [2; 32],
                 allowed_routes: vec![route.clone(), route],
                 expected_block_signing_pubkeys: Vec::new(),
+                min_committee_size: 0,
             }],
             source_authority: None,
             source_governance: None,

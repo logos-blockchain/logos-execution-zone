@@ -8,8 +8,9 @@ use common::{
     transaction::LeeTransaction,
 };
 use cross_zone::{
-    EmissionSource, Link, StallState, alerts_at, build_dispatch_from_emission, equivocation_report,
-    extract_emission, is_sequencer_only_program, link_to_tip, pinned_keys, screen_peer_block,
+    CommitteeFloorState, EmissionSource, FloorVerdict, Link, StallState, alerts_at,
+    build_dispatch_from_emission, equivocation_report, extract_emission, is_sequencer_only_program,
+    link_to_tip, pinned_keys, screen_peer_block,
 };
 use cross_zone_inbox_core::message_key;
 use futures::{Stream, StreamExt as _};
@@ -17,7 +18,10 @@ use kameo::actor::ActorRef;
 use lee::PublicKey;
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_zone_sdk::{CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient};
+use logos_blockchain_zone_sdk::{
+    CommonHttpClient, Slot, ZoneMessage,
+    adapter::{Node as _, NodeHttpClient},
+};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
@@ -37,6 +41,12 @@ struct PeerContext {
     peer_zone: [u8; 32],
     self_zone: [u8; 32],
     expected_pubkeys: Vec<PublicKey>,
+    /// Below this live committee size the watcher suspends; 0 disables the
+    /// floor and skips the committee read entirely.
+    min_committee_size: u32,
+    /// The watcher's own handle for the committee read; the connection inside
+    /// `ZoneIndexer` is consumed by the message stream.
+    node: NodeHttpClient,
 }
 
 /// Why one pass over a peer's stream ended.
@@ -67,16 +77,27 @@ enum PassOutcome {
 }
 
 /// The pass-to-pass state of one watcher.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WatcherState {
     stall: StallState<Slot>,
     /// Consecutive passes that placed nothing while skipping blocks. Not keyed
     /// by slot: the peer keeps producing, so every such pass ends at a new slot
     /// and a slot-keyed count would reset to one for ever.
     stranded: u32,
+    /// Whether the peer's live committee was last seen at or above the
+    /// configured floor; see [`CommitteeFloorState`].
+    committee_floor: CommitteeFloorState,
 }
 
 impl WatcherState {
+    fn new(min_committee_size: u32) -> Self {
+        Self {
+            stall: StallState::default(),
+            stranded: 0,
+            committee_floor: CommitteeFloorState::new(min_committee_size),
+        }
+    }
+
     /// Folds one pass's outcome into the stall and stranded counts, returning
     /// the slot the watcher is stuck on and how long it has been stuck.
     fn after_pass(&mut self, outcome: PassOutcome, cursor: Option<Slot>) -> Option<(Slot, u32)> {
@@ -202,12 +223,22 @@ pub fn spawn_watchers<S: StorageActorTrait>(
             bedrock_config.node_url.clone(),
         );
         let expected_pubkeys = pinned_keys(&peer);
+        // The indexer consumes `node` for its message stream; this clone is the
+        // watcher's own handle for the committee-floor read.
+        let floor_node = node.clone();
+        // Zero per peer up front, so a never-suspended peer still has a series.
+        sequencer_core_metrics::record_cross_zone_peer_committee_suspended(
+            hex::encode(peer.channel_id),
+            false,
+        );
         tasks.push(tokio::spawn(watch_peer(
             ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
             PeerContext {
                 peer_zone: peer.channel_id,
                 self_zone,
                 expected_pubkeys,
+                min_committee_size: peer.min_committee_size,
+                node: floor_node,
             },
             poll_interval,
             storage_ref.clone(),
@@ -289,9 +320,17 @@ async fn watch_peer<S: StorageActorTrait>(
     }
 
     // In memory, and rebuilt from the store on every start: it says only how
-    // loud to be about a slot this watcher is stuck on.
-    let mut state = WatcherState::default();
+    // loud to be about a slot this watcher is stuck on, or how long it has
+    // been suspended on the committee floor.
+    let mut state = WatcherState::new(peer.min_committee_size);
     loop {
+        // Above `next_messages`, so a suspended watcher reads nothing at all,
+        // and below the startup loads, so suspension never masks their
+        // fail-stop paths.
+        if held_below_committee_floor(&mut state.committee_floor, &peer).await {
+            tokio::time::sleep(poll_interval).await;
+            continue;
+        }
         let stream = match zone_indexer.next_messages(cursor).await {
             Ok(stream) => stream,
             Err(err) => {
@@ -305,33 +344,108 @@ async fn watch_peer<S: StorageActorTrait>(
         };
         let outcome = consume_peer_stream(stream, &peer, &storage_ref, &mut cursor, &mut tip).await;
 
-        if let Some((slot, attempts)) = state.after_pass(outcome, cursor)
-            && alerts_at(attempts)
-        {
-            error!(
-                "Watcher for peer {} has been stuck at slot {slot:?} for {attempts} passes. Nothing from that peer is being delivered until it clears, and the delivery floor stays at {:?} so the slot keeps coming back.",
-                hex::encode(peer_zone),
-                get_cross_zone_peer_floor(&storage_ref, peer_zone)
-                    .await
-                    .ok()
-                    .flatten()
-            );
-        }
-        // Reads on rather than stopping, since one such pass is ordinary, but a
-        // run of them means the stored tip no longer tracks this peer and every
-        // block since has been passed over. The floor has moved with them, so
-        // this does not clear on its own.
-        if alerts_at(state.stranded) {
-            error!(
-                "Watcher for peer {} has read {} consecutive passes without placing a block on the chain it has delivered from, tip {:?}. Nothing from that peer is being delivered, and the blocks passed over are already below the delivery floor.",
-                hex::encode(peer_zone),
-                state.stranded,
-                tip.map(|held| held.block_id)
-            );
-        }
+        report_pass_alerts(&mut state, outcome, cursor, tip, peer_zone, &storage_ref).await;
 
         // Stream ended (caught up to the peer's last finalized block); poll again.
         tokio::time::sleep(poll_interval).await;
+    }
+}
+
+/// Folds one pass into the stall and stranded counts and says so on the
+/// [`alerts_at`] cadence.
+async fn report_pass_alerts<S: StorageActorTrait>(
+    state: &mut WatcherState,
+    outcome: PassOutcome,
+    cursor: Option<Slot>,
+    tip: Option<PeerChainTip>,
+    peer_zone: [u8; 32],
+    storage_ref: &ActorRef<S>,
+) {
+    if let Some((slot, attempts)) = state.after_pass(outcome, cursor)
+        && alerts_at(attempts)
+    {
+        error!(
+            "Watcher for peer {} has been stuck at slot {slot:?} for {attempts} passes. Nothing from that peer is being delivered until it clears, and the delivery floor stays at {:?} so the slot keeps coming back.",
+            hex::encode(peer_zone),
+            get_cross_zone_peer_floor(storage_ref, peer_zone)
+                .await
+                .ok()
+                .flatten()
+        );
+    }
+    // Reads on rather than stopping, since one such pass is ordinary, but a
+    // run of them means the stored tip no longer tracks this peer and every
+    // block since has been passed over. The floor has moved with them, so
+    // this does not clear on its own.
+    if alerts_at(state.stranded) {
+        error!(
+            "Watcher for peer {} has read {} consecutive passes without placing a block on the chain it has delivered from, tip {:?}. Nothing from that peer is being delivered, and the blocks passed over are already below the delivery floor.",
+            hex::encode(peer_zone),
+            state.stranded,
+            tip.map(|held| held.block_id)
+        );
+    }
+}
+
+/// Folds one committee read into the floor latch and reports the outcome:
+/// gauge and log on the suspend and resume edges, the suspend line again on
+/// the [`alerts_at`] cadence. True while the pass must be skipped.
+async fn held_below_committee_floor(floor: &mut CommitteeFloorState, peer: &PeerContext) -> bool {
+    if !floor.enforced() {
+        return false;
+    }
+    let read = peer_committee(&peer.node, peer.peer_zone).await;
+    match floor.after_read(read) {
+        FloorVerdict::Suspended { passes, last_read } => {
+            sequencer_core_metrics::record_cross_zone_peer_committee_suspended(
+                hex::encode(peer.peer_zone),
+                true,
+            );
+            if passes == 1 || alerts_at(passes) {
+                error!(
+                    "Watcher for peer {} suspended for {passes} passes: peer committee below the floor ({}, floor {}). Nothing new is read from that peer until its committee recovers; dispatches already recorded still drain into blocks.",
+                    hex::encode(peer.peer_zone),
+                    describe_committee(last_read),
+                    peer.min_committee_size
+                );
+            }
+            true
+        }
+        FloorVerdict::Active { resumed: true } => {
+            sequencer_core_metrics::record_cross_zone_peer_committee_suspended(
+                hex::encode(peer.peer_zone),
+                false,
+            );
+            log::info!(
+                "Watcher for peer {} resumed: peer committee back at or above the floor of {}.",
+                hex::encode(peer.peer_zone),
+                peer.min_committee_size
+            );
+            false
+        }
+        FloorVerdict::Active { resumed: false } => false,
+    }
+}
+
+/// The peer channel's live committee size and tip slot, or `None` on a read
+/// failure or an absent channel, both unknown rather than zero. The indexer's
+/// verifier holds the twin of this helper; the policy folding it is
+/// [`CommitteeFloorState`].
+async fn peer_committee(node: &NodeHttpClient, peer_zone: [u8; 32]) -> Option<(usize, u64)> {
+    let state = node
+        .channel_state(ChannelId::from(peer_zone))
+        .await
+        .ok()??;
+    Some((state.accredited_keys.len(), state.tip_slot.into_inner()))
+}
+
+/// The committee behind a floor verdict, for the suspension report.
+fn describe_committee(last_read: Option<(usize, u64)>) -> String {
+    match last_read {
+        Some((size, tip_slot)) => {
+            format!("{size} accredited keys last seen at channel tip slot {tip_slot}")
+        }
+        None => "size unknown, channel state never read".to_owned(),
     }
 }
 
@@ -654,7 +768,35 @@ mod tests {
             peer_zone: PEER_ZONE,
             self_zone: SELF_ZONE,
             expected_pubkeys: Vec::new(),
+            min_committee_size: 0,
+            node: NodeHttpClient::new(
+                CommonHttpClient::new(None),
+                "http://127.0.0.1:0".parse().expect("valid url"),
+            ),
         }
+    }
+
+    /// The gate itself, on the two paths the latch tests cannot see: a
+    /// floorless peer skips the read entirely, and a floored peer whose node
+    /// is unreachable fails closed before the first read.
+    #[tokio::test]
+    async fn the_floor_gate_fails_closed_on_an_unreachable_node() {
+        let peer = peer_context();
+        let mut floorless = CommitteeFloorState::new(0);
+        assert!(
+            !held_below_committee_floor(&mut floorless, &peer).await,
+            "no floor, no gate, no read"
+        );
+
+        let floored = PeerContext {
+            min_committee_size: 3,
+            ..peer_context()
+        };
+        let mut floor = CommitteeFloorState::new(floored.min_committee_size);
+        assert!(
+            held_below_committee_floor(&mut floor, &floored).await,
+            "an unreadable committee before the first read suspends"
+        );
     }
 
     /// A store backed by a temp dir. The dir is returned so it outlives the db.
@@ -818,7 +960,7 @@ mod tests {
     /// Drives the state machine over a sequence of pass outcomes, with the read
     /// position after each, and returns the state it lands in.
     fn run_passes(passes: &[(PassOutcome, Option<u64>)]) -> WatcherState {
-        let mut state = WatcherState::default();
+        let mut state = WatcherState::new(0);
         for (outcome, cursor) in passes {
             state.after_pass(*outcome, cursor.map(Slot::from));
         }
@@ -857,7 +999,7 @@ mod tests {
             PassOutcome::Undecodable(Slot::from(4)),
             PassOutcome::Undelivered(Slot::from(4)),
         ] {
-            let mut state = WatcherState::default();
+            let mut state = WatcherState::new(0);
             assert_eq!(
                 state.after_pass(outcome, Some(Slot::from(3))),
                 Some((Slot::from(4), 1))

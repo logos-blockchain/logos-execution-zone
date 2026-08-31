@@ -528,8 +528,10 @@ struct LastBlockIdResult query_last_block(const struct IndexerServiceFFI *indexe
  * The JSON schema is owned by `indexer_core` (`IndexerStatus`): an object with
  * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
  * `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
- * `cross_zone_peers`. Lets a client distinguish "still catching up" from
- * "something went wrong".
+ * `cross_zone_peers`. Each peer entry's `health` is one of
+ * `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
+ * know as not known healthy. Lets a client distinguish "still catching up"
+ * from "something went wrong".
  *
  * # Arguments
  *
