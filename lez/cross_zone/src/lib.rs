@@ -291,9 +291,11 @@ pub fn build_wrapped_token_init_config_tx(
         .into_iter()
         .map(
             |(src_zone, src_program_id, mint_cap)| wrapped_token_core::SourceEntry {
-                src_zone,
-                src_program_id,
-                mint_cap,
+                policy: wrapped_token_core::SourcePolicy {
+                    src_zone,
+                    src_program_id,
+                    mint_cap,
+                },
                 minted: 0,
             },
         )

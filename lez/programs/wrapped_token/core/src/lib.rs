@@ -91,9 +91,10 @@ pub struct WrappedTokenConfig {
     pub sources: Vec<SourceEntry>,
 }
 
-/// One authorized peer source: its identity, its mint policy, and its counter.
+/// One source's policy as an authority supplies it: identity and allowance,
+/// without the counter, which the guest owns.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct SourceEntry {
+pub struct SourcePolicy {
     /// The peer zone the emission came from.
     pub src_zone: ZoneId,
     /// The program on that zone that emitted it.
@@ -104,19 +105,16 @@ pub struct SourceEntry {
     /// account list, and the authority can raise the cap as honest volume
     /// grows, which serves the same purpose without new plumbing.
     pub mint_cap: Option<Balance>,
+}
+
+/// One authorized peer source: its policy, and the counter the guest owns.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SourceEntry {
+    /// The source's identity and allowance as the authority supplied them.
+    pub policy: SourcePolicy,
     /// Lifetime total minted for this source. State, not policy: zero at
     /// genesis, advanced by every mint, never caller-supplied.
     pub minted: Balance,
-}
-
-/// One source's policy as an authority supplies it: a [`SourceEntry`] minus the
-/// counter, which the guest owns.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct SourcePolicy {
-    pub src_zone: ZoneId,
-    pub src_program_id: ProgramId,
-    /// Lifetime mint allowance; `None` is uncapped.
-    pub mint_cap: Option<Balance>,
 }
 
 impl WrappedTokenConfig {
@@ -189,15 +187,19 @@ mod tests {
             authority: Some(AccountId::new([5; 32])),
             sources: vec![
                 SourceEntry {
-                    src_zone: [7; 32],
-                    src_program_id: [9; 8],
-                    mint_cap: Some(1_000),
+                    policy: SourcePolicy {
+                        src_zone: [7; 32],
+                        src_program_id: [9; 8],
+                        mint_cap: Some(1_000),
+                    },
                     minted: 7,
                 },
                 SourceEntry {
-                    src_zone: [8; 32],
-                    src_program_id: [4; 8],
-                    mint_cap: None,
+                    policy: SourcePolicy {
+                        src_zone: [8; 32],
+                        src_program_id: [4; 8],
+                        mint_cap: None,
+                    },
                     minted: 0,
                 },
             ],

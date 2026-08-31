@@ -90,7 +90,11 @@ fn mint(
         .iter_mut()
         .find(|entry| {
             marker.account_id
-                == inbox_source_marker_account_id(minter, &entry.src_zone, entry.src_program_id)
+                == inbox_source_marker_account_id(
+                    minter,
+                    &entry.policy.src_zone,
+                    entry.policy.src_program_id,
+                )
         })
         .expect("Mint is only callable for a peer source this token authorizes");
     // The source's lifetime allowance. A breach fails the whole delivery, so the
@@ -99,7 +103,7 @@ fn mint(
         .minted
         .checked_add(amount)
         .expect("source mint total overflow");
-    if let Some(cap) = source.mint_cap {
+    if let Some(cap) = source.policy.mint_cap {
         assert!(minted <= cap, "mint exceeds this source's lifetime cap");
     }
     source.minted = minted;
@@ -290,13 +294,11 @@ fn update_sources(
             minted: previous
                 .iter()
                 .find(|entry| {
-                    entry.src_zone == policy.src_zone
-                        && entry.src_program_id == policy.src_program_id
+                    entry.policy.src_zone == policy.src_zone
+                        && entry.policy.src_program_id == policy.src_program_id
                 })
                 .map_or(0, |entry| entry.minted),
-            src_zone: policy.src_zone,
-            src_program_id: policy.src_program_id,
-            mint_cap: policy.mint_cap,
+            policy,
         })
         .collect();
     let mut config_account = config.account.clone();

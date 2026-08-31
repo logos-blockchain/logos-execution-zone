@@ -92,16 +92,9 @@ fn uncapped_policies(
 fn uncapped_entries(
     pairs: &[([u8; 32], lee_core::program::ProgramId)],
 ) -> Vec<wrapped_token_core::SourceEntry> {
-    pairs
-        .iter()
-        .map(
-            |&(src_zone, src_program_id)| wrapped_token_core::SourceEntry {
-                src_zone,
-                src_program_id,
-                mint_cap: None,
-                minted: 0,
-            },
-        )
+    uncapped_policies(pairs)
+        .into_iter()
+        .map(|policy| wrapped_token_core::SourceEntry { policy, minted: 0 })
         .collect()
 }
 
@@ -126,9 +119,11 @@ fn seed_wrapped_config_with_governance(
         .into_iter()
         .map(
             |(src_zone, src_program_id)| wrapped_token_core::SourceEntry {
-                src_zone,
-                src_program_id,
-                mint_cap: None,
+                policy: wrapped_token_core::SourcePolicy {
+                    src_zone,
+                    src_program_id,
+                    mint_cap: None,
+                },
                 minted: 0,
             },
         )
@@ -381,9 +376,11 @@ fn capped_mint_state(
         None,
         authority,
         vec![wrapped_token_core::SourceEntry {
-            src_zone: MINT_SRC_ZONE,
-            src_program_id: MINT_SRC_PROGRAM,
-            mint_cap,
+            policy: wrapped_token_core::SourcePolicy {
+                src_zone: MINT_SRC_ZONE,
+                src_program_id: MINT_SRC_PROGRAM,
+                mint_cap,
+            },
             minted,
         }],
     );
@@ -452,7 +449,10 @@ fn source_minted(state: &V03State) -> u128 {
     .expect("config decodes");
     cfg.sources
         .iter()
-        .find(|entry| entry.src_zone == MINT_SRC_ZONE && entry.src_program_id == MINT_SRC_PROGRAM)
+        .find(|entry| {
+            entry.policy.src_zone == MINT_SRC_ZONE
+                && entry.policy.src_program_id == MINT_SRC_PROGRAM
+        })
         .expect("the canonical source is configured")
         .minted
 }
@@ -688,20 +688,24 @@ fn a_many_source_config_still_fits_and_mints() {
     // matched on zone alone would draw down the wrong counter.
     let mut entries: Vec<_> = (0..16_u8)
         .map(|index| wrapped_token_core::SourceEntry {
-            src_zone: if index == 0 {
-                MINT_SRC_ZONE
-            } else {
-                [index.wrapping_add(10); 32]
+            policy: wrapped_token_core::SourcePolicy {
+                src_zone: if index == 0 {
+                    MINT_SRC_ZONE
+                } else {
+                    [index.wrapping_add(10); 32]
+                },
+                src_program_id: [u32::from(index) + 100; 8],
+                mint_cap: Some(u128::MAX),
             },
-            src_program_id: [u32::from(index) + 100; 8],
-            mint_cap: Some(u128::MAX),
             minted: u128::from(u64::MAX),
         })
         .collect();
     entries.push(wrapped_token_core::SourceEntry {
-        src_zone: MINT_SRC_ZONE,
-        src_program_id: MINT_SRC_PROGRAM,
-        mint_cap: Some(100),
+        policy: wrapped_token_core::SourcePolicy {
+            src_zone: MINT_SRC_ZONE,
+            src_program_id: MINT_SRC_PROGRAM,
+            mint_cap: Some(100),
+        },
         minted: 0,
     });
 
@@ -724,7 +728,7 @@ fn a_many_source_config_still_fits_and_mints() {
     for entry in cfg
         .sources
         .iter()
-        .filter(|entry| entry.src_program_id != MINT_SRC_PROGRAM)
+        .filter(|entry| entry.policy.src_program_id != MINT_SRC_PROGRAM)
     {
         assert_eq!(
             entry.minted,
