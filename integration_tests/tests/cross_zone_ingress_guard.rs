@@ -52,7 +52,6 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         src_block_hash: [7; 32],
         src_tx_index: 0,
         src_account_id: lee::AccountId::new([9; 32]),
-        target_program_id: ping_receiver_id,
         target_account_id: program_loader_core::immutable_deploy_account_id(ping_receiver_id),
         payload: vec![],
         l1_inclusion_witness: None,
