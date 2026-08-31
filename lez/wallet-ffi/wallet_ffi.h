@@ -1107,9 +1107,11 @@ enum WalletFfiError wallet_ffi_program_loader_update_header(struct WalletHandle 
                                                             struct FfiTransactionResult *out_result);
 
 /**
- * Deploys a new program: chunks `elf_data`, uploads one segment per account in `segments`, then
- * creates `header` pointing at the resulting chain. `segments_len` must exactly match the
- * number of chunks `elf_data` splits into.
+ * Deploys a new program from `elf_data`.
+ *
+ * Chunks `elf_data`, uploads one segment per account in `segments`, then creates `header`
+ * pointing at the resulting chain. `segments_len` must exactly match the number of chunks
+ * `elf_data` splits into.
  *
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
@@ -1129,9 +1131,11 @@ enum WalletFfiError wallet_ffi_program_loader_deploy(struct WalletHandle *handle
                                                      struct FfiTransactionResult *out_result);
 
 /**
- * Updates an existing program in place: chunks `elf_data`, uploads a fresh set of segments
- * (segments are write-once), then rewrites `header` to point at them. `segments_len` must
- * exactly match the number of chunks `elf_data` splits into.
+ * Updates an existing program in place with `elf_data`.
+ *
+ * Chunks `elf_data`, uploads a fresh set of segments (segments are write-once), then rewrites
+ * `header` to point at them. `segments_len` must exactly match the number of chunks `elf_data`
+ * splits into.
  *
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
