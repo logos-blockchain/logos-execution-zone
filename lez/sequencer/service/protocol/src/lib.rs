@@ -35,6 +35,23 @@ pub struct CrossZoneDeadLetterReport {
     pub retained: Vec<CrossZoneDeadLetter>,
 }
 
+/// What requeueing a dead-lettered delivery did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrossZoneDeadLetterRequeue {
+    /// Restored to the pending list with a clean attempt count; the next
+    /// production turn attempts it again.
+    Requeued,
+    /// The delivery was already pending again, so only the dead letter was
+    /// dropped.
+    AlreadyPending,
+    /// No retained dead letter under that key.
+    NotFound,
+    /// Listed, but its transaction exceeded the retention bound and was not
+    /// kept; read the message back off the peer channel instead.
+    NotRetained,
+}
+
 impl Display for ChannelId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let hex_string = hex::encode(self.0);

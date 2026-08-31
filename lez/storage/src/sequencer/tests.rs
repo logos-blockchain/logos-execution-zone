@@ -902,7 +902,7 @@ fn a_retired_dispatch_moves_into_the_dead_letter_identified_by_its_origin() {
 
     let record = dispatch_record(7);
     let key = record.message_key;
-    let encoded_len = u32::try_from(record.transaction.len()).unwrap();
+    let encoded = record.transaction.clone();
     dbio.add_pending_cross_zone_dispatches(vec![record])
         .unwrap();
 
@@ -924,7 +924,10 @@ fn a_retired_dispatch_moves_into_the_dead_letter_identified_by_its_origin() {
         dispatch_origin(7),
         "the peer coordinates are what let the message be read back off the peer channel"
     );
-    assert_eq!(dead_letters[0].transaction_bytes, encoded_len);
+    assert_eq!(
+        dead_letters[0].transaction, encoded,
+        "the record keeps the bytes a requeue restores"
+    );
     assert_eq!(dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(), 1);
 }
 

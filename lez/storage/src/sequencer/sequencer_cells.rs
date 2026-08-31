@@ -487,10 +487,10 @@ pub struct DispatchOrigin {
 /// A dispatch that fails execution is left out of the block, so nothing on chain
 /// records that it was attempted; this is the only durable trace.
 ///
-/// It identifies the message rather than carrying it: the peer block and index
-/// are enough to read it back off the channel, and the encoded transaction is
-/// peer-chosen and can exceed a whole block, which would leave the list bounded
-/// in entries but unbounded in bytes.
+/// It carries the encoded transaction, not just its size: a requeue has to
+/// restore the delivery without re-reading the peer channel, and the retained
+/// list is bounded to far fewer entries than the pending list that held the
+/// same bytes moments before.
 ///
 /// Giving up is this node's decision, not the network's, so an entry is dropped
 /// again if another sequencer carries the same delivery.
@@ -501,9 +501,9 @@ pub struct DeadLetterDispatchRecord {
     /// Attempts made before giving up, so the record carries the policy that was
     /// in force at the time.
     pub failed_attempts: u32,
-    /// Size of the delivery transaction that would not execute, the diagnostic
-    /// for size-related failures.
-    pub transaction_bytes: u32,
+    /// The borsh-encoded dispatch transaction, kept so a requeue can restore
+    /// the delivery. Its length is the diagnostic for size-related failures.
+    pub transaction: Vec<u8>,
 }
 
 #[derive(BorshDeserialize)]
