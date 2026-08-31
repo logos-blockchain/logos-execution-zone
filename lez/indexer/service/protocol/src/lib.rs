@@ -160,6 +160,7 @@ pub struct BlockHeader {
     pub prev_block_hash: HashType,
     pub hash: HashType,
     pub timestamp: Timestamp,
+    pub producer: PublicKey,
     pub signature: Signature,
 }
 
@@ -229,6 +230,16 @@ pub struct PublicMessage {
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
+    /// The fee declaration, or `None` for a fee-exempt (system) transaction.
+    pub fee: Option<FeeDeclaration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct FeeDeclaration {
+    pub payer: AccountId,
+    pub gas_limit: u64,
+    pub tip: u64,
+    pub max_fee: u128,
 }
 
 pub type InstructionData = Vec<u8>;
@@ -300,6 +311,12 @@ pub struct PublicKey(
     #[schemars(with = "String", description = "base64-encoded public key")]
     pub [u8; 32],
 );
+
+impl Display for PublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct EphemeralPublicKey(
@@ -475,7 +492,24 @@ pub enum BlockIngestError {
         header: HashType,
     },
     EmptyBlock,
+    InvalidProducerSignature,
     InvalidClockTransaction,
+    InvalidFeeTransaction,
+    InvalidFeeClass {
+        tx_index: u64,
+        reason: String,
+    },
+    MissingFeeDeclaration {
+        tx_index: u64,
+    },
+    GasCapExceeded {
+        tx_index: u64,
+        reason: String,
+    },
+    RestrictedAccountModification {
+        tx_index: u64,
+        reason: String,
+    },
     NonPublicGenesisTransaction,
     StateTransition {
         /// Index of the failing transaction within the block body.

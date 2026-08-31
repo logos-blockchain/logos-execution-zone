@@ -16,7 +16,12 @@ use sequencer_stake_core::SequencerKey;
 use url::Url;
 use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
 
-pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
+// Public balances are LGO-scale (`testnet_initial_state` precedent): charged
+// transactions reserve `gas_limit x base_fee` up front (~16M at wallet
+// defaults), so pre-fee-scale balances cannot afford a single transfer.
+// Private transactions are fee-exempt under the interim policy, so the
+// private balances stay small and private-transfer assertions stay exact.
+pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000_000, 20_000_000_000_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 
 /// Fixed sequencer signing key; exposed so the fixture generator can reopen the produced store.

@@ -32,8 +32,9 @@ use crate::{
     protocol::{
         GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock, GetBlockRange,
         GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
-        GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, Transaction,
+        GetFeeQuote, GetFeeQuoteReply, GetLastBlockId, GetProofsAndRoot, GetTransaction,
+        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitOutcome,
+        Transaction,
     },
 };
 
@@ -195,16 +196,28 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
 impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<Transaction>
     for ExecutorActor<BP, S>
 {
-    type Reply = Result<()>;
+    type Reply = Result<SubmitOutcome>;
 
     async fn handle(
         &mut self,
         Transaction { transaction }: Transaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        // Fee admission against the head state, before the mempool sees it.
+        // Advisory (base fees and balances move), but everything it turns
+        // away would have been refused by the block builder anyway.
+        if let Err(rejection) = self
+            .sequencer
+            .with_state(|state| sequencer_core::fees::screen(&transaction, state))
+            .await
+        {
+            return Ok(SubmitOutcome::Rejected(rejection));
+        }
+
         self.mempool_handle
             .try_push((TransactionOrigin::User, transaction))
-            .map_err(|_err| Error::MempoolIsFull)
+            .map_err(|_err| Error::MempoolIsFull)?;
+        Ok(SubmitOutcome::Admitted)
     }
 }
 
@@ -281,6 +294,25 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
         self.sequencer
             .with_state(|state| state.get_account_by_id(account_id).balance)
             .await
+    }
+}
+
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetFeeQuote>
+    for ExecutorActor<BP, S>
+{
+    type Reply = GetFeeQuoteReply;
+
+    async fn handle(
+        &mut self,
+        GetFeeQuote: GetFeeQuote,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        GetFeeQuoteReply {
+            quote: self
+                .sequencer
+                .with_state(sequencer_core::fees::fee_quote)
+                .await,
+        }
     }
 }
 

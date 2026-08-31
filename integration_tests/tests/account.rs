@@ -5,7 +5,9 @@
 
 use anyhow::{Context as _, Result};
 use integration_tests::{
-    TestContext, private_mention,
+    TestContext,
+    config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+    private_mention,
     utils::{get_account, new_account},
 };
 use key_protocol::key_management::KeyChain;
@@ -31,7 +33,7 @@ async fn get_existing_account() -> Result<()> {
         account.program_owner,
         programs::authenticated_transfer().id().into()
     );
-    assert_eq!(account.balance, 10000);
+    assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
     assert!(account.data.is_empty());
     assert_eq!(account.nonce.0, 1);
 

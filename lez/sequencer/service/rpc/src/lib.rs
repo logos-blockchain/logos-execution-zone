@@ -7,7 +7,7 @@ use jsonrpsee::types::ErrorObjectOwned;
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
-    CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, HashType, LeeTransaction,
+    CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote, HashType, LeeTransaction,
     MembershipProof, Nonce, ProgramId,
 };
 
@@ -39,6 +39,11 @@ pub type SequencerClient = jsonrpsee::http_client::HttpClient;
 pub trait Rpc {
     #[method(name = "sendTransaction")]
     async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, ErrorObjectOwned>;
+
+    /// The head fee market: current base fees and the band the next block's
+    /// can move within, for sizing `max_fee` at submission time.
+    #[method(name = "getFeeState")]
+    async fn get_fee_state(&self) -> Result<FeeStateQuote, ErrorObjectOwned>;
 
     // TODO: expand healthcheck response into some kind of report
     #[method(name = "checkHealth")]

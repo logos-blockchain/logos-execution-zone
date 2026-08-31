@@ -1,10 +1,12 @@
 use lee_core::account::{Account, AccountId, AccountWithMetadata};
 use risc0_zkvm::{ExecutorEnv, default_executor};
 
-use crate::program::Program;
+use crate::{
+    error::LeeError,
+    program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program},
+};
 
-#[test]
-fn program_execution() {
+fn transfer_fixture() -> (Program, Vec<AccountWithMetadata>, Vec<u8>, u128) {
     let program = crate::test_methods::simple_balance_transfer();
     let balance_to_move: u128 = 11_223_344_556_677;
     let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
@@ -17,6 +19,17 @@ fn program_execution() {
         AccountId::new([0; 32]),
     );
     let recipient = AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
+    (
+        program,
+        vec![sender, recipient],
+        instruction_data,
+        balance_to_move,
+    )
+}
+
+#[test]
+fn program_execution() {
+    let (program, pre_states, instruction_data, balance_to_move) = transfer_fixture();
 
     let expected_sender_post = Account {
         balance: 77_665_544_332_211 - balance_to_move,
@@ -26,8 +39,13 @@ fn program_execution() {
         balance: balance_to_move,
         ..Account::default()
     };
-    let program_output = program
-        .execute(None, &[sender, recipient], &instruction_data)
+    let (program_output, _cycles) = program
+        .execute(
+            None,
+            &pre_states,
+            &instruction_data,
+            DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
         .unwrap();
 
     let [sender_post, recipient_post] = program_output.post_states.try_into().unwrap();
@@ -76,7 +94,9 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
 #[test]
 fn malformed_journal_frame_is_an_error_not_a_panic() {
     let program = crate::test_methods::malformed_journal();
-    let err = program.execute(None, &[], &Vec::new()).unwrap_err();
+    let err = program
+        .execute(None, &[], &Vec::new(), DEFAULT_PUBLIC_CYCLE_BUDGET)
+        .unwrap_err();
     assert!(
         matches!(
             &err,
@@ -85,4 +105,28 @@ fn malformed_journal_frame_is_an_error_not_a_panic() {
         ),
         "expected malformed-frame ProgramExecutionFailed, got: {err:?}"
     );
+}
+
+#[test]
+fn execute_reports_cycles_within_budget() {
+    let (program, pre_states, instruction_data, _) = transfer_fixture();
+    let (_, cycles) = program
+        .execute(
+            None,
+            &pre_states,
+            &instruction_data,
+            DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .expect("executes");
+    assert!(cycles > 0);
+    // Holds because this transfer costs far less than the budget; not a general
+    // invariant — a session can overshoot its limit by up to one instruction.
+    assert!(cycles <= DEFAULT_PUBLIC_CYCLE_BUDGET);
+}
+
+#[test]
+fn tiny_budget_is_out_of_gas() {
+    let (program, pre_states, instruction_data, _) = transfer_fixture();
+    let result = program.execute(None, &pre_states, &instruction_data, 1_024);
+    assert!(matches!(result, Err(LeeError::OutOfGas { budget: 1_024 })));
 }

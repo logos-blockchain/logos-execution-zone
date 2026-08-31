@@ -55,6 +55,9 @@ pub struct BlockHeader {
     pub prev_block_hash: BlockHash,
     pub hash: BlockHash,
     pub timestamp: Timestamp,
+    /// The block producer's signing key. Covered by `hash` and verified
+    /// against `signature`; fee payouts credit its account.
+    pub producer: lee::PublicKey,
     pub signature: lee::Signature,
 }
 
@@ -88,7 +91,21 @@ impl Block {
             timestamp: self.header.timestamp,
             transactions: self.body.transactions.clone(),
         }
-        .compute_hash()
+        .compute_hash(&self.header.producer)
+    }
+
+    /// Whether the header signature verifies against the embedded producer
+    /// key. Every valid block must satisfy this.
+    ///
+    /// This attests only that the producer signed the *declared* `header.hash`,
+    /// not that the hash matches the block contents — so it is not an
+    /// authenticity check on its own. Pair it with a `recompute_hash` check (as
+    /// `validate_against_tip` does) before trusting it.
+    #[must_use]
+    pub fn has_valid_producer_signature(&self) -> bool {
+        self.header
+            .signature
+            .is_valid_for(&self.header.hash.0, &self.header.producer)
     }
 
     /// Recomputes the signed hash from the block contents and checks the header
@@ -97,7 +114,7 @@ impl Block {
     /// sequencer is rejected even if it reached the channel.
     #[must_use]
     pub fn is_signed_by(&self, expected_pubkey: &lee::PublicKey) -> bool {
-        let hash = HashableBlockData::from(self.clone()).compute_hash();
+        let hash = HashableBlockData::from(self.clone()).compute_hash(&self.header.producer);
         self.header.signature.is_valid_for(&hash.0, expected_pubkey)
     }
 }
@@ -123,27 +140,34 @@ pub struct HashableBlockData {
 }
 
 impl HashableBlockData {
-    /// Domain-separated hash of the block contents: `SHA256(PREFIX || borsh(self))`.
-    /// The single source of truth for both producing and verifying a block hash.
+    /// Domain-separated hash of the block contents and its producer:
+    /// `SHA256(PREFIX || borsh(self) || borsh(producer))`. The single source of
+    /// truth for both producing and verifying a block hash; no site can hash
+    /// without deciding the producer.
     #[must_use]
-    pub fn compute_hash(&self) -> BlockHash {
+    pub fn compute_hash(&self, producer: &lee::PublicKey) -> BlockHash {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Block/\x00\x00\x00\x00\x00\x00\x00\x00";
 
         let data_bytes = borsh::to_vec(self).unwrap();
+        let producer_bytes = borsh::to_vec(producer).unwrap();
         let mut bytes = Vec::with_capacity(
             PREFIX
                 .len()
                 .checked_add(data_bytes.len())
+                .and_then(|len| len.checked_add(producer_bytes.len()))
                 .expect("length overflow"),
         );
         bytes.extend_from_slice(PREFIX);
         bytes.extend_from_slice(&data_bytes);
+        bytes.extend_from_slice(&producer_bytes);
         OwnHasher::hash(&bytes)
     }
 
     #[must_use]
     pub fn into_pending_block(self, signing_key: &lee::PrivateKey) -> Block {
-        let hash = self.compute_hash();
+        // TODO: does this introduce too much cost to derive the key on each block?
+        let producer = lee::PublicKey::new_from_private_key(signing_key);
+        let hash = self.compute_hash(&producer);
         let signature = lee::Signature::new(signing_key, &hash.0);
         Block {
             header: BlockHeader {
@@ -151,6 +175,7 @@ impl HashableBlockData {
                 prev_block_hash: self.prev_block_hash,
                 hash,
                 timestamp: self.timestamp,
+                producer,
                 signature,
             },
             body: BlockBody {

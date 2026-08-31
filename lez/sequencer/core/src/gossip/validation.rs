@@ -9,6 +9,9 @@ use common::transaction::LeeTransaction;
 const BLOCK_HEADER_OVERHEAD: u64 = 200;
 
 #[derive(Debug)]
+// `Accept` is intentionally left unboxed: it is the common outcome and the enum
+// is short-lived per gossiped message, so boxing it would only add a heap
+// allocation on the hot validation path.
 pub enum TxEvaluation {
     /// Structurally valid and authenticated; forward and admit.
     Accept(LeeTransaction),

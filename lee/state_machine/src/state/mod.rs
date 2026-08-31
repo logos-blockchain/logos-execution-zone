@@ -204,6 +204,16 @@ impl V03State {
         self.public_state.insert(account_id, account);
     }
 
+    /// Assigns `program_owner` to the account if it is still default-owned.
+    /// Used to initialize the producer account before the fee program credits
+    /// it: program output may not modify an unclaimed default account.
+    pub fn initialize_account_owner(&mut self, account_id: AccountId, program_owner: ProgramId) {
+        let account = self.get_account_by_id_mut(account_id);
+        if account.program_owner == lee_core::program::DEFAULT_PROGRAM_OWNER {
+            account.program_owner = program_owner.into();
+        }
+    }
+
     #[must_use]
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) -> Vec<TransactionEvent> {
         let StateDiff {

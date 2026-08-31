@@ -13,9 +13,10 @@ mod inner {
         AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, BRIDGE_ELF, BRIDGE_ID,
         BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
         CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID,
-        PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID, PING_RECEIVER_ELF,
-        PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID,
-        TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
+        FEE_ELF, FEE_ID, PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID,
+        PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF,
+        SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID, WRAPPED_TOKEN_ELF,
+        WRAPPED_TOKEN_ID,
     };
     use lee::program::Program;
 
@@ -61,6 +62,12 @@ mod inner {
     #[inline]
     pub const fn clock() -> Program {
         Program::new_unchecked(CLOCK_ID, Cow::Borrowed(CLOCK_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn fee() -> Program {
+        Program::new_unchecked(FEE_ID, Cow::Borrowed(FEE_ELF))
     }
 
     #[must_use]
@@ -246,6 +253,7 @@ mod inner {
                 (ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID),
                 (CLOCK_ELF, CLOCK_ID),
                 (FAUCET_ELF, FAUCET_ID),
+                (FEE_ELF, FEE_ID),
                 (BRIDGE_ELF, BRIDGE_ID),
                 (PINATA_ELF, PINATA_ID),
                 (PINATA_TOKEN_ELF, PINATA_TOKEN_ID),
