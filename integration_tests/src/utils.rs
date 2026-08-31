@@ -116,9 +116,11 @@ pub async fn new_account(
     Ok(account_id)
 }
 
-/// Deploys `program` via `program_loader`'s `Deploy` command: creates a fresh header account
-/// plus one fresh segment account per chunk `program`'s elf splits into, then wires them all up
-/// in a single command. Returns the header's `AccountId` (the program's dispatch address).
+/// Deploys `program` via `program_loader`'s `Deploy` command.
+///
+/// Creates a fresh header account plus one fresh segment account per chunk `program`'s elf
+/// splits into, then wires them all up in a single command. Returns the header's `AccountId`
+/// (the program's dispatch address).
 pub async fn deploy_program(
     ctx: &mut TestContext,
     program: lee::program::Program,

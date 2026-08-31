@@ -99,7 +99,7 @@ pub enum Command {
         /// Indicates, how deep in tree accounts may be. Affects command complexity.
         depth: u32,
     },
-    /// program_loader interaction subcommand: deploy/update/inspect linked-list programs.
+    /// `program_loader` interaction subcommand: deploy/update/inspect linked-list programs.
     #[command(subcommand)]
     ProgramLoader(ProgramLoaderSubcommand),
     /// Keycard hardware wallet management.

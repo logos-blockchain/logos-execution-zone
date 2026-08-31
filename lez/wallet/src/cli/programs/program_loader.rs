@@ -97,21 +97,12 @@ pub enum ProgramLoaderSubcommand {
     },
 }
 
-fn resolve_public(mention: &CliAccountMention, wallet_core: &WalletCore) -> Result<AccountId> {
-    match mention.resolve(wallet_core.storage())? {
-        AccountIdWithPrivacy::Public(account_id) => Ok(account_id),
-        AccountIdWithPrivacy::Private(_) => {
-            bail!("program_loader accounts must be public, not private")
-        }
-    }
-}
-
 impl ProgramLoaderSubcommand {
     async fn handle_new_segment(
         target: CliAccountMention,
         bytecode_file: PathBuf,
         next_segment: Option<AccountId>,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let target_id = resolve_public(&target, wallet_core)?;
         let bytecode = std::fs::read(&bytecode_file).with_context(|| {
@@ -132,7 +123,7 @@ impl ProgramLoaderSubcommand {
         target: CliAccountMention,
         first_segment: AccountId,
         immutable: bool,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let target_id = resolve_public(&target, wallet_core)?;
         let chain = ProgramLoader(wallet_core).resolve_chain(first_segment).await?;
@@ -151,7 +142,7 @@ impl ProgramLoaderSubcommand {
         header: CliAccountMention,
         first_segment: AccountId,
         immutable: bool,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let header_id = resolve_public(&header, wallet_core)?;
         let chain = ProgramLoader(wallet_core).resolve_chain(first_segment).await?;
@@ -171,7 +162,7 @@ impl ProgramLoaderSubcommand {
         header: CliAccountMention,
         segments: Vec<CliAccountMention>,
         immutable: bool,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let header_id = resolve_public(&header, wallet_core)?;
         let segment_ids = segments
@@ -194,7 +185,7 @@ impl ProgramLoaderSubcommand {
         header: CliAccountMention,
         segments: Vec<CliAccountMention>,
         immutable: bool,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let header_id = resolve_public(&header, wallet_core)?;
         let segment_ids = segments
@@ -248,6 +239,15 @@ impl WalletSubcommand for ProgramLoaderSubcommand {
                 segments,
                 immutable,
             } => Self::handle_update(elf, header, segments, immutable, wallet_core).await,
+        }
+    }
+}
+
+fn resolve_public(mention: &CliAccountMention, wallet_core: &WalletCore) -> Result<AccountId> {
+    match mention.resolve(wallet_core.storage())? {
+        AccountIdWithPrivacy::Public(account_id) => Ok(account_id),
+        AccountIdWithPrivacy::Private(_) => {
+            bail!("program_loader accounts must be public, not private")
         }
     }
 }

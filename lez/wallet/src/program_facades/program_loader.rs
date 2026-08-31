@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result, bail};
 use common::HashType;
 use lee::{AccountId, program::Program};
 use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
-use program_loader_core::{Instruction, MAX_SEGMENT_DATA_LEN};
+use program_loader_core::{Instruction, MAX_PROGRAM_SEGMENTS, MAX_SEGMENT_DATA_LEN};
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
@@ -92,7 +92,7 @@ impl ProgramLoader<'_> {
     /// Chunks `bytecode` into `segments.len()` pieces (must match exactly — this never
     /// auto-generates or drops segment accounts) and uploads them tail-to-head, one signed
     /// `NewSegment` transaction per chunk, waiting for each to land before submitting the next
-    /// (a `NewSegment`'s optional `next_segment` pre_state must already exist on-chain). Then
+    /// (a `NewSegment`'s optional `next_segment` `pre_state` must already exist on-chain). Then
     /// uploads `header` pointing at the resulting chain. Returns the header's `AccountId`.
     pub async fn deploy(
         &self,
@@ -109,6 +109,9 @@ impl ProgramLoader<'_> {
     /// Like [`Self::deploy`], but signs the final step with `UpdateHeader` against an existing
     /// header account instead of claiming a new one. Segments are always freshly uploaded —
     /// segments are write-once, so there's no reuse of a prior chain.
+    ///
+    /// FIXME: the previous chain's segment accounts are never reclaimed, so they accumulate
+    /// across updates. Consider addressing alongside resumable uploads.
     pub async fn update(
         &self,
         header: AccountId,
@@ -140,8 +143,11 @@ impl ProgramLoader<'_> {
             .into());
         }
 
+        // FIXME: a partial failure here leaves landed segments claimed and write-once, so
+        // retrying with the same `segments` list fails instead of resuming. Consider making this
+        // resumable.
         for i in (0..chunks.len()).rev() {
-            let next_segment = segments.get(i + 1).copied();
+            let next_segment = segments.get(i.saturating_add(1)).copied();
             let tx_hash = self
                 .new_segment(segments[i], chunks[i].to_vec(), next_segment)
                 .await
@@ -178,13 +184,19 @@ impl ProgramLoader<'_> {
         let mut chain = Vec::new();
         let mut next = Some(first_segment);
         while let Some(id) = next {
+            if chain.len() >= MAX_PROGRAM_SEGMENTS {
+                bail!(
+                    "segment chain from {first_segment} did not terminate within \
+                     {MAX_PROGRAM_SEGMENTS} hops"
+                );
+            }
             let account = self
                 .0
                 .get_account_public(id)
                 .await
                 .with_context(|| format!("failed to fetch segment account {id}"))?;
             let segment = program_loader_core::ProgramSegment::try_from(&account.data)
-                .map_err(|_| anyhow::anyhow!("account {id} does not hold a valid program segment"))?;
+                .with_context(|| format!("account {id} does not hold a valid program segment"))?;
             chain.push(id);
             next = segment.next_segment;
         }
