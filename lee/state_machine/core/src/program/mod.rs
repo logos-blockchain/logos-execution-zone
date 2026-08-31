@@ -825,15 +825,18 @@ pub fn validate_execution(
             });
         }
 
-        // 7. If a post state has default program owner, the pre state must have been a default
-        //    account
+        // 7. A non-default account left with the default owner must be a claimless byte-identical
+        //    echo: `Claim` is applied after this check, so a claimed echo would seize the account.
         if post.account.program_owner == DEFAULT_PROGRAM_OWNER && pre.account != Account::default()
         {
-            return Err(
-                ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
-                    account_id: pre.account_id,
-                },
-            );
+            let claimless_echo = post.account == pre.account && post.required_claim().is_none();
+            if !claimless_echo {
+                return Err(
+                    ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
+                        account_id: pre.account_id,
+                    },
+                );
+            }
         }
     }
 
