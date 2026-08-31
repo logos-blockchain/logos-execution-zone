@@ -434,8 +434,16 @@ pub enum PeerHealth {
     Lagging,
     /// Stuck on a slot it cannot read.
     Holed,
+    /// The peer's live committee is below the configured floor; reading is
+    /// suspended until it recovers.
+    Suspended,
     /// A verified-absence verdict was issued against this peer's chain.
     Halted,
+    /// A health this client build does not know: a newer server added one.
+    /// Treat it as "not known healthy" rather than failing to decode the
+    /// snapshot.
+    #[serde(other)]
+    Unknown,
 }
 
 /// One peer reader's snapshot: how far the peer chain is verified, where the
@@ -707,7 +715,9 @@ mod tests {
             PeerHealth::Live,
             PeerHealth::Lagging,
             PeerHealth::Holed,
+            PeerHealth::Suspended,
             PeerHealth::Halted,
+            PeerHealth::Unknown,
         ] {
             let json = serde_json::to_string(&health).expect("serialize");
             let back: PeerHealth = serde_json::from_str(&json).expect("deserialize");
@@ -834,5 +844,23 @@ mod tests {
             resolve_event_block_range(5, Some(3), 10),
             Err(EventRangeError::Inverted { from: 5, to: 3 })
         );
+    }
+
+    #[test]
+    fn an_unknown_peer_health_deserializes_to_unknown() {
+        let health: PeerHealth =
+            serde_json::from_str(r#""SomeFutureHealth""#).expect("deserialize");
+        assert_eq!(health, PeerHealth::Unknown);
+
+        // And a whole peer snapshot carrying it still decodes.
+        let json = r#"{
+            "zone": "0202",
+            "verified_tip_block_id": 4,
+            "cursor_slot": 70,
+            "stuck_slot_attempts": 0,
+            "health": "SomeFutureHealth"
+        }"#;
+        let status: PeerStatus = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(status.health, PeerHealth::Unknown);
     }
 }
