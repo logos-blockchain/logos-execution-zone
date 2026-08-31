@@ -111,10 +111,7 @@ pub struct CrossZoneMessage {
     pub src_tx_index: u32,
     /// The emitting program's dispatch address on the peer zone (its `OutboxRecord.emitter`).
     pub src_account_id: AccountId,
-    pub target_program_id: ProgramId,
-    /// The target program's real dispatch address, used as the `ChainedCall` target. Kept
-    /// alongside `target_program_id` (its image id, still needed for identity/allowlist
-    /// bookkeeping) since the two no longer coincide under PDA-based deployment.
+    /// The target program's real dispatch address, used as the `ChainedCall` target.
     pub target_account_id: AccountId,
     pub payload: Vec<u8>,
     /// Reserved for a future source-state proof; MUST be `None` in v1.

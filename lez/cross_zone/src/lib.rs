@@ -176,7 +176,6 @@ pub fn build_dispatch_from_emission(
         src_block_hash: source.src_block_hash,
         src_tx_index: source.src_tx_index,
         src_account_id: source.src_account_id,
-        target_program_id,
         target_account_id: program_loader_core::immutable_deploy_account_id(target_program_id),
         payload,
         l1_inclusion_witness: None,
