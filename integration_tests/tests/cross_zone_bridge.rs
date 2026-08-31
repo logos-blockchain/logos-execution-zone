@@ -127,11 +127,17 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         escrowed, LOCK_AMOUNT,
         "zone A escrow must hold the locked amount"
     );
-    let remaining = seq_client_a.get_account(holder_id).await?.balance;
+    let remaining = seq_client_a
+        .get_account(bridge_lock_core::holding_account_id(
+            programs::bridge_lock().id(),
+            &holder_id.into_value(),
+        ))
+        .await?
+        .balance;
     assert_eq!(
         remaining,
         INITIAL_BALANCE - LOCK_AMOUNT,
-        "zone A holder must be debited by the locked amount"
+        "zone A holding must be debited by the locked amount"
     );
     Ok(())
 }
@@ -170,6 +176,7 @@ fn build_lock_tx(
     let accounts = vec![
         bridge_lock_core::config_account_id(bridge_lock_id),
         holder_id,
+        bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder_id.into_value()),
         bridge_lock_core::escrow_account_id(bridge_lock_id),
         outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
     ];

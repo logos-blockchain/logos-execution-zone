@@ -28,7 +28,8 @@ pub enum GenesisAction {
     SupplyBridgeAccount {
         balance: Balance,
     },
-    /// Seeds a bridge-lock holder's initial bridgeable balance into genesis state.
+    /// Funds a holder's holding PDA at genesis: one `InitHolding` then one
+    /// faucet credit, both replayable genesis transactions.
     SupplyBridgeLockHolding {
         holder: AccountId,
         amount: Balance,

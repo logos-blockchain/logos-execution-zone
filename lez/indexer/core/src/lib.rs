@@ -116,22 +116,11 @@ impl IndexerCore {
         );
         let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
 
-        // Cross-zone programs are base builtins, and their config accounts are
-        // reconstructed by replaying the genesis block's InitConfig transactions;
-        // neither is seeded here. Only bridge-lock holdings (source side), not
-        // produced by any transaction, are still seeded directly.
-        let genesis_accounts: Vec<_> = config
-            .bridge_lock_holdings
-            .iter()
-            .map(|holding| cross_zone::build_holding_account(holding.holder, holding.amount))
-            .collect();
-
         // Option B verifier: re-derives each cross-zone dispatch from the peer's
         // finalized blocks. `None` when cross-zone messaging is disabled.
         let verifier = CrossZoneVerifier::start(&config);
 
-        let store =
-            IndexerStore::open_db(&home, genesis_accounts, config.event_filter.to_filter()?)?;
+        let store = IndexerStore::open_db(&home, config.event_filter.to_filter()?)?;
         // A persisted halt outlives the process: report it from boot with its
         // stored reason. The ingest loop may still start and re-halt
         // identically, which refreshes the record.
@@ -658,7 +647,6 @@ mod tests {
             cross_zone_accept_unverified,
             peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
             event_filter: EventFilterConfig::default(),
-            bridge_lock_holdings: Vec::new(),
         };
         IndexerCore::open(config, dir).expect("open core")
     }

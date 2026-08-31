@@ -275,7 +275,6 @@ pub fn indexer_config(
         channel_id,
         cross_zone,
         peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
-        bridge_lock_holdings: Vec::new(),
         allow_chain_reset: false,
         event_filter: EventFilterConfig::Archival,
     })

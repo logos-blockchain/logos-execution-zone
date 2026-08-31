@@ -21,7 +21,7 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountId, Balance},
+    account::{AccountId, Balance},
     program::ProgramId,
 };
 
@@ -194,21 +194,6 @@ pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
     )
 }
 
-/// Builds the genesis holding account funding a holder's bridgeable balance.
-///
-/// A real native balance owned by `bridge_lock`, which can debit it on a lock; it
-/// is conserved like any other balance. Not produced by any transaction, so the
-/// sequencer and indexer both seed it through this one builder.
-#[must_use]
-pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, Account) {
-    let account = Account {
-        program_owner: programs::bridge_lock().id().into(),
-        balance: amount,
-        ..Default::default()
-    };
-    (holder, account)
-}
-
 /// The `(src_zone, src_program_id)` pairs the operator's routes name for one
 /// target.
 ///
@@ -340,6 +325,29 @@ pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
             target_program_id: programs::wrapped_token().id(),
         },
     )
+}
+
+/// The genesis transaction claiming one holder's holding PDA; replayable, so
+/// the indexer reconstructs holdings from the genesis block alone.
+#[must_use]
+pub fn build_bridge_lock_init_holding_tx(holder: AccountId) -> lee::PublicTransaction {
+    let bridge_lock_id = programs::bridge_lock().id();
+    genesis_public_tx(
+        bridge_lock_id,
+        vec![bridge_lock_core::holding_account_id(
+            bridge_lock_id,
+            &holder.into_value(),
+        )],
+        bridge_lock_core::Instruction::InitHolding {
+            holder: holder.into_value(),
+        },
+    )
+}
+
+/// The holding PDA a holder's bridgeable balance lives in.
+#[must_use]
+pub fn bridge_lock_holding_account_id(holder: AccountId) -> AccountId {
+    bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder.into_value())
 }
 
 /// The genesis transaction naming the peer sources `ping_receiver` accepts a

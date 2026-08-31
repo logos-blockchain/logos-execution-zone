@@ -1935,23 +1935,17 @@ fn genesis_block_and_state(
     (genesis_block, genesis_state)
 }
 
-/// The pre-genesis state: `testnet_initial_state` plus the bridge-lock holdings,
-/// the only accounts seeded outside any transaction. Everything else, including
-/// the bootstrap sequencer's own stake, is applied as a genesis transaction in
-/// [`build_genesis_state`] so followers replay it instead of guessing it.
+/// The pre-genesis state: `testnet_initial_state`, nothing else. Everything is
+/// applied as genesis transactions in [`build_genesis_state`] so followers replay it.
 fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
+    let _ = config;
     #[cfg(not(feature = "testnet"))]
     let base = testnet_initial_state::initial_state();
 
     #[cfg(feature = "testnet")]
     let base = testnet_initial_state::initial_state_testnet();
 
-    // Bridge-lock holder balances belong to the source side and are not produced by
-    // any transaction, so seed them directly. Cross-zone config is seeded by genesis
-    // InitConfig transactions in `build_genesis_state`, not here.
-    let holdings = bridge_lock_holdings(&config.genesis)
-        .map(|(holder, amount)| cross_zone::build_holding_account(holder, amount));
-    base.with_public_accounts(holdings)
+    base
 }
 
 /// Builds the initial genesis state from [`build_initial_state`] plus configured
@@ -1990,6 +1984,19 @@ fn build_genesis_state(
         let self_zone = *config.bedrock_config.channel_id.as_ref();
         cross_zone::build_inbox_init_config_tx(self_zone)
     });
+    // The claim must precede the credit, or the faucet's chained transfer
+    // would find a default recipient and demand a signature no PDA has.
+    let holding_txs: Vec<_> = bridge_lock_holdings(&config.genesis)
+        .flat_map(|(holder, amount)| {
+            [
+                cross_zone::build_bridge_lock_init_holding_tx(holder),
+                build_supply_holding_genesis_transaction(
+                    cross_zone::bridge_lock_holding_account_id(holder),
+                    amount,
+                ),
+            ]
+        })
+        .collect();
     let supply_txs = config.genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyAccount {
             account_id,
@@ -2000,8 +2007,8 @@ fn build_genesis_state(
         GenesisAction::SupplyBridgeAccount { balance } => {
             Some(build_supply_bridge_account_genesis_transaction(*balance))
         }
-        // Seeded directly in `build_initial_state` (holdings via `build_holding_account`), not a
-        // genesis tx. Stakes are built separately below.
+        // Holdings are emitted above as InitHolding + credit pairs; stakes are
+        // built below.
         GenesisAction::SupplyBridgeLockHolding { .. } | GenesisAction::StakeSequencer { .. } => {
             None
         }
@@ -2024,6 +2031,7 @@ fn build_genesis_state(
         .chain(ping_sender_config_tx)
         .chain(ping_receiver_config_tx)
         .chain(bridge_lock_config_tx)
+        .chain(holding_txs)
         .chain(inbox_config_tx)
         .chain(supply_txs)
         .chain(bootstrap_stake_txs)
@@ -2251,16 +2259,24 @@ fn build_supply_account_genesis_transaction(
 }
 
 fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTransaction {
+    build_supply_holding_genesis_transaction(system_accounts::bridge_account_id(), balance)
+}
+
+/// The unsigned faucet credit funding an already-claimed genesis account; the
+/// recipient must be program-owned before this runs.
+fn build_supply_holding_genesis_transaction(
+    recipient: lee::AccountId,
+    balance: lee::Balance,
+) -> PublicTransaction {
     let faucet_program_id = programs::faucet().id();
-    let bridge_account_id = system_accounts::bridge_account_id();
 
     let message = Message::try_new(
         faucet_program_id,
-        vec![system_accounts::faucet_account_id(), bridge_account_id],
+        vec![system_accounts::faucet_account_id(), recipient],
         Vec::new(),
         faucet_core::Instruction::GenesisTransferDirect { amount: balance },
     )
-    .expect("Failed to serialize bridge genesis transfer instruction");
+    .expect("Failed to serialize faucet genesis transfer instruction");
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
 
     PublicTransaction::new(message, witness_set)
