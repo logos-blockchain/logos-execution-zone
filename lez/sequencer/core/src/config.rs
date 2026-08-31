@@ -81,7 +81,9 @@ pub struct SequencerConfig {
     /// Genesis configuration.
     #[serde(default)]
     pub genesis: Vec<GenesisAction>,
-    /// Cross-zone messaging configuration. `None` disables the watcher.
+    /// Presence selects the genesis program set, must match the indexer's, and
+    /// cannot change on an existing chain. A source-only zone declares
+    /// `"cross_zone": {}`.
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,
     /// Address the Prometheus metrics exporter binds to.

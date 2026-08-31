@@ -28,7 +28,9 @@ pub struct IndexerConfig {
     pub consensus_info_polling_interval: Duration,
     pub bedrock_config: ClientConfig,
     pub channel_id: ChannelId,
-    /// Cross-zone configuration. `None` disables the indexer's cross-zone handling.
+    /// Presence selects the genesis program set, must match the sequencer's, and
+    /// cannot change on an existing chain. `None` also disables the verifier; a
+    /// source-only zone declares `"cross_zone": {}`.
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,
     /// Hex hashes of local blocks accepted without cross-zone verification: a

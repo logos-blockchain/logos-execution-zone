@@ -30,7 +30,8 @@ use lee::{
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
-    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{MultiNodeTestContextConfig, source_only_cross_zone},
 };
 use tokio::test;
 
@@ -81,7 +82,8 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
             .disable_wallet()
             .disable_indexer()
             .with_sequencer_partial_config(partial)
-            .with_genesis(genesis_a),
+            .with_genesis(genesis_a)
+            .with_cross_zone(Some(source_only_cross_zone())),
         )
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {

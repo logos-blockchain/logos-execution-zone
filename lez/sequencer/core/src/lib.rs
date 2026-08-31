@@ -187,7 +187,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         for block in head_blocks {
             let block_id = block.header.block_id;
             chain.restore_head_block(block).unwrap_or_else(|err| {
-                panic!("Stored block {block_id} does not replay while restoring chain state: {err}")
+                panic!("Stored block {block_id} does not replay while restoring chain state (does the config cross_zone presence still match the chain genesis?): {err}")
             });
         }
         if let Some(cursor) = store
@@ -212,7 +212,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         // and config disagree (e.g. edited genesis actions).
         assert!(
             chain.head_state() == stored_head_state,
-            "Persisted state does not match the replayed chain; reset the store or restore the original config"
+            "Persisted state does not match the replayed chain; reset the store or restore the original config (cross_zone presence included)"
         );
 
         chain
@@ -1938,13 +1938,19 @@ fn genesis_block_and_state(
 /// The pre-genesis state: `testnet_initial_state`, nothing else. Everything is
 /// applied as genesis transactions in [`build_genesis_state`] so followers replay it.
 fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
-    let _ = config;
+    let cross_zone = config.cross_zone.is_some();
     #[cfg(not(feature = "testnet"))]
-    let base = testnet_initial_state::initial_state();
+    let base = testnet_initial_state::initial_state(cross_zone);
 
     #[cfg(feature = "testnet")]
-    let base = testnet_initial_state::initial_state_testnet();
+    let base = testnet_initial_state::initial_state_testnet(cross_zone);
 
+    // Stamped on fresh genesis and restore-replay: compare against the
+    // indexer's on divergence.
+    log::info!(
+        "Genesis fingerprint: {}",
+        hex::encode(base.genesis_fingerprint())
+    );
     base
 }
 
@@ -1958,29 +1964,28 @@ fn build_genesis_state(
 ) -> (lee::V03State, Vec<LeeTransaction>) {
     let mut state = build_initial_state(config);
 
-    // Fingerprint the directly-seeded state, before genesis txs, so it matches the indexer's.
-    log::info!(
-        "Genesis fingerprint: {}",
-        hex::encode(state.genesis_fingerprint())
-    );
-
     // Config txs seed the config accounts by transaction, so every node
-    // reconstructs them by replaying the genesis block. Every program config is
-    // initialized on every zone: each is a builtin with a user-callable InitConfig,
-    // so a config PDA left default is claimable by the first initializer, which
-    // would hijack the minter, repoint an emitter's outbox, or name its own peer
-    // source. The inbox's own config is initialized only on receiving zones; the
-    // inbox is sequencer-only, so its default config PDA is not user-claimable,
-    // merely unused until the zone receives.
-    let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx(
-        config.cross_zone.as_ref(),
-    ));
-    let ping_sender_config_tx = std::iter::once(cross_zone::build_ping_sender_init_config_tx());
-    let ping_receiver_config_tx = std::iter::once(cross_zone::build_ping_receiver_init_config_tx(
-        config.cross_zone.as_ref(),
-    ));
-    let bridge_lock_config_tx = std::iter::once(cross_zone::build_bridge_lock_init_config_tx());
-    let inbox_config_tx = config.cross_zone.as_ref().map(|_| {
+    // reconstructs them by replaying the genesis block. Every cross-zone config
+    // is initialized: each builtin has a user-callable InitConfig, so a default
+    // config PDA would be claimable by the first initializer. The inbox's is
+    // receiving-zones-only.
+    let cross_zone_declared = config.cross_zone.as_ref();
+    assert!(
+        cross_zone_declared.is_some() || bridge_lock_holdings(&config.genesis).next().is_none(),
+        "SupplyBridgeLockHolding requires cross_zone to be configured: bridge_lock is not registered on this zone"
+    );
+    let cross_zone_config_txs = cross_zone_declared
+        .map(|cross_zone| {
+            [
+                cross_zone::build_wrapped_token_init_config_tx(cross_zone),
+                cross_zone::build_ping_sender_init_config_tx(),
+                cross_zone::build_ping_receiver_init_config_tx(cross_zone),
+                cross_zone::build_bridge_lock_init_config_tx(),
+            ]
+        })
+        .into_iter()
+        .flatten();
+    let inbox_config_tx = cross_zone_declared.map(|_| {
         let self_zone = *config.bedrock_config.channel_id.as_ref();
         cross_zone::build_inbox_init_config_tx(self_zone)
     });
@@ -2027,10 +2032,7 @@ fn build_genesis_state(
     }
     let bootstrap_stake_txs = build_stake_genesis_transactions(&staked);
 
-    let genesis_txs = wrapped_token_config_tx
-        .chain(ping_sender_config_tx)
-        .chain(ping_receiver_config_tx)
-        .chain(bridge_lock_config_tx)
+    let genesis_txs = cross_zone_config_txs
         .chain(holding_txs)
         .chain(inbox_config_tx)
         .chain(supply_txs)

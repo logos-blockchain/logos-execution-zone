@@ -383,6 +383,16 @@ pub fn bedrock_funding_key() -> ZkPublicKey {
     ZkPublicKey::from(BigUint::from_bytes_le(&bytes))
 }
 
+/// A source-only zone: programs registered, `InitConfig`s emitted, nobody watched.
+#[must_use]
+pub const fn source_only_cross_zone() -> CrossZoneConfig {
+    CrossZoneConfig {
+        peers: Vec::new(),
+        source_authority: None,
+        source_governance: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

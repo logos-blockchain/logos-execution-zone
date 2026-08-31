@@ -28,18 +28,31 @@ pub struct IndexerStore {
 impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
-    pub fn open_db(location: &Path, event_filter: EventFilter) -> Result<Self> {
+    pub fn open_db(location: &Path, cross_zone: bool, event_filter: EventFilter) -> Result<Self> {
         #[cfg(not(feature = "testnet"))]
-        let initial_state = testnet_initial_state::initial_state();
+        let initial_state = testnet_initial_state::initial_state(cross_zone);
 
         #[cfg(feature = "testnet")]
-        let initial_state = testnet_initial_state::initial_state_testnet();
+        let initial_state = testnet_initial_state::initial_state_testnet(cross_zone);
 
-        // Nothing zone-specific is seeded here: cross-zone program configs and
-        // bridge-lock holdings alike are reconstructed by replaying the genesis
-        // block's transactions, so this state matches the sequencer's by
-        // construction.
+        // Nothing zone-specific is seeded: configs and holdings are reconstructed
+        // by replaying the genesis block, so this state matches the sequencer's
+        // by construction (fingerprint below is the diagnostic).
+        log::info!(
+            "Genesis fingerprint: {}",
+            hex::encode(initial_state.genesis_fingerprint())
+        );
         let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
+        // Presence cannot change on a chain: an existing store keeps its seeded
+        // genesis, so a disagreement here is an operator error.
+        if let Some(stored) = dbio.get_breakpoint_opt(0)?
+            && stored.genesis_fingerprint() != initial_state.genesis_fingerprint()
+        {
+            log::error!(
+                "Stored genesis fingerprint {} does not match the configured one; the store keeps running on its own genesis. Did cross_zone presence change since this chain was created?",
+                hex::encode(stored.genesis_fingerprint())
+            );
+        }
 
         let current_state = dbio.final_state()?;
         let filter_segments = reconcile_filter_segments(&dbio, event_filter)?;
@@ -370,7 +383,7 @@ fn open_default(home: &Path) -> IndexerStore {
 
 #[cfg(test)]
 fn open_with(home: &Path, filter: EventFilter) -> IndexerStore {
-    IndexerStore::open_db(home, filter).expect("open store")
+    IndexerStore::open_db(home, true, filter).expect("open store")
 }
 
 #[cfg(test)]
@@ -787,7 +800,7 @@ mod tests {
 
         // What every upgrading deployment looks like: blocks already ingested, but no
         // segment history, because filtering did not exist when they were written.
-        let initial_state = testnet_initial_state::initial_state();
+        let initial_state = testnet_initial_state::initial_state(true);
         let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
         dbio.del::<EventFilterSegmentsCellOwned>(()).unwrap();
         drop(dbio);
@@ -967,12 +980,12 @@ mod tests {
         let home = tempdir().unwrap();
         drop(open_with(home.as_ref(), EventFilter::Archival));
 
-        let initial_state = testnet_initial_state::initial_state();
+        let initial_state = testnet_initial_state::initial_state(true);
         let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
         dbio.put_event_filter_segments_bytes(b"garbage").unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), EventFilter::Archival).is_err());
+        assert!(IndexerStore::open_db(home.as_ref(), true, EventFilter::Archival).is_err());
     }
 
     #[test]
@@ -982,13 +995,13 @@ mod tests {
 
         let bad: Vec<(EventFilter, BlockId)> =
             vec![(EventFilter::Archival, 5), (EventFilter::Archival, 0)];
-        let initial_state = testnet_initial_state::initial_state();
+        let initial_state = testnet_initial_state::initial_state(true);
         let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
         dbio.put_event_filter_segments_bytes(&borsh::to_vec(&bad).unwrap())
             .unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), EventFilter::Archival).is_err());
+        assert!(IndexerStore::open_db(home.as_ref(), true, EventFilter::Archival).is_err());
     }
 
     #[test]
@@ -997,13 +1010,13 @@ mod tests {
         drop(open_with(home.as_ref(), EventFilter::Archival));
 
         let ahead: Vec<(EventFilter, BlockId)> = vec![(EventFilter::Archival, 1)];
-        let initial_state = testnet_initial_state::initial_state();
+        let initial_state = testnet_initial_state::initial_state(true);
         let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
         dbio.put_event_filter_segments_bytes(&borsh::to_vec(&ahead).unwrap())
             .unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), EventFilter::Archival).is_err());
+        assert!(IndexerStore::open_db(home.as_ref(), true, EventFilter::Archival).is_err());
     }
 
     #[tokio::test]
