@@ -425,13 +425,13 @@ impl RocksDBIO {
     /// errors, and one of those sits on the follow sink's settlement path,
     /// where a persist failure halts the node.
     fn drop_undecodable_dead_letters(&self) -> DbResult<()> {
-        if self
-            .get_opt::<DeadLetterCrossZoneDispatchesCellOwned>(())
-            .is_ok()
-        {
-            return Ok(());
+        match self.get_opt::<DeadLetterCrossZoneDispatchesCellOwned>(()) {
+            Ok(_) => Ok(()),
+            Err(DbError::SerializationError { .. }) => {
+                self.del::<DeadLetterCrossZoneDispatchesCellOwned>(())
+            }
+            Err(err) => Err(err),
         }
-        self.del::<DeadLetterCrossZoneDispatchesCellOwned>(())
     }
 
     /// Rewrites a legacy whole-vector pending-dispatch blob into per-message
