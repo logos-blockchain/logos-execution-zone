@@ -123,6 +123,7 @@ impl IndexerCore {
         let store = IndexerStore::open_db(
             &home,
             config.cross_zone.is_some(),
+            Vec::new(),
             config.event_filter.to_filter()?,
         )?;
         // A persisted halt outlives the process: report it from boot with its

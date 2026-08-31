@@ -1240,9 +1240,21 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
-        let producer_account = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
-            self.store.signing_key(),
-        ));
+        // The reward target is this sequencer's own stake ownership account,
+        // already claimed when it staked. Look it up by our own sequencer key
+        // (our Bedrock signing key) in the live stake config.
+        let own_sequencer_key = sequencer_stake_core::SequencerKey::new(
+            self.bedrock_signing_key.public_key().to_bytes(),
+        )
+        .expect("our own Bedrock public key is a valid Ed25519 public key");
+        let producer_account = committee_discovery::read_config(&working_state)
+            .and_then(|config| {
+                config
+                    .entries
+                    .get(&own_sequencer_key)
+                    .map(|entry| entry.account_id)
+            })
+            .context("no stake entry for our own sequencer key; aborting block production")?;
 
         let opening = chain_state::apply::opening_fee_state(&working_state);
         let mut summary = fee_core::BlockFeeSummary::default();
@@ -1428,7 +1440,6 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         }
 
         let fee_tx = fee_invocation(summary, producer_account);
-        common::transaction::initialize_producer_account(&mut working_state, producer_account);
         working_state
             .transition_from_public_transaction(&fee_tx, new_block_height, new_block_timestamp)
             .context("Fee transaction failed. Aborting block production.")?;
@@ -2065,9 +2076,7 @@ fn genesis_block_and_state(
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     config: &SequencerConfig,
 ) -> (Block, lee::V03State) {
-    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key));
-    let (genesis_state, genesis_txs) =
-        build_genesis_state(config, bootstrap_sequencer_key, producer);
+    let (genesis_state, genesis_txs) = build_genesis_state(config, bootstrap_sequencer_key);
     let genesis_block = HashableBlockData {
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
@@ -2105,7 +2114,6 @@ fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
 fn build_genesis_state(
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
-    producer: lee::AccountId,
 ) -> (lee::V03State, Vec<LeeTransaction>) {
     let mut state = build_initial_state(config);
 
@@ -2189,10 +2197,14 @@ fn build_genesis_state(
         })
         .collect();
 
-    // The genesis fee invocation credits the producer, which must be
-    // initialized first — at the same point the validators' replay does it,
-    // so builder and replay cannot diverge.
-    common::transaction::initialize_producer_account(&mut state, producer);
+    // The genesis fee tx credits the first staked sequencer's ownership
+    // account, already claimed by its stake tx above (which ran earlier in this
+    // same genesis block), so no separate initialization is needed. A genesis
+    // that stakes no sequencer cannot produce blocks.
+    let producer = staked
+        .first()
+        .map(|(_, ownership_public_key, _)| lee::AccountId::from(ownership_public_key))
+        .expect("genesis must stake at least one sequencer");
     for tx in [
         fee_invocation(fee_core::BlockFeeSummary::default(), producer),
         clock_invocation(0),

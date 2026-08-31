@@ -28,16 +28,25 @@ pub struct IndexerStore {
 impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
-    pub fn open_db(location: &Path, cross_zone: bool, event_filter: EventFilter) -> Result<Self> {
+    pub fn open_db(
+        location: &Path,
+        cross_zone: bool,
+        genesis_seed: Vec<(AccountId, Account)>,
+        event_filter: EventFilter,
+    ) -> Result<Self> {
         #[cfg(not(feature = "testnet"))]
-        let initial_state = testnet_initial_state::initial_state(cross_zone);
+        let initial_state =
+            testnet_initial_state::initial_state(cross_zone).with_public_accounts(genesis_seed);
 
         #[cfg(feature = "testnet")]
-        let initial_state = testnet_initial_state::initial_state_testnet(cross_zone);
+        let initial_state = testnet_initial_state::initial_state_testnet(cross_zone)
+            .with_public_accounts(genesis_seed);
 
-        // Nothing zone-specific is seeded: configs and holdings are reconstructed
-        // by replaying the genesis block, so this state matches the sequencer's
-        // by construction (fingerprint below is the diagnostic).
+        // In production `genesis_seed` is empty: configs and holdings are
+        // reconstructed by replaying the genesis block, so this state matches the
+        // sequencer's by construction (fingerprint below is the diagnostic). Tests
+        // seed the producer's claimed reward account, which no genesis block of
+        // theirs stakes.
         log::info!(
             "Genesis fingerprint: {}",
             hex::encode(initial_state.genesis_fingerprint())
@@ -383,7 +392,15 @@ fn open_default(home: &Path) -> IndexerStore {
 
 #[cfg(test)]
 fn open_with(home: &Path, filter: EventFilter) -> IndexerStore {
-    IndexerStore::open_db(home, true, filter).expect("open store")
+    // Seed the producer's reward account as claimed, mirroring the stake a real
+    // sequencer holds, so charged blocks can credit it on the accept path.
+    IndexerStore::open_db(
+        home,
+        true,
+        vec![common::test_utils::claimed_producer_seed()],
+        filter,
+    )
+    .expect("open store")
 }
 
 #[cfg(test)]
@@ -484,6 +501,7 @@ fn settled_test_block(
         transactions,
     }
     .into_pending_block(&sequencer_sign_key_for_testing());
+    common::test_utils::claim_producer_account(state);
     chain_state::apply::apply_block_to_state(&block, state).expect("settled block applies");
     block
 }
@@ -1050,7 +1068,7 @@ mod tests {
         dbio.put_event_filter_segments_bytes(b"garbage").unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), true, EventFilter::Archival).is_err());
+        assert!(IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err());
     }
 
     #[test]
@@ -1066,7 +1084,7 @@ mod tests {
             .unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), true, EventFilter::Archival).is_err());
+        assert!(IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err());
     }
 
     #[test]
@@ -1081,7 +1099,7 @@ mod tests {
             .unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), true, EventFilter::Archival).is_err());
+        assert!(IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err());
     }
 
     #[tokio::test]

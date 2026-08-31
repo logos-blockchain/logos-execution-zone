@@ -316,30 +316,18 @@ pub fn is_full_vault_sweep(tx: &LeeTransaction, state: &V03State) -> bool {
     amount != 0 && amount == state.get_account_by_id(*vault_id).balance
 }
 
-/// Initializes the producer account as an ordinary user account if it has
-/// never been seen.
-///
-/// Program output may not modify an unclaimed default account, so the fee
-/// program could not credit it. The same initialization genesis applies to
-/// user accounts. Shared by the block builder and the transition so the two
-/// can never disagree.
-pub fn initialize_producer_account(state: &mut V03State, producer: AccountId) {
-    state.initialize_account_owner(producer, programs::authenticated_transfer().id());
-}
-
 /// Returns the canonical Fee Program invocation transaction for the given block fee summary.
 ///
 /// Every valid block must contain exactly one occurrence of this transaction as its
 /// second-to-last transaction, immediately before the clock invocation. The producer
-/// account (derived from the block header's producer key) rides as the fourth account
-/// so the guest can pay it.
+/// account rides as the fourth account so the guest can pay it.
 #[must_use]
 pub fn fee_invocation(
     summary: fee_core::BlockFeeSummary,
     producer: lee::AccountId,
 ) -> lee::PublicTransaction {
     let mut account_ids = system_accounts::fee_account_ids().to_vec();
-    account_ids.push(producer);
+    account_ids.push(producer); // this is the 4th account
     let message = lee::public_transaction::Message::try_new(
         programs::fee().id(),
         account_ids,
@@ -351,6 +339,20 @@ pub fn fee_invocation(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     )
+}
+
+/// The producer account a [`fee_invocation`] credits: the entry riding after
+/// the fixed fee accounts. `None` if the transaction is too short to carry one.
+/// Shared by settlement and the follower's producer check so both read the
+/// reward target the same way.
+#[must_use]
+pub fn fee_invocation_producer(fee_tx: &lee::PublicTransaction) -> Option<lee::AccountId> {
+    fee_tx
+        .message()
+        .account_ids
+        // get the 4th account, which is the producer
+        .get(system_accounts::fee_account_ids().len())
+        .copied()
 }
 
 /// The fee reserve: hold `amount` from `payer` in the fee inbox.

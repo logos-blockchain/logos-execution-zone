@@ -492,6 +492,15 @@ mod tests {
         Slot::from(n)
     }
 
+    /// The shared initial state with the test producer's reward account claimed,
+    /// simulating the stake a real sequencer holds before producing: fee
+    /// settlement credits it, and crediting an unclaimed account is rejected.
+    fn claimed_initial_state() -> V03State {
+        let mut state = initial_state(true);
+        common::test_utils::claim_producer_account(&mut state);
+        state
+    }
+
     /// `head_state` equals `final_state` replayed through `head_blocks`.
     fn assert_head_matches_replay(chain: &ChainState) {
         let mut state = Arc::clone(&chain.final_state);
@@ -544,7 +553,7 @@ mod tests {
 
     #[test]
     fn adopted_blocks_advance_head() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
 
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
@@ -564,7 +573,7 @@ mod tests {
 
     #[test]
     fn adopted_bad_block_freezes_head_without_stall() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
 
@@ -586,7 +595,7 @@ mod tests {
 
     #[test]
     fn adopted_is_idempotent() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
 
@@ -599,7 +608,7 @@ mod tests {
 
     #[test]
     fn orphan_reverts_head() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
@@ -621,7 +630,7 @@ mod tests {
 
     #[test]
     fn channel_update_reverts_then_applies() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
@@ -637,7 +646,7 @@ mod tests {
 
     #[test]
     fn finalize_moves_head_into_final() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
@@ -657,7 +666,7 @@ mod tests {
 
     #[test]
     fn backfill_applies_directly_to_final() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
             chain.apply_finalized(&genesis, slot(10)),
@@ -670,7 +679,7 @@ mod tests {
 
     #[test]
     fn invalid_finalized_block_sets_final_stall() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_finalized(&genesis, slot(10));
 
@@ -691,7 +700,7 @@ mod tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
 
@@ -724,7 +733,7 @@ mod tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
 
@@ -767,7 +776,7 @@ mod tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
         let s1 = chain.head_state().clone();
@@ -802,7 +811,7 @@ mod tests {
 
     #[test]
     fn channel_update_ignores_unknown_orphan() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         chain.apply_adopted(&genesis);
@@ -824,7 +833,7 @@ mod tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
         let s1 = chain.head_state().clone();
@@ -859,7 +868,7 @@ mod tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
 
@@ -885,7 +894,7 @@ mod tests {
 
     #[test]
     fn produced_block_extending_the_head_applies() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
 
@@ -900,7 +909,7 @@ mod tests {
 
     #[test]
     fn invalid_adopted_competitor_leaves_head_intact() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
@@ -921,7 +930,7 @@ mod tests {
 
     #[test]
     fn adopted_conflicting_with_final_tip_is_ignored() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         chain.apply_finalized(&genesis, slot(10));
@@ -946,7 +955,7 @@ mod tests {
     /// it, so a restored placeholder id can never reach a publish.
     #[test]
     fn pin_parent_follows_the_cursor_and_never_the_head() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         assert_eq!(chain.pin_parent(), None);
 
         let block1 = produce_dummy_block(1, None, vec![]);
@@ -963,7 +972,7 @@ mod tests {
 
     /// A head holding a block of ours, published on `parent` and pinned on `ours`.
     fn chain_with_our_block(parent: MsgId, ours: MsgId) -> (ChainState, Block) {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
             chain.apply_adopted(&genesis),
@@ -984,7 +993,7 @@ mod tests {
     /// parent from then on and a tip naming it is refused like any other.
     #[test]
     fn a_root_tip_is_refused_once_we_have_published_the_first_inscription() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
             chain.apply_adopted(&genesis),
@@ -1083,7 +1092,7 @@ mod tests {
 
         // Restart shape: final tier from a persisted snapshot, head rebuilt from
         // stored blocks with no MsgIds.
-        let mut state = initial_state(true);
+        let mut state = claimed_initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let mut chain = ChainState::from_final(state.clone(), Some(Tip::from(&genesis)));
@@ -1119,14 +1128,14 @@ mod tests {
 
     #[test]
     fn restore_head_block_rejects_non_chaining_block() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let skipped = produce_dummy_block(3, Some(HashType([9; 32])), vec![]);
         assert!(chain.restore_head_block(skipped).is_err());
     }
 
     #[test]
     fn finalized_hash_alias_with_wrong_id_is_not_absorbed() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
 
@@ -1146,7 +1155,7 @@ mod tests {
 
     #[test]
     fn finalized_reinscription_matches_by_block_hash() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
@@ -1173,7 +1182,7 @@ mod tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
         let s1 = chain.head_state().clone();
@@ -1201,7 +1210,7 @@ mod tests {
 
     #[test]
     fn head_self_heals_with_valid_competitor_after_park() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
 
@@ -1223,7 +1232,7 @@ mod tests {
 
     #[test]
     fn repeated_invalid_finalized_bumps_orphans_since() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_finalized(&genesis, slot(10));
 
@@ -1242,7 +1251,7 @@ mod tests {
 
     #[test]
     fn valid_finalized_successor_clears_final_stall() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_finalized(&genesis, slot(10));
 
@@ -1266,7 +1275,7 @@ mod tests {
         // Head holds unfinalized blocks 1..=2 (e.g. restored after a restart);
         // a peer block 3 we never saw adopted arrives finalized. Its ancestry
         // finalizes our prefix implicitly, then 3 applies to final directly.
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         chain.apply_adopted(&genesis);
@@ -1289,7 +1298,7 @@ mod tests {
         // Restart shape: the store's tip (incl. not-yet-finalized blocks) is
         // restored as the final tier, so their later finalization arrives for
         // blocks that were never in `head_blocks`.
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         chain.apply_finalized(&genesis, slot(10));
@@ -1311,7 +1320,7 @@ mod tests {
 
     #[test]
     fn conflicting_finalized_at_final_tip_parks() {
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         chain.apply_finalized(&genesis, slot(10));
@@ -1335,7 +1344,7 @@ mod tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
         chain.apply_finalized(&genesis, slot(10));
@@ -1373,7 +1382,7 @@ mod tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
-        let mut chain = ChainState::new(initial_state(true));
+        let mut chain = ChainState::new(claimed_initial_state());
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_adopted(&genesis);
 
