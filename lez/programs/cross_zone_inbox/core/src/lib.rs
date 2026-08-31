@@ -86,6 +86,8 @@ pub struct CrossZonePeer {
 pub struct CrossZoneConfig {
     /// Read once at startup by the watchers and the verifier, so adding a peer
     /// zone needs a config change and a restart on both sequencer and indexer.
+    /// Defaulted so a source-only zone declares `"cross_zone": {}`.
+    #[serde(default)]
     pub peers: Vec<CrossZonePeer>,
     /// Account allowed to change which peer sources each target program accepts,
     /// seeded into every target's own config at genesis.

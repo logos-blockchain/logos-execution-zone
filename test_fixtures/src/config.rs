@@ -275,7 +275,6 @@ pub fn indexer_config(
         channel_id,
         cross_zone,
         peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
-        bridge_lock_holdings: Vec::new(),
         allow_chain_reset: false,
         event_filter: EventFilterConfig::Archival,
     })
@@ -382,6 +381,16 @@ pub fn bedrock_funding_key() -> ZkPublicKey {
 
     let bytes = hex::decode(PUBLIC_KEY_HEX).expect("Fixed funding key must be valid hex");
     ZkPublicKey::from(BigUint::from_bytes_le(&bytes))
+}
+
+/// A source-only zone: programs registered, `InitConfig`s emitted, nobody watched.
+#[must_use]
+pub const fn source_only_cross_zone() -> CrossZoneConfig {
+    CrossZoneConfig {
+        peers: Vec::new(),
+        source_authority: None,
+        source_governance: None,
+    }
 }
 
 #[cfg(test)]

@@ -28,7 +28,9 @@ pub struct IndexerConfig {
     pub consensus_info_polling_interval: Duration,
     pub bedrock_config: ClientConfig,
     pub channel_id: ChannelId,
-    /// Cross-zone configuration. `None` disables the indexer's cross-zone handling.
+    /// Presence selects the genesis program set, must match the sequencer's, and
+    /// cannot change on an existing chain. `None` also disables the verifier; a
+    /// source-only zone declares `"cross_zone": {}`.
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,
     /// Hex hashes of local blocks accepted without cross-zone verification: a
@@ -48,11 +50,6 @@ pub struct IndexerConfig {
     /// is unrepresentable and rejected at config parse.
     #[serde(default = "default_peer_block_cache_window")]
     pub peer_block_cache_window: NonZeroU32,
-    /// Bridge-lock holdings to seed into genesis, mirroring the sequencer's
-    /// `SupplyBridgeLockHolding` actions. They are not produced by any
-    /// transaction, so the indexer must seed them to match the sequencer's state.
-    #[serde(default)]
-    pub bridge_lock_holdings: Vec<BridgeLockHolding>,
     /// Whether to wipe the indexer store and re-index from scratch when the startup
     /// chain-identity check finds the channel serving a different block than the one
     /// stored at the same id.
@@ -63,14 +60,6 @@ pub struct IndexerConfig {
     /// Which emitted events this indexer persists.
     #[serde(default)]
     pub event_filter: EventFilterConfig,
-}
-
-/// A genesis-funded bridge-lock holder balance, configured identically on the
-/// sequencer (via `SupplyBridgeLockHolding`) and the indexer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BridgeLockHolding {
-    pub holder: AccountId,
-    pub amount: u128,
 }
 
 impl IndexerConfig {

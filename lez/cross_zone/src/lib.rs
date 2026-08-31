@@ -21,7 +21,7 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountId, Balance},
+    account::{AccountId, Balance},
     program::ProgramId,
 };
 
@@ -194,21 +194,6 @@ pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
     )
 }
 
-/// Builds the genesis holding account funding a holder's bridgeable balance.
-///
-/// A real native balance owned by `bridge_lock`, which can debit it on a lock; it
-/// is conserved like any other balance. Not produced by any transaction, so the
-/// sequencer and indexer both seed it through this one builder.
-#[must_use]
-pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, Account) {
-    let account = Account {
-        program_owner: programs::bridge_lock().id().into(),
-        balance: amount,
-        ..Default::default()
-    };
-    (holder, account)
-}
-
 /// The `(src_zone, src_program_id)` pairs the operator's routes name for one
 /// target.
 ///
@@ -221,12 +206,9 @@ pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, 
 /// Only the sequencer builds genesis, so an indexer handed the same typo starts
 /// normally and only the sequencer refuses to boot.
 fn sources_for_target(
-    cross_zone: Option<&CrossZoneConfig>,
+    cross_zone: &CrossZoneConfig,
     target_program_id: ProgramId,
 ) -> Vec<(ZoneId, ProgramId, Option<Balance>)> {
-    let Some(cross_zone) = cross_zone else {
-        return Vec::new();
-    };
     let mut sources = Vec::new();
     for peer in &cross_zone.peers {
         for route in &peer.allowed_routes {
@@ -284,9 +266,7 @@ fn cross_zone_targets() -> [ProgramId; 2] {
 /// which authorizes nothing, and the config is still seeded so its PDA cannot be
 /// claimed by a first initializer.
 #[must_use]
-pub fn build_wrapped_token_init_config_tx(
-    cross_zone: Option<&CrossZoneConfig>,
-) -> lee::PublicTransaction {
+pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::PublicTransaction {
     let wrapped_token_id = programs::wrapped_token().id();
     let sources = sources_for_target(cross_zone, wrapped_token_id)
         .into_iter()
@@ -306,8 +286,8 @@ pub fn build_wrapped_token_init_config_tx(
         vec![wrapped_token_core::config_account_id(wrapped_token_id)],
         wrapped_token_core::Instruction::InitConfig(wrapped_token_core::WrappedTokenConfig {
             minter: programs::cross_zone_inbox().id(),
-            governance: cross_zone.and_then(|cross_zone| cross_zone.source_governance),
-            authority: cross_zone.and_then(|cross_zone| cross_zone.source_authority),
+            governance: cross_zone.source_governance,
+            authority: cross_zone.source_authority,
             sources,
         }),
     )
@@ -342,13 +322,34 @@ pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
     )
 }
 
+/// The genesis transaction claiming one holder's holding PDA; replayable, so
+/// the indexer reconstructs holdings from the genesis block alone.
+#[must_use]
+pub fn build_bridge_lock_init_holding_tx(holder: AccountId) -> lee::PublicTransaction {
+    let bridge_lock_id = programs::bridge_lock().id();
+    genesis_public_tx(
+        bridge_lock_id,
+        vec![bridge_lock_core::holding_account_id(
+            bridge_lock_id,
+            &holder.into_value(),
+        )],
+        bridge_lock_core::Instruction::InitHolding {
+            holder: holder.into_value(),
+        },
+    )
+}
+
+/// The holding PDA a holder's bridgeable balance lives in.
+#[must_use]
+pub fn bridge_lock_holding_account_id(holder: AccountId) -> AccountId {
+    bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder.into_value())
+}
+
 /// The genesis transaction naming the peer sources `ping_receiver` accepts a
 /// delivery from, fanned out of the operator's routes exactly as the wrapped
 /// token's is.
 #[must_use]
-pub fn build_ping_receiver_init_config_tx(
-    cross_zone: Option<&CrossZoneConfig>,
-) -> lee::PublicTransaction {
+pub fn build_ping_receiver_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::PublicTransaction {
     let receiver_id = programs::ping_receiver().id();
     // Caps are refused on non-minting targets above, so the cap is always
     // absent here and the receiver's pair list keeps its shape.
@@ -361,8 +362,8 @@ pub fn build_ping_receiver_init_config_tx(
         vec![ping_core::receiver_config_account_id(receiver_id)],
         ping_core::ReceiverInstruction::InitConfig(ping_core::ReceiverConfig {
             deliverer: programs::cross_zone_inbox().id(),
-            governance: cross_zone.and_then(|cross_zone| cross_zone.source_governance),
-            authority: cross_zone.and_then(|cross_zone| cross_zone.source_authority),
+            governance: cross_zone.source_governance,
+            authority: cross_zone.source_authority,
             sources,
         }),
     )
@@ -409,7 +410,7 @@ mod tests {
             source_authority: None,
             source_governance: None,
         };
-        let _tx = build_wrapped_token_init_config_tx(Some(&cross_zone));
+        let _tx = build_wrapped_token_init_config_tx(&cross_zone);
     }
 
     /// A capped route on an authority-less zone is a fuse with no replacement:
@@ -432,7 +433,7 @@ mod tests {
             source_authority: None,
             source_governance: None,
         };
-        let _tx = build_wrapped_token_init_config_tx(Some(&cross_zone));
+        let _tx = build_wrapped_token_init_config_tx(&cross_zone);
     }
 
     /// Mint advances the first matching entry, so a source listed twice would
@@ -455,6 +456,6 @@ mod tests {
             source_authority: None,
             source_governance: None,
         };
-        let _tx = build_wrapped_token_init_config_tx(Some(&cross_zone));
+        let _tx = build_wrapped_token_init_config_tx(&cross_zone);
     }
 }

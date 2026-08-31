@@ -27,7 +27,8 @@ use ping_core::{
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
-    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{MultiNodeTestContextConfig, source_only_cross_zone},
 };
 use tokio::test;
 
@@ -66,7 +67,8 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
             })
             .disable_wallet()
             .with_sequencer_partial_config(partial)
-            .with_genesis(vec![]),
+            .with_genesis(vec![])
+            .with_cross_zone(Some(source_only_cross_zone())),
         )
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
