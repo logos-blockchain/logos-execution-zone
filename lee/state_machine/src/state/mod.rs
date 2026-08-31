@@ -19,6 +19,10 @@ use crate::{
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
+/// Hard cap on a deployed program's segment chain length (~2 MiB of bytecode at 96 KiB/segment).
+/// `get_program` re-walks the chain uncached on every dispatch, so length must be bounded.
+pub const MAX_PROGRAM_SEGMENTS: usize = 20;
+
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
 pub struct CommitmentSet {
@@ -315,8 +319,9 @@ impl V03State {
     /// `header.program_first_segment` via [`ProgramSegment::next_segment`] and concatenating.
     ///
     /// `Ok(None)` means no such program exists, including a chain still missing a segment.
-    /// `Err(LeeError::InvalidProgramBytecode(_))` means every segment exists but the
-    /// reconstructed bytecode doesn't hash to the `image_id` the header declares.
+    /// `Err(LeeError::InvalidProgramBytecode(_))` means either the chain exceeds
+    /// [`MAX_PROGRAM_SEGMENTS`] or every segment exists but the reconstructed bytecode doesn't
+    /// hash to the `image_id` the header declares.
     pub fn get_program(
         &self,
         program_account_id: AccountId,
@@ -333,7 +338,14 @@ impl V03State {
 
         let mut elf = Vec::new();
         let mut next = Some(header.program_first_segment);
+        let mut segment_count = 0_usize;
         while let Some(segment_account_id) = next {
+            segment_count += 1;
+            if segment_count > MAX_PROGRAM_SEGMENTS {
+                return Err(LeeError::InvalidProgramBytecode(anyhow::anyhow!(
+                    "segment chain for {program_account_id} exceeds the {MAX_PROGRAM_SEGMENTS}-segment cap"
+                )));
+            }
             let Some(segment_account) = self.get_account_by_id_ref(segment_account_id) else {
                 return Ok(None);
             };

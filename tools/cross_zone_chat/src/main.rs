@@ -373,7 +373,7 @@ fn watch_peer(peer: ZoneId, receiver_id: ProgramId) -> CrossZoneConfig {
                 src_account_id: program_loader_core::immutable_deploy_account_id(
                     programs::ping_sender().id(),
                 ),
-                target_program_id: receiver_id,
+                target_account_id: program_loader_core::immutable_deploy_account_id(receiver_id),
             }],
             expected_block_signing_pubkeys: Vec::new(),
         }],

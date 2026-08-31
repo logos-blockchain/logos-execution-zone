@@ -390,7 +390,6 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 #[test]
 async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let faucet_chain_caller = test_programs::faucet_chain_caller();
-    // Seeded into genesis: a live Deploy has no predictable dispatch address anymore.
     let faucet_chain_caller_header =
         program_loader_core::immutable_deploy_account_id(faucet_chain_caller.id());
 

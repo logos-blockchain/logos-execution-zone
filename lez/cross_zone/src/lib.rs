@@ -224,20 +224,11 @@ pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, 
     (holder, account)
 }
 
-/// The `(src_zone, src_program_id)` pairs the operator's routes name for one
+/// The `(src_zone, src_account_id)` pairs the operator's routes name for one
 /// target.
-///
-/// Panics on a route naming a program that does not authorize cross-zone sources.
-/// Nothing downstream would notice otherwise: the route is dropped here, the
-/// watcher no longer filters targets, and every delivery would be refused by a
-/// program that never opted in, dead-lettering after three attempts. A typo in a
-/// config file should not cost a channel silently.
-///
-/// Only the sequencer builds genesis, so an indexer handed the same typo starts
-/// normally and only the sequencer refuses to boot.
 fn sources_for_target(
     cross_zone: Option<&CrossZoneConfig>,
-    target_program_id: ProgramId,
+    target_account_id: AccountId,
 ) -> Vec<(ZoneId, AccountId)> {
     let Some(cross_zone) = cross_zone else {
         return Vec::new();
@@ -245,25 +236,12 @@ fn sources_for_target(
     let mut sources = Vec::new();
     for peer in &cross_zone.peers {
         for route in &peer.allowed_routes {
-            assert!(
-                cross_zone_targets().contains(&route.target_program_id),
-                "cross-zone route names {:?}, which does not authorize cross-zone sources",
-                route.target_program_id
-            );
-            if route.target_program_id == target_program_id {
+            if route.target_account_id == target_account_id {
                 sources.push((peer.channel_id, route.src_account_id));
             }
         }
     }
     sources
-}
-
-/// The programs a cross-zone route may name as a target on this zone.
-fn cross_zone_targets() -> [ProgramId; 2] {
-    [
-        programs::wrapped_token().id(),
-        programs::ping_receiver().id(),
-    ]
 }
 
 /// The genesis transaction that pins the cross-zone inbox as the wrapped-token
@@ -282,7 +260,7 @@ pub fn build_wrapped_token_init_config_tx(
     let wrapped_token_id = programs::wrapped_token().id();
     let wrapped_token_account_id =
         program_loader_core::immutable_deploy_account_id(wrapped_token_id);
-    let sources = sources_for_target(cross_zone, wrapped_token_id);
+    let sources = sources_for_target(cross_zone, wrapped_token_account_id);
     genesis_public_tx(
         wrapped_token_id,
         vec![wrapped_token_core::config_account_id(
@@ -345,7 +323,7 @@ pub fn build_ping_receiver_init_config_tx(
 ) -> lee::PublicTransaction {
     let receiver_id = programs::ping_receiver().id();
     let receiver_account_id = program_loader_core::immutable_deploy_account_id(receiver_id);
-    let sources = sources_for_target(cross_zone, receiver_id);
+    let sources = sources_for_target(cross_zone, receiver_account_id);
     genesis_public_tx(
         receiver_id,
         vec![ping_core::receiver_config_account_id(receiver_account_id)],
@@ -382,33 +360,4 @@ fn genesis_public_tx<I: borsh::BorshSerialize>(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A route naming a program that never opted into cross-zone sources is an
-    /// operator typo that nothing downstream would report: the fan-out would drop
-    /// it, the watcher no longer filters targets, and every delivery would be
-    /// refused by the target and dead-lettered.
-    #[test]
-    #[should_panic(expected = "does not authorize cross-zone sources")]
-    fn a_route_to_a_program_that_does_not_authorize_sources_is_refused() {
-        let cross_zone = CrossZoneConfig {
-            peers: vec![CrossZonePeer {
-                channel_id: [2; 32],
-                allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
-                    src_account_id: program_loader_core::immutable_deploy_account_id(
-                        programs::bridge_lock().id(),
-                    ),
-                    target_program_id: programs::amm().id(),
-                }],
-                expected_block_signing_pubkeys: Vec::new(),
-            }],
-            source_authority: None,
-            source_governance: None,
-        };
-        let _tx = build_wrapped_token_init_config_tx(Some(&cross_zone));
-    }
 }

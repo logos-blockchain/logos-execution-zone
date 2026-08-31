@@ -57,7 +57,9 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
                 src_account_id: program_loader_core::immutable_deploy_account_id(
                     programs::bridge_lock().id(),
                 ),
-                target_program_id: wrapped_token_id,
+                target_account_id: program_loader_core::immutable_deploy_account_id(
+                    wrapped_token_id,
+                ),
             }],
             expected_block_signing_pubkeys: Vec::new(),
         }],

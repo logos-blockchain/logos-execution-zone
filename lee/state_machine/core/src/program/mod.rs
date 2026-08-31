@@ -21,12 +21,6 @@ pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
 /// `SHA256(domain_separator || label)` with `domain_separator = /LEE/v0.3/AccountId/State/` and
 /// `label = DeploymentProgram`, both padded to 32 bytes. Same construction as every other PDA
 /// derivation in this module, just with no variable input — this address is fixed.
-///
-/// Dispatch runs the deploy logic as native Rust instead of a guest ELF. Computing a program's
-/// image id inside the zkVM costs ~1,400-1,500 cycles per byte (measured against every real
-/// program in this repo): a real deployment would run 500M-900M cycles against the 32M
-/// public-execution cap. Natively it's low tens of milliseconds. Callers target this address
-/// directly, like any other program.
 pub const PROGRAM_LOADER_ACCOUNT_ID: AccountId = AccountId::new(hex!(
     "599e2c6c2b89ff39bc3094b3276f1fcaa7173800a71d9896a1ba9bd1458a91c9"
 ));
@@ -51,8 +45,8 @@ pub struct ProgramHeader {
     pub image_id: ProgramId,
     /// The first node of this program's bytecode segment chain — see [`ProgramSegment`].
     pub program_first_segment: AccountId,
-    /// Self-declared, not enforced: `program_loader` never checks it. A program stays updatable
-    /// only for as long as someone remains authorized over the header account.
+    /// Once set, `program_loader`'s `UpdateHeader` refuses to rewrite this header again —
+    /// authorization over the account no longer matters once this is `true`.
     pub immutable: bool,
 }
 
@@ -231,11 +225,9 @@ impl AccountId {
     /// Derives an [`AccountId`] for a public PDA from the owning program's dispatch address and
     /// a seed.
     ///
-    /// Keyed on the program's `AccountId` (its actual dispatch address), not its `ProgramId`
-    /// (bytecode image id): two different deployments of identical bytecode get different
-    /// `AccountId`s, since a header's address carries no derivation requirement — each deployer
-    /// just claims whatever account it likes (see [`ProgramHeader`]) — and each must own a
-    /// disjoint family of PDAs.
+    /// Keyed on the program's `AccountId` (its dispatch address) rather than its `ProgramId`
+    /// (bytecode image id), so different deployments of the same bytecode own disjoint families
+    /// of PDAs.
     #[must_use]
     pub fn for_public_pda(program_account_id: &Self, seed: &PdaSeed) -> Self {
         use risc0_zkvm::sha::{Impl, Sha256 as _};

@@ -1,6 +1,7 @@
 use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramSegment};
 
 use super::*;
+use crate::state::MAX_PROGRAM_SEGMENTS;
 
 /// Proof that a program's bytecode split across multiple segment accounts reconstructs into
 /// something that executes identically to the original: writes several segments (linked
@@ -95,4 +96,58 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         .expect("execution against the manually-reconstructed binary should succeed");
 
     assert_eq!(direct_output, reconstructed_output);
+}
+
+/// A segment chain longer than `MAX_PROGRAM_SEGMENTS` is rejected. The cap trips before the walk
+/// checks the next account exists, so the one past the limit is never created.
+#[test]
+fn program_with_more_than_max_segments_is_rejected() {
+    let mut state = V03State::new();
+
+    let segment_account_ids: Vec<AccountId> = (0..MAX_PROGRAM_SEGMENTS)
+        .map(|i| AccountId::new([u8::try_from(i + 1).unwrap(); 32]))
+        .collect();
+    let one_too_many = AccountId::new([0xEE; 32]);
+
+    for i in (0..MAX_PROGRAM_SEGMENTS).rev() {
+        let next_segment = if i + 1 == MAX_PROGRAM_SEGMENTS {
+            Some(one_too_many)
+        } else {
+            segment_account_ids.get(i + 1).copied()
+        };
+        state.force_insert_account(
+            segment_account_ids[i],
+            Account {
+                program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+                data: Data::from(&ProgramSegment {
+                    bytecode: vec![],
+                    next_segment,
+                }),
+                ..Account::default()
+            },
+        );
+    }
+
+    let header_account_id = AccountId::new([0xff; 32]);
+    state.force_insert_account(
+        header_account_id,
+        Account {
+            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+            data: Data::from(&ProgramHeader {
+                image_id: [0; 8],
+                program_first_segment: segment_account_ids[0],
+                immutable: true,
+            }),
+            ..Account::default()
+        },
+    );
+
+    assert!(
+        matches!(
+            state.get_program(header_account_id),
+            Err(LeeError::InvalidProgramBytecode(_))
+        ),
+        "a chain of {} segments must be rejected by the {MAX_PROGRAM_SEGMENTS}-segment cap",
+        MAX_PROGRAM_SEGMENTS + 1
+    );
 }

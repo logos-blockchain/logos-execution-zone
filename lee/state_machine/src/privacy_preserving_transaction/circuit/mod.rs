@@ -45,7 +45,7 @@ impl Proof {
 #[derive(Clone)]
 pub struct ProgramWithDependencies {
     pub program: Program,
-    /// Where `program` is dispatched at. Defaults to
+    /// Where `program` is dispatched at. Set by [`Self::new`] to
     /// `program_loader_core::immutable_deploy_account_id(program.id())`, matching how every
     /// genesis-seeded builtin is actually dispatched; override via
     /// [`Self::with_program_account_id`] for a program deployed to a different PDA (e.g. a
@@ -114,10 +114,11 @@ pub fn execute_and_prove_with_padded_inputs(
     let mut program_outputs = Vec::new();
 
     // Real `image_id`s for every program in this call graph whose address doesn't already
-    // determine it — i.e. every `Deploy`-created program, PDA-addressed rather than
-    // bijection-addressed. A legacy program needs no claim at all: `ProgramId::from(account_id)`
-    // is already exact for it, by construction, with nothing to authenticate. See
-    // `ProgramImageClaim` and `execution_state.rs`'s matching bijection fallback.
+    // determine it — i.e. every `Deploy`-created program, PDA-addressed rather than found via
+    // the legacy image-id bijection. A legacy program needs no claim at all:
+    // `ProgramId::from(account_id)` is already exact for it, by construction, with nothing to
+    // authenticate. See `ProgramImageClaim` and `execution_state.rs`'s matching bijection
+    // fallback.
     let program_image_claims: Vec<ProgramImageClaim> =
         std::iter::once((*initial_program_account_id, initial_program.id()))
             .chain(

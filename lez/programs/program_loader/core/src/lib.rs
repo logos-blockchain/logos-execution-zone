@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::{ProgramHeader, ProgramSegment};
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim, ProgramId},
+    program::{AccountPostState, Claim, PROGRAM_LOADER_ACCOUNT_ID, ProgramId},
 };
 
 /// Max bytes of bytecode per segment. Under `DATA_MAX_LENGTH` with headroom for a segment's own
@@ -30,10 +30,8 @@ pub enum Instruction {
         immutable: bool,
     },
     /// Rewrites an existing header at `pre_states[0]` (must already hold a valid
-    /// [`ProgramHeader`] and be `is_authorized`) — an ordinary data mutation, not a claim. The
-    /// existing header's `immutable` is never consulted; whether an update is possible is purely
-    /// a matter of who still controls the account. Same chain/`image_id` handling as
-    /// `UploadHeader`.
+    /// [`ProgramHeader`], be `is_authorized`, and not already be `immutable`) — an ordinary data
+    /// mutation, not a claim. Same chain/`image_id` handling as `UploadHeader`.
     UpdateHeader {
         first_segment: AccountId,
         immutable: bool,
@@ -107,6 +105,10 @@ pub fn execute_new_segment(
             referenced.account_id, next,
             "second account must be the segment `next_segment` points to"
         );
+        assert_eq!(
+            referenced.account.program_owner, PROGRAM_LOADER_ACCOUNT_ID,
+            "`next_segment` must be loader-owned"
+        );
         assert!(
             ProgramSegment::try_from(&referenced.account.data).is_ok(),
             "`next_segment` must already hold a valid segment — segments are linked tail-to-head"
@@ -166,9 +168,11 @@ pub fn execute_update_header(
         !pre_states.is_empty(),
         "UpdateHeader requires at least the header target account"
     );
+    let old_header = ProgramHeader::try_from(&pre_states[0].account.data)
+        .expect("UpdateHeader target must already hold a valid header — use UploadHeader to create one");
     assert!(
-        ProgramHeader::try_from(&pre_states[0].account.data).is_ok(),
-        "UpdateHeader target must already hold a valid header — use UploadHeader to create one"
+        !old_header.immutable,
+        "UpdateHeader target is immutable and cannot be updated"
     );
     assert!(
         pre_states[0].is_authorized,
@@ -207,6 +211,10 @@ fn recompute_image_id(pre_states: &[AccountWithMetadata], first_segment: Account
         assert_eq!(
             pre.account_id, account_id,
             "segment accounts must be supplied in exact chain order starting at `first_segment`"
+        );
+        assert_eq!(
+            pre.account.program_owner, PROGRAM_LOADER_ACCOUNT_ID,
+            "segment {account_id} must be loader-owned"
         );
         let segment = ProgramSegment::try_from(&pre.account.data)
             .expect("every supplied segment account must decode as a valid ProgramSegment");
