@@ -7,8 +7,8 @@ use lee_core::{
     },
 };
 use wrapped_token_core::{
-    Instruction, MAX_MINT_AMOUNT, WrappedTokenConfig, balance_bytes, config_account_id,
-    config_seed, holding_account_id, holding_seed, read_balance,
+    Instruction, MAX_MINT_AMOUNT, SourceEntry, SourcePolicy, WrappedTokenConfig, balance_bytes,
+    config_account_id, config_seed, holding_account_id, holding_seed, read_balance,
 };
 
 fn main() {
@@ -73,7 +73,7 @@ fn mint(
         config_account_id(self_program_id),
         "second account must be the wrapped-token config PDA"
     );
-    let cfg = WrappedTokenConfig::from_bytes(&config.account.data)
+    let mut cfg = WrappedTokenConfig::from_bytes(&config.account.data)
         .expect("config account holds a wrapped-token config");
     assert_eq!(
         caller_program_id,
@@ -84,13 +84,29 @@ fn mint(
     // token's own business, and unbacked value is what gets minted if it takes
     // anyone's word for it. The marker's address is the source, so re-deriving it
     // from an authorized pair is the whole check.
-    assert!(
-        cfg.sources.iter().any(|(src_zone, src_program_id)| {
+    let minter = cfg.minter;
+    let source = cfg
+        .sources
+        .iter_mut()
+        .find(|entry| {
             marker.account_id
-                == inbox_source_marker_account_id(cfg.minter, src_zone, *src_program_id)
-        }),
-        "Mint is only callable for a peer source this token authorizes"
-    );
+                == inbox_source_marker_account_id(
+                    minter,
+                    &entry.policy.src_zone,
+                    entry.policy.src_program_id,
+                )
+        })
+        .expect("Mint is only callable for a peer source this token authorizes");
+    // The source's lifetime allowance. A breach fails the whole delivery, so the
+    // message stays undelivered and can be redelivered after a cap raise.
+    let minted = source
+        .minted
+        .checked_add(amount)
+        .expect("source mint total overflow");
+    if let Some(cap) = source.policy.mint_cap {
+        assert!(minted <= cap, "mint exceeds this source's lifetime cap");
+    }
+    source.minted = minted;
 
     assert_eq!(
         holding.account_id,
@@ -115,7 +131,14 @@ fn mint(
         holding_account,
         Claim::Pda(holding_seed(&recipient)),
     );
-    let config_post = AccountPostState::new(config.account.clone());
+    // The advanced counter is written back, so the cap survives restarts and
+    // re-derivation alike: it is state, not host memory.
+    let mut config_account = config.account.clone();
+    config_account.data = cfg
+        .to_bytes()
+        .try_into()
+        .expect("wrapped-token config fits in account data");
+    let config_post = AccountPostState::new(config_account);
 
     ProgramOutput::new(
         self_program_id,
@@ -208,7 +231,7 @@ fn update_sources(
     caller_program_id: Option<lee_core::program::ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
-    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+    sources: Vec<SourcePolicy>,
 ) {
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
@@ -251,7 +274,33 @@ fn update_sources(
         "the configured authority must authorize a source change"
     );
 
-    cfg.sources = sources;
+    // Mint advances the first matching entry, so a duplicated pair would split
+    // one source's policy across entries an auditor reads as two.
+    for (index, policy) in sources.iter().enumerate() {
+        assert!(
+            !sources[..index].iter().any(|other| {
+                other.src_zone == policy.src_zone && other.src_program_id == policy.src_program_id
+            }),
+            "UpdateSources lists the same source twice"
+        );
+    }
+    // The counter is the guest's, never the caller's: a kept source carries its
+    // spent allowance over, so an update cannot reset it, and a source removed
+    // and later re-added starts at zero.
+    let previous = core::mem::take(&mut cfg.sources);
+    cfg.sources = sources
+        .into_iter()
+        .map(|policy| SourceEntry {
+            minted: previous
+                .iter()
+                .find(|entry| {
+                    entry.policy.src_zone == policy.src_zone
+                        && entry.policy.src_program_id == policy.src_program_id
+                })
+                .map_or(0, |entry| entry.minted),
+            policy,
+        })
+        .collect();
     let mut config_account = config.account.clone();
     config_account.data = cfg
         .to_bytes()

@@ -222,7 +222,7 @@ pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, 
 fn sources_for_target(
     cross_zone: Option<&CrossZoneConfig>,
     target_program_id: ProgramId,
-) -> Vec<(ZoneId, ProgramId)> {
+) -> Vec<(ZoneId, ProgramId, Option<Balance>)> {
     let Some(cross_zone) = cross_zone else {
         return Vec::new();
     };
@@ -234,10 +234,33 @@ fn sources_for_target(
                 "cross-zone route names {:?}, which does not authorize cross-zone sources",
                 route.target_program_id
             );
+            assert!(
+                route.mint_cap.is_none()
+                    || route.target_program_id == programs::wrapped_token().id(),
+                "cross-zone route sets a mint cap, but its target {:?} does not mint",
+                route.target_program_id
+            );
+            // A cap only the authority can raise, on a zone with no authority,
+            // is a fuse with no replacement: once honest volume exhausts it,
+            // every later delivery dead-letters and the peer's escrow strands.
+            assert!(
+                route.mint_cap.is_none() || cross_zone.source_authority.is_some(),
+                "cross-zone route sets a mint cap, but no source_authority is configured to ever raise it"
+            );
             if route.target_program_id == target_program_id {
-                sources.push((peer.channel_id, route.src_program_id));
+                sources.push((peer.channel_id, route.src_program_id, route.mint_cap));
             }
         }
+    }
+    // Mint's counter advances the first matching entry, so a duplicated pair
+    // would split one source's policy across entries an auditor reads as two.
+    for (index, (zone, program, _)) in sources.iter().enumerate() {
+        assert!(
+            !sources[..index].iter().any(
+                |(other_zone, other_program, _)| other_zone == zone && other_program == program
+            ),
+            "cross-zone routes list the same source twice for one target"
+        );
     }
     sources
 }
@@ -264,7 +287,19 @@ pub fn build_wrapped_token_init_config_tx(
     cross_zone: Option<&CrossZoneConfig>,
 ) -> lee::PublicTransaction {
     let wrapped_token_id = programs::wrapped_token().id();
-    let sources = sources_for_target(cross_zone, wrapped_token_id);
+    let sources = sources_for_target(cross_zone, wrapped_token_id)
+        .into_iter()
+        .map(
+            |(src_zone, src_program_id, mint_cap)| wrapped_token_core::SourceEntry {
+                policy: wrapped_token_core::SourcePolicy {
+                    src_zone,
+                    src_program_id,
+                    mint_cap,
+                },
+                minted: 0,
+            },
+        )
+        .collect();
     genesis_public_tx(
         wrapped_token_id,
         vec![wrapped_token_core::config_account_id(wrapped_token_id)],
@@ -314,7 +349,12 @@ pub fn build_ping_receiver_init_config_tx(
     cross_zone: Option<&CrossZoneConfig>,
 ) -> lee::PublicTransaction {
     let receiver_id = programs::ping_receiver().id();
-    let sources = sources_for_target(cross_zone, receiver_id);
+    // Caps are refused on non-minting targets above, so the cap is always
+    // absent here and the receiver's pair list keeps its shape.
+    let sources = sources_for_target(cross_zone, receiver_id)
+        .into_iter()
+        .map(|(src_zone, src_program_id, _)| (src_zone, src_program_id))
+        .collect();
     genesis_public_tx(
         receiver_id,
         vec![ping_core::receiver_config_account_id(receiver_id)],
@@ -360,7 +400,52 @@ mod tests {
                 allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
                     src_program_id: programs::bridge_lock().id(),
                     target_program_id: programs::amm().id(),
+                    mint_cap: None,
                 }],
+                expected_block_signing_pubkeys: Vec::new(),
+            }],
+            source_authority: None,
+            source_governance: None,
+        };
+        let _tx = build_wrapped_token_init_config_tx(Some(&cross_zone));
+    }
+
+    /// A capped route on an authority-less zone is a fuse with no replacement:
+    /// once honest volume exhausts the cap, every later delivery dead-letters
+    /// and the peer's escrow strands, so genesis refuses the combination.
+    #[test]
+    #[should_panic(expected = "no source_authority is configured")]
+    fn a_capped_route_without_an_authority_is_refused() {
+        let cross_zone = CrossZoneConfig {
+            peers: vec![CrossZonePeer {
+                channel_id: [2; 32],
+                allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
+                    src_program_id: programs::bridge_lock().id(),
+                    target_program_id: programs::wrapped_token().id(),
+                    mint_cap: Some(1_000),
+                }],
+                expected_block_signing_pubkeys: Vec::new(),
+            }],
+            source_authority: None,
+            source_governance: None,
+        };
+        let _tx = build_wrapped_token_init_config_tx(Some(&cross_zone));
+    }
+
+    /// Mint advances the first matching entry, so a source listed twice would
+    /// split one policy across entries an auditor reads as two.
+    #[test]
+    #[should_panic(expected = "same source twice")]
+    fn a_duplicated_route_for_one_target_is_refused() {
+        let route = cross_zone_inbox_core::CrossZoneRoute {
+            src_program_id: programs::bridge_lock().id(),
+            target_program_id: programs::wrapped_token().id(),
+            mint_cap: None,
+        };
+        let cross_zone = CrossZoneConfig {
+            peers: vec![CrossZonePeer {
+                channel_id: [2; 32],
+                allowed_routes: vec![route.clone(), route],
                 expected_block_signing_pubkeys: Vec::new(),
             }],
             source_authority: None,

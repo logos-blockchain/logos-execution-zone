@@ -254,6 +254,7 @@ fn cross_zone_test_config() -> SequencerConfig {
                 allowed_routes: vec![CrossZoneRoute {
                     src_program_id: programs::ping_sender().id(),
                     target_program_id: programs::ping_receiver().id(),
+                    mint_cap: None,
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
             }],
@@ -857,7 +858,7 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
         dead_letters[0].message_key,
         cross_zone_inbox_core::message_key(&PEER_ZONE, 13, 0)
     );
-    assert!(dead_letters[0].transaction_bytes > 0);
+    assert!(!dead_letters[0].transaction.is_empty());
     assert_eq!(
         dead_letters[0].failed_attempts,
         RETIRE_DISPATCH_AFTER_FAILURES
@@ -4364,4 +4365,16 @@ fn a_slash_without_enough_approvals_is_rejected() {
 
     assert_eq!(state.get_account_by_id(ownership_id).balance, amount);
     assert_eq!(state.get_account_by_id(slash_sink_id()).balance, 0);
+}
+
+/// The route struct refuses unknown keys, so a misspelled `mint_cap` in an
+/// operator config fails startup instead of silently seeding uncapped.
+#[test]
+fn a_misspelled_mint_cap_key_fails_route_parse() {
+    let route = serde_json::from_value::<CrossZoneRoute>(serde_json::json!({
+        "src_program_id": [0, 0, 0, 0, 0, 0, 0, 1],
+        "target_program_id": [0, 0, 0, 0, 0, 0, 0, 2],
+        "mintcap": 1_000,
+    }));
+    assert!(route.is_err(), "an unknown key must fail the parse");
 }

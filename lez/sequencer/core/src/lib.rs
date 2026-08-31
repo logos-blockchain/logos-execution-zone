@@ -36,11 +36,11 @@ use num_bigint::BigUint;
 use sequencer_storage_actor::{
     StorageActor, StorageActorTrait,
     protocol::{
-        ApplyStoreUpdate, DeadLetterDispatchRecord, DispatchFailure, DispatchOrigin,
-        DropSettledCrossZoneDispatches, GetBlock, GetDeadLetterDispatches, GetFirstBlockId,
-        GetLatestBlockMeta, GetPendingCrossZoneDispatches, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, RecordNewBlock, SetZoneAnchor, WithdrawalReconciliationKey,
-        ZoneAnchorRecord,
+        ApplyStoreUpdate, DeadLetterDispatchRecord, DeadLetterRequeue, DispatchFailure,
+        DispatchOrigin, DropSettledCrossZoneDispatches, GetBlock, GetDeadLetterDispatches,
+        GetFirstBlockId, GetLatestBlockMeta, GetPendingCrossZoneDispatches,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordNewBlock, SetZoneAnchor,
+        WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
 use tokio::sync::Mutex;
@@ -1436,12 +1436,12 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 sequencer_core_metrics::increment_cross_zone_dispatches_retired_total();
                 record_dead_letter_gauge(self.store.storage_ref()).await;
                 error!(
-                    "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter.",
+                    "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter; requeueCrossZoneDeadLetter restores it.",
                     hex::encode(key),
                     hex::encode(origin.src_zone),
                     origin.src_block_id,
                     origin.src_tx_index,
-                    record.transaction_bytes,
+                    record.transaction.len(),
                     record.failed_attempts
                 );
             }
@@ -1471,6 +1471,15 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let retained = self.store.dead_letter_dispatches().await?;
         let total = self.store.dead_letter_dispatch_count().await?;
         Ok((total, retained))
+    }
+
+    /// Restores a retained dead-lettered delivery to the pending list, with a
+    /// clean attempt count. The next production turn attempts it again.
+    pub async fn requeue_cross_zone_dead_letter(
+        &self,
+        message_key: [u8; 32],
+    ) -> Result<DeadLetterRequeue> {
+        self.store.requeue_dead_letter_dispatch(message_key).await
     }
 
     /// Every background task that holds this sequencer's store handle.

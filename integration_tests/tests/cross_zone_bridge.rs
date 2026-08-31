@@ -56,6 +56,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
             allowed_routes: vec![CrossZoneRoute {
                 src_program_id: programs::bridge_lock().id(),
                 target_program_id: wrapped_token_id,
+                mint_cap: None,
             }],
             expected_block_signing_pubkeys: Vec::new(),
         }],
