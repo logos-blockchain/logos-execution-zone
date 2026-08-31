@@ -284,4 +284,36 @@ mod test_methods {
             Cow::Borrowed(test_methods::SIMPLE_TRANSFER_PROXY_ELF),
         )
     }
+
+    #[must_use]
+    pub const fn references_undeclared_account() -> Program {
+        Program::new_unchecked(
+            test_methods::REFERENCES_UNDECLARED_ACCOUNT_ID,
+            Cow::Borrowed(test_methods::REFERENCES_UNDECLARED_ACCOUNT_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn injects_undeclared_pre_state() -> Program {
+        Program::new_unchecked(
+            test_methods::INJECTS_UNDECLARED_PRE_STATE_ID,
+            Cow::Borrowed(test_methods::INJECTS_UNDECLARED_PRE_STATE_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn reorders_and_forwards() -> Program {
+        Program::new_unchecked(
+            test_methods::REORDERS_AND_FORWARDS_ID,
+            Cow::Borrowed(test_methods::REORDERS_AND_FORWARDS_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn asserts_specific_account_authorized() -> Program {
+        Program::new_unchecked(
+            test_methods::ASSERTS_SPECIFIC_ACCOUNT_AUTHORIZED_ID,
+            Cow::Borrowed(test_methods::ASSERTS_SPECIFIC_ACCOUNT_AUTHORIZED_ELF),
+        )
+    }
 }

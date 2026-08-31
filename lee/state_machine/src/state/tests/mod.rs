@@ -73,6 +73,8 @@ impl V03State {
         self.insert_program(&crate::test_methods::validity_window_chain_caller());
         self.insert_program(&crate::test_methods::simple_transfer_proxy());
         self.insert_program(&crate::test_methods::modified_transfer_program());
+        self.insert_program(&crate::test_methods::references_undeclared_account());
+        self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
         self
     }
 

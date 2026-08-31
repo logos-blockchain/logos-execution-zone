@@ -76,6 +76,8 @@ impl ValidatedStateDiff {
         );
 
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
+        let declared_account_ids: HashSet<AccountId> =
+            message.account_ids.iter().copied().collect();
 
         let initial_call = ChainedCall {
             program_id: message.program_id,
@@ -119,17 +121,32 @@ impl ValidatedStateDiff {
 
             // The caller only names which accounts to call with (`accounts`); resolve their
             // actual values from the protocol's own tracked state, not from anything it asserts.
+            // Resolvable only if declared up front or already touched in this transaction —
+            // never merely because it exists somewhere in global state.
             let real_pre_states: Vec<AccountWithMetadata> = chained_call
                 .accounts
                 .iter()
                 .map(|account_id| {
-                    let account = state_diff
-                        .get(account_id)
-                        .cloned()
-                        .unwrap_or_else(|| state.get_account_by_id(*account_id));
-                    AccountWithMetadata::new(account, is_authorized(account_id), *account_id)
+                    let account = match state_diff.get(account_id) {
+                        Some(account) => account.clone(),
+                        None if declared_account_ids.contains(account_id) => {
+                            state.get_account_by_id(*account_id)
+                        }
+                        None => {
+                            return Err(LeeError::from(
+                                InvalidProgramBehaviorError::UnknownChainedCallAccount {
+                                    account_id: *account_id,
+                                },
+                            ));
+                        }
+                    };
+                    Ok(AccountWithMetadata::new(
+                        account,
+                        is_authorized(account_id),
+                        *account_id,
+                    ))
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()?;
 
             debug!(
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
@@ -145,8 +162,22 @@ impl ValidatedStateDiff {
                 chained_call.program_id, program_output
             );
 
+            // A program may report fewer accounts than it was named with (dropping one for a
+            // later call to pick up), but never one outside `chained_call.accounts` — otherwise
+            // it could inject an account nobody in this transaction ever named.
+            let named_accounts: HashSet<AccountId> =
+                chained_call.accounts.iter().copied().collect();
+
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
+                ensure!(
+                    named_accounts.contains(&account_id),
+                    InvalidProgramBehaviorError::UndeclaredAccountInProgramOutput {
+                        program_id: chained_call.program_id,
+                        account_id
+                    }
+                );
+
                 // Check that the program output pre_states coincide with the values in the public
                 // state or with any modifications to those values during the chain of calls.
                 let expected_pre = state_diff
