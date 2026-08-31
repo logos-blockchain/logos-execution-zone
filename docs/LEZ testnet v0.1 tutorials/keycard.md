@@ -173,8 +173,6 @@ Fund a Keycard-backed account from an account of yours that already holds tokens
 |-----------------------------|------------------------------------------------------|
 | `wallet auth-transfer send` | Sends native tokens to a public or private recipient |
 
-Note: The recipient account must be initialized with `wallet auth-transfer init` before receiving.
-
 `--to` accepts any of:
 - A BIP32 key path — uses Keycard (e.g. `m/44'/60'/0'/0/0`)
 - An account ID with privacy prefix (e.g. `Public/9bKm...`)
@@ -192,26 +190,16 @@ Transaction hash is fd320c01f5469e62d2486afa1d9d5be39afcca0cd01d1575905b7acd95cf
 
 | Command                     | Description                                                                   |
 |-----------------------------|-------------------------------------------------------------------------------|
-| `wallet auth-transfer init` | Registers an account with the auth-transfer program                           |
 | `wallet auth-transfer send` | Sends native tokens between accounts                                          |
 
-`--account-id` (for `init`) and `--from`/`--to` (for `send`) each accept any of:
+`--from`/`--to` (for `send`) each accept any of:
 - A BIP32 key path — uses Keycard (e.g. `m/44'/60'/0'/0/0`)
 - An account ID with privacy prefix (e.g. `Public/9bKm...`)
 - An account label (e.g. `my-account`)
 
 For `send`, foreign recipient accounts (not in the local wallet and not a Keycard path) do not need to sign — pass their account ID directly via `--to`. Shielded sends to foreign private accounts use `--to-npk`/`--to-vpk`.
 
-1. Initialize a Keycard public account
-```bash
-wallet auth-transfer init --account-id "m/44'/60'/0'/0/0"
-
-# Output:
-Keycard PIN:
-Transaction hash is 49c16940493e1618c393645c1211b5c793d405838221c29ac6562a8a4b11c5a7
-```
-
-2. Send native tokens between two Keycard accounts
+1. Send native tokens between two Keycard accounts
 ```bash
 wallet auth-transfer send \
   --from   "m/44'/60'/0'/0/0" \
@@ -223,7 +211,7 @@ Keycard PIN:
 Transaction hash is 1a9764ab20763dcc1ffb51c6e9badd5a6316a773759032ca48e0eee59caaf488
 ```
 
-3. Send native tokens from a Keycard account to a foreign account
+2. Send native tokens from a Keycard account to a foreign account
 ```bash
 wallet auth-transfer send \
   --from   "m/44'/60'/0'/0/0" \
@@ -235,7 +223,7 @@ Keycard PIN:
 Transaction hash is 3e7b2a91cf804d56fe19084b3c8b25d07e8f243829bc50addf6e2c78b4b09d34
 ```
 
-4. Send native tokens from a Keycard account to a local wallet account by label
+3. Send native tokens from a Keycard account to a local wallet account by label
 ```bash
 wallet auth-transfer send \
   --from   "m/44'/60'/0'/0/0" \

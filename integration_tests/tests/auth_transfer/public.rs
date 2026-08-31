@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention,
-    utils::{account_balance, get_account, new_account, send, send_claiming_new_account},
+    utils::{account_balance, new_account, send, send_claiming_new_account},
 };
 use lee::{PublicKey, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
@@ -193,33 +193,6 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     assert_eq!(acc_2_balance, 20200);
 
     log::info!("Second TX Success!");
-
-    Ok(())
-}
-
-#[test]
-async fn initialize_public_account() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
-
-    let account_id = new_account(&mut ctx, false, None).await?;
-
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: public_mention(account_id),
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    log::info!("Checking correct execution");
-    let account = get_account(&ctx, account_id).await?;
-
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
-    assert_eq!(account.balance, 0);
-    assert_eq!(account.nonce.0, 1);
-    assert!(account.data.is_empty());
-
-    log::info!("Successfully initialized public account");
 
     Ok(())
 }

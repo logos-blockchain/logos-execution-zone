@@ -1,38 +1,13 @@
 use std::vec;
 
 use common::HashType;
-use lee::{AccountId, program::Program};
+use lee::AccountId;
 use lee_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
 use crate::{AccountIdentity, ExecutionFailureKind};
 
 impl NativeTokenTransfer<'_> {
-    pub async fn register_account_private(
-        &self,
-        from: AccountId,
-    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let instruction = authenticated_transfer_core::Instruction::Initialize;
-
-        let account = self
-            .0
-            .resolve_private_account(from)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-
-        self.0
-            .send_privacy_preserving_tx(
-                vec![account],
-                Program::serialize_instruction(instruction).unwrap(),
-                &programs::authenticated_transfer().into(),
-            )
-            .await
-            .map(|(resp, secrets)| {
-                let mut secrets_iter = secrets.into_iter();
-                let first = secrets_iter.next().expect("expected sender's secret");
-                (resp, first)
-            })
-    }
-
     pub async fn send_private_transfer_to_outer_account(
         &self,
         from: AccountId,

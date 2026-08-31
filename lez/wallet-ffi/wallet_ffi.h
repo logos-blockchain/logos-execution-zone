@@ -353,8 +353,7 @@ enum WalletFfiError wallet_ffi_create_account_public(struct WalletHandle *handle
  *
  * This is the private-account equivalent of `wallet_ffi_create_account_public`.
  * It generates a key node, assigns a random identifier, and inserts a default
- * account record so the account can immediately be used with
- * `wallet_ffi_register_private_account`.
+ * account record so the account can immediately be used.
  *
  * The identifier is chosen at random and is not encoded in the mnemonic seed.
  * Once the account is initialized, the identifier is embedded in the encrypted
@@ -1344,62 +1343,7 @@ enum WalletFfiError wallet_ffi_transfer_private_owned(struct WalletHandle *handl
                                                       struct FfiTransferResult *out_result);
 
 /**
- * Register a public account on the network.
- *
- * This initializes a public account on the blockchain. The account must be
- * owned by this wallet.
- *
- * # Parameters
- * - `handle`: Valid wallet handle
- * - `account_id`: Account ID to register
- * - `out_result`: Output pointer for registration result
- *
- * # Returns
- * - `Success` if the registration was submitted successfully
- * - Error code on failure
- *
- * # Memory
- * The result must be freed with `wallet_ffi_free_transfer_result()`.
- *
- * # Safety
- * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `account_id` must be a valid pointer to a `FfiBytes32` struct
- * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
- */
-enum WalletFfiError wallet_ffi_register_public_account(struct WalletHandle *handle,
-                                                       const struct FfiBytes32 *account_id,
-                                                       struct FfiTransferResult *out_result);
-
-/**
- * Register a private account on the network.
- *
- * This initializes a private account. The account must be
- * owned by this wallet.
- *
- * # Parameters
- * - `handle`: Valid wallet handle
- * - `account_id`: Account ID to register
- * - `out_result`: Output pointer for registration result
- *
- * # Returns
- * - `Success` if the registration was submitted successfully
- * - Error code on failure
- *
- * # Memory
- * The result must be freed with `wallet_ffi_free_transfer_result()`.
- *
- * # Safety
- * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `account_id` must be a valid pointer to a `FfiBytes32` struct
- * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
- */
-enum WalletFfiError wallet_ffi_register_private_account(struct WalletHandle *handle,
-                                                        const struct FfiBytes32 *account_id,
-                                                        struct FfiTransferResult *out_result);
-
-/**
- * Free a transfer result returned by `wallet_ffi_transfer_public` or
- * `wallet_ffi_register_public_account`.
+ * Free a transfer result returned by `wallet_ffi_transfer_public`.
  *
  * # Safety
  * The result must be either null or a valid result from a transfer function.

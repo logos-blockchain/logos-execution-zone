@@ -18,9 +18,6 @@ export KEYCARD_MNEMONIC="fashion degree mountain wool question damp current pond
 wallet keycard load
 unset KEYCARD_MNEMONIC
 
-echo "Test: wallet auth-transfer init --account-id \"m/44'/60'/0'/0/0\""
-wallet auth-transfer init --account-id "m/44'/60'/0'/0/0"
-
 echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
 wallet account get --account-id "m/44'/60'/0'/0/0"
 
@@ -32,7 +29,6 @@ wallet account get --account-id "m/44'/60'/0'/0/0"
 
 echo ""
 echo "=== Test: Keycard account to Keycard account ==="
-wallet auth-transfer init --account-id "m/44'/60'/0'/0/1"
 wallet auth-transfer send --amount 40 --from "m/44'/60'/0'/0/0" --to "m/44'/60'/0'/0/1"
 
 echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
@@ -46,9 +42,6 @@ echo "=== Test: Keycard account to public local account ==="
 echo "Test: create local wallet account"
 LOCAL_ACCOUNT_ID=$(wallet account new public 2>&1 | grep -oP '(?<=Public/)\S+')
 echo "Created local account: Public/${LOCAL_ACCOUNT_ID}"
-
-echo "Test: wallet auth-transfer init local account"
-wallet auth-transfer init --account-id "Public/${LOCAL_ACCOUNT_ID}"
 
 
 echo "Test: wallet auth-transfer send from keycard to local account"
@@ -109,8 +102,6 @@ echo "=== Test: Deshielded auth-transfer: private account → keycard path 1 ===
 
 PRIV_SENDER=$(wallet account new private | grep -o 'Private/[^[:space:]]*' | head -1)
 echo "Fresh private sender account: $PRIV_SENDER"
-
-wallet auth-transfer init --account-id "$PRIV_SENDER"
 
 echo "Test: fund private sender via wallet auth-transfer send"
 wallet auth-transfer send --amount 200 --from "$FUNDED_ACCOUNT" --to "$PRIV_SENDER"

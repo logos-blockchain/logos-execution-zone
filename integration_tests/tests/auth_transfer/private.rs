@@ -26,8 +26,7 @@ use tokio::test;
 use wallet::{
     account::Label,
     cli::{
-        CliAccountMention, Command, SubcommandReturnValue,
-        account::{AccountSubcommand, NewSubcommand},
+        CliAccountMention, Command, SubcommandReturnValue, account::AccountSubcommand,
         programs::native_token_transfer::AuthTransferSubcommand,
     },
 };
@@ -362,41 +361,6 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
 }
 
 #[test]
-async fn initialize_private_account() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
-
-    let account_id = new_account(&mut ctx, true, None).await?;
-
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: private_mention(account_id),
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
-    log::info!("Syncing private accounts");
-    sync_private(&mut ctx).await?;
-
-    assert_private_commitment_in_state(&ctx, account_id, "account").await?;
-
-    let account = ctx
-        .wallet()
-        .get_account_private(account_id)
-        .context("Failed to get private account")?;
-
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
-    assert_eq!(account.balance, 0);
-    assert!(account.data.is_empty());
-
-    log::info!("Successfully initialized private account");
-
-    Ok(())
-}
-
-#[test]
 async fn private_transfer_using_from_label() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
@@ -427,48 +391,6 @@ async fn private_transfer_using_from_label() -> Result<()> {
     assert_private_commitment_in_state(&ctx, to, "receiver").await?;
 
     log::info!("Successfully transferred privately using from_label");
-
-    Ok(())
-}
-
-#[test]
-async fn initialize_private_account_using_label() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
-
-    // Create a new private account with a label
-    let label = Label::new("init-private-label");
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
-        cci: None,
-        label: Some(label.clone()),
-    }));
-    let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::RegisterAccount { account_id } = result else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
-
-    // Initialize using the label instead of account ID
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: label.into(),
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
-    sync_private(&mut ctx).await?;
-
-    assert_private_commitment_in_state(&ctx, account_id, "account").await?;
-
-    let account = ctx
-        .wallet()
-        .get_account_private(account_id)
-        .context("Failed to get private account")?;
-
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
-
-    log::info!("Successfully initialized private account using label");
 
     Ok(())
 }
