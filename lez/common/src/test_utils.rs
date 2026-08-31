@@ -21,6 +21,35 @@ pub fn sequencer_sign_key_for_testing() -> lee::PrivateKey {
     lee::PrivateKey::try_new([37; 32]).unwrap()
 }
 
+/// Claims the test block-producer's reward account, simulating the stake a real
+/// sequencer holds before producing. Fee settlement credits real fees to this
+/// account, and crediting an unclaimed (default-owner) account is rejected.
+pub fn claim_producer_account(state: &mut lee::V03State) {
+    state.initialize_account_owner(
+        producer_account_for_testing(),
+        programs::authenticated_transfer().id(),
+    );
+}
+
+/// The test block-producer's reward account.
+#[must_use]
+pub fn producer_account_for_testing() -> AccountId {
+    AccountId::from(&lee::PublicKey::new_from_private_key(
+        &sequencer_sign_key_for_testing(),
+    ))
+}
+
+/// The test block-producer's reward account as a claimed genesis-seed entry, for
+/// stores that seed their state before any block credits fees to it.
+#[must_use]
+pub fn claimed_producer_seed() -> (AccountId, lee::Account) {
+    let account = lee::Account {
+        program_owner: programs::authenticated_transfer().id().into(),
+        ..lee::Account::default()
+    };
+    (producer_account_for_testing(), account)
+}
+
 /// A syntactically valid `Public` transaction. Its contents are irrelevant to the
 /// bridge guard, which only branches on the transaction *variant* and the diff.
 #[cfg(test)]

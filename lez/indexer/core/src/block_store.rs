@@ -375,7 +375,14 @@ fn open_default(home: &Path) -> IndexerStore {
 
 #[cfg(test)]
 fn open_with(home: &Path, filter: EventFilter) -> IndexerStore {
-    IndexerStore::open_db(home, Vec::new(), filter).expect("open store")
+    // Seed the producer's reward account as claimed, mirroring the stake a real
+    // sequencer holds, so charged blocks can credit it on the accept path.
+    IndexerStore::open_db(
+        home,
+        vec![common::test_utils::claimed_producer_seed()],
+        filter,
+    )
+    .expect("open store")
 }
 
 #[cfg(test)]
@@ -476,6 +483,7 @@ fn settled_test_block(
         transactions,
     }
     .into_pending_block(&sequencer_sign_key_for_testing());
+    common::test_utils::claim_producer_account(state);
     chain_state::apply::apply_block_to_state(&block, state).expect("settled block applies");
     block
 }

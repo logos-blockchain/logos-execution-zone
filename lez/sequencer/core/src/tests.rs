@@ -180,34 +180,19 @@ fn committee_cooldown_needs_the_channel_to_advance() {
     ));
 }
 
-/// The forced fee invocation for a block with the given summary, addressed to
-/// the test sequencer's producer account.
-fn fee_tx_with_summary(summary: fee_core::BlockFeeSummary) -> LeeTransaction {
-    LeeTransaction::Public(fee_invocation(
-        summary,
-        lee::AccountId::from(&lee::PublicKey::new_from_private_key(
-            &sequencer_sign_key_for_testing(),
-        )),
-    ))
-}
-
-/// The forced zero-fee invocation appended to every all-exempt block.
-fn zero_fee_tx() -> LeeTransaction {
-    fee_tx_with_summary(fee_core::BlockFeeSummary::default())
-}
-
 /// A peer block whose fee transaction settles `txs` against `state`.
 fn settled_peer_block(
     state: &lee::V03State,
     id: u64,
     prev_hash: HashType,
     txs: Vec<LeeTransaction>,
+    producer: lee::AccountId,
 ) -> common::block::Block {
     let timestamp = id.saturating_mul(100);
     let summary = chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
         .expect("test transactions settle");
     let mut transactions = txs;
-    transactions.push(fee_tx_with_summary(summary));
+    transactions.push(LeeTransaction::Public(fee_invocation(summary, producer)));
     transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
     HashableBlockData {
         block_id: id,
@@ -556,9 +541,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
 
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signing_key));
-    let (genesis_state, genesis_txs) =
-        build_genesis_state(&config, Some(bootstrap_sequencer_key), producer);
+    let (genesis_state, genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
     let genesis_hashable_data = HashableBlockData {
         block_id: 1,
         transactions: genesis_txs,
@@ -1736,13 +1719,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
         .unwrap()
         .unwrap();
     // The replay is rejected, so only the fee and clock txs are in the block.
-    assert_eq!(
-        block.body.transactions,
-        vec![
-            zero_fee_tx(),
-            LeeTransaction::Public(clock_invocation(block.header.timestamp))
-        ]
-    );
+    assert_block_tail(&block, &[]);
 }
 
 #[tokio::test]
@@ -1938,13 +1915,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
         .unwrap();
 
     // Both transactions were dropped. Only the system-appended fee and clock txs remain.
-    assert_eq!(
-        block.body.transactions,
-        vec![
-            zero_fee_tx(),
-            LeeTransaction::Public(clock_invocation(block.header.timestamp))
-        ]
-    );
+    assert_block_tail(&block, &[]);
 }
 
 #[tokio::test]
@@ -1995,13 +1966,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         .unwrap();
 
     // The user tx must have been dropped; only the mandatory fee and clock invocations remain.
-    assert_eq!(
-        block.body.transactions,
-        vec![
-            zero_fee_tx(),
-            LeeTransaction::Public(clock_invocation(block.header.timestamp))
-        ]
-    );
+    assert_block_tail(&block, &[]);
 }
 
 #[tokio::test]
@@ -3159,7 +3124,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
 #[tokio::test]
 async fn follow_adopted_peer_block_applies_and_persists() {
     let config = setup_sequencer_config();
-    let (sequencer, mempool_handle) = start_sequencer(config).await;
+    let (sequencer, mempool_handle) = start_sequencer(config.clone()).await;
     let genesis_meta = sequencer
         .store
         .latest_block_meta()
@@ -3181,6 +3146,7 @@ async fn follow_adopted_peer_block_applies_and_persists() {
         2,
         genesis_meta.hash,
         vec![tx],
+        bootstrap_stake_account_id(&config),
     );
 
     apply_follow_update(
@@ -3870,7 +3836,7 @@ async fn record_produced_block_skips_persistence_when_block_no_longer_chains() {
 #[tokio::test]
 async fn follow_update_persists_blocks_meta_and_state_atomically() {
     let config = setup_sequencer_config();
-    let (sequencer, mempool_handle) = start_sequencer(config).await;
+    let (sequencer, mempool_handle) = start_sequencer(config.clone()).await;
     let genesis_meta = sequencer
         .store
         .latest_block_meta()
@@ -3892,10 +3858,17 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
         2,
         genesis_meta.hash,
         vec![tx],
+        bootstrap_stake_account_id(&config),
     );
     let mut state_after_2 = sequencer.with_state(Clone::clone).await;
     chain_state::apply::apply_block_to_state(&block2, &mut state_after_2).expect("block2 applies");
-    let block3 = settled_peer_block(&state_after_2, 3, block2.header.hash, vec![]);
+    let block3 = settled_peer_block(
+        &state_after_2,
+        3,
+        block2.header.hash,
+        vec![],
+        bootstrap_stake_account_id(&config),
+    );
 
     // One update carrying several blocks: both adopted, block 2 also finalized.
     apply_follow_update(
@@ -4405,10 +4378,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signing_key));
-    let (state, _genesis_txs) =
-        build_genesis_state(&config, Some(bootstrap_sequencer_key), producer);
+    let (state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
 
     let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
     assert_eq!(
@@ -4439,10 +4409,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
 fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signing_key));
-    let (mut state, _genesis_txs) =
-        build_genesis_state(&config, Some(bootstrap_sequencer_key), producer);
+    let (mut state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
 
     let stake_id = bootstrap_stake_account_id(&config);
     let destination = AccountId::from(&PublicKey::new_from_private_key(

@@ -209,12 +209,17 @@ pub fn apply_block_to_state(
     }
 
     // The forced fee transaction must carry exactly the summary this block's
-    // settlement produced, addressed to the header's producer.
-    let producer_account = lee::AccountId::from(&block.header.producer);
+    // settlement produced. Its reward target — a staked sequencer's ownership
+    // account, already claimed by that sequencer's stake — rides inside the tx
+    // (the account after the fixed fee accounts). The byte-compare pins the
+    // summary and tx shape; authenticating the target as the block's true L1
+    // producer is the follower's job, not this signer-free path the indexer
+    // also runs.
+    let producer_account = common::transaction::fee_invocation_producer(fee_tx)
+        .ok_or(BlockIngestError::InvalidFeeTransaction)?;
     if *fee_tx != fee_invocation(summary, producer_account) {
         return Err(BlockIngestError::InvalidFeeTransaction);
     }
-    common::transaction::initialize_producer_account(state, producer_account);
 
     let fee_events = state
         .transition_from_public_transaction(fee_tx, block.header.block_id, block.header.timestamp)
@@ -734,6 +739,9 @@ mod tests {
         // Genesis (block 1): fee/clock only.
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
+        // Simulate the producer's stake: its reward account is claimed before
+        // it produces, so the charged blocks below can credit it.
+        common::test_utils::claim_producer_account(&mut state);
         let mut tip = tip_of(&genesis);
 
         // Blocks 2..=11: one charged native transfer of 10 each (nonces 0..=9).

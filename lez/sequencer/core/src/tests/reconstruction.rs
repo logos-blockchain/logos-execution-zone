@@ -873,8 +873,16 @@ async fn reconstructed_delivery_settles_its_pending_record() {
     let channel_id = config_a.bedrock_config.channel_id;
 
     // Sequencer B holds the same record, as its own watcher would after reading
-    // the peer block, and reconstructs A's chain from a fresh store.
-    let (mut seq_b, _mempool_b) = start_sequencer(cross_zone_test_config()).await;
+    // the peer block, and reconstructs A's chain from a fresh store. It rebuilds
+    // the same node's chain, so it must carry A's staked identity: copy A's
+    // bedrock and stake keys into B's home so its seeded genesis matches A's and
+    // its own key resolves to the reconstructed stake entry when it produces.
+    let config_b = cross_zone_test_config();
+    std::fs::create_dir_all(&config_b.home).unwrap();
+    for key_file in ["bedrock_signing_key", "sequencer_stake_signing_key"] {
+        std::fs::copy(config_a.home.join(key_file), config_b.home.join(key_file)).unwrap();
+    }
+    let (mut seq_b, _mempool_b) = start_sequencer(config_b).await;
     assert_eq!(
         seq_b
             .block_store()
