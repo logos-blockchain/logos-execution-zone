@@ -1549,6 +1549,7 @@ dependencies = [
  "anyhow",
  "borsh",
  "common",
+ "fee_core",
  "futures",
  "lee",
  "lee_core",
@@ -1557,6 +1558,7 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "serde",
  "serde_json",
+ "system_accounts",
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
@@ -1801,18 +1803,23 @@ dependencies = [
  "authenticated_transfer_core",
  "base64 0.22.1",
  "borsh",
+ "bridge_core",
  "clock_core",
+ "cross_zone_inbox_core",
+ "fee_core",
  "hex",
  "lee",
  "lee_core",
  "log",
  "logos-blockchain-common-http-client",
+ "ping_core",
  "programs",
  "serde",
  "serde_with",
  "sha2 0.10.9",
  "system_accounts",
  "thiserror 2.0.18",
+ "vault_core",
 ]
 
 [[package]]
@@ -3274,6 +3281,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "fee_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "fee_program"
+version = "0.1.0"
+dependencies = [
+ "fee_core",
+ "lee_core",
+]
+
+[[package]]
 name = "ferroid"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4595,6 +4619,7 @@ dependencies = [
  "arc-swap",
  "async-stream",
  "borsh",
+ "bridge_core",
  "chain_state",
  "common",
  "cross_zone",
@@ -9485,6 +9510,7 @@ dependencies = [
  "cross_zone_marker_core",
  "cross_zone_outbox_core",
  "faucet_core",
+ "fee_core",
  "lee",
  "lee_core",
  "ping_core",
@@ -11063,6 +11089,7 @@ dependencies = [
  "cross_zone",
  "cross_zone_inbox_core",
  "faucet_core",
+ "fee_core",
  "futures",
  "hex",
  "humantime-serde",
@@ -11082,6 +11109,7 @@ dependencies = [
  "programs",
  "rand 0.8.6",
  "sequencer_core_metrics",
+ "sequencer_service_protocol",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "serde",
@@ -11128,11 +11156,13 @@ dependencies = [
  "num-bigint 0.4.6",
  "num-traits",
  "sequencer_core",
+ "sequencer_service_protocol",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "system_accounts",
  "tempfile",
  "test_programs",
+ "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -11202,7 +11232,9 @@ dependencies = [
  "lee",
  "lee_core",
  "serde",
+ "serde_json",
  "serde_with",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -11846,7 +11878,9 @@ name = "storage"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "chain_state",
  "common",
+ "fee_core",
  "lee",
  "lee_core",
  "log",
@@ -12090,6 +12124,7 @@ dependencies = [
  "bridge_core",
  "clock_core",
  "faucet_core",
+ "fee_core",
  "lee_core",
  "programs",
  "sequencer_stake_core",
@@ -12495,6 +12530,7 @@ dependencies = [
 name = "testnet_initial_state"
 version = "0.1.0"
 dependencies = [
+ "fee_core",
  "key_protocol",
  "lee",
  "lee_core",

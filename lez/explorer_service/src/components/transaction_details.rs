@@ -19,6 +19,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         account_ids,
         nonces,
         instruction_data,
+        fee,
     } = message;
     let WitnessSet {
         signatures_and_public_keys,
@@ -28,6 +29,15 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
     let program_id_str = program_id.to_string();
     let proof_len = proof.map_or(0, |p| p.0.len());
     let signatures_count = signatures_and_public_keys.len();
+    let (fee_payer_str, fee_amounts_str) = fee.map_or_else(
+        || ("None (exempt)".to_owned(), "None (exempt)".to_owned()),
+        |fee| {
+            (
+                fee.payer.to_string(),
+                format!("{} / {} / {}", fee.gas_limit, fee.tip, fee.max_fee),
+            )
+        },
+    );
 
     view! {
         <div class="transaction-details">
@@ -50,6 +60,14 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
                 <div class="info-row">
                     <span class="info-label">"Signatures:"</span>
                     <span class="info-value">{signatures_count.to_string()}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Fee Payer:"</span>
+                    <span class="info-value hash">{fee_payer_str}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Gas Limit / Tip / Max Fee:"</span>
+                    <span class="info-value">{fee_amounts_str}</span>
                 </div>
             </div>
 

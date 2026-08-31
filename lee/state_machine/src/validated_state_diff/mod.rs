@@ -6,9 +6,9 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Cycles},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, TransactionEvent,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, TransactionEvent,
         compute_public_authorized_pdas, validate_execution,
     },
 };
@@ -55,35 +55,221 @@ impl ValidatedStateDiff {
     }
 }
 
+/// The metered result of a public execution: the cycle count accumulated
+/// across every call in the chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutionOutcome {
+    pub cycles: Cycles,
+}
+
+impl ExecutionOutcome {
+    /// The outcome of transaction kinds that meter nothing.
+    pub const FREE: Self = Self { cycles: 0 };
+}
+
 impl ValidatedStateDiff {
+    /// [`Self::from_public_transaction_with_cycle_budget`] at the default budget,
+    /// discarding the metered outcome.
     pub fn from_public_transaction(
         tx: &PublicTransaction,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
+        Self::from_public_transaction_with_cycle_budget(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .map(|(diff, _)| diff)
+    }
+
+    /// Validates and executes `tx` under `cycle_budget`, shared by every call
+    /// in the chain: each nested session is limited to the remaining budget, so
+    /// the chain cannot exceed the budget in aggregate.
+    pub fn from_public_transaction_with_cycle_budget(
+        tx: &PublicTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: Cycles,
+    ) -> Result<(Self, ExecutionOutcome), LeeError> {
+        let mut cycles_used: u64 = 0;
+        let diff = Self::execute_public_core(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            cycle_budget,
+            &mut cycles_used,
+        )?;
+        Ok((
+            diff,
+            ExecutionOutcome {
+                cycles: cycles_used,
+            },
+        ))
+    }
+
+    /// The settlement-shaped variant: authenticate, execute under `cycle_budget`,
+    /// and return a diff that is always safe to apply.
+    ///
+    /// - `Ok` on success: carries the transaction's full effects plus the signers' nonce advances.
+    /// - `Ok` on a *reverted* action: the failure is charged w.r.t `LeeError::is_chargeable`, nonce
+    ///   advances if charged.
+    /// - `Err` covers a transaction a correct proposer would never include
+    pub fn from_public_transaction_metered(
+        tx: &PublicTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: u64,
+    ) -> (ExecutionOutcome, Result<Self, LeeError>) {
+        // Authentication failure is a malformed transaction, not a revert: bail
+        // before executing so the caller can reject the block.
+        let signers = match authenticate_public_transaction_signers(tx, state) {
+            Ok(signers) => signers,
+            Err(err) => return (ExecutionOutcome::FREE, Err(err)),
+        };
+        let message = tx.message();
+        // Signers both authorize the execution and advance their replay nonces.
+        let authorized: HashSet<AccountId> = signers.iter().copied().collect();
+        let mut cycles_used: u64 = 0;
+        let result = Self::execute_authorized(
+            message.program_id,
+            &message.account_ids,
+            &message.instruction_data,
+            &authorized,
+            signers.clone(),
+            state,
+            block_id,
+            timestamp,
+            cycle_budget,
+            &mut cycles_used,
+        );
+        let cycles = if matches!(result, Err(LeeError::OutOfGas { .. })) {
+            // if it ran out of gas, we can charge the entire usage
+            cycle_budget
+        } else {
+            cycles_used
+        };
+        let diff = match result {
+            Ok(diff) => diff,
+            // A chargeable action failure keeps no effects but still advances the
+            // signers' nonces, so what `apply_state_diff` receives is the nonce
+            // bumps alone: the fee stays committed and the tx cannot be replayed.
+            Err(err) if err.is_chargeable() => Self(StateDiff {
+                signer_account_ids: signers,
+                public_diff: HashMap::new(),
+                new_commitments: Vec::new(),
+                new_nullifiers: Vec::new(),
+                program: None,
+                events: Vec::new(),
+            }),
+            // A non-chargeable failure is a structural defect a correct proposer
+            // would never include; reject the whole block.
+            Err(err) => return (ExecutionOutcome { cycles }, Err(err)),
+        };
+        (ExecutionOutcome { cycles }, Ok(diff))
+    }
+
+    /// Executes a fee-settlement invocation (reserve or refund), authorized by
+    /// the fee declaration rather than a signature and advancing no nonces (the
+    /// action phase owns the payer's replay nonce).
+    ///
+    /// Fee-scoped by name on purpose: it skips the signature check, so it must
+    /// not read as a general escape hatch. `authorized` is the guest's
+    /// `is_authorized` set — the payer for the reserve, empty for the refund.
+    pub fn from_fee_settlement_invocation(
+        program_id: ProgramId,
+        account_ids: &[AccountId],
+        instruction_data: &[u8],
+        authorized: &HashSet<AccountId>,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+    ) -> Result<Self, LeeError> {
+        let mut cycles_used = 0; // dont care
+        Self::execute_authorized(
+            program_id,
+            account_ids,
+            instruction_data,
+            authorized,
+            Vec::new(), // no nonces to advance!
+            state,
+            block_id,
+            timestamp,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+            &mut cycles_used,
+        )
+    }
+
+    fn execute_public_core(
+        tx: &PublicTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: u64,
+        cycles_used: &mut u64,
+    ) -> Result<Self, LeeError> {
         let signer_account_ids = authenticate_public_transaction_signers(tx, state)?;
         let message = tx.message();
+        // Signers both authorize the execution and advance their replay nonces.
+        let authorized: HashSet<AccountId> = signer_account_ids.iter().copied().collect();
+        Self::execute_authorized(
+            message.program_id,
+            &message.account_ids,
+            &message.instruction_data,
+            &authorized,
+            signer_account_ids,
+            state,
+            block_id,
+            timestamp,
+            cycle_budget,
+            cycles_used,
+        )
+    }
 
+    /// Shared execution core: validates and executes one program invocation
+    /// (with its chained calls), producing a diff. `authorized` is the guest's
+    /// `is_authorized` set; `nonce_bearers` become the diff's `signer_account_ids`
+    /// (their nonces advance on apply).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the execution core threads the full invocation context"
+    )]
+    fn execute_authorized(
+        program_id: ProgramId,
+        account_ids: &[AccountId],
+        instruction_data: &[u8],
+        authorized: &HashSet<AccountId>,
+        nonce_bearers: Vec<AccountId>,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: u64,
+        cycles_used: &mut u64,
+    ) -> Result<Self, LeeError> {
         ensure!(
-            !message.account_ids.is_empty(),
+            !account_ids.is_empty(),
             LeeError::InvalidInput("Public transaction must have at least one account".into())
         );
 
         // All account_ids must be different
         ensure!(
-            message.account_ids.iter().collect::<HashSet<_>>().len() == message.account_ids.len(),
+            account_ids.iter().collect::<HashSet<_>>().len() == account_ids.len(),
             LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
         );
 
         // Build pre_states for execution
-        let input_pre_states: Vec<_> = message
-            .account_ids
+        let input_pre_states: Vec<_> = account_ids
             .iter()
             .map(|account_id| {
                 AccountWithMetadata::new(
                     state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
+                    authorized.contains(account_id),
                     *account_id,
                 )
             })
@@ -93,15 +279,15 @@ impl ValidatedStateDiff {
         let mut events: Vec<TransactionEvent> = Vec::new();
 
         let initial_call = ChainedCall {
-            program_id: message.program_id,
-            instruction_data: message.instruction_data.clone(),
+            program_id,
+            instruction_data: instruction_data.to_vec(),
             pre_states: input_pre_states,
             pda_seeds: vec![],
         };
 
         let initial_caller_data = CallerData {
             program_id: None,
-            authorized_accounts: signer_account_ids.iter().copied().collect(),
+            authorized_accounts: authorized.clone(),
         };
 
         let mut chained_calls =
@@ -126,11 +312,15 @@ impl ValidatedStateDiff {
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
             );
-            let mut program_output = program.execute(
+            let (mut program_output, call_cycles) = program.execute(
                 caller_data.program_id,
                 &chained_call.pre_states,
                 &chained_call.instruction_data,
+                cycle_budget.saturating_sub(*cycles_used),
             )?;
+            *cycles_used = cycles_used
+                .checked_add(call_cycles)
+                .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_id, program_output
@@ -324,7 +514,7 @@ impl ValidatedStateDiff {
 
         // Every account the caller declared as part of the transaction must appear in the final
         // diff.
-        for account_id in &message.account_ids {
+        for account_id in account_ids {
             ensure!(
                 state_diff.contains_key(account_id),
                 InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput {
@@ -334,7 +524,7 @@ impl ValidatedStateDiff {
         }
 
         Ok(Self(StateDiff {
-            signer_account_ids,
+            signer_account_ids: nonce_bearers,
             public_diff: state_diff,
             new_commitments: vec![],
             new_nullifiers: vec![],
@@ -488,6 +678,8 @@ impl ValidatedStateDiff {
     }
 }
 
+/// Validates the witness set and replay nonces of a public transaction against
+/// `state`, returning the signer account ids.
 fn authenticate_public_transaction_signers(
     tx: &PublicTransaction,
     state: &V03State,

@@ -3,9 +3,10 @@
     reason = "We prefer to group methods by functionality rather than by type for encoding"
 )]
 
+pub use fees::{FeeDeclaration, SignedMessage, is_fee_authorized};
 pub use lee_core::{
     GENESIS_BLOCK_ID, SharedSecretKey,
-    account::{Account, AccountId, Balance, Data},
+    account::{Account, AccountId, Balance, Cycles, Data, Fee, Gas},
     encryption::EphemeralPublicKey,
     program::ProgramId,
 };
@@ -19,10 +20,11 @@ pub use program_deployment_transaction::ProgramDeploymentTransaction;
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::V03State;
-pub use validated_state_diff::ValidatedStateDiff;
+pub use validated_state_diff::{ExecutionOutcome, ValidatedStateDiff};
 
 pub mod encoding;
 pub mod error;
+pub mod fees;
 mod merkle_tree;
 pub mod privacy_preserving_transaction;
 pub mod program;

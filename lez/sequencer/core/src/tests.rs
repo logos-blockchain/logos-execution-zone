@@ -6,7 +6,7 @@ use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
     test_utils::sequencer_sign_key_for_testing,
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 use kameo::actor::Spawn as _;
 use lee::{
@@ -151,8 +151,9 @@ fn setup_sequencer_config() -> SequencerConfig {
 }
 
 #[test]
-fn only_the_cross_zone_inbox_is_sequencer_only() {
+fn only_the_cross_zone_inbox_and_fee_are_sequencer_only() {
     assert!(is_sequencer_only_program(programs::cross_zone_inbox().id()));
+    assert!(is_sequencer_only_program(programs::fee().id()));
     assert!(!is_sequencer_only_program(
         programs::cross_zone_outbox().id()
     ));
@@ -177,6 +178,62 @@ fn committee_cooldown_needs_the_channel_to_advance() {
         Some(submitted_at),
         Some(Slot::new(100 + cooldown))
     ));
+}
+
+/// The forced fee invocation for a block with the given summary, addressed to
+/// the test sequencer's producer account.
+fn fee_tx_with_summary(summary: fee_core::BlockFeeSummary) -> LeeTransaction {
+    LeeTransaction::Public(fee_invocation(
+        summary,
+        lee::AccountId::from(&lee::PublicKey::new_from_private_key(
+            &sequencer_sign_key_for_testing(),
+        )),
+    ))
+}
+
+/// The forced zero-fee invocation appended to every all-exempt block.
+fn zero_fee_tx() -> LeeTransaction {
+    fee_tx_with_summary(fee_core::BlockFeeSummary::default())
+}
+
+/// A peer block whose fee transaction settles `txs` against `state`.
+fn settled_peer_block(
+    state: &lee::V03State,
+    id: u64,
+    prev_hash: HashType,
+    txs: Vec<LeeTransaction>,
+) -> common::block::Block {
+    let timestamp = id.saturating_mul(100);
+    let summary = chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
+        .expect("test transactions settle");
+    let mut transactions = txs;
+    transactions.push(fee_tx_with_summary(summary));
+    transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
+    HashableBlockData {
+        block_id: id,
+        prev_block_hash: prev_hash,
+        timestamp,
+        transactions,
+    }
+    .into_pending_block(&sequencer_sign_key_for_testing())
+}
+
+/// Asserts the block body is `user_txs` followed by the forced fee invocation
+/// (whatever summary it settled to) and the canonical clock invocation.
+fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) {
+    let txs = &block.body.transactions;
+    assert_eq!(&txs[..user_txs.len()], user_txs, "user transactions differ");
+    let [fee_tx, clock_tx] = &txs[user_txs.len()..] else {
+        panic!("expected exactly the fee + clock tail");
+    };
+    let LeeTransaction::Public(fee_tx) = fee_tx else {
+        panic!("fee tx must be public");
+    };
+    assert_eq!(fee_tx.message().program_id, programs::fee().id());
+    assert_eq!(
+        *clock_tx,
+        LeeTransaction::Public(clock_invocation(block.header.timestamp))
+    );
 }
 
 fn create_signing_key_for_account1() -> lee::PrivateKey {
@@ -241,6 +298,141 @@ fn tx_is_bridge_deposit(
             ..
         } if l1_deposit_op_id == deposit_op_id && amount == expected_amount
     )
+}
+
+/// A bridge `Deposit` wrapped as a *charged* user transaction: a real witness
+/// (so it is not a system injection) plus a fee declaration.
+///
+/// This is the forged deposit shape a user could submit through the mempool
+/// which the charged-path bridge guard in `settle_transaction` must reject.
+fn create_charged_bridge_deposit(
+    op_id: [u8; 32],
+    recipient_id: AccountId,
+    amount: u64,
+    payer_nonce: u128,
+    payer_key: &PrivateKey,
+) -> LeeTransaction {
+    let bridge_program_id = programs::bridge().id();
+    let vault_program_id = programs::vault().id();
+    let payer = AccountId::from(&PublicKey::new_from_private_key(payer_key));
+    let message = lee::public_transaction::Message::try_new_with_fees(
+        bridge_program_id,
+        vec![
+            system_accounts::bridge_account_id(),
+            vault_core::compute_vault_account_id(vault_program_id, recipient_id),
+            bridge_core::deposit_receipt_account_id(bridge_program_id, op_id),
+        ],
+        vec![payer_nonce.into()],
+        bridge_core::Instruction::Deposit {
+            l1_deposit_op_id: op_id,
+            vault_program_id,
+            recipient_id,
+            amount,
+        },
+        common::test_utils::test_fee_declaration(payer),
+    )
+    .expect("charged bridge deposit message builds");
+    let witness = lee::public_transaction::WitnessSet::for_message(&message, &[payer_key]);
+    LeeTransaction::Public(PublicTransaction::new(message, witness))
+}
+
+#[tokio::test]
+async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
+    // A user-submitted forged deposit (charged, so not the sequencer's exempt
+    // empty-witness mint) debits the bridge escrow. The charged-path bridge
+    // guard in `settle_transaction` must reject it, so the builder drops it and
+    // the produced block never includes it — proving the guard is wired on the
+    // live settlement path, not only in the now-dead `validate_on_state`.
+    let mut config = setup_sequencer_config();
+    // The mint debits the bridge, so it must hold enough to execute; otherwise
+    // it underflows and we would be testing the wrong failure.
+    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let payer_key = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
+    let recipient_id = initial_public_user_accounts()[1].account_id;
+    let op_id = [0x5a_u8; 32];
+    let forged = create_charged_bridge_deposit(op_id, recipient_id, 1, 0, &payer_key);
+
+    mempool_handle
+        .push((TransactionOrigin::User, forged))
+        .await
+        .unwrap();
+
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .expect("produced block is stored");
+
+    assert!(
+        !block
+            .body
+            .transactions
+            .iter()
+            .any(|tx| tx_is_bridge_deposit(tx, op_id, 1)),
+        "the charged forged deposit must be dropped by the builder's bridge guard",
+    );
+    assert!(
+        !sequencer
+            .with_state(|state| deposit_already_minted(state, HashType(op_id)))
+            .await,
+        "a dropped deposit must not mint the receipt PDA",
+    );
+}
+
+#[tokio::test]
+async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
+    // An empty-witness bridge `Deposit` classifies as an exempt system
+    // injection, so `settle_transaction` applies it — a legit deposit replays
+    // through that same path. Only the builder's origin-gated guard can drop a
+    // *user*-submitted one. Without it the fee classification waves a forged
+    // public deposit straight through (the consensus replay gap is #809).
+    let mut config = setup_sequencer_config();
+    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let recipient_id = initial_public_user_accounts()[1].account_id;
+    let op_id = [0x7c_u8; 32];
+    let forged = build_bridge_deposit_tx_from_event(&PendingDepositEventRecord {
+        deposit_op_id: HashType(op_id),
+        source_tx_hash: HashType([1_u8; 32]),
+        amount: 1,
+        metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
+    })
+    .expect("bridge deposit tx builds");
+
+    mempool_handle
+        .push((TransactionOrigin::User, forged))
+        .await
+        .unwrap();
+
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .expect("produced block is stored");
+
+    assert!(
+        !block
+            .body
+            .transactions
+            .iter()
+            .any(|tx| tx_is_bridge_deposit(tx, op_id, 1)),
+        "a user-submitted exempt bridge deposit must be dropped by the builder guard",
+    );
+    assert!(
+        !sequencer
+            .with_state(|state| deposit_already_minted(state, HashType(op_id)))
+            .await,
+        "a dropped deposit must not mint the receipt PDA",
+    );
 }
 
 /// A config that receives `ping_receiver` messages from [`PEER_ZONE`], so
@@ -351,8 +543,8 @@ async fn start_from_config() {
         .with_state(|s| s.get_account_by_id(acc2_account_id).balance)
         .await;
 
-    assert_eq!(10000, balance_acc_1);
-    assert_eq!(20000, balance_acc_2);
+    assert_eq!(initial_public_user_accounts()[0].balance, balance_acc_1);
+    assert_eq!(initial_public_user_accounts()[1].balance, balance_acc_2);
 }
 
 #[tokio::test]
@@ -364,7 +556,9 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
 
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-    let (genesis_state, genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
+    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signing_key));
+    let (genesis_state, genesis_txs) =
+        build_genesis_state(&config, Some(bootstrap_sequencer_key), producer);
     let genesis_hashable_data = HashableBlockData {
         block_id: 1,
         transactions: genesis_txs,
@@ -1127,6 +1321,107 @@ async fn a_delivery_backlog_is_spread_across_blocks() {
     assert_eq!(dispatches_in(&block).len(), 3);
 }
 
+#[tokio::test]
+async fn a_block_full_of_declared_gas_defers_the_rest() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let sign_key = create_signing_key_for_account1();
+
+    // Six transfers declaring the default 2M-cycle test gas limit each: five
+    // fill the 10M-cycle block execution budget exactly, so the sixth does
+    // not fit however few cycles the transfers actually use — the budget
+    // prices declared gas, not metered gas.
+    let transfers: Vec<_> = (0..6_u128)
+        .map(|nonce| {
+            common::test_utils::create_transaction_native_token_transfer(
+                acc1, nonce, acc2, 10, &sign_key,
+            )
+        })
+        .collect();
+    for tx in &transfers {
+        mempool_handle
+            .push((TransactionOrigin::User, tx.clone()))
+            .await
+            .unwrap();
+    }
+
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_block_tail(&block, &transfers[..5]);
+
+    // Deferred, not dropped: the sixth leads the next block.
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_block_tail(&block, &transfers[5..]);
+}
+
+#[tokio::test]
+async fn an_over_cap_transaction_is_dropped_not_deferred() {
+    // C1: a charged transaction whose declared gas exceeds the caps fits no
+    // budget, not even an empty one. The RPC door screens these out, but gossip
+    // ingest does not, so the builder must DROP it — deferring it would stall
+    // every subsequent block behind it. A normal transfer queued after it must
+    // still make the block.
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let sign_key = create_signing_key_for_account1();
+
+    // Declares exec gas one cycle beyond the per-block cap, so it can never fit
+    // any block. Origin `Gossip` stands in for the unscreened ingest path.
+    let over_cap = common::test_utils::create_transaction_native_token_transfer_with_fees(
+        acc1,
+        0,
+        acc2,
+        10,
+        &sign_key,
+        lee::FeeDeclaration::new(acc1, fee_core::market::MAX_GAS_EXEC + 1, 0, u128::MAX >> 1),
+    );
+    let normal =
+        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key);
+
+    mempool_handle
+        .push((TransactionOrigin::Gossip, over_cap))
+        .await
+        .unwrap();
+    mempool_handle
+        .push((TransactionOrigin::User, normal.clone()))
+        .await
+        .unwrap();
+
+    // The over-cap tx is dropped and the normal transfer still makes the block:
+    // the builder did not stall behind the unfittable transaction.
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_block_tail(&block, std::slice::from_ref(&normal));
+
+    // Nothing was deferred: the next block carries no user transactions.
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_block_tail(&block, &[]);
+}
+
 #[test]
 fn transaction_pre_check_pass() {
     let tx = common::test_utils::produce_dummy_empty_transaction();
@@ -1184,8 +1479,9 @@ async fn transaction_pre_check_native_transfer_sent_too_much() {
 
     let sign_key1 = create_signing_key_for_account1();
 
+    let overdraft = initial_public_user_accounts()[0].balance * 2;
     let tx = common::test_utils::create_transaction_native_token_transfer(
-        acc1, 0, acc2, 10_000_000, &sign_key1,
+        acc1, 0, acc2, overdraft, &sign_key1,
     );
 
     let result = tx.transaction_stateless_check();
@@ -1229,8 +1525,10 @@ async fn transaction_execute_native_transfer() {
         .with_state(|s| s.get_account_by_id(acc2).balance)
         .await;
 
-    assert_eq!(bal_from, 9900);
-    assert_eq!(bal_to, 20100);
+    // execute_check_on_state applies the raw diff (no fee settlement), so the
+    // balances move by exactly the transferred amount.
+    assert_eq!(bal_from, initial_public_user_accounts()[0].balance - 100);
+    assert_eq!(bal_to, initial_public_user_accounts()[1].balance + 100);
 }
 
 #[tokio::test]
@@ -1394,14 +1692,8 @@ async fn replay_transactions_are_rejected_in_the_same_block() {
         .unwrap()
         .unwrap();
 
-    // Only one user tx should be included; the clock tx is always appended last.
-    assert_eq!(
-        block.body.transactions,
-        vec![
-            tx.clone(),
-            LeeTransaction::Public(clock_invocation(block.header.timestamp))
-        ]
-    );
+    // Only one user tx should be included; the fee and clock txs are always appended last.
+    assert_block_tail(&block, std::slice::from_ref(&tx));
 }
 
 #[tokio::test]
@@ -1429,13 +1721,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(
-        block.body.transactions,
-        vec![
-            tx.clone(),
-            LeeTransaction::Public(clock_invocation(block.header.timestamp))
-        ]
-    );
+    assert_block_tail(&block, std::slice::from_ref(&tx));
 
     // Add same transaction should fail
     mempool_handle
@@ -1449,12 +1735,13 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
         .await
         .unwrap()
         .unwrap();
-    // The replay is rejected, so only the clock tx is in the block.
+    // The replay is rejected, so only the fee and clock txs are in the block.
     assert_eq!(
         block.body.transactions,
-        vec![LeeTransaction::Public(clock_invocation(
-            block.header.timestamp
-        ))]
+        vec![
+            zero_fee_tx(),
+            LeeTransaction::Public(clock_invocation(block.header.timestamp))
+        ]
     );
 }
 
@@ -1491,13 +1778,7 @@ async fn restart_from_storage() {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(
-            block.body.transactions,
-            vec![
-                tx.clone(),
-                LeeTransaction::Public(clock_invocation(block.header.timestamp))
-            ]
-        );
+        assert_block_tail(&block, std::slice::from_ref(&tx));
         sequencer.block_store().storage_ref().downgrade()
     };
     storage_weak.wait_for_shutdown_with_result(|_| ()).await;
@@ -1512,11 +1793,9 @@ async fn restart_from_storage() {
         .with_state(|s| s.get_account_by_id(acc2_account_id).balance)
         .await;
 
-    // Balances should be consistent with the stored block
-    assert_eq!(
-        balance_acc_1,
-        initial_public_user_accounts()[0].balance - balance_to_move
-    );
+    // Balances should be consistent with the stored block: the recipient
+    // gained exactly the transfer; the sender also paid a real fee.
+    assert!(balance_acc_1 < initial_public_user_accounts()[0].balance - balance_to_move);
     assert_eq!(
         balance_acc_2,
         initial_public_user_accounts()[1].balance + balance_to_move
@@ -1616,14 +1895,7 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
         new_block.header.prev_block_hash, expected_prev_meta.hash,
         "New block's prev_block_hash should match the stored metadata hash"
     );
-    assert_eq!(
-        new_block.body.transactions,
-        vec![
-            tx,
-            LeeTransaction::Public(clock_invocation(new_block.header.timestamp))
-        ],
-        "New block should contain the submitted transaction and the clock invocation"
-    );
+    assert_block_tail(&new_block, std::slice::from_ref(&tx));
 }
 
 #[tokio::test]
@@ -1665,12 +1937,13 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
         .unwrap()
         .unwrap();
 
-    // Both transactions were dropped. Only the system-appended clock tx remains.
+    // Both transactions were dropped. Only the system-appended fee and clock txs remain.
     assert_eq!(
         block.body.transactions,
-        vec![LeeTransaction::Public(clock_invocation(
-            block.header.timestamp
-        ))]
+        vec![
+            zero_fee_tx(),
+            LeeTransaction::Public(clock_invocation(block.header.timestamp))
+        ]
     );
 }
 
@@ -1721,12 +1994,13 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         .unwrap()
         .unwrap();
 
-    // The user tx must have been dropped; only the mandatory clock invocation remains.
+    // The user tx must have been dropped; only the mandatory fee and clock invocations remain.
     assert_eq!(
         block.body.transactions,
-        vec![LeeTransaction::Public(clock_invocation(
-            block.header.timestamp
-        ))]
+        vec![
+            zero_fee_tx(),
+            LeeTransaction::Public(clock_invocation(block.header.timestamp))
+        ]
     );
 }
 
@@ -2902,7 +3176,12 @@ async fn follow_adopted_peer_block_applies_and_persists() {
         10,
         &create_signing_key_for_account1(),
     );
-    let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![tx]);
+    let peer_block = settled_peer_block(
+        &sequencer.with_state(Clone::clone).await,
+        2,
+        genesis_meta.hash,
+        vec![tx],
+    );
 
     apply_follow_update(
         sequencer.block_store().storage_ref(),
@@ -2927,7 +3206,7 @@ async fn follow_adopted_peer_block_applies_and_persists() {
         sequencer
             .with_state(|s| s.get_account_by_id(acc2).balance)
             .await,
-        20010
+        initial_public_user_accounts()[1].balance + 10
     );
 }
 
@@ -2970,7 +3249,7 @@ async fn follow_redelivery_of_own_block_is_deduped() {
         sequencer
             .with_state(|s| s.get_account_by_id(acc2).balance)
             .await,
-        20010,
+        initial_public_user_accounts()[1].balance + 10,
         "the transfer must not be double-applied"
     );
 }
@@ -3013,7 +3292,7 @@ async fn follow_orphan_reverts_head_and_requeues_user_txs() {
         sequencer
             .with_state(|s| s.get_account_by_id(acc1).balance)
             .await,
-        10000,
+        initial_public_user_accounts()[0].balance,
         "the orphaned transfer must be reverted from the head"
     );
     let (origin, requeued) = sequencer
@@ -3084,7 +3363,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
         sequencer
             .with_state(|s| s.get_account_by_id(acc2).balance)
             .await,
-        20010,
+        initial_public_user_accounts()[1].balance + 10,
         "the finalized transfer stands"
     );
     assert!(
@@ -3416,7 +3695,7 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
         sequencer
             .with_state(|s| s.get_account_by_id(acc1).balance)
             .await,
-        10000,
+        initial_public_user_accounts()[0].balance,
         "the orphaned transfer must be reverted"
     );
     let stored = sequencer.store.block_at_id(2).await.unwrap().unwrap();
@@ -3608,8 +3887,15 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
         10,
         &create_signing_key_for_account1(),
     );
-    let block2 = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![tx]);
-    let block3 = common::test_utils::produce_dummy_block(3, Some(block2.header.hash), vec![]);
+    let block2 = settled_peer_block(
+        &sequencer.with_state(Clone::clone).await,
+        2,
+        genesis_meta.hash,
+        vec![tx],
+    );
+    let mut state_after_2 = sequencer.with_state(Clone::clone).await;
+    chain_state::apply::apply_block_to_state(&block2, &mut state_after_2).expect("block2 applies");
+    let block3 = settled_peer_block(&state_after_2, 3, block2.header.hash, vec![]);
 
     // One update carrying several blocks: both adopted, block 2 also finalized.
     apply_follow_update(
@@ -3645,7 +3931,10 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
         .expect("the store holds a chain")
         .get_account_by_id(acc2)
         .balance;
-    assert_eq!(stored_balance, 20010);
+    assert_eq!(
+        stored_balance,
+        initial_public_user_accounts()[1].balance + 10
+    );
 }
 
 /// Diagnostic repro: exercises `sequencer_stake`'s `Stake` instruction (claim
@@ -4116,7 +4405,10 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let (state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
+    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signing_key));
+    let (state, _genesis_txs) =
+        build_genesis_state(&config, Some(bootstrap_sequencer_key), producer);
 
     let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
     assert_eq!(
@@ -4147,7 +4439,10 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
 fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let (mut state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
+    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signing_key));
+    let (mut state, _genesis_txs) =
+        build_genesis_state(&config, Some(bootstrap_sequencer_key), producer);
 
     let stake_id = bootstrap_stake_account_id(&config);
     let destination = AccountId::from(&PublicKey::new_from_private_key(

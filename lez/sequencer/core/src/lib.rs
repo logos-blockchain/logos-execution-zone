@@ -14,7 +14,7 @@ use chain_state::{
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
@@ -57,6 +57,7 @@ pub mod block_store;
 pub mod committee_discovery;
 pub mod config;
 pub mod cross_zone_watcher;
+pub mod fees;
 pub mod gossip;
 
 #[cfg(feature = "mock")]
@@ -98,6 +99,43 @@ type FoundingStake = (
     lee::PublicKey,
     lee::Signature,
 );
+
+/// The block's declared-gas budget: the sum of included charged transactions'
+/// signed limits, tracked against the caps the transition enforces on actuals.
+/// Each transaction's actual gas is bounded by its declared gas, so a block
+/// built under this budget can never breach the consensus caps — and no
+/// execution is wasted discovering that.
+#[derive(Clone, Copy, Debug, Default)]
+struct DeclaredGasBudget {
+    exec: u64,
+    stor: u64,
+}
+
+impl DeclaredGasBudget {
+    /// Whether `view`'s declared gas fits the remaining budget.
+    ///
+    /// Saturating rather than checked: a sum that saturates is past its cap
+    /// by construction, so the answer is the same and nothing can panic.
+    const fn fits(self, view: &fee_core::assess::FeeTxView) -> bool {
+        self.exec.saturating_add(view.gas_limit()) <= fee_core::market::MAX_GAS_EXEC
+            && self.stor.saturating_add(view.gas_stor()) <= fee_core::market::MAX_GAS_STOR
+    }
+
+    /// Whether `view` fits an empty budget at all — i.e. its declared gas is
+    /// within the per-block caps. A charged transaction that fails this can
+    /// never be included in any block, so it must be dropped rather than
+    /// deferred (a deferral would repeat for ever).
+    const fn fits_empty(view: &fee_core::assess::FeeTxView) -> bool {
+        view.gas_limit() <= fee_core::market::MAX_GAS_EXEC
+            && view.gas_stor() <= fee_core::market::MAX_GAS_STOR
+    }
+
+    /// Adds a contribution [`Self::fits`] has already cleared.
+    const fn add(&mut self, view: &fee_core::assess::FeeTxView) {
+        self.exec = self.exec.saturating_add(view.gas_limit());
+        self.stor = self.stor.saturating_add(view.gas_stor());
+    }
+}
 
 /// The origin of a transaction.
 #[derive(Clone, Copy)]
@@ -923,6 +961,10 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     /// Validates and applies a single mempool transaction to the current state.
     /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
     /// it was skipped due to validation failure.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the settlement threads exactly the block-transition context the spec names"
+    )]
     fn apply_mempool_transaction(
         state: &mut lee::V03State,
         origin: TransactionOrigin,
@@ -930,38 +972,67 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         block_height: u64,
         timestamp: u64,
         withdrawals: &mut Vec<WithdrawArg>,
+        opening: &fee_core::state::FeeState,
+        tx_index: u64,
+        summary: &mut fee_core::BlockFeeSummary,
     ) -> bool {
         let tx_hash = tx.hash();
         match origin {
             // Gossiped transactions arrive from untrusted peers, same as
             // user-submitted ones, so they get the same full state validation.
             TransactionOrigin::User | TransactionOrigin::Gossip => {
-                let validated_diff = match tx.validate_on_state(state, block_height, timestamp) {
-                    Ok(diff) => diff,
+                // Settle on a scratch clone: settlement is the single validation
+                // and charging pass (restricted- and bridge-account guards
+                // included), so a transaction that cannot pay, breaches a cap, or
+                // touches a restricted account is dropped, never included.
+                let mut scratch = state.clone();
+                let mut scratch_summary = *summary;
+                match chain_state::apply::settle_transaction(
+                    tx,
+                    &mut scratch,
+                    opening,
+                    block_height,
+                    timestamp,
+                    tx_index,
+                    &mut scratch_summary,
+                ) {
+                    Ok(_events) => {
+                        // a user/gossip submitted transaction cannot debit the bridge escrow
+                        let bridge_id = system_accounts::bridge_account_id();
+                        if tx.affected_public_account_ids().contains(&bridge_id)
+                            && !common::transaction::bridge_balance_only_increased(
+                                &state.get_account_by_id(bridge_id),
+                                &scratch.get_account_by_id(bridge_id),
+                            )
+                        {
+                            log::warn!(
+                                "Transaction {tx_hash} illegally modifies the bridge account; dropping it",
+                            );
+                            return false;
+                        }
+                        if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
+                            withdrawals.push(withdraw_data);
+                        }
+                        *state = scratch;
+                        *summary = scratch_summary;
+                    }
                     Err(err) => {
-                        // A gossiped tx the leader already included is
-                        // expected to fail here (e.g. on nonce) for every
-                        // other node on its turn; that is steady-state noise,
-                        // not an error. User-submitted failures still warrant
-                        // `error!`.
+                        // A gossiped tx the leader already included is expected to
+                        // fail here (e.g. on nonce) for every other node on its
+                        // turn; that is steady-state noise, not an error.
+                        // User-submitted failures still warrant `error!`.
                         if matches!(origin, TransactionOrigin::Gossip) {
                             debug!(
-                                "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                                "Transaction with hash {tx_hash} failed settlement: {err:#?}, skipping it",
                             );
                         } else {
                             error!(
-                                "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                                "Transaction with hash {tx_hash} failed settlement: {err:#?}, skipping it",
                             );
                         }
                         return false;
                     }
-                };
-
-                if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
-                    withdrawals.push(withdraw_data);
                 }
-
-                drop(state.apply_state_diff(validated_diff));
             }
             TransactionOrigin::Sequencer => {
                 let LeeTransaction::Public(public_tx) = tx else {
@@ -1169,6 +1240,19 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
+        let producer_account = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
+            self.store.signing_key(),
+        ));
+
+        let opening = chain_state::apply::opening_fee_state(&working_state);
+        let mut summary = fee_core::BlockFeeSummary::default();
+        let mut gas_budget = DeclaredGasBudget::default();
+        // The fee tx's summary is only known after the loop; a default-summary
+        // placeholder sizes identically (the summary struct is fixed-size).
+        let placeholder_fee_lee_tx = LeeTransaction::Public(fee_invocation(
+            fee_core::BlockFeeSummary::default(),
+            producer_account,
+        ));
         let clock_tx = clock_invocation(new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
@@ -1191,6 +1275,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
+                std::slice::from_ref(&placeholder_fee_lee_tx),
                 std::slice::from_ref(&clock_lee_tx),
             ]
             .concat();
@@ -1219,7 +1304,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 if from_store
                     && !self.fits_in_an_empty_block(
                         &tx,
-                        &clock_lee_tx,
+                        &[placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()],
                         new_block_height,
                         prev_block_hash,
                         new_block_timestamp,
@@ -1256,6 +1341,50 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 continue;
             }
 
+            // Declared-gas pre-screen: a charged transaction whose signed
+            // limits do not fit this block's remaining budget is deferred with
+            // nothing executed, mirroring the size deferral above — unless they
+            // exceed the caps outright, in which case it fits no budget and is
+            // dropped rather than deferred for ever (the RPC door screens these
+            // out, but gossip ingest does not). One that does not even classify
+            // (an unserializable transaction) falls through: the settlement
+            // below rejects it and it is dropped like any other failed
+            // application.
+            let charged_view = match chain_state::classify::classify(&tx, false, &working_state) {
+                Ok(chain_state::classify::FeeClass::Charged(view)) => Some(view),
+                Ok(chain_state::classify::FeeClass::Exempt) | Err(_) => None,
+            };
+            if let Some(view) = &charged_view
+                && !gas_budget.fits(view)
+            {
+                // A transaction whose declared gas exceeds the caps fits no
+                // budget, not even an empty one, so deferring it would stall the
+                // builder behind it for ever. The RPC door screens these out,
+                // but gossip ingest does not, so drop it here instead.
+                if !DeclaredGasBudget::fits_empty(view) {
+                    error!(
+                        "Transaction with hash {tx_hash} declares gas beyond the block caps \
+                         (limit {}, bytes {}); dropping it rather than stalling production",
+                        view.gas_limit(),
+                        view.gas_stor(),
+                    );
+                    self.count_dispatch_failure(&tx).await;
+                    continue;
+                }
+                warn!(
+                    "Transaction with hash {tx_hash} deferred to next block: declared gas \
+                     (limit {}, bytes {}) would exceed the block gas caps",
+                    view.gas_limit(),
+                    view.gas_stor(),
+                );
+                // Anything drained from the store needs no requeue: its record
+                // stays there and is drained again on the next turn.
+                if !from_store {
+                    self.mempool.push_front((origin, tx));
+                }
+                break;
+            }
+
             let before_tx_apply = Instant::now();
             let applied = Self::apply_mempool_transaction(
                 &mut working_state,
@@ -1264,8 +1393,14 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 new_block_height,
                 new_block_timestamp,
                 &mut withdrawals,
+                &opening,
+                valid_transactions.len().try_into().expect("fits u64"),
+                &mut summary,
             );
             if applied {
+                if let Some(view) = &charged_view {
+                    gas_budget.add(view);
+                }
                 sequencer_core_metrics::record_mempool_transaction_application_time(
                     origin.into(),
                     tx.kind().into(),
@@ -1291,6 +1426,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 break;
             }
         }
+
+        let fee_tx = fee_invocation(summary, producer_account);
+        common::transaction::initialize_producer_account(&mut working_state, producer_account);
+        working_state
+            .transition_from_public_transaction(&fee_tx, new_block_height, new_block_timestamp)
+            .context("Fee transaction failed. Aborting block production.")?;
+        valid_transactions.push(LeeTransaction::Public(fee_tx));
 
         working_state
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
@@ -1376,8 +1518,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         &self.block_publisher
     }
 
-    /// Whether a block carrying nothing but `tx` and the clock would be within
-    /// the size limit.
+    /// Whether a block carrying nothing but `tx` and the appended system
+    /// transactions (fee and clock) would be within the size limit.
     ///
     /// Distinguishes "does not fit in this block" from "does not fit in any
     /// block". The first is an ordinary deferral; the second, for a transaction
@@ -1386,14 +1528,14 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     fn fits_in_an_empty_block(
         &self,
         tx: &LeeTransaction,
-        clock_tx: &LeeTransaction,
+        system_txs: &[LeeTransaction],
         block_id: u64,
         prev_block_hash: HashType,
         timestamp: u64,
     ) -> Result<bool> {
         let alone = HashableBlockData {
             block_id,
-            transactions: vec![tx.clone(), clock_tx.clone()],
+            transactions: [std::slice::from_ref(tx), system_txs].concat(),
             prev_block_hash,
             timestamp,
         };
@@ -1914,7 +2056,9 @@ fn genesis_block_and_state(
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     config: &SequencerConfig,
 ) -> (Block, lee::V03State) {
-    let (genesis_state, genesis_txs) = build_genesis_state(config, bootstrap_sequencer_key);
+    let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key));
+    let (genesis_state, genesis_txs) =
+        build_genesis_state(config, bootstrap_sequencer_key, producer);
     let genesis_block = HashableBlockData {
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
@@ -1952,6 +2096,7 @@ fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
 fn build_genesis_state(
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
+    producer: lee::AccountId,
 ) -> (lee::V03State, Vec<LeeTransaction>) {
     let mut state = build_initial_state(config);
 
@@ -2011,19 +2156,35 @@ fn build_genesis_state(
     }
     let bootstrap_stake_txs = build_stake_genesis_transactions(&staked);
 
-    let genesis_txs = wrapped_token_config_tx
+    let mut genesis_txs: Vec<_> = wrapped_token_config_tx
         .chain(ping_sender_config_tx)
         .chain(ping_receiver_config_tx)
         .chain(bridge_lock_config_tx)
         .chain(inbox_config_tx)
         .chain(supply_txs)
         .chain(bootstrap_stake_txs)
-        .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
             state
                 .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
                 .expect("Failed to execute genesis transaction");
         })
+        .collect();
+
+    // The genesis fee invocation credits the producer, which must be
+    // initialized first — at the same point the validators' replay does it,
+    // so builder and replay cannot diverge.
+    common::transaction::initialize_producer_account(&mut state, producer);
+    for tx in [
+        fee_invocation(fee_core::BlockFeeSummary::default(), producer),
+        clock_invocation(0),
+    ] {
+        state
+            .transition_from_public_transaction(&tx, GENESIS_BLOCK_ID, 0)
+            .expect("Failed to execute genesis transaction");
+        genesis_txs.push(tx);
+    }
+    let genesis_txs = genesis_txs
+        .into_iter()
         .map(LeeTransaction::Public)
         .collect();
 
@@ -2211,10 +2372,11 @@ fn bridge_lock_holdings(
 ///
 /// The cross-zone inbox is injected solely by the watcher; a user-submitted call
 /// must be rejected at ingress, since `TransactionOrigin` is not carried in the
-/// block.
+/// block. The fee program is invoked solely by the forced per-block fee
+/// transaction.
 #[must_use]
 pub fn is_sequencer_only_program(program_id: lee::ProgramId) -> bool {
-    cross_zone::is_sequencer_only_program(program_id)
+    cross_zone::is_sequencer_only_program(program_id) || program_id == programs::fee().id()
 }
 
 fn build_supply_account_genesis_transaction(
@@ -2377,8 +2539,9 @@ fn build_finalize_unstake_tx(
 
 /// User transactions of an orphaned block to return to the mempool: everything
 /// except the trailing clock tx, sequencer-generated bridge deposits (replayed
-/// from their own bedrock events) and sequencer-only cross-zone txs (replayed
-/// by the watcher; the ingress guard rejects them as `User`).
+/// from their own bedrock events) and sequencer-only txs — cross-zone dispatches
+/// (replayed by the watcher) and the fee tx (regenerated every block; the
+/// ingress guard rejects them as `User`).
 fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
     let Some((_clock, rest)) = block.body.transactions.split_last() else {
         return Vec::new();

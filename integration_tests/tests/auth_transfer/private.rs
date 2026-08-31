@@ -109,6 +109,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         .get_account_private(from)
         .context("Failed to get sender's private account")?;
     assert_eq!(from_acc.balance, 10000);
+    let to_before = account_balance(&ctx, to).await?;
 
     send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
 
@@ -123,8 +124,10 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
 
     let acc_2_balance = account_balance(&ctx, to).await?;
 
+    // A deshielded transfer is a privacy-preserving transaction — fee-exempt
+    // under the interim policy — so both sides move by exactly the amount.
     assert_eq!(from_acc.balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    assert_eq!(acc_2_balance, to_before + 100);
 
     log::info!("Successfully deshielded transfer to public account");
 
@@ -237,6 +240,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
 
     let from: AccountId = ctx.existing_public_accounts()[0];
     let to: AccountId = ctx.existing_private_accounts()[1];
+    let from_before = account_balance(&ctx, from).await?;
 
     send(&mut ctx, public_mention(from), private_mention(to), 100).await?;
 
@@ -251,7 +255,9 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
 
     let acc_from_balance = account_balance(&ctx, from).await?;
 
-    assert_eq!(acc_from_balance, 9900);
+    // A shielded transfer is a privacy-preserving transaction — fee-exempt
+    // under the interim policy — so the public sender pays exactly the amount.
+    assert_eq!(acc_from_balance, from_before - 100);
     assert_eq!(acc_to.balance, 20100);
 
     log::info!("Successfully shielded transfer to owned private account");
@@ -267,6 +273,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
     let to_npk_string = hex::encode(to_npk.0);
     let to_vpk = ViewingPublicKey::from_seed(&[0_u8; 32], &[1_u8; 32]);
     let from: AccountId = ctx.existing_public_accounts()[0];
+    let from_before = account_balance(&ctx, from).await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from: public_mention(from),
@@ -294,7 +301,8 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
-    assert_eq!(acc_1_balance, 9900);
+    // Privacy-preserving, so fee-exempt: the sender pays exactly the amount.
+    assert_eq!(acc_1_balance, from_before - 100);
 
     log::info!("Successfully shielded transfer to foreign account");
 

@@ -27,11 +27,13 @@ const SSK_PRIV_ACC_B: [u8; 32] = [
     180, 43, 120, 55, 151, 50, 21, 113, 22, 254, 83, 148, 56,
 ];
 
-const PUB_ACC_A_INITIAL_BALANCE: u128 = 10000;
-const PUB_ACC_B_INITIAL_BALANCE: u128 = 20000;
+// LGO-scale balances (10^9 atomic units per LGO): once transactions pay real
+// fees, the pre-fee 10_000/20_000 could not afford a single reservation.
+const PUB_ACC_A_INITIAL_BALANCE: u128 = 10_000_000_000_000;
+const PUB_ACC_B_INITIAL_BALANCE: u128 = 20_000_000_000_000;
 
-const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10000;
-const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20000;
+const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10_000_000_000_000;
+const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20_000_000_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicAccountPublicInitialData {
@@ -215,6 +217,20 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             system_accounts::sequencer_stake_config_account_id(),
             system_accounts::sequencer_stake_config_account(),
         )])
+        .chain([
+            (
+                system_accounts::fee_state_account_id(),
+                system_accounts::fee_state_account(),
+            ),
+            (
+                system_accounts::fee_escrow_account_id(),
+                system_accounts::fee_account(),
+            ),
+            (
+                system_accounts::fee_inbox_account_id(),
+                system_accounts::fee_account(),
+            ),
+        ])
         .collect()
 }
 
@@ -224,6 +240,7 @@ fn initial_programs() -> Vec<Program> {
         programs::token(),
         programs::amm(),
         programs::clock(),
+        programs::fee(),
         programs::ata(),
         programs::vault(),
         programs::faucet(),
@@ -409,6 +426,46 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn genesis_fee_accounts_are_registered_and_owned() {
+        let state = initial_state();
+        let fee_program_id = programs::fee().id();
+
+        let ids = system_accounts::fee_account_ids();
+        // state, escrow, inbox — all distinct, all non-default.
+        for (i, id) in ids.iter().enumerate() {
+            assert_ne!(*id, AccountId::default());
+            for other in &ids[i + 1..] {
+                assert_ne!(id, other);
+            }
+            let account = state.get_account_by_id(*id);
+            assert_eq!(account.program_owner, fee_program_id.into());
+            assert_eq!(account.balance, 0);
+        }
+
+        // The fee-state account carries the genesis market state; escrow and
+        // inbox start empty.
+        let fee_state = fee_core::state::FeeState::from_bytes(
+            &state
+                .get_account_by_id(system_accounts::fee_state_account_id())
+                .data
+                .into_inner(),
+        );
+        assert_eq!(fee_state, fee_core::state::FeeState::genesis());
+        for empty_id in [
+            system_accounts::fee_escrow_account_id(),
+            system_accounts::fee_inbox_account_id(),
+        ] {
+            assert!(
+                state
+                    .get_account_by_id(empty_id)
+                    .data
+                    .into_inner()
+                    .is_empty()
+            );
+        }
     }
 
     #[test]
