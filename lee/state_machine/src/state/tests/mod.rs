@@ -163,15 +163,15 @@ impl TestPrivateKeys {
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct CallbackInstruction {
     return_funds: bool,
-    token_program_id: AccountId,
+    token_account_id: AccountId,
     amount: u128,
 }
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 enum FlashSwapInstruction {
     Initiate {
-        token_program_id: AccountId,
-        callback_program_id: AccountId,
+        token_account_id: AccountId,
+        callback_account_id: AccountId,
         amount_out: u128,
         callback_instruction_data: Vec<u8>,
     },

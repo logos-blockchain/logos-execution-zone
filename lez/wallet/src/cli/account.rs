@@ -642,19 +642,20 @@ impl WalletSubcommand for ImportSubcommand {
 
 /// Formats account details for display, returning (description, `json_view`).
 fn format_account_details(account: &Account) -> (String, String) {
-    let auth_tr_prog_id =
+    let auth_tr_account_id =
         program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id());
-    let token_prog_id = program_loader_core::immutable_deploy_account_id(programs::token().id());
+    let token_account_id =
+        program_loader_core::immutable_deploy_account_id(programs::token().id());
 
     match &account.program_owner {
-        o if *o == auth_tr_prog_id => {
+        o if *o == auth_tr_account_id => {
             let account_hr: HumanReadableAccount = account.clone().into();
             (
                 "Account owned by authenticated transfer program".to_owned(),
                 serde_json::to_string(&account_hr).unwrap(),
             )
         }
-        o if *o == token_prog_id => TokenDefinition::try_from(&account.data)
+        o if *o == token_account_id => TokenDefinition::try_from(&account.data)
             .map(|token_def| {
                 (
                     "Definition account owned by token program".to_owned(),

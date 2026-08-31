@@ -7,15 +7,15 @@ pub fn create_associated_token_account(
     owner: AccountWithMetadata,
     token_definition: AccountWithMetadata,
     ata_account: AccountWithMetadata,
-    ata_program_id: AccountId,
+    ata_account_id: AccountId,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
     // No authorization check needed: create is idempotent, so anyone can call it safely.
-    let token_program_id = token_definition.account.program_owner;
+    let token_account_id = token_definition.account.program_owner;
     let ata_seed = associated_token_account_core::verify_ata_and_get_seed(
         &ata_account,
         &owner,
         token_definition.account_id,
-        ata_program_id,
+        ata_account_id,
     );
 
     // Idempotent: already initialized → no-op
@@ -40,7 +40,7 @@ pub fn create_associated_token_account(
         ..ata_account.clone()
     };
     let chained_call = ChainedCall::new(
-        token_program_id,
+        token_account_id,
         vec![token_definition.clone(), ata_account_auth],
         &token_core::Instruction::InitializeAccount,
     )

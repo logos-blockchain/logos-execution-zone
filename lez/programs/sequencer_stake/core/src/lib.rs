@@ -184,7 +184,7 @@ pub fn sequencer_stake_config_account_id(program_account_id: AccountId) -> Accou
 mod tests {
     use super::*;
 
-    const PROGRAM_ID: AccountId = AccountId::new([9; 32]);
+    const ACCOUNT_ID: AccountId = AccountId::new([9; 32]);
 
     fn test_destination() -> AccountId {
         AccountId::new([3; 32])
@@ -348,8 +348,8 @@ mod tests {
     #[test]
     fn sequencer_stake_config_account_id_is_deterministic() {
         assert_eq!(
-            sequencer_stake_config_account_id(PROGRAM_ID),
-            sequencer_stake_config_account_id(PROGRAM_ID)
+            sequencer_stake_config_account_id(ACCOUNT_ID),
+            sequencer_stake_config_account_id(ACCOUNT_ID)
         );
     }
 }
