@@ -36,8 +36,8 @@ pub struct CrossZoneRoute {
     /// against its `OutboxRecord.emitter`, itself the peer's state-machine-verified caller
     /// address — not derivable from any `ProgramId`).
     pub src_account_id: AccountId,
-    /// The program on this zone it may be delivered to.
-    pub target_program_id: ProgramId,
+    /// The dispatch address of the program on this zone it may be delivered to.
+    pub target_account_id: AccountId,
     /// This source's lifetime mint allowance on the target, if the target mints; refused on a
     /// target that does not. `None` is uncapped.
     #[serde(default)]

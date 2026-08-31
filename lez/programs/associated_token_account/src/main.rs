@@ -19,22 +19,24 @@ fn main() {
             let [owner, token_definition, ata_account] = pre_states
                 .try_into()
                 .expect("Create instruction requires exactly three accounts");
+            let ata_account_id = self_account_id;
             associated_token_account_program::create::create_associated_token_account(
                 owner,
                 token_definition,
                 ata_account,
-                self_account_id,
+                ata_account_id,
             )
         }
         Instruction::Transfer { amount } => {
             let [owner, sender_ata, recipient] = pre_states
                 .try_into()
                 .expect("Transfer instruction requires exactly three accounts");
+            let ata_account_id = self_account_id;
             associated_token_account_program::transfer::transfer_from_associated_token_account(
                 owner,
                 sender_ata,
                 recipient,
-                self_account_id,
+                ata_account_id,
                 amount,
             )
         }
@@ -42,11 +44,12 @@ fn main() {
             let [owner, holder_ata, token_definition] = pre_states
                 .try_into()
                 .expect("Burn instruction requires exactly three accounts");
+            let ata_account_id = self_account_id;
             associated_token_account_program::burn::burn_from_associated_token_account(
                 owner,
                 holder_ata,
                 token_definition,
-                self_account_id,
+                ata_account_id,
                 amount,
             )
         }

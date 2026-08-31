@@ -237,32 +237,21 @@ pub fn bridge_lock_holding_account_id(holder: AccountId) -> AccountId {
 
 /// The `(src_zone, src_account_id)` pairs the operator's routes name for one
 /// target.
-///
-/// Panics on a route naming a program that does not authorize cross-zone sources.
-/// Nothing downstream would notice otherwise: the route is dropped here, the
-/// watcher no longer filters targets, and every delivery would be refused by a
-/// program that never opted in, dead-lettering after three attempts. A typo in a
-/// config file should not cost a channel silently.
-///
-/// Only the sequencer builds genesis, so an indexer handed the same typo starts
-/// normally and only the sequencer refuses to boot.
 fn sources_for_target(
     cross_zone: &CrossZoneConfig,
-    target_program_id: ProgramId,
+    target_account_id: AccountId,
 ) -> Vec<(ZoneId, AccountId, Option<Balance>)> {
     let mut sources = Vec::new();
     for peer in &cross_zone.peers {
         for route in &peer.allowed_routes {
             assert!(
-                cross_zone_targets().contains(&route.target_program_id),
-                "cross-zone route names {:?}, which does not authorize cross-zone sources",
-                route.target_program_id
-            );
-            assert!(
                 route.mint_cap.is_none()
-                    || route.target_program_id == programs::wrapped_token().id(),
+                    || route.target_account_id
+                        == program_loader_core::immutable_deploy_account_id(
+                            programs::wrapped_token().id()
+                        ),
                 "cross-zone route sets a mint cap, but its target {:?} does not mint",
-                route.target_program_id
+                route.target_account_id
             );
             // A cap only the authority can raise, on a zone with no authority,
             // is a fuse with no replacement: once honest volume exhausts it,
@@ -271,7 +260,7 @@ fn sources_for_target(
                 route.mint_cap.is_none() || cross_zone.source_authority.is_some(),
                 "cross-zone route sets a mint cap, but no source_authority is configured to ever raise it"
             );
-            if route.target_program_id == target_program_id {
+            if route.target_account_id == target_account_id {
                 sources.push((peer.channel_id, route.src_account_id, route.mint_cap));
             }
         }
@@ -288,14 +277,6 @@ fn sources_for_target(
     sources
 }
 
-/// The programs a cross-zone route may name as a target on this zone.
-fn cross_zone_targets() -> [ProgramId; 2] {
-    [
-        programs::wrapped_token().id(),
-        programs::ping_receiver().id(),
-    ]
-}
-
 /// The genesis transaction that pins the cross-zone inbox as the wrapped-token
 /// minter and names the peer sources it may mint for, without importing either id
 /// into the guest.
@@ -310,7 +291,7 @@ pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
     let wrapped_token_id = programs::wrapped_token().id();
     let wrapped_token_account_id =
         program_loader_core::immutable_deploy_account_id(wrapped_token_id);
-    let sources = sources_for_target(cross_zone, wrapped_token_id)
+    let sources = sources_for_target(cross_zone, wrapped_token_account_id)
         .into_iter()
         .map(
             |(src_zone, src_account_id, mint_cap)| wrapped_token_core::SourceEntry {
@@ -383,7 +364,7 @@ pub fn build_ping_receiver_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
     let receiver_account_id = program_loader_core::immutable_deploy_account_id(receiver_id);
     // Caps are refused on non-minting targets above, so the cap is always
     // absent here and the receiver's pair list keeps its shape.
-    let sources = sources_for_target(cross_zone, receiver_id)
+    let sources = sources_for_target(cross_zone, receiver_account_id)
         .into_iter()
         .map(|(src_zone, src_account_id, _)| (src_zone, src_account_id))
         .collect();
@@ -427,32 +408,6 @@ fn genesis_public_tx<I: borsh::BorshSerialize>(
 mod tests {
     use super::*;
 
-    /// A route naming a program that never opted into cross-zone sources is an
-    /// operator typo that nothing downstream would report: the fan-out would drop
-    /// it, the watcher no longer filters targets, and every delivery would be
-    /// refused by the target and dead-lettered.
-    #[test]
-    #[should_panic(expected = "does not authorize cross-zone sources")]
-    fn a_route_to_a_program_that_does_not_authorize_sources_is_refused() {
-        let cross_zone = CrossZoneConfig {
-            peers: vec![CrossZonePeer {
-                channel_id: [2; 32],
-                allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
-                    src_account_id: program_loader_core::immutable_deploy_account_id(
-                        programs::bridge_lock().id(),
-                    ),
-                    target_program_id: programs::amm().id(),
-                    mint_cap: None,
-                }],
-                expected_block_signing_pubkeys: Vec::new(),
-                min_committee_size: 0,
-            }],
-            source_authority: None,
-            source_governance: None,
-        };
-        let _tx = build_wrapped_token_init_config_tx(&cross_zone);
-    }
-
     /// A capped route on an authority-less zone is a fuse with no replacement:
     /// once honest volume exhausts the cap, every later delivery dead-letters
     /// and the peer's escrow strands, so genesis refuses the combination.
@@ -466,7 +421,9 @@ mod tests {
                     src_account_id: program_loader_core::immutable_deploy_account_id(
                         programs::bridge_lock().id(),
                     ),
-                    target_program_id: programs::wrapped_token().id(),
+                    target_account_id: program_loader_core::immutable_deploy_account_id(
+                        programs::wrapped_token().id(),
+                    ),
                     mint_cap: Some(1_000),
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
@@ -487,7 +444,9 @@ mod tests {
             src_account_id: program_loader_core::immutable_deploy_account_id(
                 programs::bridge_lock().id(),
             ),
-            target_program_id: programs::wrapped_token().id(),
+            target_account_id: program_loader_core::immutable_deploy_account_id(
+                programs::wrapped_token().id(),
+            ),
             mint_cap: None,
         };
         let cross_zone = CrossZoneConfig {

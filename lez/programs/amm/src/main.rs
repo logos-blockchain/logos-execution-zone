@@ -40,6 +40,7 @@ fn main() {
             ] = pre_states
                 .try_into()
                 .expect("Transfer instruction requires exactly seven accounts");
+            let amm_account_id = self_account_id;
             amm_program::new_definition::new_definition(
                 pool,
                 vault_a,
@@ -50,7 +51,7 @@ fn main() {
                 user_holding_lp,
                 NonZero::new(token_a_amount).expect("Token A should have a nonzero amount"),
                 NonZero::new(token_b_amount).expect("Token B should have a nonzero amount"),
-                self_account_id,
+                amm_account_id,
             )
         }
         Instruction::AddLiquidity {

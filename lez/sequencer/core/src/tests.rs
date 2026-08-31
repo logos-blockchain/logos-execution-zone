@@ -265,7 +265,7 @@ fn cross_zone_test_config() -> SequencerConfig {
                 channel_id: PEER_ZONE,
                 allowed_routes: vec![CrossZoneRoute {
                     src_account_id: programs::ping_sender().deployed_account_id(),
-                    target_program_id: programs::ping_receiver().id(),
+                    target_account_id: programs::ping_receiver().deployed_account_id(),
                     mint_cap: None,
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
@@ -4572,6 +4572,7 @@ fn deploy_program(
     key_seed: u8,
     header_key: &PrivateKey,
     block_id: BlockId,
+    immutable: bool,
 ) -> AccountId {
     let segment_ids = upload_program_segments(state, &bytecode, key_seed, block_id);
     let header_id = AccountId::from(&PublicKey::new_from_private_key(header_key));
@@ -4582,7 +4583,7 @@ fn deploy_program(
         segment_ids.clone(),
         program_loader_core::Instruction::UploadHeader {
             first_segment: segment_ids[0],
-            immutable: true,
+            immutable,
         },
         block_id,
     )
@@ -4629,7 +4630,7 @@ fn loader_deploys_program() {
         .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
         .count();
 
-    let header = deploy_program(&mut state, bytecode.clone(), 20, &header_key, 1);
+    let header = deploy_program(&mut state, bytecode.clone(), 20, &header_key, 1, true);
 
     let deployed_header = state.get_account_by_id(header);
     assert_eq!(deployed_header.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
@@ -4659,7 +4660,7 @@ fn loader_deployed_program_is_found_by_get_program() {
     let bytecode = test_programs::claimer().elf().to_vec();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
 
-    let header = deploy_program(&mut state, bytecode.clone(), 40, &header_key, 1);
+    let header = deploy_program(&mut state, bytecode.clone(), 40, &header_key, 1, true);
 
     let (found_image_id, found_bytecode) = state
         .get_program(header)
@@ -4684,7 +4685,7 @@ fn loader_deployed_program_is_invocable_via_dispatch() {
     let header_key = PrivateKey::try_new([79; 32]).unwrap();
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let header = deploy_program(&mut state, bytecode, 60, &header_key, 1);
+    let header = deploy_program(&mut state, bytecode, 60, &header_key, 1, true);
 
     // `claimer` claims its one pre_state account with `Claim::Authorized`, which requires the
     // account to be signed for and to start out default-owned.
@@ -4858,6 +4859,7 @@ fn loader_update_header_repoints_to_a_new_segment_chain() {
         100,
         &header_key,
         1,
+        false,
     );
     let original_image_id = state.get_program_image_id(header).unwrap();
 
@@ -4889,6 +4891,47 @@ fn loader_update_header_repoints_to_a_new_segment_chain() {
 }
 
 #[test]
+fn loader_rejects_update_header_when_immutable() {
+    let mut state = V03State::new();
+    let header_key = PrivateKey::try_new([179; 32]).unwrap();
+
+    let header = deploy_program(
+        &mut state,
+        test_programs::claimer().elf().to_vec(),
+        180,
+        &header_key,
+        1,
+        true,
+    );
+    let original_image_id = state.get_program_image_id(header).unwrap();
+
+    let new_segment_ids =
+        upload_program_segments(&mut state, &test_programs::chain_caller().elf().to_vec(), 220, 2);
+
+    let result = submit_loader_instruction(
+        &mut state,
+        &header_key,
+        new_segment_ids.clone(),
+        program_loader_core::Instruction::UpdateHeader {
+            first_segment: new_segment_ids[0],
+            immutable: true,
+        },
+        3,
+    );
+
+    assert!(
+        result.is_err(),
+        "UpdateHeader on an immutable header should fail even when signed by the header's own \
+         key, but got: {result:?}"
+    );
+    assert_eq!(
+        state.get_program_image_id(header).unwrap(),
+        original_image_id,
+        "a rejected UpdateHeader must leave the header untouched"
+    );
+}
+
+#[test]
 fn loader_rejects_update_header_without_authorization() {
     let mut state = V03State::new();
     let header_key = PrivateKey::try_new([149; 32]).unwrap();
@@ -4899,6 +4942,7 @@ fn loader_rejects_update_header_without_authorization() {
         130,
         &header_key,
         1,
+        false,
     );
 
     let new_segment_ids =
