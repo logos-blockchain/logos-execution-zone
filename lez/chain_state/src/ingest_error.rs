@@ -30,6 +30,11 @@ pub enum BlockIngestError {
     InvalidClockTransaction,
     #[error("Second-to-last transaction must be the canonical public fee invocation")]
     InvalidFeeTransaction,
+    #[error("Block reward target is not a spendable account: {reason}")]
+    InvalidRewardTarget {
+        /// Why the fee transaction's reward account is not allowed.
+        reason: String,
+    },
     #[error("Transaction {tx_index} failed fee classification: {reason}")]
     InvalidFeeClass {
         /// Index of the failing transaction within the block body.

@@ -495,6 +495,9 @@ pub enum BlockIngestError {
     InvalidProducerSignature,
     InvalidClockTransaction,
     InvalidFeeTransaction,
+    InvalidRewardTarget {
+        reason: String,
+    },
     InvalidFeeClass {
         tx_index: u64,
         reason: String,

@@ -871,6 +871,9 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
                 Self::InvalidClockTransaction
             }
             indexer_core::BlockIngestError::InvalidFeeTransaction => Self::InvalidFeeTransaction,
+            indexer_core::BlockIngestError::InvalidRewardTarget { reason } => {
+                Self::InvalidRewardTarget { reason }
+            }
             indexer_core::BlockIngestError::InvalidProducerSignature => {
                 Self::InvalidProducerSignature
             }
