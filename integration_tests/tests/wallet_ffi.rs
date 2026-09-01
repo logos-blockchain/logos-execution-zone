@@ -1156,6 +1156,13 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     let to: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
 
+    let to_before = unsafe {
+        let mut out_balance: [u8; 16] = [0; 16];
+        wallet_ffi_get_balance(wallet_ffi_handle, &raw const to, true, &raw mut out_balance)
+            .unwrap();
+        u128::from_le_bytes(out_balance)
+    };
+
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
         wallet_ffi_transfer_deshielded(
@@ -1196,8 +1203,11 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
+    // A deshield moves private funds into a public account and is fee-exempt, so
+    // the private sender is debited exactly the amount and the public recipient
+    // is credited exactly the amount, with no fee on either side.
     assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 10100);
+    assert_eq!(to_balance, to_before + 100);
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);

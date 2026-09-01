@@ -93,6 +93,11 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
 
 #[test]
 async fn restore_keys_from_seed() -> Result<()> {
+    // Well above a single transfer's fee reserve, and distinct so restoration
+    // maps each balance to the right account.
+    const ACC3_FUNDING: u128 = 1_000_000_000;
+    const ACC4_FUNDING: u128 = 1_000_000_001;
+
     let mut ctx = TestContext::new().await?;
 
     let from: AccountId = ctx.existing_private_accounts()[0];
@@ -125,8 +130,11 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to both public accounts. Both are still unclaimed, so bypass the wallet CLI (which
     // never signs with the recipient's key) and sign with the recipient's own key directly.
-    send_claiming_new_account(&mut ctx, from, to_account_id3, 102).await?;
-    send_claiming_new_account(&mut ctx, from, to_account_id4, 103).await?;
+    // Public transfers pay a real fee, so these accounts must hold enough to cover one when they
+    // transact below (unlike the fee-exempt private accounts above). Balances stay distinct so
+    // key restoration still maps each to the right account.
+    send_claiming_new_account(&mut ctx, from, to_account_id3, ACC3_FUNDING).await?;
+    send_claiming_new_account(&mut ctx, from, to_account_id4, ACC4_FUNDING).await?;
 
     log::info!("Preparation complete, performing keys restoration");
 
@@ -196,8 +204,13 @@ async fn restore_keys_from_seed() -> Result<()> {
         .get_account_balance(to_account_id4)
         .await?;
 
-    assert_eq!(acc3, 91); // 102 - 11
-    assert_eq!(acc4, 114); // 103 + 11
+    // The recipient gains exactly the transferred amount; the sender pays that
+    // plus a real fee, so its balance drops by strictly more than 11.
+    assert_eq!(acc4, ACC4_FUNDING + 11);
+    assert!(
+        acc3 < ACC3_FUNDING - 11,
+        "sender must also pay a fee on the transfer, got {acc3}"
+    );
 
     log::info!("Successfully restored keys and verified transactions");
 
