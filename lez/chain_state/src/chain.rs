@@ -496,9 +496,7 @@ mod tests {
     /// simulating the stake a real sequencer holds before producing: fee
     /// settlement credits it, and crediting an unclaimed account is rejected.
     fn claimed_initial_state() -> V03State {
-        let mut state = initial_state();
-        common::test_utils::claim_producer_account(&mut state);
-        state
+        initial_state().with_public_accounts([common::test_utils::claimed_producer_seed()])
     }
 
     /// `head_state` equals `final_state` replayed through `head_blocks`.

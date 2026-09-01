@@ -731,7 +731,11 @@ mod tests {
 
     #[test]
     fn applies_transfers_and_advances_state() {
-        let mut state = initial_state();
+        // The producer's reward account is claimed from genesis, simulating the
+        // stake a real sequencer holds before producing, so the charged blocks
+        // below can credit it (crediting an unclaimed account is rejected).
+        let mut state =
+            initial_state().with_public_accounts([common::test_utils::claimed_producer_seed()]);
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
@@ -742,9 +746,6 @@ mod tests {
         // Genesis (block 1): fee/clock only.
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
-        // Simulate the producer's stake: its reward account is claimed before
-        // it produces, so the charged blocks below can credit it.
-        common::test_utils::claim_producer_account(&mut state);
         let mut tip = tip_of(&genesis);
 
         // Blocks 2..=11: one charged native transfer of 10 each (nonces 0..=9).
