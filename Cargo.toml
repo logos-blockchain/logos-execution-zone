@@ -69,6 +69,7 @@ members = [
   "test_fixtures",
 
   "tools/cycle_bench",
+  "tools/image_id_pin",
   "tools/crypto_primitives_bench",
   "tools/integration_bench",
   "tools/cross_zone_chat",

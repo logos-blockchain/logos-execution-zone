@@ -4576,6 +4576,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "image_id_pin"
+version = "0.1.0"
+dependencies = [
+ "risc0-binfmt",
+]
+
+[[package]]
 name = "include_bytes_aligned"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

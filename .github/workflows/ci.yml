@@ -365,7 +365,7 @@ jobs:
 
       - name: Check if artifacts match repository
         run: |
-          if ! git diff --exit-code artifacts/; then
+          if ! git diff --exit-code artifacts/ lez/programs/authenticated_transfer/image_id.rs; then
             echo "❌ Artifacts in the repository are out of date!"
             echo "Please run 'just build-artifacts' and commit the changes."
             exit 1

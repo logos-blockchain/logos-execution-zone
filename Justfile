@@ -17,12 +17,27 @@ build-artifacts:
     @rm -rf {{ARTIFACTS}}
     @just build-artifact lee/privacy_preserving_circuit
     @just build-artifact lez/programs programs
+    @just refresh-image-id-pin
 
     @if [ "${GITHUB_ACTIONS:-}" = "true" ]; then \
         echo "Skipping test fixture regeneration because CI doesn't need it"; \
     else \
         just regenerate-test-fixture; \
     fi
+
+# Guests that chain into authenticated_transfer embed its image id as a source
+# constant. Refresh it from the built artifact; when it changed (exit 1), rebuild
+# those guests once — the second pass must converge, since authenticated_transfer's
+# own ELF never includes the constant. Any other non-zero exit is a failure.
+refresh-image-id-pin:
+    @status=0; cargo run -q -p image_id_pin || status=$?; \
+    if [ "$status" -eq 1 ]; then \
+        echo "🔁 Rebuilding guests that embed the refreshed image id"; \
+        just build-artifact lez/programs programs || exit 1; \
+        status=0; cargo run -q -p image_id_pin || status=$?; \
+        if [ "$status" -eq 1 ]; then echo "image id pin did not converge"; exit 1; fi; \
+    fi; \
+    if [ "$status" -ne 0 ]; then echo "image id pin failed (exit $status)"; exit "$status"; fi
 
 RISC0_DOCKER_CONTAINER_TAG := "r0.1.91.1"
 

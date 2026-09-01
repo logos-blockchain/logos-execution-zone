@@ -1,0 +1,11 @@
+[package]
+name = "image_id_pin"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+risc0-binfmt = "3.0.2"
