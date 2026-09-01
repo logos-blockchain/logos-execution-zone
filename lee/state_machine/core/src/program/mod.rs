@@ -728,6 +728,18 @@ pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionDa
     )
 }
 
+/// Whether a callee's journalled `pre_states` name exactly the accounts in the call
+/// in the appropriate order.
+#[must_use]
+pub fn pre_states_match_accounts(
+    accounts: &[AccountId],
+    pre_states: &[AccountWithMetadata],
+) -> bool {
+    accounts
+        .iter()
+        .eq(pre_states.iter().map(|pre| &pre.account_id))
+}
+
 /// Validates well-behaved program execution.
 ///
 /// # Parameters

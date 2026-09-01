@@ -9,7 +9,7 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
     program::{
         CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
-        validate_execution,
+        pre_states_match_accounts, validate_execution,
     },
 };
 use log::debug;
@@ -162,9 +162,19 @@ impl ValidatedStateDiff {
                 chained_call.program_id, program_output
             );
 
-            // A program may report fewer accounts than it was named with (dropping one for a
-            // later call to pick up), but never one outside `chained_call.pre_state_ids` —
-            // otherwise it could inject an account nobody in this transaction ever named.
+            // A chained callee must account for exactly the accounts its caller named, in
+            // order. The top-level call has no caller, so it's exempt here.
+            ensure!(
+                caller_data.program_id.is_none()
+                    || pre_states_match_accounts(
+                        &chained_call.pre_state_ids,
+                        &program_output.pre_states
+                    ),
+                InvalidProgramBehaviorError::ChainedCallAccountsMismatch {
+                    program_id: chained_call.program_id
+                }
+            );
+
             let named_accounts: HashSet<AccountId> =
                 chained_call.pre_state_ids.iter().copied().collect();
 

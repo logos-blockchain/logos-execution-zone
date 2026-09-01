@@ -891,7 +891,7 @@ fn holder_authorization_survives_across_sibling_calls() {
 }
 
 #[test]
-fn inherited_scope_passes_through_intermediate_calls() {
+fn inherited_scope_passes_through_nested_intermediate_calls() {
     let delegator = crate::test_methods::selective_pda_delegator();
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let callee = crate::test_methods::auth_asserting_noop();
@@ -909,12 +909,12 @@ fn inherited_scope_passes_through_intermediate_calls() {
         [(forwarder_id, forwarder), (callee_id, callee)].into(),
     );
     let no_sibling: Option<(ProgramId, bool)> = None;
-    let forward_through_undeclaring_call = Program::serialize_instruction((
+    let forward_through_nested_call = Program::serialize_instruction((
         forwarder_id,
         Program::serialize_instruction((
             callee_id,
             Program::serialize_instruction(()).unwrap(),
-            false,
+            true,
             Vec::<PdaSeed>::new(),
         ))
         .unwrap(),
@@ -929,16 +929,14 @@ fn inherited_scope_passes_through_intermediate_calls() {
             seed,
             seed,
             forwarder_id,
-            forward_through_undeclaring_call,
+            forward_through_nested_call,
             no_sibling,
         ))
         .unwrap(),
         vec![init_pda_witness(&keys, 0, None)],
         &program_with_deps,
     )
-    .expect(
-        "an account authorized in an ancestor's output stays authorized below a call that never mentions it",
-    );
+    .expect("an account authorized in an ancestor's output stays authorized two calls below it");
 }
 
 /// The circuit tracks accounts by `AccountId` across the whole call tree, not per-step: a

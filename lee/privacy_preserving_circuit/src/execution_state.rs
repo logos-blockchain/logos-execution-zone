@@ -10,7 +10,7 @@ use lee_core::{
     program::{
         AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
-        TimestampValidityWindow, validate_execution,
+        TimestampValidityWindow, pre_states_match_accounts, validate_execution,
     },
 };
 use risc0_zkvm::guest::env;
@@ -157,6 +157,18 @@ impl ExecutionState {
             assert_eq!(
                 chained_call.instruction_data, program_output.instruction_data,
                 "Mismatched instruction data between chained call and program output"
+            );
+
+            // Check accounts used are exactly those the call was performed with.
+            assert!(
+                // If the call is top-level, nothing to check.
+                caller_data.program_id.is_none()
+                    // Else, match.
+                    || pre_states_match_accounts(
+                        &chained_call.pre_state_ids,
+                        &program_output.pre_states
+                    ),
+                "Callee ran on accounts the chained call did not name"
             );
 
             // Check that `program_output` is consistent with the execution of the corresponding
