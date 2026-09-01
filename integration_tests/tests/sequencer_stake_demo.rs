@@ -72,29 +72,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .key_chain_mut()
         .add_imported_public_account(funding_private_key);
 
-    // Claim the genesis supply out of its vault.
-    let owner_vault_id = vault_core::compute_vault_account_id(programs::vault().id(), funding_id);
-    let claim_instruction_data = Program::serialize_instruction(vault_core::Instruction::Claim {
-        amount: FUNDING_BALANCE,
-    })
-    .context("Failed to serialize vault Claim instruction")?;
-    ctx.wallet()
-        .send_pub_tx(
-            vec![
-                AccountIdentity::Public(funding_id),
-                AccountIdentity::PublicNoSign(owner_vault_id),
-            ],
-            claim_instruction_data,
-            programs::vault().id(),
-        )
-        .await
-        .map_err(|err| {
-            anyhow::anyhow!(
-                "Failed to claim the demo funding account from its genesis vault: {err:?}"
-            )
-        })?;
-    info!("Waiting for the vault-claim transaction's block to land");
-    poll_until("vault claim to land", 30, || async {
+    info!("Waiting for the genesis supply to land on the funding account");
+    poll_until("genesis supply to land", 30, || async {
         Ok(account_balance(&ctx, funding_id).await? == FUNDING_BALANCE)
     })
     .await?;
@@ -266,10 +245,11 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // Exit flow: full UnstakeRequest, wait for the committee removal to land on
     // Bedrock, then check the sequencer's own FinalizeUnstake releases the stake.
     //
-    // FinalizeUnstake is unsigned/permissionless, so it can't claim a fresh
-    // destination account (that needs the owner's own signature, same as
-    // authenticated_transfer's Transfer). Reuse funding_id: already
-    // authenticated_transfer-owned, drained to 0 by the Stake above.
+    // The destination is free: crediting one acquires nothing and needs no
+    // signature of its own, which is just as well since FinalizeUnstake is
+    // unsigned. Reuse funding_id out of convenience — genesis credited it, so it
+    // is unowned, and the Stake above drained it to 0, which leaves the released
+    // stake as its whole balance below.
     let destination_id = funding_id;
 
     let unstake_request_data =

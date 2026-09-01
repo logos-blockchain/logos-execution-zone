@@ -17,7 +17,6 @@ sequencer_service_rpc = { workspace = true, features = ["client"] }
 amm_core.workspace = true
 testnet_initial_state.workspace = true
 token_core.workspace = true
-vault_core.workspace = true
 bridge_core.workspace = true
 keycard_wallet.workspace = true
 programs.workspace = true

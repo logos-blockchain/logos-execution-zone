@@ -19,6 +19,9 @@ use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, Wallet
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 
+/// The public account fronting the private accounts' balances at genesis.
+pub const PRIVATE_FUNDER_INDEX: usize = 0;
+
 /// Fixed sequencer signing key; exposed so the fixture generator can reopen the produced store.
 pub const SEQUENCER_SIGNING_KEY: [u8; 32] = [37; 32];
 
@@ -206,32 +209,43 @@ fn deterministic_private_key_chain(entropy: [u8; 32]) -> KeyChain {
     }
 }
 
+/// What the funder must front at genesis: `fund_private_accounts` draws this much from it,
+/// since genesis itself cannot create the private accounts (only the circuit writes
+/// commitments).
+#[must_use]
+pub fn private_total(private_accounts: &[InitialPrivateAccountForWallet]) -> u128 {
+    private_accounts.iter().map(|account| account.balance).sum()
+}
+
 #[must_use]
 pub fn genesis_from_accounts(
     public_accounts: &[(PrivateKey, u128)],
-    private_accounts: &[InitialPrivateAccountForWallet],
+    private_total: u128,
 ) -> Vec<GenesisAction> {
-    let public_genesis = public_accounts.iter().map(|(private_key, balance)| {
-        let public_key = PublicKey::new_from_private_key(private_key);
-        let account_id = AccountId::from(&public_key);
-        GenesisAction::SupplyAccount {
-            account_id,
-            balance: *balance,
-        }
-    });
-
-    let private_genesis = private_accounts
+    let mut balances: Vec<(AccountId, u128)> = public_accounts
         .iter()
-        .map(|account| GenesisAction::SupplyAccount {
-            account_id: account.account_id(),
-            balance: account.balance,
-        });
+        .map(|(private_key, balance)| {
+            (
+                AccountId::from(&PublicKey::new_from_private_key(private_key)),
+                *balance,
+            )
+        })
+        .collect();
 
-    let supply_bridge_account = GenesisAction::SupplyBridgeAccount { balance: 1_000_000 };
+    let funder_balance = &mut balances[PRIVATE_FUNDER_INDEX].1;
+    *funder_balance = funder_balance
+        .checked_add(private_total)
+        .expect("private funder genesis balance overflow");
 
-    public_genesis
-        .chain(private_genesis)
-        .chain(std::iter::once(supply_bridge_account))
+    balances
+        .into_iter()
+        .map(|(account_id, balance)| GenesisAction::SupplyAccount {
+            account_id,
+            balance,
+        })
+        .chain(std::iter::once(GenesisAction::SupplyBridgeAccount {
+            balance: 1_000_000,
+        }))
         .collect()
 }
 

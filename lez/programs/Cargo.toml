@@ -40,11 +40,6 @@ path = "token/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
-name = "vault"
-path = "vault/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
 name = "cross_zone_outbox"
 path = "cross_zone_outbox/src/main.rs"
 required-features = ["programs"]
@@ -101,7 +96,6 @@ programs = [
   "dep:clock_core",
   "dep:faucet_core",
   "dep:token_core",
-  "dep:vault_core",
   "dep:cross_zone_inbox_core",
   "dep:cross_zone_marker_core",
   "dep:cross_zone_outbox_core",
@@ -122,7 +116,6 @@ bridge_core = { workspace = true, optional = true }
 clock_core = { workspace = true, optional = true }
 faucet_core = { workspace = true, optional = true }
 token_core = { workspace = true, optional = true }
-vault_core = { workspace = true, optional = true }
 cross_zone_inbox_core = { workspace = true, optional = true }
 cross_zone_marker_core = { workspace = true, optional = true }
 cross_zone_outbox_core = { workspace = true, optional = true }
@@ -140,4 +133,3 @@ build_utils = { workspace = true, optional = true }
 
 [dev-dependencies]
 bridge_core = { workspace = true }
-vault_core = { workspace = true }

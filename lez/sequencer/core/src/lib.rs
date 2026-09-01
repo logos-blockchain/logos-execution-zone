@@ -1999,8 +1999,8 @@ fn build_genesis_state(
     });
     let holding_txs: Vec<_> = bridge_lock_holdings(&config.genesis)
         .map(|(holder, amount)| {
-            build_supply_holding_genesis_transaction(
-                cross_zone::bridge_lock_holding_account_id(holder),
+            build_supply_account_genesis_transaction(
+                &cross_zone::bridge_lock_holding_account_id(holder),
                 amount,
             )
         })
@@ -2015,7 +2015,8 @@ fn build_genesis_state(
         GenesisAction::SupplyBridgeAccount { balance } => {
             Some(build_supply_bridge_account_genesis_transaction(*balance))
         }
-        // Holdings are credited above; stakes are built below.
+        // Holdings are emitted above as single credits by
+        // `build_supply_account_genesis_transaction`; stakes are built below.
         GenesisAction::SupplyBridgeLockHolding { .. } | GenesisAction::StakeSequencer { .. } => {
             None
         }
@@ -2185,7 +2186,7 @@ fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTrans
             genesis_stake_funding_account(),
         ],
         vec![lee_core::account::Nonce(0)],
-        faucet_core::Instruction::GenesisTransferDirect { amount: total },
+        faucet_core::Instruction::GenesisTransfer { amount: total },
     )
     .expect("Failed to build genesis funding message");
     // The funding account signs even though it is only receiving: the stake
@@ -2246,18 +2247,12 @@ fn build_supply_account_genesis_transaction(
     balance: lee::Balance,
 ) -> PublicTransaction {
     let faucet_program_id = programs::faucet().id();
-    let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, *account_id);
 
     let message = Message::try_new(
         faucet_program_id,
-        vec![system_accounts::faucet_account_id(), recipient_vault_id],
+        vec![system_accounts::faucet_account_id(), *account_id],
         Vec::new(),
-        faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
-            recipient_id: *account_id,
-            amount: balance,
-        },
+        faucet_core::Instruction::GenesisTransfer { amount: balance },
     )
     .expect("Failed to serialize genesis transfer instruction");
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
@@ -2266,27 +2261,7 @@ fn build_supply_account_genesis_transaction(
 }
 
 fn build_supply_bridge_account_genesis_transaction(balance: lee::Balance) -> PublicTransaction {
-    build_supply_holding_genesis_transaction(system_accounts::bridge_account_id(), balance)
-}
-
-/// The unsigned faucet credit funding an already-claimed genesis account; the
-/// recipient must be program-owned before this runs.
-fn build_supply_holding_genesis_transaction(
-    recipient: lee::AccountId,
-    balance: lee::Balance,
-) -> PublicTransaction {
-    let faucet_program_id = programs::faucet().id();
-
-    let message = Message::try_new(
-        faucet_program_id,
-        vec![system_accounts::faucet_account_id(), recipient],
-        Vec::new(),
-        faucet_core::Instruction::GenesisTransferDirect { amount: balance },
-    )
-    .expect("Failed to serialize faucet genesis transfer instruction");
-    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
-
-    PublicTransaction::new(message, witness_set)
+    build_supply_account_genesis_transaction(&system_accounts::bridge_account_id(), balance)
 }
 
 fn pending_deposit_event_record(deposit: &DepositInfo) -> PendingDepositEventRecord {
@@ -2303,9 +2278,6 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
     let bridge_program_id = programs::bridge().id();
-    let vault_program_id = programs::vault().id();
-    let recipient_vault_id =
-        vault_core::compute_vault_account_id(vault_program_id, metadata.recipient_id);
     // The receipt PDA carries the exactly-once check: the program reads it to
     // detect a replay, so it must be in the tx's account list.
     let receipt_id =
@@ -2315,13 +2287,12 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         bridge_program_id,
         vec![
             system_accounts::bridge_account_id(),
-            recipient_vault_id,
+            metadata.recipient_id,
             receipt_id,
         ],
         Vec::new(),
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
-            vault_program_id,
             recipient_id: metadata.recipient_id,
             amount: event.amount,
         },

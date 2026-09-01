@@ -23,7 +23,6 @@ use crate::{
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
             native_token_transfer::AuthTransferSubcommand, token::TokenProgramAgnosticSubcommand,
-            vault::VaultSubcommand,
         },
         statistics::StatisticsSubcommand,
     },
@@ -67,9 +66,6 @@ pub enum Command {
     /// Associated Token Account program interaction subcommand.
     #[command(subcommand)]
     Ata(AtaSubcommand),
-    /// Vault program interaction subcommand.
-    #[command(subcommand)]
-    Vault(VaultSubcommand),
     /// Bridge program interaction subcommand.
     #[command(subcommand)]
     Bridge(BridgeSubcommand),
@@ -271,7 +267,6 @@ pub async fn execute_subcommand(
         Command::Token(token_subcommand) => token_subcommand.handle_subcommand(wallet_core).await?,
         Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
         Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
-        Command::Vault(vault_subcommand) => vault_subcommand.handle_subcommand(wallet_core).await?,
         Command::Bridge(bridge_subcommand) => {
             bridge_subcommand.handle_subcommand(wallet_core).await?
         }

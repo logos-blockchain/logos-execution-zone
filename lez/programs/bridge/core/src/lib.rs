@@ -9,20 +9,19 @@ const DEPOSIT_RECEIPT_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeDepositReceipt/
 
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
-    /// Transfers native tokens from the bridge PDA account to a recipient vault,
+    /// Transfers native tokens from the bridge PDA account to a recipient,
     /// exactly once per `l1_deposit_op_id`.
     ///
     /// Required accounts (3):
     /// - Bridge PDA account
-    /// - Recipient vault PDA account
-    /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`. Its existence records that
-    ///   this op id was already minted; a second application of the same op id finds it present and
-    ///   transfers nothing.
+    /// - Recipient account
+    /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`. Bridge ownership of it
+    ///   records that this op id was already minted; a second application of the same op id finds
+    ///   it owned and transfers nothing.
     Deposit {
         /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
         /// Deposit Event on L1.
         l1_deposit_op_id: [u8; 32],
-        vault_program_id: ProgramId,
         recipient_id: AccountId,
         amount: u64,
     },
@@ -51,8 +50,8 @@ pub fn compute_bridge_account_id(bridge_program_id: ProgramId) -> AccountId {
     AccountId::for_public_pda(&bridge_program_id, &compute_bridge_seed())
 }
 
-/// Seed of the deposit-receipt PDA for `l1_deposit_op_id`, exposed so the guest
-/// can claim the account. Domain-separated from [`compute_bridge_seed`].
+/// Seed of the deposit-receipt PDA for `l1_deposit_op_id`. Domain-separated from
+/// [`compute_bridge_seed`].
 #[must_use]
 fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
@@ -68,7 +67,7 @@ fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
     PdaSeed::new(seed)
 }
 
-/// The deposit-receipt PDA whose existence marks `l1_deposit_op_id` as minted.
+/// The deposit-receipt PDA whose bridge ownership marks `l1_deposit_op_id` as minted.
 #[must_use]
 pub fn deposit_receipt_account_id(
     bridge_program_id: ProgramId,

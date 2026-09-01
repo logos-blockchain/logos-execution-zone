@@ -172,7 +172,7 @@ async fn deshielded_transfer_does_not_sign_with_recipient_key() -> Result<()> {
 }
 
 #[test]
-async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
+async fn private_transfer_to_owned_account_over_foreign_keys() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let from: AccountId = ctx.existing_private_accounts()[0];
@@ -188,7 +188,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         .private_account(to_account_id)
         .context("Failed to get private account")?;
 
-    // Send to this account using claiming path (using npk and vpk instead of account ID)
+    // Send to this account over the foreign-keys path (npk and vpk instead of the account ID)
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from: private_mention(from),
         to: None,
@@ -206,7 +206,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
-    // Sync the wallet to claim the new account
+    // Sync the wallet to discover the new account
     sync_private(&mut ctx).await?;
 
     let sender_commitment = ctx
@@ -225,7 +225,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         .context("Failed to get recipient's private account")?;
     assert_eq!(to_res_acc.balance, 100);
 
-    log::info!("Successfully transferred using claiming path");
+    log::info!("Successfully transferred over the foreign-keys path");
 
     Ok(())
 }
@@ -513,18 +513,13 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let faucet_account_id = system_accounts::faucet_account_id();
-    let attacker_id = ctx.existing_public_accounts()[0];
     let faucet_program_id = programs::faucet().id();
-    let vault_program_id = programs::vault().id();
     let auth_transfer_program_id = programs::authenticated_transfer().id();
     let ask = lee_core::AuthorizationSecretKey([3; 32]);
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let attacker_vault_id = {
-        let seed = vault_core::compute_vault_seed(attacker_id);
-        AccountId::for_private_pda(&vault_program_id, &seed, &npk, &vpk, 1337)
-    };
+    let attacker_private_id = AccountId::for_regular_private_account(&npk, &vpk, 1337);
     let amount: u128 = 1;
 
     let faucet_pre = AccountWithMetadata::new(
@@ -532,27 +527,25 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         false,
         faucet_account_id,
     );
-    let vault_pda_pre = AccountWithMetadata::new(
-        get_account(&ctx, attacker_vault_id).await?,
+    let recipient_pre = AccountWithMetadata::new(
+        get_account(&ctx, attacker_private_id).await?,
         false,
-        attacker_vault_id,
+        attacker_private_id,
     );
 
     let program_with_deps = ProgramWithDependencies::new(
         faucet_chain_caller,
         [
             (faucet_program_id, programs::faucet()),
-            (vault_program_id, programs::vault()),
             (auth_transfer_program_id, programs::authenticated_transfer()),
         ]
         .into(),
     );
 
-    let instruction =
-        Program::serialize_instruction((faucet_program_id, vault_program_id, attacker_id, amount))?;
+    let instruction = Program::serialize_instruction((faucet_program_id, amount))?;
 
     let res = execute_and_prove(
-        vec![faucet_pre, vault_pda_pre],
+        vec![faucet_pre, recipient_pre],
         instruction,
         vec![
             InputAccountIdentity::Public,
@@ -560,7 +553,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
                 vpk,
                 random_seed: [0; 32],
                 identifier: 1337,
-                kind: WitnessKind::Pda { binding: None },
+                kind: WitnessKind::Regular { ask: None },
                 nullifier: NullifierWitness::Init {
                     npk,
                     commitment_root: DUMMY_COMMITMENT_HASH,

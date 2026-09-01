@@ -4,6 +4,8 @@ use lee_core::{
     program::{ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
+include!("../../authenticated_transfer/image_id.rs");
+
 fn unchanged_post_states(pre_states: &[lee_core::account::AccountWithMetadata]) -> Vec<Account> {
     pre_states
         .iter()
@@ -31,40 +33,10 @@ fn main() {
     let post_states = unchanged_post_states(&pre_states_clone);
 
     let chained_calls = match instruction {
-        Instruction::GenesisTransferVault {
-            vault_program_id,
-            recipient_id,
-            amount,
-        } => {
-            let [faucet, recipient_vault] = pre_states
-                .try_into()
-                .expect("Transfer requires exactly 2 accounts");
-
-            assert_eq!(
-                faucet.account_id,
-                faucet_core::compute_faucet_account_id(self_program_id),
-                "First account must be faucet PDA"
-            );
-
-            let mut faucet_for_vault = faucet;
-            faucet_for_vault.is_authorized = true;
-
-            vec![
-                ChainedCall::new(
-                    vault_program_id,
-                    vec![faucet_for_vault, recipient_vault],
-                    &vault_core::Instruction::Transfer {
-                        recipient_id,
-                        amount,
-                    },
-                )
-                .with_pda_seeds(vec![faucet_core::compute_faucet_seed()]),
-            ]
-        }
-        Instruction::GenesisTransferDirect { amount } => {
+        Instruction::GenesisTransfer { amount } => {
             let [faucet, recipient] = pre_states
                 .try_into()
-                .expect("TransferDirect requires exactly 2 accounts");
+                .expect("GenesisTransfer requires exactly 2 accounts");
 
             assert_eq!(
                 faucet.account_id,
@@ -77,7 +49,7 @@ fn main() {
 
             vec![
                 ChainedCall::new(
-                    faucet_for_transfer.account.program_owner.into(),
+                    AUTHENTICATED_TRANSFER_IMAGE_ID,
                     vec![faucet_for_transfer, recipient],
                     &authenticated_transfer_core::Instruction::Transfer { amount },
                 )

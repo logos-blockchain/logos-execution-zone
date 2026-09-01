@@ -26,11 +26,8 @@ use wallet::{
 
 use super::LezSequencerClient;
 use crate::{
-    config::InitialPrivateAccountForWallet,
-    setup::{
-        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
-        setup_wallet,
-    },
+    config::{self, InitialPrivateAccountForWallet},
+    setup::{fund_private_accounts, setup_wallet},
 };
 
 struct WalletComponents {
@@ -535,7 +532,7 @@ impl LezRuntime {
             .await
     }
 
-    /// Executes a public transfer that claims a fresh recipient account.
+    /// Executes a public transfer to a fresh recipient account, which signs alongside the sender.
     pub async fn public_transfer_to_new_account(
         &self,
         from: AccountId,
@@ -697,22 +694,14 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                         }),
                     }?;
                     let mut wallet = wallet;
-                    setup_public_accounts_with_initial_supply(&mut wallet, &public_accounts)
-                        .await
-                        .context("failed to initialize LEZ public wallet accounts")?;
                     if initialize_private_account_funding {
-                        for private_account in &private_accounts {
-                            setup_private_accounts_with_initial_supply(
-                                &mut wallet,
-                                std::slice::from_ref(private_account),
-                            )
-                            .await
-                            .context("failed to initialize LEZ private wallet account")?;
-                            wallet
-                                .sync_to_latest_block()
-                                .await
-                                .context("failed to synchronize LEZ private wallet accounts")?;
-                        }
+                        fund_private_accounts(
+                            &mut wallet,
+                            &public_accounts[config::PRIVATE_FUNDER_INDEX].0,
+                            &private_accounts,
+                        )
+                        .await
+                        .context("failed to fund LEZ private wallet accounts")?;
                     }
                     Ok((wallet, initialized_state_dir, password))
                 })

@@ -25,9 +25,8 @@ use crate::{
     config::{InitialPrivateAccountForWallet, MultiNodeTestContextConfig, SequencerPartialConfig},
     indexer_client::IndexerClient,
     setup::{
-        SequencerSetup, setup_bedrock_node, setup_indexer,
-        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
-        setup_wallet, sync_wallet_from_prebuilt,
+        SequencerSetup, fund_private_accounts, setup_bedrock_node, setup_indexer, setup_wallet,
+        sync_wallet_from_prebuilt,
     },
 };
 
@@ -762,18 +761,18 @@ impl ZoneTestContextBuilder {
 
             if use_prebuilt {
                 // Funds already exist on-chain in the prebuilt blocks; sync instead of
-                // claiming live.
+                // funding live.
                 sync_wallet_from_prebuilt(&mut wallet)
                     .await
                     .context("Failed to sync wallet from prebuilt database")?;
             } else {
-                setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
-                    .await
-                    .context("Failed to initialize public accounts in wallet")?;
-
-                setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
-                    .await
-                    .context("Failed to initialize private accounts in wallet")?;
+                fund_private_accounts(
+                    &mut wallet,
+                    &initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0,
+                    &initial_private_accounts,
+                )
+                .await
+                .context("Failed to fund private accounts in wallet")?;
             }
 
             Some(WalletComponents {
@@ -1122,12 +1121,13 @@ async fn build_sequencer_components(
     let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
 
     let genesis_actions = if enable_wallet {
-        // Wallet genesis must always be present so that
-        // setup_public/private_accounts_with_initial_supply can claim from the vault
-        // PDAs. When a test supplies custom genesis, merge rather
-        // than replace.
-        let wallet_genesis =
-            config::genesis_from_accounts(initial_public_accounts, initial_private_accounts);
+        // Wallet genesis must always be present so the wallet's accounts hold
+        // their supply and `fund_private_accounts` can draw from the funder.
+        // When a test supplies custom genesis, merge rather than replace.
+        let wallet_genesis = config::genesis_from_accounts(
+            initial_public_accounts,
+            config::private_total(initial_private_accounts),
+        );
         match genesis_transactions {
             Some(mut custom) => {
                 custom.extend(wallet_genesis);

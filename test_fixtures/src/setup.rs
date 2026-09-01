@@ -15,7 +15,7 @@ use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::{
     WalletCore,
-    cli::{Command, SubcommandReturnValue, programs::vault::VaultSubcommand},
+    cli::{Command, programs::native_token_transfer::AuthTransferSubcommand},
     config::WalletConfigOverrides,
 };
 
@@ -408,38 +408,42 @@ pub async fn setup_wallet_at(
     Ok((wallet, home.to_owned(), wallet_password))
 }
 
-pub async fn setup_public_accounts_with_initial_supply(
+/// Funds each of the wallet's private accounts from one of its public accounts.
+///
+/// Genesis credits public accounts directly, but a private account has no state until a
+/// transaction writes its commitment, so this is what brings them into existence.
+pub async fn fund_private_accounts(
     wallet: &mut WalletCore,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    funder: &PrivateKey,
+    initial_private_accounts: &[InitialPrivateAccountForWallet],
 ) -> Result<()> {
-    for (private_key, amount) in initial_public_accounts {
-        let account_id = AccountId::from(&PublicKey::new_from_private_key(private_key));
+    let funder_id = AccountId::from(&PublicKey::new_from_private_key(funder));
+
+    for private_account in initial_private_accounts {
         wallet::cli::execute_subcommand(
             wallet,
-            Command::Vault(VaultSubcommand::Claim {
-                account_id: public_mention(account_id),
-                amount: *amount,
+            Command::AuthTransfer(AuthTransferSubcommand::Send {
+                from: public_mention(funder_id),
+                to: Some(private_mention(private_account.account_id())),
+                to_npk: None,
+                to_vpk: None,
+                to_keys: None,
+                to_identifier: Some(private_account.identifier),
+                amount: private_account.balance,
             }),
         )
         .await
-        .context("Failed to claim funds from vault into public account")?;
-    }
+        .with_context(|| {
+            format!(
+                "Failed to fund private account {}",
+                private_account.account_id()
+            )
+        })?;
 
-    Ok(())
-}
-
-pub async fn setup_private_accounts_with_initial_supply(
-    wallet: &mut WalletCore,
-    initial_private_accounts: &[InitialPrivateAccountForWallet],
-) -> Result<()> {
-    for private_account in initial_private_accounts {
-        claim_funds_from_vault_to_private(
-            wallet,
-            private_account.account_id(),
-            private_account.balance,
-        )
-        .await
-        .context("Failed to claim funds from vault into private account")?;
+        wallet
+            .sync_to_latest_block()
+            .await
+            .context("Failed to sync wallet after funding a private account")?;
     }
 
     Ok(())
@@ -450,32 +454,6 @@ pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {
         .sync_to_latest_block()
         .await
         .context("Failed to sync wallet from prebuilt chain")?;
-
-    Ok(())
-}
-
-async fn claim_funds_from_vault_to_private(
-    wallet: &mut WalletCore,
-    owner_id: AccountId,
-    amount: u128,
-) -> Result<()> {
-    let Some(_) = wallet.storage().key_chain().private_account(owner_id) else {
-        bail!("Missing private account in wallet key chain for account {owner_id}");
-    };
-
-    let result = wallet::cli::execute_subcommand(
-        wallet,
-        Command::Vault(VaultSubcommand::Claim {
-            account_id: private_mention(owner_id),
-            amount,
-        }),
-    )
-    .await
-    .context("Failed to execute private vault claim command")?;
-
-    let SubcommandReturnValue::TransactionExecuted { .. } = result else {
-        bail!("Expected TransactionExecuted return value for private vault claim");
-    };
 
     Ok(())
 }

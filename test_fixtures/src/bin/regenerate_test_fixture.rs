@@ -14,8 +14,7 @@ use sequencer_storage_actor::{
 use test_fixtures::{
     config,
     setup::{
-        SequencerSetup, prebuilt_sequencer_db_dump_path, setup_bedrock_node,
-        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
+        SequencerSetup, fund_private_accounts, prebuilt_sequencer_db_dump_path, setup_bedrock_node,
         setup_wallet,
     },
 };
@@ -39,8 +38,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run a real sequencer with the default accounts, apply genesis + claim the initial supply
-/// (genesis block + claim block), then strip the checkpoint and reset blocks to `Pending` so the
+/// Run a real sequencer with the default accounts, apply genesis + fund the private accounts
+/// (genesis block + funding block), then strip the checkpoint and reset blocks to `Pending` so the
 /// dump replays cleanly against a fresh Bedrock. Writes the dump to `dest`.
 async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let (_bedrock_compose, bedrock_addr) = setup_bedrock_node()
@@ -49,8 +48,10 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
 
     let initial_public_accounts = config::default_public_accounts_for_wallet();
     let initial_private_accounts = config::default_private_accounts_for_wallet();
-    let genesis =
-        config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts);
+    let genesis = config::genesis_from_accounts(
+        &initial_public_accounts,
+        config::private_total(&initial_private_accounts),
+    );
 
     let (sequencer_handle, temp_sequencer_dir) =
         SequencerSetup::new(config::SequencerPartialConfig::default(), bedrock_addr)
@@ -69,12 +70,13 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     .await
     .context("Failed to setup wallet for fixture generation")?;
 
-    setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
-        .await
-        .context("Failed to initialize public accounts for fixture generation")?;
-    setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
-        .await
-        .context("Failed to initialize private accounts for fixture generation")?;
+    fund_private_accounts(
+        &mut wallet,
+        &initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0,
+        &initial_private_accounts,
+    )
+    .await
+    .context("Failed to fund private accounts for fixture generation")?;
 
     // Shut down gracefully to release the rocksdb lock before reopening the store.
     drop(wallet);

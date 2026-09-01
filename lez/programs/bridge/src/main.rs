@@ -4,6 +4,8 @@ use lee_core::{
     program::{ChainedCall, ProgramEvent, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
+include!("../../authenticated_transfer/image_id.rs");
+
 fn unchanged_post_states(pre_states: &[lee_core::account::AccountWithMetadata]) -> Vec<Account> {
     pre_states
         .iter()
@@ -32,11 +34,10 @@ fn main() {
     let (post_states, chained_calls, events) = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
-            vault_program_id,
             recipient_id,
             amount,
         } => {
-            let [bridge, recipient_vault, receipt] = pre_states
+            let [bridge, recipient, receipt] = pre_states
                 .try_into()
                 .expect("Deposit requires exactly 3 accounts");
 
@@ -47,9 +48,8 @@ fn main() {
             );
 
             assert_eq!(
-                recipient_vault.account_id,
-                vault_core::compute_vault_account_id(vault_program_id, recipient_id),
-                "Second account must be recipient vault PDA"
+                recipient.account_id, recipient_id,
+                "Second account must be the recipient"
             );
 
             assert_eq!(
@@ -82,18 +82,17 @@ fn main() {
 
                 let post_states = vec![
                     bridge.account.clone(),
-                    recipient_vault.account.clone(),
+                    recipient.account.clone(),
                     receipt_post,
                 ];
 
-                let mut bridge_for_vault = bridge;
-                bridge_for_vault.is_authorized = true;
+                let mut bridge_for_transfer = bridge;
+                bridge_for_transfer.is_authorized = true;
                 let chained_calls = vec![
                     ChainedCall::new(
-                        vault_program_id,
-                        vec![bridge_for_vault, recipient_vault],
-                        &vault_core::Instruction::Transfer {
-                            recipient_id,
+                        AUTHENTICATED_TRANSFER_IMAGE_ID,
+                        vec![bridge_for_transfer, recipient],
+                        &authenticated_transfer_core::Instruction::Transfer {
                             amount: u128::from(amount),
                         },
                     )
@@ -104,7 +103,6 @@ fn main() {
                     selector: bridge_core::event::Deposit::SELECTOR,
                     data: bridge_core::event::Deposit {
                         l1_deposit_op_id,
-                        vault_program_id,
                         recipient_id,
                         amount,
                     }
