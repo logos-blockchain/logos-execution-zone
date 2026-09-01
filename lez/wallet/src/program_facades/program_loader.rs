@@ -23,7 +23,7 @@ impl ProgramLoader<'_> {
         bytecode: Vec<u8>,
         next_segment: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let instruction = Instruction::NewSegment {
+        let instruction = Instruction::WriteSegment {
             bytecode,
             next_segment,
         };
@@ -49,7 +49,7 @@ impl ProgramLoader<'_> {
         chain: &[AccountId],
         immutable: bool,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let instruction = Instruction::UploadHeader {
+        let instruction = Instruction::CreateHeader {
             first_segment,
             immutable,
         };
