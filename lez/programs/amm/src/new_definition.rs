@@ -2,11 +2,11 @@ use std::num::NonZeroU128;
 
 use amm_core::{
     PoolDefinition, compute_liquidity_token_pda, compute_liquidity_token_pda_seed,
-    compute_pool_pda, compute_pool_pda_seed, compute_vault_pda, compute_vault_pda_seed,
+    compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
 };
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall, Claim, ProgramId},
+    program::{ChainedCall, ProgramId},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -22,7 +22,7 @@ pub fn new_definition(
     token_a_amount: NonZeroU128,
     token_b_amount: NonZeroU128,
     amm_program_id: ProgramId,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<Account>, Vec<ChainedCall>) {
     // Verify token_a and token_b are different
     let definition_token_a_id = token_core::TokenHolding::try_from(&user_holding_a.account.data)
         .expect("New definition: AMM Program expects valid Token Holding account for Token A")
@@ -65,7 +65,7 @@ pub fn new_definition(
 
     // TODO: return here
     // Verify that Pool Account is not active
-    let pool_account_data = if pool.account == Account::default() {
+    let pool_account_data = if pool.account.data.is_empty() {
         PoolDefinition::default()
     } else {
         PoolDefinition::try_from(&pool.account.data)
@@ -81,7 +81,7 @@ pub fn new_definition(
     let initial_lp = (token_a_amount.get() * token_b_amount.get()).isqrt();
 
     // Chain call for liquidity token (TokenLP definition -> User LP Holding)
-    let instruction = if pool.account == Account::default() {
+    let instruction = if pool.account.data.is_empty() {
         token_core::Instruction::NewFungibleDefinition {
             name: String::from("LP Token"),
             total_supply: initial_lp,
@@ -108,8 +108,6 @@ pub fn new_definition(
     };
 
     pool_post.data = Data::from(&pool_post_definition);
-    let pool_pda_seed = compute_pool_pda_seed(definition_token_a_id, definition_token_b_id);
-    let pool_post = AccountPostState::new_claimed_if_default(pool_post, Claim::Pda(pool_pda_seed));
 
     let token_program_id: lee_core::program::ProgramId =
         user_holding_a.account.program_owner.into();
@@ -160,12 +158,12 @@ pub fn new_definition(
 
     let post_states = vec![
         pool_post,
-        AccountPostState::new(vault_a.account),
-        AccountPostState::new(vault_b.account),
-        AccountPostState::new(pool_definition_lp.account),
-        AccountPostState::new(user_holding_a.account),
-        AccountPostState::new(user_holding_b.account),
-        AccountPostState::new(user_holding_lp.account),
+        vault_a.account,
+        vault_b.account,
+        pool_definition_lp.account,
+        user_holding_a.account,
+        user_holding_b.account,
+        user_holding_lp.account,
     ];
 
     (post_states, chained_calls)

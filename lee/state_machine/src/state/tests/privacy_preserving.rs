@@ -105,7 +105,6 @@ fn transition_from_privacy_preserving_transaction_private() {
     let expected_new_commitment_2 = Commitment::new(
         &recipient_account_id,
         &Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
             nonce: Nonce::private_account_nonce_init(&recipient_account_id),
             balance: balance_to_move,
             ..Account::default()

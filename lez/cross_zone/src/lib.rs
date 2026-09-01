@@ -322,23 +322,6 @@ pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
     )
 }
 
-/// The genesis transaction claiming one holder's holding PDA; replayable, so
-/// the indexer reconstructs holdings from the genesis block alone.
-#[must_use]
-pub fn build_bridge_lock_init_holding_tx(holder: AccountId) -> lee::PublicTransaction {
-    let bridge_lock_id = programs::bridge_lock().id();
-    genesis_public_tx(
-        bridge_lock_id,
-        vec![bridge_lock_core::holding_account_id(
-            bridge_lock_id,
-            &holder.into_value(),
-        )],
-        bridge_lock_core::Instruction::InitHolding {
-            holder: holder.into_value(),
-        },
-    )
-}
-
 /// The holding PDA a holder's bridgeable balance lives in.
 #[must_use]
 pub fn bridge_lock_holding_account_id(holder: AccountId) -> AccountId {

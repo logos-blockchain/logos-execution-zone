@@ -11,7 +11,7 @@
 //!   [`cooldown_ms`: u64 LE | `last_run_timestamp`: u64 LE].
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 type Instruction = ();
 
@@ -89,10 +89,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![state, clock_pre],
-        vec![
-            AccountPostState::new(state_post),
-            AccountPostState::new(clock_post),
-        ],
+        vec![state_post, clock_post],
     )
     .write();
 }

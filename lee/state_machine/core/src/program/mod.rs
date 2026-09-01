@@ -250,6 +250,10 @@ pub struct CallerData {
 pub struct ChainedCall {
     /// The program ID of the program to execute.
     pub program_id: ProgramId,
+    /// The callee's pre-states.
+    ///
+    /// Checked against the state as the caller's frame leaves it, so an account the caller
+    /// acquired in this frame must be forwarded with the caller as its `program_owner`.
     pub pre_states: Vec<AccountWithMetadata>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
@@ -279,95 +283,6 @@ impl ChainedCall {
     pub fn with_pda_seeds(mut self, pda_seeds: Vec<PdaSeed>) -> Self {
         self.pda_seeds = pda_seeds;
         self
-    }
-}
-
-/// Represents the final state of an `Account` after a program execution.
-///
-/// A post state may optionally request that the executing program
-/// becomes the owner of the account (a "claim"). This is used to signal
-/// that the program intends to take ownership of the account.
-#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
-pub struct AccountPostState {
-    account: Account,
-    claim: Option<Claim>,
-}
-
-/// A claim request for an account, indicating that the executing program intends to take ownership
-/// of the account.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
-)]
-pub enum Claim {
-    /// The program requests ownership of the account which was authorized by the signer.
-    ///
-    /// Note that it's possible to successfully execute program outputting [`AccountPostState`] with
-    /// `is_authorized == false` and `claim == Some(Claim::Authorized)`.
-    /// This will give no error if program had authorization in pre state and may be useful
-    /// if program decides to give up authorization for a chained call.
-    Authorized,
-    /// The program requests ownership of the account through a PDA. The program emits the
-    /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
-    /// account is public or private.
-    Pda(PdaSeed),
-}
-
-impl AccountPostState {
-    /// Creates a post state without a claim request.
-    /// The executing program is not requesting ownership of the account.
-    #[must_use]
-    pub const fn new(account: Account) -> Self {
-        Self {
-            account,
-            claim: None,
-        }
-    }
-
-    /// Creates a post state that requests ownership of the account.
-    /// This indicates that the executing program intends to claim the
-    /// account as its own and is allowed to mutate it.
-    #[must_use]
-    pub const fn new_claimed(account: Account, claim: Claim) -> Self {
-        Self {
-            account,
-            claim: Some(claim),
-        }
-    }
-
-    /// Creates a post state that requests ownership of the account
-    /// if the account's program owner is the default program ID.
-    #[must_use]
-    pub fn new_claimed_if_default(account: Account, claim: Claim) -> Self {
-        let is_default_owner = account.program_owner == DEFAULT_PROGRAM_OWNER;
-        Self {
-            account,
-            claim: is_default_owner.then_some(claim),
-        }
-    }
-
-    /// Returns whether this post state requires a claim.
-    #[must_use]
-    pub const fn required_claim(&self) -> Option<Claim> {
-        self.claim
-    }
-
-    /// Returns the underlying account.
-    #[must_use]
-    pub const fn account(&self) -> &Account {
-        &self.account
-    }
-
-    /// Returns the underlying account.
-    #[must_use]
-    pub const fn account_mut(&mut self) -> &mut Account {
-        &mut self.account
-    }
-
-    /// Consumes the post state and returns the underlying account.
-    #[must_use]
-    pub fn into_account(self) -> Account {
-        self.account
     }
 }
 
@@ -496,7 +411,7 @@ pub struct ProgramOutput {
     /// The account pre states the program received to produce this output.
     pub pre_states: Vec<AccountWithMetadata>,
     /// The account post states the program execution produced.
-    pub post_states: Vec<AccountPostState>,
+    pub post_states: Vec<Account>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
     /// The block ID window where the program output is valid.
@@ -514,7 +429,7 @@ impl ProgramOutput {
         caller_program_id: Option<ProgramId>,
         instruction_data: InstructionData,
         pre_states: Vec<AccountWithMetadata>,
-        post_states: Vec<AccountPostState>,
+        post_states: Vec<Account>,
     ) -> Self {
         Self {
             self_program_id,
@@ -676,11 +591,6 @@ pub enum ExecutionValidationError {
         executing_program_id: ProgramId,
     },
 
-    #[error(
-        "Post-state for account {account_id} has default program owner but pre-state was not default"
-    )]
-    NonDefaultAccountWithDefaultOwner { account_id: AccountId },
-
     #[error("Total balance across accounts overflowed 2^256 - 1")]
     BalanceSumOverflow,
 
@@ -757,7 +667,7 @@ pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionDa
 /// - `executing_program_id`: The identifier of the program that was executed.
 pub fn validate_execution(
     pre_states: &[AccountWithMetadata],
-    post_states: &[AccountPostState],
+    post_states: &[Account],
     executing_program_id: ProgramId,
 ) -> Result<(), ExecutionValidationError> {
     // `program_owner` is `AccountId`-typed; convert once up front rather than at each
@@ -781,14 +691,14 @@ pub fn validate_execution(
 
     for (pre, post) in pre_states.iter().zip(post_states) {
         // 3. Nonce must remain unchanged
-        if pre.account.nonce != post.account.nonce {
+        if pre.account.nonce != post.nonce {
             return Err(ExecutionValidationError::ModifiedNonce {
                 account_id: pre.account_id,
             });
         }
 
         // 4. Program ownership changes are not allowed
-        if pre.account.program_owner != post.account.program_owner {
+        if pre.account.program_owner != post.program_owner {
             return Err(ExecutionValidationError::ModifiedProgramOwner {
                 account_id: pre.account_id,
             });
@@ -797,16 +707,17 @@ pub fn validate_execution(
         let account_program_owner = pre.account.program_owner;
 
         // 5. Decreasing balance requires the account to be authorized
-        if post.account.balance < pre.account.balance && !pre.is_authorized {
+        if post.balance < pre.account.balance && !pre.is_authorized {
             return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
                 account_id: pre.account_id,
             });
         }
 
-        // 6. Data changes only allowed if owned by executing program or if account pre state has
-        //    default values
-        if pre.account.data != post.account.data
-            && pre.account != Account::default()
+        // 6. Data changes only allowed if owned by executing program or if the account is unowned.
+        //    Writing data to an unowned account is how ownership is acquired: the caller of
+        //    `validate_execution` assigns the executing program as owner afterwards.
+        if pre.account.data != post.data
+            && account_program_owner != DEFAULT_PROGRAM_OWNER
             && account_program_owner != executing_account_id
         {
             return Err(ExecutionValidationError::UnauthorizedDataModification {
@@ -814,23 +725,9 @@ pub fn validate_execution(
                 executing_program_id,
             });
         }
-
-        // 7. A non-default account left with the default owner must be a claimless byte-identical
-        //    echo: `Claim` is applied after this check, so a claimed echo would seize the account.
-        if post.account.program_owner == DEFAULT_PROGRAM_OWNER && pre.account != Account::default()
-        {
-            let claimless_echo = post.account == pre.account && post.required_claim().is_none();
-            if !claimless_echo {
-                return Err(
-                    ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
-                        account_id: pre.account_id,
-                    },
-                );
-            }
-        }
     }
 
-    // 8. Total balance is preserved
+    // 7. Total balance is preserved
     let Some(total_balance_pre_states) =
         WrappedBalanceSum::from_balances(pre_states.iter().map(|pre| pre.account.balance))
     else {
@@ -838,7 +735,7 @@ pub fn validate_execution(
     };
 
     let Some(total_balance_post_states) =
-        WrappedBalanceSum::from_balances(post_states.iter().map(|post| post.account.balance))
+        WrappedBalanceSum::from_balances(post_states.iter().map(|post| post.balance))
     else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
@@ -851,6 +748,28 @@ pub fn validate_execution(
     }
 
     Ok(())
+}
+
+/// Ownership is implicit: writing data to an unowned account makes the executing program its
+/// owner.
+///
+/// Must be applied by every caller of `validate_execution`, which has already rejected a data
+/// write to an account owned by another program. A balance-only credit leaves it unowned, and so
+/// does an echo: naming an account acquires nothing, only writing to it does. Acquisition lands
+/// after the frame: a guest that forwards an account it just acquired must name itself as its
+/// owner on the forwarded pre-state (see [`ChainedCall::pre_states`]).
+pub fn acquire_ownership_on_data_write(pre: &Account, post: &mut Account, program_id: ProgramId) {
+    if pre.program_owner == DEFAULT_PROGRAM_OWNER && post.data != pre.data {
+        post.program_owner = AccountId::from(program_id);
+    }
+}
+
+/// An account that ends a transaction unowned must carry no data. Unreachable through
+/// `acquire_ownership_on_data_write`; this pins the program-output surface against a prover
+/// that skips it.
+#[must_use]
+pub fn is_ownership_settled(post: &Account) -> bool {
+    post.program_owner != DEFAULT_PROGRAM_OWNER || post.data.is_empty()
 }
 
 fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> bool {

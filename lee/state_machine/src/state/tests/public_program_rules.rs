@@ -330,12 +330,20 @@ fn program_should_fail_if_modifies_data_of_non_owned_account() {
     let initial_data = HashMap::new();
     let mut state = V03State::new()
         .with_public_accounts(initial_data)
-        .with_test_programs()
-        .with_non_default_accounts_but_default_program_owners();
+        .with_test_programs();
     let account_id = AccountId::new([255; 32]);
     let program_id = crate::test_methods::data_changer().id();
 
-    assert_ne!(state.get_account_by_id(account_id), Account::default());
+    // Owned by someone else: rule 6 lets a program write to an *unowned* account, so the
+    // subject of "non-owned" must carry a foreign owner, not merely non-default contents.
+    state.force_insert_account(
+        account_id,
+        Account {
+            program_owner: [0, 1, 2, 3, 4, 5, 6, 7].into(),
+            balance: 100,
+            ..Account::default()
+        },
+    );
     assert_ne!(
         state.get_account_by_id(account_id).program_owner,
         program_id.into()

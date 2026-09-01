@@ -1140,10 +1140,19 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         // the very task production needs). Draining here also subsumes the old
         // startup replay.
         //
-        // Skip any deposit whose receipt PDA already exists in the state we
+        // Skip any deposit whose receipt PDA the bridge owns in the state we
         // build on — it was minted by us or by a peer whose block we adopted.
         // An orphan reverts the receipt with the block, so the next turn
         // re-mints without any bookkeeping of our own.
+        //
+        // TODO(squatting): a receipt owned by anyone else — a program that
+        // wrote data to the derivable address before the mint — fails that
+        // predicate for ever, so its deposit is rebuilt and executed on every
+        // block for the life of the chain: a failed application is dropped,
+        // not retired, and only dispatches carry a failure budget. Known and
+        // accepted for now. Namespaced accounts remove ownership and with it
+        // the squat; retiring a mint that fails for good for any other reason
+        // wants a deposit dead letter like the dispatch one, alongside.
         let pending_deposits: VecDeque<LeeTransaction> = self
             .store
             .get_pending_deposit_events()
@@ -1585,14 +1594,17 @@ impl LiveCommittee {
     }
 }
 
-/// Whether `deposit_op_id`'s mint is already reflected in `state` — its receipt
-/// PDA exists. The receipt is the exactly-once ledger the bridge program keeps.
+/// Whether `deposit_op_id`'s mint is already reflected in `state` — the bridge
+/// owns its receipt PDA. The receipt is the exactly-once ledger the bridge
+/// program keeps, and this mirrors the guest's own predicate: ownership, not
+/// non-defaultness, since anyone may credit balance to the receipt address and
+/// a bare credit must not make us skip relaying a real deposit.
 fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> bool {
     let receipt_id =
         bridge_core::deposit_receipt_account_id(programs::bridge().id(), deposit_op_id.0);
     state
         .get_account_by_id_ref(receipt_id)
-        .is_some_and(|receipt| *receipt != lee::Account::default())
+        .is_some_and(|receipt| receipt.program_owner == programs::bridge().id().into())
 }
 
 /// Whether a cross-zone delivery is already on the chain we are building on.
@@ -1985,17 +1997,12 @@ fn build_genesis_state(
         let self_zone = *config.bedrock_config.channel_id.as_ref();
         cross_zone::build_inbox_init_config_tx(self_zone)
     });
-    // The claim must precede the credit, or the faucet's chained transfer
-    // would find a default recipient and demand a signature no PDA has.
     let holding_txs: Vec<_> = bridge_lock_holdings(&config.genesis)
-        .flat_map(|(holder, amount)| {
-            [
-                cross_zone::build_bridge_lock_init_holding_tx(holder),
-                build_supply_holding_genesis_transaction(
-                    cross_zone::bridge_lock_holding_account_id(holder),
-                    amount,
-                ),
-            ]
+        .map(|(holder, amount)| {
+            build_supply_holding_genesis_transaction(
+                cross_zone::bridge_lock_holding_account_id(holder),
+                amount,
+            )
         })
         .collect();
     let supply_txs = config.genesis.iter().filter_map(|action| match action {
@@ -2008,8 +2015,7 @@ fn build_genesis_state(
         GenesisAction::SupplyBridgeAccount { balance } => {
             Some(build_supply_bridge_account_genesis_transaction(*balance))
         }
-        // Holdings are emitted above as InitHolding + credit pairs; stakes are
-        // built below.
+        // Holdings are credited above; stakes are built below.
         GenesisAction::SupplyBridgeLockHolding { .. } | GenesisAction::StakeSequencer { .. } => {
             None
         }
@@ -2178,9 +2184,8 @@ fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTrans
         faucet_core::Instruction::GenesisTransferDirect { amount: total },
     )
     .expect("Failed to build genesis funding message");
-    // The funding account signs even though it is only receiving. It is a brand
-    // new account, so the transfer claims it, and a claim needs that account's
-    // own signature.
+    // The funding account signs even though it is only receiving: the stake
+    // transactions below count their nonces from 1 on the strength of it.
     let fund_witness_set =
         lee::public_transaction::WitnessSet::for_message(&fund_message, &[&funding_key]);
 

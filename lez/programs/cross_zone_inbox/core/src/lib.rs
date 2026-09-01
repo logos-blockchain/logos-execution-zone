@@ -282,7 +282,7 @@ pub fn inbox_config_account_id(inbox_id: ProgramId) -> AccountId {
 /// Seed of the config PDA, exposed so the guest can claim the account when it
 /// initializes the config at genesis.
 #[must_use]
-pub const fn inbox_config_seed() -> PdaSeed {
+const fn inbox_config_seed() -> PdaSeed {
     PdaSeed::new(INBOX_CONFIG_SEED)
 }
 
@@ -301,7 +301,7 @@ pub fn inbox_seen_shard_account_id(
 /// One shard per peer block, so a peer cannot accumulate deliveries from many
 /// blocks into one account.
 #[must_use]
-pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
+fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 72];

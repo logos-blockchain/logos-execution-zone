@@ -1,7 +1,4 @@
-use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
-};
+use lee_core::account::{Account, AccountWithMetadata, Data};
 use token_core::{
     NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding, TokenMetadata,
 };
@@ -12,17 +9,15 @@ pub fn new_fungible_definition(
     holding_target_account: AccountWithMetadata,
     name: String,
     total_supply: u128,
-) -> Vec<AccountPostState> {
-    assert_eq!(
-        definition_target_account.account,
-        Account::default(),
-        "Definition target account must have default values"
+) -> Vec<Account> {
+    assert!(
+        definition_target_account.account.data.is_empty(),
+        "Definition target account must not already hold data"
     );
 
-    assert_eq!(
-        holding_target_account.account,
-        Account::default(),
-        "Holding target account must have default values"
+    assert!(
+        holding_target_account.account.data.is_empty(),
+        "Holding target account must not already hold data"
     );
 
     let token_definition = TokenDefinition::Fungible {
@@ -41,10 +36,7 @@ pub fn new_fungible_definition(
     let mut holding_target_account_post = holding_target_account.account;
     holding_target_account_post.data = Data::from(&token_holding);
 
-    vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
-    ]
+    vec![definition_target_account_post, holding_target_account_post]
 }
 
 #[must_use]
@@ -54,23 +46,20 @@ pub fn new_definition_with_metadata(
     metadata_target_account: AccountWithMetadata,
     new_definition: NewTokenDefinition,
     metadata: NewTokenMetadata,
-) -> Vec<AccountPostState> {
-    assert_eq!(
-        definition_target_account.account,
-        Account::default(),
-        "Definition target account must have default values"
+) -> Vec<Account> {
+    assert!(
+        definition_target_account.account.data.is_empty(),
+        "Definition target account must not already hold data"
     );
 
-    assert_eq!(
-        holding_target_account.account,
-        Account::default(),
-        "Holding target account must have default values"
+    assert!(
+        holding_target_account.account.data.is_empty(),
+        "Holding target account must not already hold data"
     );
 
-    assert_eq!(
-        metadata_target_account.account,
-        Account::default(),
-        "Metadata target account must have default values"
+    assert!(
+        metadata_target_account.account.data.is_empty(),
+        "Metadata target account must not already hold data"
     );
 
     let (token_definition, token_holding) = match new_definition {
@@ -119,8 +108,8 @@ pub fn new_definition_with_metadata(
     metadata_target_account_post.data = Data::from(&token_metadata);
 
     vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(metadata_target_account_post, Claim::Authorized),
+        definition_target_account_post,
+        holding_target_account_post,
+        metadata_target_account_post,
     ]
 }

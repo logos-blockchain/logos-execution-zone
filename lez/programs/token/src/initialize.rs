@@ -1,17 +1,13 @@
-use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
-};
+use lee_core::account::{Account, AccountWithMetadata, Data};
 use token_core::{TokenDefinition, TokenHolding};
 
 #[must_use]
 pub fn initialize_account(
     definition_account: AccountWithMetadata,
     account_to_initialize: AccountWithMetadata,
-) -> Vec<AccountPostState> {
-    assert_eq!(
-        account_to_initialize.account,
-        Account::default(),
+) -> Vec<Account> {
+    assert!(
+        account_to_initialize.account.data.is_empty(),
         "Only Uninitialized accounts can be initialized"
     );
 
@@ -28,8 +24,5 @@ pub fn initialize_account(
     let mut account_to_initialize = account_to_initialize.account;
     account_to_initialize.data = Data::from(&holding);
 
-    vec![
-        AccountPostState::new(definition_post),
-        AccountPostState::new_claimed(account_to_initialize, Claim::Authorized),
-    ]
+    vec![definition_post, account_to_initialize]
 }

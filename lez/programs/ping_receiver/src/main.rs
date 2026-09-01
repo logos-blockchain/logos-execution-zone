@@ -1,15 +1,9 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    account::AccountWithMetadata,
+    program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
-use ping_core::{
-    ReceiverConfig, ReceiverInstruction, ping_record_pda, ping_record_seed,
-    receiver_config_account_id, receiver_config_seed,
-};
+use ping_core::{ReceiverConfig, ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 
 fn main() {
     let (
@@ -92,21 +86,15 @@ fn record(
         "third account must be the ping record PDA"
     );
 
-    let mut post_account = record.account.clone();
-    post_account.data = payload.try_into().expect("payload fits in account data");
-    let post =
-        AccountPostState::new_claimed_if_default(post_account, Claim::Pda(ping_record_seed()));
+    let mut post = record.account.clone();
+    post.data = payload.try_into().expect("payload fits in account data");
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![marker.clone(), config.clone(), record],
-        vec![
-            AccountPostState::new(marker.account),
-            AccountPostState::new(config.account),
-            post,
-        ],
+        vec![marker.account, config.account, post],
     )
     .write();
 }
@@ -147,13 +135,6 @@ fn renounce_authority(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
-    // Claims apply after post-state validation, so a first use must find the
-    // account untouched; an unowned account with history is refused for good.
-    assert!(
-        authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
-        "the authority account must be untouched before its first use as one"
-    );
     assert!(
         authority.is_authorized,
         "the configured authority must authorize renouncing it"
@@ -171,12 +152,7 @@ fn renounce_authority(
         caller_program_id,
         instruction_data,
         vec![config, authority.clone()],
-        vec![
-            AccountPostState::new(config_account),
-            // Claimed on first use: the authority's own signature bumps its
-            // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
-        ],
+        vec![config_account, authority.account],
     )
     .write();
 }
@@ -219,13 +195,6 @@ fn update_sources(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
-    // Claims apply after post-state validation, so a first use must find the
-    // account untouched; an unowned account with history is refused for good.
-    assert!(
-        authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
-        "the authority account must be untouched before its first use as one"
-    );
     assert!(
         authority.is_authorized,
         "the configured authority must authorize a source change"
@@ -243,12 +212,7 @@ fn update_sources(
         caller_program_id,
         instruction_data,
         vec![config, authority.clone()],
-        vec![
-            AccountPostState::new(config_account),
-            // Claimed on first use: the authority's own signature bumps its
-            // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
-        ],
+        vec![config_account, authority.account],
     )
     .write();
 }
@@ -275,11 +239,11 @@ fn init_config(
         receiver_config_account_id(self_program_id),
         "account must be the receiver config PDA"
     );
-    // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned one must already hold exactly this, since genesis is
-    // replayed onto seeded state during multi-sequencer reconstruction.
-    // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
-    if config.account != Account::default() {
+    // Init-once, idempotent under genesis replay: an empty config is a first init;
+    // a written one must already hold exactly this, since genesis is replayed onto
+    // seeded state during multi-sequencer reconstruction. Implicit ownership alone
+    // would not stop a later self-owned rewrite.
+    if !config.account.data.is_empty() {
         assert_eq!(
             config.account.program_owner,
             self_program_id.into(),
@@ -292,15 +256,11 @@ fn init_config(
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = config_value
+    let mut config_post = config.account.clone();
+    config_post.data = config_value
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
-    let config_post = AccountPostState::new_claimed_if_default(
-        config_account,
-        Claim::Pda(receiver_config_seed()),
-    );
 
     ProgramOutput::new(
         self_program_id,

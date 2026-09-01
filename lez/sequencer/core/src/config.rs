@@ -28,8 +28,8 @@ pub enum GenesisAction {
     SupplyBridgeAccount {
         balance: Balance,
     },
-    /// Funds a holder's holding PDA at genesis: one `InitHolding` then one
-    /// faucet credit, both replayable genesis transactions.
+    /// Funds a holder's holding PDA at genesis with one replayable faucet
+    /// credit; the balance-only PDA needs no claim.
     SupplyBridgeLockHolding {
         holder: AccountId,
         amount: Balance,

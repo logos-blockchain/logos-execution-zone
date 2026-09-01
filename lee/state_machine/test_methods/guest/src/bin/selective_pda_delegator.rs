@@ -1,11 +1,9 @@
 use borsh::to_vec;
 use lee_core::program::{
-    AccountPostState, ChainedCall, Claim, InstructionData, PdaSeed, ProgramId, ProgramInput,
-    ProgramOutput, read_lee_inputs,
+    ChainedCall, InstructionData, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 type Instruction = (
-    PdaSeed,
     PdaSeed,
     ProgramId,
     InstructionData,
@@ -18,8 +16,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction:
-                (claim_seed, delegated_seed, callee_program_id, callee_instruction, sibling),
+            instruction: (delegated_seed, callee_program_id, callee_instruction, sibling),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -31,7 +28,6 @@ fn main() {
     let pda_for_callee = |is_authorized| {
         let mut for_callee = pda.clone();
         for_callee.is_authorized = is_authorized;
-        for_callee.account.program_owner = self_program_id.into();
         for_callee
     };
 
@@ -71,11 +67,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pda.clone()],
-        // Claim first PDA supplied
-        vec![AccountPostState::new_claimed(
-            pda.account.clone(),
-            Claim::Pda(claim_seed),
-        )],
+        vec![pda.account.clone()],
     )
     .with_chained_calls(chained_calls)
     .write();

@@ -1,6 +1,5 @@
 use lee_core::program::{
-    AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+    ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 type Instruction = (ProgramId, InstructionData, bool);
@@ -19,7 +18,7 @@ fn main() {
     let (output_pre_states, output_post_states) = if declare_pre_states {
         let post_states = pre_states
             .iter()
-            .map(|account| AccountPostState::new(account.account.clone()))
+            .map(|account| account.account.clone())
             .collect();
         (pre_states.clone(), post_states)
     } else {

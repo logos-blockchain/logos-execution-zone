@@ -5,25 +5,25 @@
 
 use lee_core::{
     account::{Account, AccountWithMetadata},
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
+    program::{ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
-/// Initializes a default account under the ownership of this program.
-/// This is achieved by a noop.
-fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
-    let account_to_claim = pre_state.account;
+/// Echoes an authorized default account back unchanged. The echo acquires nothing: only
+/// writing data takes an unowned account over.
+fn initialize_account(pre_state: AccountWithMetadata) -> Account {
+    let account = pre_state.account;
     let is_authorized = pre_state.is_authorized;
 
-    // Continue only if the account to claim has default values
+    // Continue only if the account has default values
     assert!(
-        account_to_claim == Account::default(),
+        account == Account::default(),
         "Account is already initialized"
     );
 
     // Continue only if the owner authorized this operation
     assert!(is_authorized, "Missing required authorization");
 
-    AccountPostState::new(account_to_claim)
+    account
 }
 
 /// Transfers `balance_to_move` native balance from `sender` to `recipient`.
@@ -31,7 +31,7 @@ fn transfer(
     sender: AccountWithMetadata,
     recipient: AccountWithMetadata,
     balance_to_move: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<Account> {
     // Continue only if the sender has authorized this operation
     assert!(sender.is_authorized, "Missing required authorization");
 
@@ -52,10 +52,7 @@ fn transfer(
     sender_post.balance -= balance_to_move + malicious_offset;
     recipient_post.balance += balance_to_move + malicious_offset;
 
-    vec![
-        AccountPostState::new(sender_post),
-        AccountPostState::new(recipient_post),
-    ]
+    vec![sender_post, recipient_post]
 }
 
 /// A transfer of balance program.
@@ -73,8 +70,8 @@ fn main() {
     ) = read_lee_inputs();
 
     let post_states = match (pre_states.as_slice(), balance_to_move) {
-        ([account_to_claim], 0) => {
-            let post = initialize_account(account_to_claim.clone());
+        ([account], 0) => {
+            let post = initialize_account(account.clone());
             vec![post]
         }
         ([sender, recipient], balance_to_move) => {

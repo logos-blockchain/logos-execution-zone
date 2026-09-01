@@ -1,10 +1,10 @@
 use std::collections::btree_map::Entry;
 
 use lee_core::{
-    account::{AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata},
     program::{
-        AccountPostState, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramId,
-        ProgramInput, ProgramOutput, read_lee_inputs,
+        ChainedCall, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_inputs,
     },
 };
 use sequencer_stake_core::{
@@ -12,7 +12,6 @@ use sequencer_stake_core::{
     SequencerStakeConfig, SlashApproval, StakeRecord,
     ed25519_dalek::{Signature, VerifyingKey},
     sequencer_stake_config_account_id, slash_approval_message, slash_sink_account_id,
-    slash_sink_seed,
 };
 
 fn main() {
@@ -134,7 +133,7 @@ fn stake(
     amount: u128,
     mover_program_id: ProgramId,
     mover_instruction_data: InstructionData,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<Account>, Vec<ChainedCall>) {
     let [funding_account, ownership_account, config_account] =
         <[AccountWithMetadata; 3]>::try_from(pre_states).expect(
             "Stake requires a funding account, an ownership account, and the config account",
@@ -206,9 +205,9 @@ fn stake(
     }
 
     // pass-through: propagates authorization into the nested mover call
-    let funding_account_post = AccountPostState::new(funding_account.account.clone());
+    let funding_account_post = funding_account.account.clone();
 
-    // claim is a no-op on a top-up (already owned)
+    // the first stake's write acquires the ownership account; a top-up is an ordinary owned write
     let mut ownership_account_data = ownership_account.account.clone();
     ownership_account_data.data = StakeRecord {
         sequencer_key,
@@ -217,15 +216,14 @@ fn stake(
     .to_bytes()
     .try_into()
     .expect("StakeRecord should fit in account data");
-    let ownership_account_post =
-        AccountPostState::new_claimed_if_default(ownership_account_data.clone(), Claim::Authorized);
+    let ownership_account_post = ownership_account_data.clone();
 
     let mut config_account_new = config_account.account;
     config_account_new.data = config
         .to_bytes()
         .try_into()
         .expect("SequencerStakeConfig should fit in account data");
-    let config_account_post = AccountPostState::new(config_account_new);
+    let config_account_post = config_account_new;
 
     // chained-call pre-states reflect state as of when each call runs
     let mut ownership_account_claimed = ownership_account;
@@ -264,7 +262,7 @@ fn stake(
 fn confirm_stake(
     pre_states: Vec<AccountWithMetadata>,
     expected_balance_after: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<Account> {
     let [ownership_account] = <[AccountWithMetadata; 1]>::try_from(pre_states)
         .expect("ConfirmStake requires exactly the ownership account");
 
@@ -273,7 +271,7 @@ fn confirm_stake(
         "mover call did not deposit the expected amount into the ownership account"
     );
 
-    vec![AccountPostState::new(ownership_account.account)]
+    vec![ownership_account.account]
 }
 
 fn unstake_request(
@@ -281,7 +279,7 @@ fn unstake_request(
     pre_states: Vec<AccountWithMetadata>,
     amount: u128,
     destination: AccountId,
-) -> Vec<AccountPostState> {
+) -> Vec<Account> {
     let [ownership_account, config_account] = <[AccountWithMetadata; 2]>::try_from(pre_states)
         .expect("UnstakeRequest requires the ownership account and the config account");
 
@@ -343,10 +341,7 @@ fn unstake_request(
         .try_into()
         .expect("SequencerStakeConfig should fit in account data");
 
-    vec![
-        AccountPostState::new(ownership_account_new),
-        AccountPostState::new(config_account_new),
-    ]
+    vec![ownership_account_new, config_account_new]
 }
 
 /// Checks for enough distinct approvals from accredited keys over this key and
@@ -393,7 +388,7 @@ fn slash(
     sequencer_key: SequencerKey,
     inscription: [u8; 32],
     approvals: &[SlashApproval],
-) -> Vec<AccountPostState> {
+) -> Vec<Account> {
     let [ownership_account, sink_account, config_account] =
         <[AccountWithMetadata; 3]>::try_from(pre_states)
             .expect("Slash requires the ownership account, the slash sink, and the config account");
@@ -446,9 +441,8 @@ fn slash(
         .balance
         .checked_add(entry.total_staked)
         .expect("slash sink balance overflow");
-    // The first slash claims the sink.
-    let sink_post =
-        AccountPostState::new_claimed_if_default(sink_account_new, Claim::Pda(slash_sink_seed()));
+    // The sink is balance-only, so it stays unowned.
+    let sink_post = sink_account_new;
 
     let mut config_account_new = config_account.account;
     config_account_new.data = config
@@ -456,17 +450,13 @@ fn slash(
         .try_into()
         .expect("SequencerStakeConfig should fit in account data");
 
-    vec![
-        AccountPostState::new(ownership_account_new),
-        sink_post,
-        AccountPostState::new(config_account_new),
-    ]
+    vec![ownership_account_new, sink_post, config_account_new]
 }
 
 fn finalize_unstake(
     self_program_id: ProgramId,
     pre_states: Vec<AccountWithMetadata>,
-) -> Vec<AccountPostState> {
+) -> Vec<Account> {
     let [ownership_account, destination_account, config_account] =
         <[AccountWithMetadata; 3]>::try_from(pre_states).expect(
             "FinalizeUnstake requires the ownership account, a destination account, and the config account",
@@ -534,9 +524,5 @@ fn finalize_unstake(
         .try_into()
         .expect("SequencerStakeConfig should fit in account data");
 
-    vec![
-        AccountPostState::new(ownership_account_new),
-        AccountPostState::new(destination_new),
-        AccountPostState::new(config_account_new),
-    ]
+    vec![ownership_account_new, destination_new, config_account_new]
 }

@@ -1,13 +1,12 @@
 use bridge_lock_core::{
-    Instruction, config_account_id, config_bytes, config_seed, escrow_account_id, escrow_seed,
-    holding_account_id, holding_seed, read_config,
+    Instruction, config_account_id, config_bytes, escrow_account_id, holding_account_id,
+    read_config,
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::AccountWithMetadata,
     program::{
-        AccountPostState, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_inputs,
+        ChainedCall, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
@@ -69,8 +68,8 @@ fn main() {
     }
 }
 
-/// Idempotent claim: a re-run on a funded holding must be a byte-identical
-/// echo, or a stranger's `InitHolding` could reset a balance.
+/// Byte-identical echo of the holding PDA: claiming is implicit now and a
+/// balance-only account acquires no owner, so this arm changes nothing.
 fn init_holding(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
@@ -93,10 +92,7 @@ fn init_holding(
             "bridge-lock holding PDA is owned by another program"
         );
     }
-    let holding_post = AccountPostState::new_claimed_if_default(
-        holding.account.clone(),
-        Claim::Pda(holding_seed(holder)),
-    );
+    let holding_post = holding.account.clone();
 
     ProgramOutput::new(
         self_program_id,
@@ -204,17 +200,11 @@ fn lock(
         .checked_add(amount)
         .expect("escrow balance overflow");
 
-    let mut holding_account = holding.account.clone();
-    holding_account.balance = holding_new;
-    let holding_post = AccountPostState::new_claimed_if_default(
-        holding_account,
-        Claim::Pda(holding_seed(&holder.account_id.into_value())),
-    );
+    let mut holding_post = holding.account.clone();
+    holding_post.balance = holding_new;
 
-    let mut escrow_account = escrow.account.clone();
-    escrow_account.balance = escrow_new;
-    let escrow_post =
-        AccountPostState::new_claimed_if_default(escrow_account, Claim::Pda(escrow_seed()));
+    let mut escrow_post = escrow.account.clone();
+    escrow_post.balance = escrow_new;
 
     let call = ChainedCall::new(
         outbox_program_id,
@@ -228,7 +218,7 @@ fn lock(
         },
     );
 
-    let config_post = AccountPostState::new(config.account.clone());
+    let config_post = config.account.clone();
 
     ProgramOutput::new(
         self_program_id,
@@ -238,10 +228,10 @@ fn lock(
         vec![
             config_post,
             // The holder only signs; its account is echoed untouched.
-            AccountPostState::new(holder.account),
+            holder.account,
             holding_post,
             escrow_post,
-            AccountPostState::new(outbox.account),
+            outbox.account,
         ],
     )
     .with_chained_calls(vec![call])
@@ -269,8 +259,8 @@ fn init_config(
     // Init-once, idempotent under genesis replay: a `default` config is a first
     // init; an already-owned one must already pin exactly these programs, since
     // genesis is replayed onto seeded state during multi-sequencer reconstruction.
-    // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
-    if config.account != Account::default() {
+    // Acquiring it on the data write alone would not stop a later self-owned rewrite.
+    if !config.account.data.is_empty() {
         assert_eq!(
             config.account.program_owner,
             self_program_id.into(),
@@ -288,8 +278,7 @@ fn init_config(
         .to_vec()
         .try_into()
         .expect("pinned ids fit in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
+    let config_post = config_account;
 
     ProgramOutput::new(
         self_program_id,

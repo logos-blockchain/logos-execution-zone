@@ -5,17 +5,16 @@
 //! performs the actual transfer of funds from the vault accounts.
 
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
-use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::Account,
+    program::{ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use vault_core::Instruction;
 
-fn unchanged_post_states(
-    pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountPostState> {
+fn unchanged_post_states(pre_states: &[lee_core::account::AccountWithMetadata]) -> Vec<Account> {
     pre_states
         .iter()
-        .map(|pre_state| AccountPostState::new(pre_state.account.clone()))
+        .map(|pre_state| pre_state.account.clone())
         .collect()
 }
 

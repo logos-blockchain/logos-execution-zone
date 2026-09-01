@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{Account, AccountWithMetadata, Data},
+    program::{ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 // Hello-world with write + move_data example program.
@@ -16,37 +16,34 @@ use lee_core::{
 // - the accounts involved are either uninitialized, or
 // - already owned by this program.
 //
-// In case an input account is uninitialized, the program will claim it when
-// producing the post-state.
+// Writing data to an unowned input account is what makes this program its owner;
+// `move_data` clears the source's data, which acquires nothing.
 
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
 
 type Instruction = (u8, Vec<u8>);
 
-fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> AccountPostState {
-    // Construct the post state account values
-    let post_account = {
-        let mut this = pre_state.account;
-        let mut bytes = this.data.into_inner();
-        bytes.extend_from_slice(greeting);
-        this.data = bytes
-            .try_into()
-            .expect("Data should fit within the allowed limits");
-        this
-    };
-
-    AccountPostState::new_claimed_if_default(post_account, Claim::Authorized)
+fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> Account {
+    // Construct the post state account value. Writing data to an unowned account is what
+    // makes this program its owner.
+    let mut post_account = pre_state.account;
+    let mut bytes = post_account.data.into_inner();
+    bytes.extend_from_slice(greeting);
+    post_account.data = bytes
+        .try_into()
+        .expect("Data should fit within the allowed limits");
+    post_account
 }
 
-fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<AccountPostState> {
+fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<Account> {
     // Construct the post state account values
     let from_data: Vec<u8> = from_pre.account.data.clone().into();
 
     let from_post = {
         let mut this = from_pre.account;
         this.data = Data::default();
-        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
+        this
     };
 
     let to_post = {
@@ -56,7 +53,7 @@ fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<
         this.data = bytes
             .try_into()
             .expect("Data should fit within the allowed limits");
-        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
+        this
     };
 
     vec![from_post, to_post]

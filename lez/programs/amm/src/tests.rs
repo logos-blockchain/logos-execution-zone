@@ -2163,10 +2163,7 @@ fn call_add_liquidity_chained_call_successsful() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_add_successful().account
-            == *pool_post.account()
-    );
+    assert!(AccountWithMetadataForTests::pool_definition_add_successful().account == pool_post);
 
     let chained_call_lp = chained_calls[0].clone();
     let chained_call_b = chained_calls[1].clone();
@@ -2336,10 +2333,7 @@ fn call_remove_liquidity_chained_call_successful() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_remove_successful().account
-            == *pool_post.account()
-    );
+    assert!(AccountWithMetadataForTests::pool_definition_remove_successful().account == pool_post);
 
     let chained_call_lp = chained_calls[0].clone();
     let chained_call_b = chained_calls[1].clone();
@@ -2504,10 +2498,7 @@ fn call_new_definition_chained_call_successful() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_add_successful().account
-            == *pool_post.account()
-    );
+    assert!(AccountWithMetadataForTests::pool_definition_add_successful().account == pool_post);
 
     let chained_call_lp = chained_calls[0].clone();
     let chained_call_b = chained_calls[1].clone();
@@ -2638,9 +2629,7 @@ fn call_swap_chained_call_successful_1() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_swap_test_1().account == *pool_post.account()
-    );
+    assert!(AccountWithMetadataForTests::pool_definition_swap_test_1().account == pool_post);
 
     let chained_call_a = chained_calls[0].clone();
     let chained_call_b = chained_calls[1].clone();
@@ -2670,9 +2659,7 @@ fn call_swap_chained_call_successful_2() {
 
     let pool_post = post_states[0].clone();
 
-    assert!(
-        AccountWithMetadataForTests::pool_definition_swap_test_2().account == *pool_post.account()
-    );
+    assert!(AccountWithMetadataForTests::pool_definition_swap_test_2().account == pool_post);
 
     let chained_call_a = chained_calls[1].clone();
     let chained_call_b = chained_calls[0].clone();
@@ -2839,7 +2826,7 @@ fn call_swap_exact_output_chained_call_successful() {
 
     assert!(
         AccountWithMetadataForTests::pool_definition_swap_exact_output_test_1().account
-            == *pool_post.account()
+            == pool_post
     );
 
     let chained_call_a = chained_calls[0].clone();
@@ -2872,7 +2859,7 @@ fn call_swap_exact_output_chained_call_successful_2() {
 
     assert!(
         AccountWithMetadataForTests::pool_definition_swap_exact_output_test_2().account
-            == *pool_post.account()
+            == pool_post
     );
 
     let chained_call_a = chained_calls[1].clone();
@@ -2979,7 +2966,7 @@ fn new_definition_lp_asymmetric_amounts() {
 
     // check the minted LP amount
     let pool_post = post_states[0].clone();
-    let pool_def = PoolDefinition::try_from(&pool_post.account().data).unwrap();
+    let pool_def = PoolDefinition::try_from(&pool_post.data).unwrap();
     assert_eq!(
         pool_def.liquidity_pool_supply,
         BalanceForTests::lp_supply_init()
@@ -3011,7 +2998,7 @@ fn new_definition_lp_symmetric_amounts() {
     );
 
     let pool_post = post_states[0].clone();
-    let pool_def = PoolDefinition::try_from(&pool_post.account().data).unwrap();
+    let pool_def = PoolDefinition::try_from(&pool_post.data).unwrap();
     assert_eq!(pool_def.liquidity_pool_supply, expected_lp);
 
     let chained_call_lp = chained_calls[0].clone();

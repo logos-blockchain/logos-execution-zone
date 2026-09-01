@@ -1,6 +1,5 @@
 use lee_core::program::{
-    AccountPostState, BlockValidityWindow, ProgramInput, ProgramOutput, TimestampValidityWindow,
-    read_lee_inputs,
+    BlockValidityWindow, ProgramInput, ProgramOutput, TimestampValidityWindow, read_lee_inputs,
 };
 
 type Instruction = (BlockValidityWindow, TimestampValidityWindow);
@@ -27,7 +26,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pre],
-        vec![AccountPostState::new(post)],
+        vec![post],
     )
     .with_block_validity_window(block_validity_window)
     .with_timestamp_validity_window(timestamp_validity_window)

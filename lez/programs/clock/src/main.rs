@@ -13,8 +13,8 @@ use clock_core::{
     ClockAccountData, Instruction,
 };
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{Account, AccountWithMetadata},
+    program::{ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 fn update_if_multiple(
@@ -22,16 +22,16 @@ fn update_if_multiple(
     divisor: u64,
     current_block_id: u64,
     updated_data: &[u8],
-) -> (AccountWithMetadata, AccountPostState) {
+) -> (AccountWithMetadata, Account) {
     if current_block_id.is_multiple_of(divisor) {
         let mut post_account = pre.account.clone();
         post_account.data = updated_data
             .to_vec()
             .try_into()
             .expect("Clock account data should fit in account data");
-        (pre, AccountPostState::new(post_account))
+        (pre, post_account)
     } else {
-        let post = AccountPostState::new(pre.account.clone());
+        let post = pre.account.clone();
         (pre, post)
     }
 }

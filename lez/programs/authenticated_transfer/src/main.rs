@@ -1,10 +1,7 @@
 use authenticated_transfer_core::Instruction;
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    account::{Account, AccountWithMetadata},
+    program::{ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 /// Transfers `balance_to_move` native balance from `sender` to `recipient`.
@@ -12,7 +9,7 @@ fn transfer(
     sender: AccountWithMetadata,
     recipient: AccountWithMetadata,
     balance_to_move: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<Account> {
     // Continue only if the sender has authorized this operation.
     assert!(sender.is_authorized, "Sender must be authorized");
 
@@ -24,23 +21,18 @@ fn transfer(
             .balance
             .checked_sub(balance_to_move)
             .expect("Sender has insufficient balance");
-        AccountPostState::new(sender_post_account)
+        sender_post_account
     };
 
     let recipient_post = {
-        // Modify recipient's balance
+        // Modify recipient's balance. A credit writes no data, so an unowned recipient stays
+        // unowned -- receiving balance never hands a program ownership of the recipient.
         let mut recipient_post_account = recipient.account;
         recipient_post_account.balance = recipient_post_account
             .balance
             .checked_add(balance_to_move)
             .expect("Recipient balance overflow");
-
-        // Claim recipient account if it has default program owner
-        if recipient_post_account.program_owner == DEFAULT_PROGRAM_OWNER {
-            AccountPostState::new_claimed(recipient_post_account, Claim::Authorized)
-        } else {
-            AccountPostState::new(recipient_post_account)
-        }
+        recipient_post_account
     };
 
     vec![sender_post, recipient_post]

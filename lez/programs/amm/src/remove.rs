@@ -2,8 +2,8 @@ use std::num::NonZeroU128;
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall},
+    account::{Account, AccountWithMetadata, Data},
+    program::ChainedCall,
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -19,7 +19,7 @@ pub fn remove_liquidity(
     remove_liquidity_amount: NonZeroU128,
     min_amount_to_remove_token_a: u128,
     min_amount_to_remove_token_b: u128,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<Account>, Vec<ChainedCall>) {
     let remove_liquidity_amount: u128 = remove_liquidity_amount.into();
 
     // 1. Fetch Pool state
@@ -155,13 +155,13 @@ pub fn remove_liquidity(
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_states = vec![
-        AccountPostState::new(pool_post),
-        AccountPostState::new(vault_a.account),
-        AccountPostState::new(vault_b.account),
-        AccountPostState::new(pool_definition_lp.account),
-        AccountPostState::new(user_holding_a.account),
-        AccountPostState::new(user_holding_b.account),
-        AccountPostState::new(user_holding_lp.account),
+        pool_post,
+        vault_a.account,
+        vault_b.account,
+        pool_definition_lp.account,
+        user_holding_a.account,
+        user_holding_b.account,
+        user_holding_lp.account,
     ];
 
     (post_states, chained_calls)

@@ -1,7 +1,4 @@
-use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
-};
+use lee_core::account::{Account, AccountWithMetadata, Data};
 use token_core::TokenHolding;
 
 #[must_use]
@@ -9,13 +6,13 @@ pub fn transfer(
     sender: AccountWithMetadata,
     recipient: AccountWithMetadata,
     balance_to_move: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<Account> {
     assert!(sender.is_authorized, "Sender authorization is missing");
 
     let mut sender_holding =
         TokenHolding::try_from(&sender.account.data).expect("Invalid sender data");
 
-    let mut recipient_holding = if recipient.account == Account::default() {
+    let mut recipient_holding = if recipient.account.data.is_empty() {
         TokenHolding::zeroized_clone_from(&sender_holding)
     } else {
         TokenHolding::try_from(&recipient.account.data).expect("Invalid recipient data")
@@ -104,8 +101,5 @@ pub fn transfer(
     let mut recipient_post = recipient.account;
     recipient_post.data = Data::from(&recipient_holding);
 
-    vec![
-        AccountPostState::new(sender_post),
-        AccountPostState::new_claimed_if_default(recipient_post, Claim::Authorized),
-    ]
+    vec![sender_post, recipient_post]
 }

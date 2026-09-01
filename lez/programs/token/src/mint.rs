@@ -1,7 +1,4 @@
-use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
-};
+use lee_core::account::{Account, AccountWithMetadata, Data};
 use token_core::{TokenDefinition, TokenHolding};
 
 #[must_use]
@@ -9,7 +6,7 @@ pub fn mint(
     definition_account: AccountWithMetadata,
     user_holding_account: AccountWithMetadata,
     amount_to_mint: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<Account> {
     assert!(
         definition_account.is_authorized,
         "Definition authorization is missing"
@@ -17,7 +14,7 @@ pub fn mint(
 
     let mut definition = TokenDefinition::try_from(&definition_account.account.data)
         .expect("Token Definition account must be valid");
-    let mut holding = if user_holding_account.account == Account::default() {
+    let mut holding = if user_holding_account.account.data.is_empty() {
         TokenHolding::zeroized_from_definition(definition_account.account_id, &definition)
     } else {
         TokenHolding::try_from(&user_holding_account.account.data)
@@ -65,8 +62,5 @@ pub fn mint(
     let mut holding_post = user_holding_account.account;
     holding_post.data = Data::from(&holding);
 
-    vec![
-        AccountPostState::new(definition_post),
-        AccountPostState::new_claimed_if_default(holding_post, Claim::Authorized),
-    ]
+    vec![definition_post, holding_post]
 }

@@ -1,14 +1,11 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    account::AccountWithMetadata,
+    program::{ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use wrapped_token_core::{
     Instruction, MAX_MINT_AMOUNT, SourceEntry, SourcePolicy, WrappedTokenConfig, balance_bytes,
-    config_account_id, config_seed, holding_account_id, holding_seed, read_balance,
+    config_account_id, holding_account_id, read_balance,
 };
 
 fn main() {
@@ -127,10 +124,7 @@ fn mint(
         .to_vec()
         .try_into()
         .expect("balance fits in account data");
-    let holding_post = AccountPostState::new_claimed_if_default(
-        holding_account,
-        Claim::Pda(holding_seed(&recipient)),
-    );
+    let holding_post = holding_account;
     // The advanced counter is written back, so the cap survives restarts and
     // re-derivation alike: it is state, not host memory.
     let mut config_account = config.account.clone();
@@ -138,18 +132,14 @@ fn mint(
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
-    let config_post = AccountPostState::new(config_account);
+    let config_post = config_account;
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![marker.clone(), config, holding],
-        vec![
-            AccountPostState::new(marker.account),
-            config_post,
-            holding_post,
-        ],
+        vec![marker.account, config_post, holding_post],
     )
     .write();
 }
@@ -190,13 +180,6 @@ fn renounce_authority(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
-    // Claims apply after post-state validation, so a first use must find the
-    // account untouched; an unowned account with history is refused for good.
-    assert!(
-        authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
-        "the authority account must be untouched before its first use as one"
-    );
     assert!(
         authority.is_authorized,
         "the configured authority must authorize renouncing it"
@@ -214,12 +197,7 @@ fn renounce_authority(
         caller_program_id,
         instruction_data,
         vec![config, authority.clone()],
-        vec![
-            AccountPostState::new(config_account),
-            // Claimed on first use: the authority's own signature bumps its
-            // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
-        ],
+        vec![config_account, authority.account],
     )
     .write();
 }
@@ -261,13 +239,6 @@ fn update_sources(
     assert_eq!(
         authority.account_id, expected,
         "second account must be the configured authority"
-    );
-    // Claims apply after post-state validation, so a first use must find the
-    // account untouched; an unowned account with history is refused for good.
-    assert!(
-        authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
-        "the authority account must be untouched before its first use as one"
     );
     assert!(
         authority.is_authorized,
@@ -312,12 +283,7 @@ fn update_sources(
         caller_program_id,
         instruction_data,
         vec![config, authority.clone()],
-        vec![
-            AccountPostState::new(config_account),
-            // Claimed on first use: the authority's own signature bumps its
-            // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
-        ],
+        vec![config_account, authority.account],
     )
     .write();
 }
@@ -344,13 +310,13 @@ fn init_config(
         config_account_id(self_program_id),
         "account must be the wrapped-token config PDA"
     );
-    // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned config must already hold exactly this minter (the
-    // genesis block is replayed onto seeded state during multi-sequencer
-    // reconstruction), otherwise reject a post-genesis attempt to set a different
-    // minter. `new_claimed_if_default` alone would not stop the owning program from
-    // rewriting its own config data on a later call.
-    if config.account != Account::default() {
+    // Init-once, idempotent under genesis replay: an empty config is a first init;
+    // a written config must already hold exactly this minter (the genesis block is
+    // replayed onto seeded state during multi-sequencer reconstruction), otherwise
+    // reject a post-genesis attempt to set a different minter. Implicit ownership
+    // alone would not stop the owning program from rewriting its own config data
+    // on a later call.
+    if !config.account.data.is_empty() {
         assert_eq!(
             config.account.program_owner,
             self_program_id.into(),
@@ -368,8 +334,7 @@ fn init_config(
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
+    let config_post = config_account;
 
     ProgramOutput::new(
         self_program_id,

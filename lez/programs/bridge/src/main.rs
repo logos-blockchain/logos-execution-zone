@@ -1,18 +1,13 @@
 use bridge_core::Instruction;
 use lee_core::{
     account::Account,
-    program::{
-        AccountPostState, ChainedCall, Claim, ProgramEvent, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    program::{ChainedCall, ProgramEvent, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
-fn unchanged_post_states(
-    pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountPostState> {
+fn unchanged_post_states(pre_states: &[lee_core::account::AccountWithMetadata]) -> Vec<Account> {
     pre_states
         .iter()
-        .map(|pre_state| AccountPostState::new(pre_state.account.clone()))
+        .map(|pre_state| pre_state.account.clone())
         .collect()
 }
 
@@ -63,30 +58,31 @@ fn main() {
                 "Third account must be the deposit-receipt PDA"
             );
 
-            // Replay protection: the receipt PDA exists iff this op id was
-            // already minted. On replay it is non-default and the whole
-            // instruction is a no-op.
+            // Replay protection: this op id was already minted iff we own the
+            // receipt PDA. Ownership, not non-defaultness, is the test: anyone
+            // may credit balance to the receipt address, and a bare credit must
+            // not be able to make a deposit look already-minted and silently
+            // skip it. A credit leaves the receipt unowned, so the mint below
+            // still runs and the marker write claims it.
             //
             // Observability note: a no-op replay and a real first mint are both
             // successful txs, so an indexer cannot tell "credited here" from
             // "already credited by a peer" without deriving the receipt id and
-            // checking whether it existed before this block — the receipt claim
-            // is the only on-chain signal. Relevant once the explorer surfaces
-            // deposits.
-            if receipt.account != Account::default() {
+            // checking its owner before this block — the receipt is the only
+            // on-chain signal. Relevant once the explorer surfaces deposits.
+            if receipt.account.program_owner == self_program_id.into() {
                 (unchanged_post_states(&pre_states_clone), vec![], vec![])
             } else {
-                // First mint: claim the receipt — its existence is the record,
-                // the account's contents are never read — and chain the vault
-                // transfer.
-                let receipt_post = AccountPostState::new_claimed_if_default(
-                    receipt.account,
-                    Claim::Pda(bridge_core::deposit_receipt_seed(l1_deposit_op_id)),
-                );
+                // First mint: write the marker byte into the receipt. The write
+                // is what records the mint -- it also makes this program the
+                // receipt's owner, which is the predicate above. The contents
+                // beyond "non-empty" are never read.
+                let mut receipt_post = receipt.account;
+                receipt_post.data = vec![1].try_into().expect("1 byte fits in account data");
 
                 let post_states = vec![
-                    AccountPostState::new(bridge.account.clone()),
-                    AccountPostState::new(recipient_vault.account.clone()),
+                    bridge.account.clone(),
+                    recipient_vault.account.clone(),
                     receipt_post,
                 ];
 

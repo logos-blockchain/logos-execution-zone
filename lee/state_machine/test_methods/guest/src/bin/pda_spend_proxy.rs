@@ -1,6 +1,6 @@
 use borsh::to_vec;
 use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 /// Proxy for spending from a private PDA via `simple_transfer`.
@@ -24,8 +24,8 @@ fn main() {
         return;
     };
 
-    let first_post = AccountPostState::new(first.account.clone());
-    let second_post = AccountPostState::new(second.account.clone());
+    let first_post = first.account.clone();
+    let second_post = second.account.clone();
 
     let mut first_for_callee = first.clone();
     first_for_callee.is_authorized = true;

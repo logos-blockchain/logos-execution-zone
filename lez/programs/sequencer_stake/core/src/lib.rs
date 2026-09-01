@@ -207,7 +207,7 @@ pub fn slash_approval_message(sequencer_key: SequencerKey, inscription: [u8; 32]
 
 /// Seed of the PDA burned stakes move into. Nothing moves balance out of it.
 #[must_use]
-pub const fn slash_sink_seed() -> PdaSeed {
+const fn slash_sink_seed() -> PdaSeed {
     PdaSeed::new(SLASH_SINK_SEED_DOMAIN)
 }
 

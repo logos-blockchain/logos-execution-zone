@@ -1,8 +1,6 @@
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data, Nonce},
-    program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 /// Instruction is a flat tuple of primitives, borsh-encoded.
@@ -49,10 +47,7 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     // Echo own pre_states (attacker's account) unchanged.
-    let post_states = pre_states
-        .iter()
-        .map(|p| AccountPostState::new(p.account.clone()))
-        .collect();
+    let post_states = pre_states.iter().map(|p| p.account.clone()).collect();
 
     // Construct victim AccountWithMetadata from primitives, stamping is_authorized=true.
     // Victim has not signed anything — this flag is forged entirely by P1's logic.
@@ -67,10 +62,9 @@ fn main() {
         account_id: AccountId::new(victim_id_raw),
     };
 
-    // Recipient is already initialized under authenticated_transfer (program_owner =
-    // auth_transfer_id, balance = 0). Using the default account would trigger
-    // Claim::Authorized inside authenticated_transfer, which requires is_authorized=true
-    // on the recipient — a check that would block the transfer.
+    // Recipient presented as an existing authenticated_transfer account (program_owner =
+    // auth_transfer_id, balance = 0). Nothing forces this: authenticated_transfer only
+    // credits the recipient, writing no data, so an unowned recipient would work too.
     let recipient = AccountWithMetadata {
         account: Account {
             program_owner: auth_transfer_id.into(),

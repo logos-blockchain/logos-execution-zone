@@ -1,5 +1,5 @@
 use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 /// PDA authorization program that delegates balance operations to `simple_transfer`.
@@ -10,8 +10,9 @@ use lee_core::program::{
 /// Instruction: `(pda_seed, simple_transfer_id, amount, is_withdraw)`.
 ///
 /// **Init** (`is_withdraw = false`, 1 pre-state `[pda]`):
-/// Chains to `simple_transfer` with `instruction=0` (init path) and `pda_seeds=[seed]`
-/// to initialize the PDA under `simple_transfer`'s ownership.
+/// Chains to `simple_transfer` with `instruction=0` (init path) and `pda_seeds=[seed]`,
+/// which echoes the PDA unchanged. The seed establishes the private-PDA binding; no
+/// data is written, so the PDA stays unowned.
 ///
 /// **Withdraw** (`is_withdraw = true`, 2 pre-states `[pda, recipient]`):
 /// Chains to `simple_transfer` with the amount and `pda_seeds=[seed]` to authorize
@@ -47,8 +48,8 @@ fn main() {
 
         // Post-states stay unchanged in this program. The actual balance transfer
         // happens in the chained call to simple_transfer.
-        let pda_post = AccountPostState::new(pda_pre.account.clone());
-        let recipient_post = AccountPostState::new(recipient_pre.account.clone());
+        let pda_post = pda_pre.account.clone();
+        let recipient_post = recipient_pre.account.clone();
 
         // Chain to simple_transfer with pda_seeds to authorize the PDA.
         // The circuit's assert_authorization_and_record_bindings establishes the
@@ -77,10 +78,11 @@ fn main() {
             panic!("expected exactly 1 pre_state for init: [pda]");
         };
 
-        let pda_post = AccountPostState::new(pda_pre.account.clone());
+        let pda_post = pda_pre.account.clone();
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
-        // to authorize the PDA. simple_transfer will claim it with Claim::Authorized.
+        // to authorize the PDA. simple_transfer echoes it unchanged, writing no
+        // data, so the PDA acquires no owner.
         let mut auth_pda_pre = pda_pre;
         auth_pda_pre.is_authorized = true;
         let auth_call = ChainedCall::new(simple_transfer_id, vec![auth_pda_pre], &amount)

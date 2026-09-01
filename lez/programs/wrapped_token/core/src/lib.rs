@@ -137,7 +137,7 @@ pub fn config_account_id(wrapped_token_id: ProgramId) -> AccountId {
 }
 
 #[must_use]
-pub const fn config_seed() -> PdaSeed {
+const fn config_seed() -> PdaSeed {
     PdaSeed::new(CONFIG_SEED_DOMAIN)
 }
 
@@ -148,7 +148,7 @@ pub fn holding_account_id(wrapped_token_id: ProgramId, recipient: &[u8; 32]) -> 
 }
 
 #[must_use]
-pub fn holding_seed(recipient: &[u8; 32]) -> PdaSeed {
+fn holding_seed(recipient: &[u8; 32]) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 64];

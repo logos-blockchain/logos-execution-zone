@@ -1,9 +1,7 @@
 use borsh::to_vec;
 use lee_core::{
     account::AccountId,
-    program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 type Instruction = (ProgramId, ProgramId, AccountId, u128);
@@ -20,10 +18,7 @@ fn main() {
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
-    let post_states: Vec<_> = pre_states
-        .iter()
-        .map(|pre| AccountPostState::new(pre.account.clone()))
-        .collect();
+    let post_states: Vec<_> = pre_states.iter().map(|pre| pre.account.clone()).collect();
 
     assert_eq!(pre_states.len(), 2);
     let [faucet_pre, vault_pda_pre] = [pre_states[0].clone(), pre_states[1].clone()];

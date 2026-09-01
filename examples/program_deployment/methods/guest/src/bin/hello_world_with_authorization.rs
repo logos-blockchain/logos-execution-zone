@@ -1,4 +1,4 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 // Hello-world with authorization example program.
 //
@@ -9,7 +9,7 @@ use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, re
 // - uninitialized, or
 // - already owned by this program.
 //
-// In case the input account is uninitialized, the program claims it.
+// Writing data to an unowned input account is what makes this program its owner.
 //
 // The updated account is emitted as the sole post-state.
 
@@ -40,7 +40,7 @@ fn main() {
     // ####
 
     // Construct the post state account values
-    let post_account = {
+    let post_state = {
         let mut this = pre_state.account.clone();
         let mut bytes = this.data.into_inner();
         bytes.extend_from_slice(&greeting);
@@ -49,10 +49,6 @@ fn main() {
             .expect("Data should fit within the allowed limits");
         this
     };
-
-    // Wrap the post state account values inside a `AccountPostState` instance.
-    // This is used to forward the account claiming request if any
-    let post_state = AccountPostState::new_claimed_if_default(post_account, Claim::Authorized);
 
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms

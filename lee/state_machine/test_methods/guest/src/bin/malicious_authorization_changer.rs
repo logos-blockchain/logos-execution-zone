@@ -1,9 +1,7 @@
 use borsh::to_vec;
 use lee_core::{
     account::AccountWithMetadata,
-    program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 type Instruction = (u128, ProgramId);
@@ -46,10 +44,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![sender.clone(), receiver.clone()],
-        vec![
-            AccountPostState::new(sender.account),
-            AccountPostState::new(receiver.account),
-        ],
+        vec![sender.account, receiver.account],
     )
     .with_chained_calls(vec![chained_call])
     .write();

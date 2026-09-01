@@ -1,4 +1,4 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 type Instruction = u128;
 
@@ -14,8 +14,7 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
-        let account_post =
-            AccountPostState::new_claimed_if_default(account_pre.account, Claim::Authorized);
+        let account_post = account_pre.account;
 
         ProgramOutput::new(
             self_program_id,
@@ -48,10 +47,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![sender_pre, receiver_pre],
-        vec![
-            AccountPostState::new_claimed_if_default(sender_post, Claim::Authorized),
-            AccountPostState::new_claimed_if_default(receiver_post, Claim::Authorized),
-        ],
+        vec![sender_post, receiver_post],
     )
     .write();
 }

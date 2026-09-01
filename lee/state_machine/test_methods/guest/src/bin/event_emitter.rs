@@ -1,6 +1,6 @@
 use lee_core::program::{
-    AccountPostState, ChainedCall, InstructionData, ProgramEvent, ProgramId, ProgramInput,
-    ProgramOutput, read_lee_inputs,
+    ChainedCall, InstructionData, ProgramEvent, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_inputs,
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -22,7 +22,7 @@ fn main() {
 
     let post_states = pre_states
         .iter()
-        .map(|account| AccountPostState::new(account.account.clone()))
+        .map(|account| account.account.clone())
         .collect();
 
     let chained_calls = chain

@@ -86,7 +86,7 @@ pub fn outbox_pda(
 
 /// Seed of an outbox message PDA, exposed so the guest can claim the account.
 #[must_use]
-pub fn outbox_pda_seed(emitter: ProgramId, target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
+fn outbox_pda_seed(emitter: ProgramId, target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 100];

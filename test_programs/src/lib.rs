@@ -48,16 +48,6 @@ pub const fn authority_proxy() -> Program {
 
 #[must_use]
 #[inline]
-pub const fn claimer() -> Program {
-    use guests::{CLAIMER_ELF, CLAIMER_ID, CLAIMER_PATH};
-
-    let _unused = CLAIMER_PATH;
-
-    Program::new_unchecked(CLAIMER_ID, Cow::Borrowed(CLAIMER_ELF))
-}
-
-#[must_use]
-#[inline]
 pub const fn pda_spend_proxy() -> Program {
     use guests::{PDA_SPEND_PROXY_ELF, PDA_SPEND_PROXY_ID, PDA_SPEND_PROXY_PATH};
 

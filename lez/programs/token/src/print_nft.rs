@@ -1,23 +1,19 @@
-use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
-};
+use lee_core::account::{Account, AccountWithMetadata, Data};
 use token_core::TokenHolding;
 
 #[must_use]
 pub fn print_nft(
     master_account: AccountWithMetadata,
     printed_account: AccountWithMetadata,
-) -> Vec<AccountPostState> {
+) -> Vec<Account> {
     assert!(
         master_account.is_authorized,
         "Master NFT Account must be authorized"
     );
 
-    assert_eq!(
-        printed_account.account,
-        Account::default(),
-        "Printed Account must be uninitialized"
+    assert!(
+        printed_account.account.data.is_empty(),
+        "Printed Account must not already hold data"
     );
 
     let mut master_account_data =
@@ -48,8 +44,5 @@ pub fn print_nft(
         owned: true,
     });
 
-    vec![
-        AccountPostState::new(master_account_post),
-        AccountPostState::new_claimed(printed_account_post, Claim::Authorized),
-    ]
+    vec![master_account_post, printed_account_post]
 }

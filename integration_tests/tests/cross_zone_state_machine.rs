@@ -1202,65 +1202,6 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
     );
 }
 
-/// Post-genesis anyone may claim any holder's holding PDA: the result is a
-/// zero-balance holding that funds nothing.
-#[test]
-fn a_post_genesis_init_holding_claims_a_zero_balance_holding() {
-    let bridge_lock_id = programs::bridge_lock().id();
-    let holder = [7_u8; 32];
-    let state = base_state();
-
-    let init = bridge_lock_core::Instruction::InitHolding { holder };
-    let message = Message::try_new(
-        bridge_lock_id,
-        vec![bridge_lock_core::holding_account_id(
-            bridge_lock_id,
-            &holder,
-        )],
-        vec![],
-        init,
-    )
-    .expect("build init message");
-    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
-
-    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
-        .expect("a stranger's InitHolding executes");
-    let holding =
-        &diff.public_diff()[&bridge_lock_core::holding_account_id(bridge_lock_id, &holder)];
-    assert_eq!(holding.balance, 0, "nothing funds a post-genesis holding");
-    assert_eq!(
-        holding.program_owner,
-        bridge_lock_id.into(),
-        "the claim lands with bridge_lock"
-    );
-}
-
-/// A repeated `InitHolding` must echo a funded holding untouched.
-#[test]
-fn a_repeated_init_holding_leaves_a_funded_holding_untouched() {
-    let bridge_lock_id = programs::bridge_lock().id();
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state();
-    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
-
-    let init = bridge_lock_core::Instruction::InitHolding {
-        holder: holder_id.into_value(),
-    };
-    let message = Message::try_new(bridge_lock_id, vec![holding_id_of(holder_id)], vec![], init)
-        .expect("build init message");
-    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
-
-    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
-        .expect("a repeated InitHolding is a no-op");
-    drop(state.apply_state_diff(diff));
-    assert_eq!(
-        state.get_account_by_id(holding_id_of(holder_id)).balance,
-        INITIAL_BALANCE,
-        "a re-run must not reset a funded holding"
-    );
-}
-
 /// The debit lands on the holding PDA; the holder only signs.
 #[test]
 fn lock_debits_the_holding_not_the_holder() {
@@ -1569,8 +1510,9 @@ fn the_outbox_pin_is_written_once_and_replayable() {
 }
 
 /// The token's authority path, end to end: each guard refuses for its own
-/// reason, the signed path works more than once through the claimed account, and
-/// renouncing is one-way. The receiver battery mirrors this one.
+/// reason, the signed path works more than once because the authority's own
+/// signature and nonce suffice every time, and renouncing is one-way. The
+/// receiver battery mirrors this one.
 #[test]
 fn the_token_authority_path_holds() {
     let wrapped_token_id = programs::wrapped_token().id();
@@ -1680,8 +1622,8 @@ fn the_token_authority_path_holds() {
         "must be the wrapped-token config PDA",
     );
 
-    // The authority itself works, and more than once: the first use claims the
-    // account for the target, and the second runs on the claimed path.
+    // The authority itself works, and more than once: the first use acquires
+    // nothing, so the second runs on exactly the same path.
     let diff = ValidatedStateDiff::from_public_transaction(
         &update(authority, &key, 0, bridge_source.clone()),
         &state,
@@ -1701,8 +1643,8 @@ fn the_token_authority_path_holds() {
     );
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
-        wrapped_token_id.into(),
-        "the first use claims the authority account for the target"
+        lee::AccountId::default(),
+        "the authority carries no data, so no program takes it over"
     );
 
     let sender_source = vec![(src_zone, programs::ping_sender().id())];
@@ -2026,9 +1968,9 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
 }
 
 /// A program-held authority acts through the governance program delegating its
-/// PDA on the chained call: the first use has the target claim the account, the
-/// second runs on the claimed path, and renouncing through it is as total as
-/// renouncing top-level.
+/// PDA on the chained call: no target ever takes the account over, so the second
+/// use runs on exactly the same path as the first, and renouncing through it is
+/// as total as renouncing top-level.
 #[test]
 fn the_governance_path_holds() {
     let wrapped_token_id = programs::wrapped_token().id();
@@ -2084,8 +2026,8 @@ fn the_governance_path_holds() {
     );
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
-        wrapped_token_id.into(),
-        "the first use claims the delegated PDA for the target"
+        lee::AccountId::default(),
+        "the authority carries no data, so no program takes it over"
     );
 
     let second = ValidatedStateDiff::from_public_transaction(&update(vec![]), &state, 2, 0)
@@ -2258,16 +2200,16 @@ fn the_receiver_governance_path_holds() {
     assert_eq!(cfg.sources, vec![(src_zone, programs::ping_sender().id())]);
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
-        receiver_id.into(),
-        "the first use claims the delegated PDA for the receiver"
+        lee::AccountId::default(),
+        "the authority carries no data, so no program takes it over"
     );
 }
 
-/// One authority seeds both targets at genesis, and the config doc promises that
-/// whichever target is used first owns the account while the other keeps
-/// working. Claim through the token, then act and renounce on the receiver.
+/// One authority seeds both targets at genesis, and neither takes it over: the
+/// authority carries no data, so it stays unowned and both keep working. Act
+/// through the token, then act and renounce on the receiver.
 #[test]
-fn a_shared_authority_survives_the_first_claim() {
+fn a_shared_authority_serves_both_targets() {
     let wrapped_token_id = programs::wrapped_token().id();
     let receiver_id = programs::ping_receiver().id();
     let proxy_id = test_programs::authority_proxy().id();
@@ -2293,12 +2235,12 @@ fn a_shared_authority_survives_the_first_claim() {
         }),
     );
     let first = ValidatedStateDiff::from_public_transaction(&token_update, &state, 1, 0)
-        .expect("the token claims the shared authority");
+        .expect("the token acts for the shared authority");
     drop(state.apply_state_diff(first));
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
-        wrapped_token_id.into(),
-        "the first target to be used owns the account"
+        lee::AccountId::default(),
+        "a data-free authority is owned by nobody, whichever target uses it first"
     );
 
     let receiver_update = via_proxy(
@@ -2327,8 +2269,8 @@ fn a_shared_authority_survives_the_first_claim() {
     );
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
-        wrapped_token_id.into(),
-        "the receiver never takes the account over"
+        lee::AccountId::default(),
+        "the authority stays unowned across both targets"
     );
 
     let receiver_renounce = via_proxy(
@@ -2359,70 +2301,6 @@ fn a_shared_authority_survives_the_first_claim() {
         Some(authority),
         "renouncing one target leaves the other's grant alone"
     );
-}
-
-/// An authority account with any history can never be claimed, so all four
-/// authority handlers refuse it, and say why rather than surfacing a rule number.
-#[test]
-fn an_authority_account_with_history_is_refused() {
-    let wrapped_token_id = programs::wrapped_token().id();
-    let receiver_id = programs::ping_receiver().id();
-    let src_zone = [2_u8; 32];
-
-    let key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
-
-    let mut state = base_state();
-    seed_wrapped_config(&mut state, Some(authority), &[]);
-    seed_receiver_config(&mut state, Some(authority), vec![]);
-    // Unowned but already used: exactly what one prior signature leaves behind.
-    state = state.with_public_accounts([(
-        authority,
-        Account {
-            nonce: 1_u128.into(),
-            ..Default::default()
-        },
-    )]);
-
-    for (program, config_id, instruction_data) in [
-        (
-            wrapped_token_id,
-            wrapped_token_core::config_account_id(wrapped_token_id),
-            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-                sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id())]),
-            }),
-        ),
-        (
-            wrapped_token_id,
-            wrapped_token_core::config_account_id(wrapped_token_id),
-            bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
-        ),
-        (
-            receiver_id,
-            receiver_config_account_id(receiver_id),
-            bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
-                sources: vec![(src_zone, programs::ping_sender().id())],
-            }),
-        ),
-        (
-            receiver_id,
-            receiver_config_account_id(receiver_id),
-            bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
-        ),
-    ] {
-        rejects_at(
-            &state,
-            &signed_tx(
-                program,
-                vec![config_id, authority],
-                1,
-                instruction_data,
-                &key,
-            ),
-            1,
-            "must be untouched before its first use",
-        );
-    }
 }
 
 /// The guards that survive a deletion otherwise: the receiver's config-address

@@ -1,18 +1,15 @@
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, SeenShard, inbox_config_account_id,
-    inbox_config_seed, inbox_seen_shard_account_id, inbox_seen_shard_seed,
+    inbox_seen_shard_account_id,
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountWithMetadata},
-    program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
-fn unchanged(pre: &AccountWithMetadata) -> AccountPostState {
-    AccountPostState::new(pre.account.clone())
+fn unchanged(pre: &AccountWithMetadata) -> Account {
+    pre.account.clone()
 }
 
 fn main() {
@@ -56,14 +53,17 @@ fn main() {
 /// instruction bytes and account ids the peer chose. So a program meant to be
 /// reachable across zones MUST check the marker at position 0 against sources it
 /// authorized itself, the way `wrapped_token` and `ping_receiver` do. A program
-/// not meant to be reachable has only whatever its own code happens to do. Today
-/// every other builtin refuses, but by three different accidents: four assert
-/// `caller_program_id` is none; several run to completion and are stopped by the
-/// host, either because they try to claim the marker without its authorization or
-/// because they chain into its zero program id; and the rest are saved by an
-/// address assert on a PDA. None of that was written with cross-zone delivery in
-/// mind. User-deployed programs are reachable too, and were written with no
-/// expectation of an inbox caller at all.
+/// not meant to be reachable has only whatever its own code happens to do. Some
+/// refuse: four assert `caller_program_id` is none, several chain into the
+/// marker's zero program id and are stopped by the host, and the rest are saved
+/// by an address assert on a PDA. Others no longer do — a target that used to be
+/// stopped only because it claimed the marker without its authorization now runs,
+/// since ownership follows a data write and needs no claim. What such a target
+/// can be made to do is write state at addresses the peer names, which is the
+/// squatting any locally deployed program can already do, at no local fee. None
+/// of that was written with cross-zone delivery in mind. User-deployed programs
+/// are reachable too, and were written with no expectation of an inbox caller at
+/// all.
 fn dispatch(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
@@ -108,7 +108,16 @@ fn dispatch(
         msg.src_zone != cfg.self_zone,
         "Source zone must not be this zone"
     );
-    let mut shard = SeenShard::from_bytes(&seen.account.data).expect("seen shard decodes");
+    // Mirrors the bridge receipt: the shard is this program's record, so its
+    // bytes count only when this program owns the account. Anyone may write
+    // data at a derivable address first; a foreign-owned shard is no shard,
+    // and the write below then fails loudly rather than a squatter's bytes
+    // deciding which peer messages count as delivered.
+    let mut shard = if seen.account.program_owner == self_program_id.into() {
+        SeenShard::from_bytes(&seen.account.data).expect("seen shard decodes")
+    } else {
+        SeenShard::default()
+    };
 
     // One block id, one delivering block. The address binds the zone and block
     // id but not which block claimed them, so an equivocating peer's two blocks
@@ -129,15 +138,11 @@ fn dispatch(
         (unchanged(&seen), vec![])
     } else {
         shard.insert(msg.src_block_hash, msg.src_tx_index);
-        let mut seen_account = seen.account.clone();
-        seen_account.data = shard
+        let mut seen_post = seen.account.clone();
+        seen_post.data = shard
             .to_bytes()
             .try_into()
             .expect("seen shard fits in account data");
-        let seen_post = AccountPostState::new_claimed_if_default(
-            seen_account,
-            Claim::Pda(inbox_seen_shard_seed(&msg.src_zone, msg.src_block_id)),
-        );
 
         // The payload carries the target instruction as borsh bytes: its instruction_data verbatim.
         let call_instruction_data = msg.payload.clone();
@@ -188,12 +193,12 @@ fn init_config(
         inbox_config_account_id(self_program_id),
         "account must be the inbox config PDA"
     );
-    // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned config must already hold exactly this, since genesis
-    // is replayed onto seeded state during multi-sequencer reconstruction.
-    // `new_claimed_if_default` alone would not stop the owning program from
-    // rewriting its own config data on a later call.
-    if config_meta.account != Account::default() {
+    // Init-once, idempotent under genesis replay: an empty config is a first init;
+    // a written config must already hold exactly this, since genesis is replayed
+    // onto seeded state during multi-sequencer reconstruction. Implicit ownership
+    // alone would not stop the owning program from rewriting its own config data
+    // on a later call.
+    if !config_meta.account.data.is_empty() {
         assert_eq!(
             config_meta.account.program_owner,
             self_program_id.into(),
@@ -206,13 +211,11 @@ fn init_config(
         );
     }
 
-    let mut config_account = config_meta.account.clone();
-    config_account.data = config
+    let mut config_post = config_meta.account.clone();
+    config_post.data = config
         .to_bytes()
         .try_into()
         .expect("inbox config fits in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(inbox_config_seed()));
 
     ProgramOutput::new(
         self_program_id,

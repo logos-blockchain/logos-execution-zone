@@ -10,7 +10,7 @@
 //!   2 - clock account (read-only, e.g. `CLOCK_01`).
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 /// (`amount`, `deadline_timestamp`).
 type Instruction = (u128, u64);
@@ -62,11 +62,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![sender_pre, receiver_pre, clock_pre],
-        vec![
-            AccountPostState::new(sender_post),
-            AccountPostState::new(receiver_post),
-            AccountPostState::new(clock_post),
-        ],
+        vec![sender_post, receiver_post, clock_post],
     )
     .write();
 }

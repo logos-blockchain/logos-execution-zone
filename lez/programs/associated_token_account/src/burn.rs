@@ -1,6 +1,6 @@
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ChainedCall, ProgramId},
+    account::{Account, AccountWithMetadata},
+    program::{ChainedCall, ProgramId},
 };
 use token_core::TokenHolding;
 
@@ -10,7 +10,7 @@ pub fn burn_from_associated_token_account(
     token_definition: AccountWithMetadata,
     ata_program_id: ProgramId,
     amount: u128,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<Account>, Vec<ChainedCall>) {
     let token_program_id: lee_core::program::ProgramId = holder_ata.account.program_owner.into();
     assert!(owner.is_authorized, "Owner authorization is missing");
     let definition_id = TokenHolding::try_from(&holder_ata.account.data)
@@ -24,9 +24,9 @@ pub fn burn_from_associated_token_account(
     );
 
     let post_states = vec![
-        AccountPostState::new(owner.account.clone()),
-        AccountPostState::new(holder_ata.account.clone()),
-        AccountPostState::new(token_definition.account.clone()),
+        owner.account.clone(),
+        holder_ata.account.clone(),
+        token_definition.account.clone(),
     ];
     let mut holder_ata_auth = holder_ata.clone();
     holder_ata_auth.is_authorized = true;

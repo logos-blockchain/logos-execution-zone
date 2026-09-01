@@ -1,4 +1,4 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 type Instruction = u128;
 
@@ -26,7 +26,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pre],
-        vec![AccountPostState::new(account_post)],
+        vec![account_post],
     )
     .write();
 }

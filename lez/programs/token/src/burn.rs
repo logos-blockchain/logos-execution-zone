@@ -1,7 +1,4 @@
-use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::AccountPostState,
-};
+use lee_core::account::{Account, AccountWithMetadata, Data};
 use token_core::{TokenDefinition, TokenHolding};
 
 #[must_use]
@@ -9,7 +6,7 @@ pub fn burn(
     definition_account: AccountWithMetadata,
     user_holding_account: AccountWithMetadata,
     amount_to_burn: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<Account> {
     assert!(
         user_holding_account.is_authorized,
         "Authorization is missing"
@@ -98,8 +95,5 @@ pub fn burn(
     let mut holding_post = user_holding_account.account;
     holding_post.data = Data::from(&holding);
 
-    vec![
-        AccountPostState::new(definition_post),
-        AccountPostState::new(holding_post),
-    ]
+    vec![definition_post, holding_post]
 }

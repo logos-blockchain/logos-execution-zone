@@ -1,99 +1,6 @@
 use super::*;
 
 #[test]
-fn claiming_mechanism() {
-    let program = crate::test_methods::simple_balance_transfer();
-    let from_key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let initial_balance = 100;
-    let initial_data = [(from, initial_balance)];
-    let mut state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&initial_data))
-        .with_test_programs();
-    let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
-    let amount: u128 = 37;
-
-    // Check the recipient is an uninitialized account
-    assert_eq!(state.get_account_by_id(to), Account::default());
-
-    let expected_recipient_post = Account {
-        program_owner: program.id().into(),
-        balance: amount,
-        nonce: Nonce(1),
-        ..Account::default()
-    };
-
-    let message = public_transaction::Message::try_new(
-        program.id(),
-        vec![from, to],
-        vec![Nonce(0), Nonce(0)],
-        amount,
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key, &to_key]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
-
-    let recipient_post = state.get_account_by_id(to);
-
-    assert_eq!(recipient_post, expected_recipient_post);
-}
-
-#[test]
-fn unauthorized_public_account_claiming_fails() {
-    let program = crate::test_methods::simple_balance_transfer();
-    let account_key = PrivateKey::try_new([9; 32]).unwrap();
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
-    let mut state = V03State::new().with_test_programs();
-
-    assert_eq!(state.get_account_by_id(account_id), Account::default());
-
-    let message =
-        public_transaction::Message::try_new(program.id(), vec![account_id], vec![], 0_u128)
-            .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    let result = state.transition_from_public_transaction(&tx, 2, 0);
-
-    assert!(matches!(result, Err(LeeError::InvalidProgramBehavior(_))));
-    assert_eq!(state.get_account_by_id(account_id), Account::default());
-}
-
-#[test]
-fn authorized_public_account_claiming_succeeds() {
-    let program = crate::test_methods::simple_balance_transfer();
-    let account_key = PrivateKey::try_new([10; 32]).unwrap();
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
-    let mut state = V03State::new().with_test_programs();
-
-    assert_eq!(state.get_account_by_id(account_id), Account::default());
-
-    let message = public_transaction::Message::try_new(
-        program.id(),
-        vec![account_id],
-        vec![Nonce(0)],
-        0_u128,
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&account_key]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
-
-    assert_eq!(
-        state.get_account_by_id(account_id),
-        Account {
-            program_owner: program.id().into(),
-            nonce: Nonce(1),
-            ..Account::default()
-        }
-    );
-}
-
-#[test]
 fn public_chained_call() {
     let program = crate::test_methods::chain_caller();
     let key = PrivateKey::try_new([1; 32]).unwrap();
@@ -221,13 +128,11 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
 }
 
 #[test]
-fn claiming_mechanism_within_chain_call() {
-    // This test calls the authenticated transfer program through the chain_caller program.
-    // The transfer is made from an initialized sender to an uninitialized recipient. And
-    // it is expected that the recipient account is claimed by the authenticated transfer
-    // program and not the chained_caller program.
+fn credit_within_chain_call_leaves_the_recipient_unowned() {
+    // This test calls the transfer program through the chain_caller program. The transfer is
+    // made from an initialized sender to an uninitialized recipient. Neither program writes
+    // the recipient's data, so neither becomes its owner.
     let chain_caller = crate::test_methods::chain_caller();
-    let simple_transfer = crate::test_methods::simple_balance_transfer();
     let from_key = PrivateKey::try_new([1; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let initial_balance = 100;
@@ -243,15 +148,13 @@ fn claiming_mechanism_within_chain_call() {
     assert_eq!(state.get_account_by_id(to), Account::default());
 
     let expected_to_post = Account {
-        // The expected program owner is the authenticated transfer program
-        program_owner: simple_transfer.id().into(),
         balance: amount,
         nonce: Nonce(1),
         ..Account::default()
     };
 
     // The transaction executes the chain_caller program, which internally calls the
-    // authenticated_transfer program
+    // `simple_balance_transfer` program
     let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
         amount,
         crate::test_methods::simple_balance_transfer().id(),
@@ -275,98 +178,6 @@ fn claiming_mechanism_within_chain_call() {
     let to_post = state.get_account_by_id(to);
     assert_eq!(from_post.balance, initial_balance - amount);
     assert_eq!(to_post, expected_to_post);
-}
-
-#[test]
-fn unauthorized_public_account_claiming_fails_when_executed_privately() {
-    let program = crate::test_methods::simple_balance_transfer();
-    let account_id = AccountId::new([11; 32]);
-    let public_account = AccountWithMetadata::new(Account::default(), false, account_id);
-
-    let result = execute_and_prove(
-        vec![public_account],
-        Program::serialize_instruction(0_u128).unwrap(),
-        vec![InputAccountIdentity::Public],
-        &program.into(),
-    );
-
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-#[test]
-fn authorized_public_account_claiming_succeeds_when_executed_privately() {
-    let program = crate::test_methods::simple_balance_transfer();
-    let program_id = program.id();
-    let sender_keys = test_private_account_keys_1();
-    let sender_private_account = Account {
-        program_owner: program_id.into(),
-        balance: 100,
-        ..Account::default()
-    };
-    let sender_account_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
-    let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
-    let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
-    let mut state =
-        V03State::new().with_private_accounts([(sender_commitment, sender_init_nullifier)]);
-    let sender_pre = AccountWithMetadata::new(
-        sender_private_account,
-        true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
-    );
-    let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
-    let recipient_account_id =
-        AccountId::from(&PublicKey::new_from_private_key(&recipient_private_key));
-    let recipient_pre = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
-
-    let balance = 37;
-
-    let (output, proof) = execute_and_prove(
-        vec![sender_pre, recipient_pre],
-        Program::serialize_instruction(balance).unwrap(),
-        vec![
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: sender_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(sender_keys.ask),
-                },
-                nullifier: NullifierWitness::Update {
-                    view_tag: 0,
-                    nsk: sender_keys.nsk(),
-                    membership_proof: state
-                        .get_proof_for_commitment(&sender_commitment)
-                        .expect("sender's commitment must be in state"),
-                },
-            }),
-            InputAccountIdentity::Public,
-        ],
-        &program.into(),
-    )
-    .unwrap();
-
-    let message = Message::from_circuit_output(vec![Nonce(0)], output);
-
-    let witness_set = WitnessSet::for_message(&message, proof, &[&recipient_private_key]);
-    let tx = PrivacyPreservingTransaction::new(message, witness_set);
-
-    state
-        .transition_from_privacy_preserving_transaction(&tx, 1, 0)
-        .unwrap();
-
-    let nullifier = Nullifier::for_account_update(&sender_commitment, &sender_keys.nsk());
-    assert!(state.private_state.1.contains(&nullifier));
-
-    assert_eq!(
-        state.get_account_by_id(recipient_account_id),
-        Account {
-            program_owner: program_id.into(),
-            balance,
-            nonce: Nonce(1),
-            ..Account::default()
-        }
-    );
 }
 
 #[test_case::test_case(1; "single call")]
@@ -498,36 +309,6 @@ fn private_chained_call(number_of_calls: u32) {
             .get_proof_for_commitment(&to_expected_commitment)
             .is_some()
     );
-}
-
-#[test]
-fn claiming_mechanism_cannot_claim_initialied_accounts() {
-    let claimer = crate::test_methods::claimer();
-    let mut state = V03State::new().with_test_programs();
-    let account_id = AccountId::new([2; 32]);
-
-    // Insert an account with non-default program owner
-    state.force_insert_account(
-        account_id,
-        Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-            ..Account::default()
-        },
-    );
-
-    let message =
-        public_transaction::Message::try_new(claimer.id(), vec![account_id], vec![], ()).unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
-
-    assert!(matches!(
-        result,
-        Err(LeeError::InvalidProgramBehavior(
-            InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id: err_account_id }
-        )) if err_account_id == account_id
-    ));
 }
 
 /// This test ensures that even if a malicious program tries to perform overflow of balances

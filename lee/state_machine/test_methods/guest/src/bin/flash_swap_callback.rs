@@ -25,7 +25,7 @@
 //! if it needs to trust the context it is called from.
 
 use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -82,10 +82,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![vault_pre.clone(), receiver_pre.clone()],
-        vec![
-            AccountPostState::new(vault_pre.account),
-            AccountPostState::new(receiver_pre.account),
-        ],
+        vec![vault_pre.account, receiver_pre.account],
     )
     .with_chained_calls(chained_calls)
     .write();

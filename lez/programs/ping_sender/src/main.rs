@@ -1,14 +1,9 @@
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    account::AccountWithMetadata,
+    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
-use ping_core::{
-    SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id, sender_config_seed,
-};
+use ping_core::{SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id};
 
 fn main() {
     let (
@@ -96,14 +91,14 @@ fn send(
         },
     );
 
-    let config_post = AccountPostState::new(config.account.clone());
+    let config_post = config.account.clone();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![config, outbox.clone()],
-        vec![config_post, AccountPostState::new(outbox.account)],
+        vec![config_post, outbox.account],
     )
     .with_chained_calls(vec![call])
     .write();
@@ -125,11 +120,11 @@ fn init_config(
         sender_config_account_id(self_program_id),
         "account must be the ping-sender config PDA"
     );
-    // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned one must already pin exactly this outbox, since
-    // genesis is replayed onto seeded state during multi-sequencer reconstruction.
-    // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
-    if config.account != Account::default() {
+    // Init-once, idempotent under genesis replay: an empty config is a first init;
+    // a written one must already pin exactly this outbox, since genesis is replayed
+    // onto seeded state during multi-sequencer reconstruction. Implicit ownership
+    // alone would not stop a later self-owned rewrite.
+    if !config.account.data.is_empty() {
         assert_eq!(
             config.account.program_owner,
             self_program_id.into(),
@@ -142,13 +137,11 @@ fn init_config(
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = outbox_bytes(outbox_program_id)
+    let mut config_post = config.account.clone();
+    config_post.data = outbox_bytes(outbox_program_id)
         .to_vec()
         .try_into()
         .expect("outbox id fits in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(sender_config_seed()));
 
     ProgramOutput::new(
         self_program_id,

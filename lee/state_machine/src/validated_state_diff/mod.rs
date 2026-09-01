@@ -8,8 +8,9 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, TransactionEvent,
-        compute_public_authorized_pdas, validate_execution,
+        CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER, TransactionEvent,
+        acquire_ownership_on_data_write, compute_public_authorized_pdas, is_ownership_settled,
+        validate_execution,
     },
 };
 use log::debug;
@@ -214,52 +215,15 @@ impl ValidatedStateDiff {
                 LeeError::OutOfValidityWindow
             );
 
-            for (i, post) in program_output.post_states.iter_mut().enumerate() {
-                let Some(claim) = post.required_claim() else {
-                    continue;
-                };
-                let pre = &program_output.pre_states[i];
-                let account_id = pre.account_id;
-
-                // The invoked program can only claim accounts with default program id.
-                ensure!(
-                    post.account().program_owner == DEFAULT_PROGRAM_OWNER,
-                    InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
-                );
-
-                match claim {
-                    Claim::Authorized => {
-                        // The program can only claim accounts that were authorized by the signer.
-                        ensure!(
-                            pre.is_authorized,
-                            InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
-                        );
-                    }
-                    Claim::Pda(seed) => {
-                        // The program can only claim accounts that correspond to the PDAs it is
-                        // authorized to claim. The public-execution path only sees public
-                        // accounts, so the public-PDA derivation is the correct formula here.
-                        let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
-                        ensure!(
-                            account_id == pda,
-                            InvalidProgramBehaviorError::MismatchedPdaClaim {
-                                expected: pda,
-                                actual: account_id
-                            }
-                        );
-                    }
-                }
-
-                post.account_mut().program_owner = AccountId::from(chained_call.program_id);
-            }
-
-            // Update the state diff
+            // Update the state diff, acquiring ownership of every unowned account this call
+            // wrote data to.
             for (pre, post) in program_output
                 .pre_states
                 .iter()
-                .zip(program_output.post_states.iter())
+                .zip(program_output.post_states.iter_mut())
             {
-                state_diff.insert(pre.account_id, post.account().clone());
+                acquire_ownership_on_data_write(&pre.account, post, chained_call.program_id);
+                state_diff.insert(pre.account_id, post.clone());
             }
 
             // Write all the output event data into a proper event struct,
@@ -305,7 +269,8 @@ impl ValidatedStateDiff {
                 .expect("we check the max depth at the beginning of the loop");
         }
 
-        // Check that all modified uninitialized accounts where claimed
+        // Backstop over every account that entered the transaction unowned and changed; see
+        // `is_ownership_settled`.
         for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
             let pre = state.get_account_by_id(*account_id);
             if pre.program_owner != DEFAULT_PROGRAM_OWNER {
@@ -317,8 +282,8 @@ impl ValidatedStateDiff {
             Some((*account_id, post))
         }) {
             ensure!(
-                post.program_owner != DEFAULT_PROGRAM_OWNER,
-                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
+                is_ownership_settled(post),
+                InvalidProgramBehaviorError::DataBearingUnownedAccount { account_id }
             );
         }
 

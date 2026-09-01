@@ -1,15 +1,14 @@
 use borsh::to_vec;
 use lee_core::program::{
-    AccountPostState, ChainedCall, Claim, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+    ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
-/// Claims the sole `pre_state` as a PDA with `claim_seed`, then chains to `callee_program_id`
-/// delegating authorization with `delegated_seed` in `pda_seeds`. When `claim_seed ==
-/// delegated_seed` this exercises the happy caller-seeds authorization path for mask-3 private
-/// PDAs in `validate_and_sync_states`; when they differ, the callee's mask-3 `pre_state` has
-/// no matching authorization source and the circuit must reject.
-type Instruction = (PdaSeed, PdaSeed, ProgramId);
+/// Echoes the sole `pre_state` and chains to `callee_program_id`, delegating authorization with
+/// `delegated_seed` in `pda_seeds`. When `delegated_seed` is the seed the account was derived
+/// under, this exercises the happy caller-seeds authorization path for private PDAs in
+/// `validate_and_sync_states` -- which is also what binds the position's npk. When it differs,
+/// the callee's `pre_state` has no matching authorization source and the circuit must reject.
+type Instruction = (PdaSeed, ProgramId);
 
 fn main() {
     let (
@@ -17,7 +16,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: (claim_seed, delegated_seed, callee_program_id),
+            instruction: (delegated_seed, callee_program_id),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -26,11 +25,10 @@ fn main() {
         return;
     };
 
-    let claimed = AccountPostState::new_claimed(pre.account.clone(), Claim::Pda(claim_seed));
+    let post = pre.account.clone();
 
     let mut pre_for_callee = pre.clone();
     pre_for_callee.is_authorized = true;
-    pre_for_callee.account.program_owner = self_program_id.into();
 
     let chained_call = ChainedCall {
         program_id: callee_program_id,
@@ -44,7 +42,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pre],
-        vec![claimed],
+        vec![post],
     )
     .with_chained_calls(vec![chained_call])
     .write();

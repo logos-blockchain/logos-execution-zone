@@ -45,8 +45,9 @@ pub enum Instruction {
         outbox_program_id: ProgramId,
         target_program_id: ProgramId,
     },
-    /// Claims the holder's holding PDA, idempotently; anyone may run it, and a
-    /// re-run on a funded holding leaves it untouched.
+    /// Byte-identical echo of the holder's holding PDA: claiming is implicit
+    /// now and a balance-only account acquires no owner, so this changes
+    /// nothing.
     ///
     /// Required accounts (1): the holder's holding PDA.
     InitHolding { holder: [u8; 32] },
@@ -59,7 +60,7 @@ pub fn escrow_account_id(bridge_lock_id: ProgramId) -> AccountId {
 }
 
 #[must_use]
-pub const fn escrow_seed() -> PdaSeed {
+const fn escrow_seed() -> PdaSeed {
     PdaSeed::new(ESCROW_SEED_DOMAIN)
 }
 
@@ -91,7 +92,7 @@ pub fn config_account_id(bridge_lock_id: ProgramId) -> AccountId {
 }
 
 #[must_use]
-pub const fn config_seed() -> PdaSeed {
+const fn config_seed() -> PdaSeed {
     PdaSeed::new(CONFIG_SEED_DOMAIN)
 }
 

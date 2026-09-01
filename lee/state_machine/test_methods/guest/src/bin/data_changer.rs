@@ -1,4 +1,4 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 type Instruction = Vec<u8>;
 
@@ -29,10 +29,7 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![pre],
-        vec![AccountPostState::new_claimed(
-            account_post,
-            Claim::Authorized,
-        )],
+        vec![account_post],
     )
     .write();
 }
