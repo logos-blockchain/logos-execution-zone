@@ -19,9 +19,10 @@ use wallet::{
     program_facades::native_token_transfer::NativeTokenTransfer,
 };
 
-/// The sender's post-transfer balance is `before - amount - fee` where the
-/// fee depends on metered cycles, so sender assertions are relative (a
-/// positive fee was paid) while recipient assertions stay exact.
+/// The sender's post-transfer balance is `before - amount - fee`.
+///
+/// The fee is dynamic, so sender assertions are relative while
+/// recipient assertions stay exact.
 fn assert_sender_paid_fee(before: u128, after: u128, amount_sent: u128) {
     let fee = before
         .checked_sub(amount_sent)
