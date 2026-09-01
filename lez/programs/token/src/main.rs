@@ -31,6 +31,10 @@ fn main() {
                 .expect("Transfer instruction requires exactly two accounts");
             token_program::transfer::transfer(sender, recipient, balance_to_move)
         }
+        // TODO(squatting): nothing here checks the caller, so the cross-zone inbox
+        // can deliver into this program on a peer's word, letting the peer write
+        // token state at addresses it names. That is the same squatting any
+        // locally deployed program can already do; a peer just pays no local fee.
         Instruction::NewFungibleDefinition { name, total_supply } => {
             let [definition_account, holding_account] = pre_states
                 .try_into()

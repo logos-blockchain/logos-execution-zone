@@ -110,7 +110,7 @@ pub fn ping_record_pda(receiver_id: ProgramId) -> AccountId {
     AccountId::for_public_pda(&receiver_id, &ping_record_seed())
 }
 
-/// Seed of the record PDA, exposed so the guest can claim the account.
+/// Seed of the record PDA.
 #[must_use]
 const fn ping_record_seed() -> PdaSeed {
     PdaSeed::new(PING_RECORD_SEED)

@@ -54,7 +54,7 @@ Execution succeeds only if the account is:
 - Uninitialized, or
 - Already owned by this program
 
-If uninitialized, the program will claim the account and emit the updated state.
+If the account is unowned, writing data to it makes the program its owner, and the updated state is emitted.
 
 ## Navigate to the example directory
 All remaining commands must be run from:
@@ -108,7 +108,7 @@ cargo run --bin run_hello_world \
 > [!NOTE]
 > - Passing the `.bin` lets the script compute the program ID and build the transaction.
 > - Because this program executes publicly, the node performs the execution.
-> - The program will claim the account and write data into it.
+> - The program will write data into the account, which makes it the owner.
 
 Monitor the sequencer terminal to confirm execution.
 
@@ -144,7 +144,7 @@ Its purpose is very simple: append the instruction bytes to the data field of a 
   - The raw instruction data (used again when writing outputs)
 2. Checks that there is exactly one input account: this example operates on a single account, so it expects `pre_states` to contain exactly one entry.
 3. Builds the post-state: It clones the input account and appends the instruction bytes to its data field.
-4. Handles account claiming logic: If the account is uninitialized (i.e. not yet claimed by any program), its program_owner will equal `DEFAULT_PROGRAM_ID`. In that case, the program issues a claim request, meaning: "This program now owns this account."
+4. Acquires ownership implicitly: if the account is unowned (its `program_owner` equals `DEFAULT_PROGRAM_ID`), writing data to it makes this program its owner. Nothing is requested — writing the data is the whole of it.
 5. Outputs the proposed state transition: `write_lee_outputs` emits:
   - The original instruction data
   - The original pre-states
@@ -169,14 +169,7 @@ let mut bytes = this.data.into_inner();
 bytes.extend_from_slice(&greeting);
 this.data = bytes.try_into().expect("Data should fit within the allowed limits");
 ```
-4. Instantiating the `AccountPostState` with a claiming request only if the account pre state is uninitialized:
-```rust
-let post_state = if post_account.program_owner == DEFAULT_PROGRAM_ID {
-    AccountPostState::new_claimed(post_account)
-} else {
-    AccountPostState::new(post_account)
-};
-```
+4. There is no claiming step. Ownership is implicit: because step 3 wrote `data` to an account no program owns, the state machine assigns this program as its owner. A program that only moved balance would leave the account unowned.
 5. Emmiting the output
 ```rust
 write_lee_outputs(instruction_data, vec![pre_state], vec![post_state]);
@@ -206,7 +199,7 @@ The program expects two arguments:
 - Path to the guest binary
 - AccountId of the public account to operate on
 
-This is the account that the program will claim and write data into.
+This is the account the program will write data into, becoming its owner.
 
 ### 3. Loading the program bytecode
 ```rust
@@ -285,7 +278,7 @@ cargo run --bin run_hello_world_private \
 > - This command may take a few minutes to complete. A ZK proof of the Hello world program execution and the privacy preserving circuit are being generated. Depending on the machine this can take from 30 seconds to 4 minutes.
 > - We are passing the same `hello_world.bin` binary as in the previous case with public executions. This is because the program is the same, it is the privacy context of the input account that's different.
 > - Because this program executes privately, the local machine runs the program and generate the proof of execution.
-> - The program will claim the private account and write data into it.
+> - The program will write data into the private account, which makes it the owner.
 
 ### Syncing the new private account values
 The `run_hello_world` script submitted a transaction and it was (hopefully) accepted by the node. On chain there is now a commitment to the new private account values, and the account data is stored encrypted. However, the local client hasn’t updated its private state yet. That’s why, if you try to get the private account values now, it still reads the old values from local storage instead.
@@ -376,7 +369,7 @@ wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_authorization
 ```
 
 ### Create a new public account
-Our previous public account is already claimed by the simple Hello world program. So we need a new one to work with this other version of the hello program
+Our previous public account is already owned by the simple Hello world program. So we need a new one to work with this other version of the hello program
 ```bash
 wallet account new public
 ```
@@ -445,7 +438,7 @@ Previous examples only operated on public or private accounts independently. Tho
 The "Hello world with move function" introduces two operations that require one or two input accounts:
 - `write`: appends arbitrary bytes to a single account. This is what we already had.
 - `move_data`: reads all bytes from one account, clears it, and appends those bytes to another account.
-Because these operations may involve multiple accounts, we'll see how public and private accounts can participate together in one execution. It highlights how ownership checks work, when an account needs to be claimed, and how multiple post-states are emitted when several accounts are modified.
+Because these operations may involve multiple accounts, we'll see how public and private accounts can participate together in one execution. It highlights how ownership checks work, when writing data takes an account over, and how multiple post-states are emitted when several accounts are modified.
 
 > [!NOTE]
 > The program logic is completely agnostic to whether input accounts are public or private. It always executes the same way.
@@ -598,8 +591,8 @@ In LEE there are two distinct concepts that control who can modify an account:
 **Program Ownership:** Each account has a field: `program_owner: ProgramId`.
 This indicates which program is allowed to update the account’s state during execution.
 - If a program is the program_owner of an account, it can freely mutate its fields.
-- If the account is uninitialized (`program_owner = DEFAULT_PROGRAM_ID`), a program may claim it and become its owner.
-- If a program is not the owner and the account is not claimable, any attempt to modify it will cause the transition to fail.
+- If the account is unowned (`program_owner = DEFAULT_PROGRAM_ID`), a program that writes data to it becomes its owner.
+- If a program is not the owner and the account is already owned, any attempt to modify its data will cause the transition to fail.
 Program ownership is about mutation rights during program execution.
 
 **Account authority**: Independent from program ownership, each account also has an authority. The entity that is allowed to set: `is_authorized = true`. This flag indicates that the account has been authorized for use in a transaction.
@@ -620,7 +613,7 @@ A program can be the authority of an account owned by another program, which is 
 During a chained call, a program can mark its PDA accounts as `is_authorized=true` without requiring any user signatures or nullifier secret keys. This enables programs to safely authorize accounts during program composition. Importantly, these flags can only be set to true for PDA accounts through an execution of the program that is their authority. No user and no other program can execute any transition that requires authorization of PDA accounts belonging to a different program.
 
 ## Running the example
-This tutorial includes an example of PDA usage in `methods/guest/src/bin/tail_call_with_pda.rs.`. That program’s sole purpose is to forward one of its own PDA accounts, an account for which it is the authority, to the "Hello World with authorization" program via a chained call. The Hello World program will then claim the account and become its program owner, but the `tail_call_with_pda` program remains the authority. This means it is still the only entity capable of marking that account as `is_authorized=true`.
+This tutorial includes an example of PDA usage in `methods/guest/src/bin/tail_call_with_pda.rs.`. That program’s sole purpose is to forward one of its own PDA accounts, an account for which it is the authority, to the "Hello World with authorization" program via a chained call. The Hello World program will then write to the account and become its program owner, but the `tail_call_with_pda` program remains the authority. This means it is still the only entity capable of marking that account as `is_authorized=true`.
 
 Deploy the program:
 ```bash

@@ -12,7 +12,7 @@ use integration_tests::{
     public_mention,
     utils::{
         assert_public_account_restored, new_account, restored_private_account, send,
-        send_claiming_new_account,
+        send_with_signing_recipient,
     },
     verify_commitment_is_in_state,
 };
@@ -125,8 +125,8 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to both public accounts, with each recipient signing alongside the sender. The wallet
     // CLI never signs with the recipient's key, so bypass it and sign directly.
-    send_claiming_new_account(&mut ctx, from, to_account_id3, 102).await?;
-    send_claiming_new_account(&mut ctx, from, to_account_id4, 103).await?;
+    send_with_signing_recipient(&mut ctx, from, to_account_id3, 102).await?;
+    send_with_signing_recipient(&mut ctx, from, to_account_id4, 103).await?;
 
     log::info!("Preparation complete, performing keys restoration");
 

@@ -134,17 +134,17 @@ pub async fn send(
     Ok(())
 }
 
-/// Like [`send`], but for a `to` that is still a fresh, unclaimed account.
+/// Like [`send`], but with the recipient signing the transaction as well.
 ///
 /// The wallet CLI's `AuthTransfer::Send` never signs with the recipient's key (by design: the
-/// sender's wallet must not sign on behalf of an account it doesn't own). But claiming a fresh
-/// account is only possible if that account's own key signs the transaction, so this bypasses
-/// the CLI and calls the program facade directly with an explicit `AccountIdentity::Public` for
-/// the recipient, using the key the test wallet holds for the account it just created.
+/// sender's wallet must not sign on behalf of an account it doesn't own), so this bypasses the
+/// CLI and calls the program facade directly with an explicit `AccountIdentity::Public` for the
+/// recipient, using the key the test wallet holds for it. The credit itself needs no such
+/// signature.
 ///
 /// Unlike `send`, this doesn't go through the CLI's own poll-until-included step, so it waits
 /// for block creation itself before returning.
-pub async fn send_claiming_new_account(
+pub async fn send_with_signing_recipient(
     ctx: &mut TestContext,
     from: AccountId,
     to: AccountId,
@@ -204,9 +204,11 @@ pub async fn token_send(
     Ok(())
 }
 
-/// Like [`token_send`], but for a `to` that is still a fresh, unclaimed holding account. See
-/// [`send_claiming_new_account`] for why the CLI can't be used here.
-pub async fn token_send_claiming_new_account(
+/// Like [`token_send`], but with the recipient signing the transaction as well.
+///
+/// See [`send_with_signing_recipient`] for why the CLI can't be used here; the token program
+/// acquires the recipient's holding through its own data write, not through that signature.
+pub async fn token_send_with_signing_recipient(
     ctx: &mut TestContext,
     from: AccountId,
     to: AccountId,

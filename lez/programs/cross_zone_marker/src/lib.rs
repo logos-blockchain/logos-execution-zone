@@ -22,10 +22,11 @@ pub type ZoneId = [u8; 32];
 /// The account the inbox passes at position 0 of a delivery's chained call, so
 /// the target can authenticate its own sources.
 ///
-/// Nothing writes or claims it, and nothing can: crediting it would leave a
-/// modified default-owner account, which the state machine rejects, and only the
-/// inbox could claim this address, which it never does. So it stays
-/// `Account::default()` and every hop round-trips it untouched.
+/// Its contents carry nothing and are never read: a target re-derives this
+/// address from a source it has authorized and compares, so what the account
+/// holds cannot change any decision. Anyone may write it — the address is
+/// derivable and the account is unowned until someone writes it — and that is
+/// harmless for the same reason.
 ///
 /// The address is derivable by anyone, so it is not a secret and not a
 /// capability. What makes it mean something is that a target checks it only after
@@ -42,8 +43,8 @@ pub fn inbox_source_marker_account_id(
     )
 }
 
-/// Seed of the source marker. Private: nothing claims this account, so no caller
-/// needs the seed, only the address.
+/// Seed of the source marker. Private: nothing ever needs to spend from the
+/// account, so no caller needs the seed, only the address.
 fn inbox_source_marker_seed(src_zone: &ZoneId, src_program_id: ProgramId) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 

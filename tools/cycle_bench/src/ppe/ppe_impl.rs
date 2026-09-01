@@ -46,9 +46,9 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
     let auth_transfer_id = auth_transfer.id();
     let pwd = ProgramWithDependencies::from(auth_transfer);
 
-    // For PPE to allow the sender's balance to be decremented by this
-    // program, the sender must already be claimed by auth_transfer.
-    // Recipient stays default-owned so the first call can claim it.
+    // The sender's balance may only be decremented because it is authorized;
+    // its owner is incidental. The recipient stays default: a credit writes no
+    // data, so it acquires no owner.
     let sender = AccountWithMetadata {
         account: Account {
             program_owner: auth_transfer_id.into(),
@@ -112,9 +112,9 @@ fn prove_chain_caller(
     deps.insert(auth_transfer.id(), auth_transfer);
     let pwd = ProgramWithDependencies::new(chain_caller, deps);
 
-    // Both accounts pre-claimed by auth_transfer. chain_caller doesn't
-    // track recipient's post-claim program_owner, so a default recipient
-    // would cause a state mismatch on subsequent chained calls.
+    // Both accounts are seeded owned by auth_transfer. Nothing forces it: the
+    // sender needs only its authorization to be debited, and a credit writes no
+    // data, so chain_caller echoes each owner unchanged down the whole chain.
     let recipient_pre = AccountWithMetadata {
         account: Account {
             program_owner: auth_transfer_id.into(),
