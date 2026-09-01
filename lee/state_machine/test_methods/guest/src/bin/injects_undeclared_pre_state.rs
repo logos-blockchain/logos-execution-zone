@@ -5,7 +5,7 @@ use lee_core::{
 
 /// Echoes its real `pre_states` unchanged, then appends one fabricated, untouched account never
 /// present in its own input — to test whether reporting it in `ProgramOutput.pre_states` alone
-/// is enough to get it resolved, independent of `ChainedCall.accounts`.
+/// is enough to get it resolved, independent of `ChainedCall.pre_state_ids`.
 type Instruction = AccountId;
 
 fn main() {

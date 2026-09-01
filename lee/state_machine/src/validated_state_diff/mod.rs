@@ -82,7 +82,7 @@ impl ValidatedStateDiff {
         let initial_call = ChainedCall {
             program_id: message.program_id,
             instruction_data: message.instruction_data.clone(),
-            accounts: message.account_ids.clone(),
+            pre_state_ids: message.account_ids.clone(),
             pda_seeds: vec![],
         };
 
@@ -119,12 +119,12 @@ impl ValidatedStateDiff {
                     || caller_data.authorized_accounts.contains(account_id)
             };
 
-            // The caller only names which accounts to call with (`accounts`); resolve their
+            // The caller only names which accounts to call with (`pre_state_ids`); resolve their
             // actual values from the protocol's own tracked state, not from anything it asserts.
             // Resolvable only if declared up front or already touched in this transaction —
             // never merely because it exists somewhere in global state.
             let real_pre_states: Vec<AccountWithMetadata> = chained_call
-                .accounts
+                .pre_state_ids
                 .iter()
                 .map(|account_id| {
                     let account = match state_diff.get(account_id) {
@@ -163,10 +163,10 @@ impl ValidatedStateDiff {
             );
 
             // A program may report fewer accounts than it was named with (dropping one for a
-            // later call to pick up), but never one outside `chained_call.accounts` — otherwise
-            // it could inject an account nobody in this transaction ever named.
+            // later call to pick up), but never one outside `chained_call.pre_state_ids` —
+            // otherwise it could inject an account nobody in this transaction ever named.
             let named_accounts: HashSet<AccountId> =
-                chained_call.accounts.iter().copied().collect();
+                chained_call.pre_state_ids.iter().copied().collect();
 
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
@@ -293,7 +293,7 @@ impl ValidatedStateDiff {
             }
 
             // Source from `program_output.pre_states` (the callee's own checked echo), not
-            // `chained_call.accounts` (bare ids the caller supplied, carrying no
+            // `chained_call.pre_state_ids` (bare ids the caller supplied, carrying no
             // authorization claim at all) — the loop above already gates program_output's
             // `is_authorized` via the `!pre.is_authorized || is_indeed_authorized` check.
             //

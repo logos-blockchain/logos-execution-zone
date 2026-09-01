@@ -110,7 +110,7 @@ pub fn execute_and_prove_with_padded_inputs(
         .iter()
         .map(|pre| (pre.account_id, pre.account.clone()))
         .collect();
-    let accounts: Vec<AccountId> = pre_states.iter().map(|pre| pre.account_id).collect();
+    let pre_state_ids: Vec<AccountId> = pre_states.iter().map(|pre| pre.account_id).collect();
 
     // Non-PDA accounts authorized at their first sight, anywhere in the call tree — mirrors
     // the circuit's own `globally_authorized`. Seeded from top-level `is_authorized` since the
@@ -131,7 +131,7 @@ pub fn execute_and_prove_with_padded_inputs(
     let initial_call = ChainedCall {
         program_id: initial_program.id(),
         instruction_data,
-        accounts,
+        pre_state_ids,
         pda_seeds: vec![],
     };
 
@@ -152,8 +152,8 @@ pub fn execute_and_prove_with_padded_inputs(
             compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
 
         let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_id) = caller_program_id {
-            let mut resolved = Vec::with_capacity(chained_call.accounts.len());
-            for account_id in &chained_call.accounts {
+            let mut resolved = Vec::with_capacity(chained_call.pre_state_ids.len());
+            for account_id in &chained_call.pre_state_ids {
                 let account = materialized_state.get(account_id).cloned().ok_or(
                     InvalidProgramBehaviorError::UnknownChainedCallAccount {
                         account_id: *account_id,

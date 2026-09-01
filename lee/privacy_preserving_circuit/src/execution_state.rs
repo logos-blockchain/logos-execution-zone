@@ -121,12 +121,12 @@ impl ExecutionState {
             panic!("No program outputs provided");
         };
 
-        // `accounts` is never read below (every check uses `program_output` instead) —
+        // `pre_state_ids` is never read below (every check uses `program_output` instead) —
         // this synthetic call only bootstraps the loop's first iteration.
         let initial_call = ChainedCall {
             program_id,
             instruction_data: first_output.instruction_data.clone(),
-            accounts: first_output
+            pre_state_ids: first_output
                 .pre_states
                 .iter()
                 .map(|p| p.account_id)

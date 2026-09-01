@@ -16,7 +16,7 @@ fn main() {
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
-    let accounts: Vec<_> = pre_states.iter().map(|pre| pre.account_id).collect();
+    let pre_state_ids: Vec<_> = pre_states.iter().map(|pre| pre.account_id).collect();
 
     let (output_pre_states, output_post_states) = if declare_pre_states {
         let post_states = pre_states
@@ -41,7 +41,7 @@ fn main() {
     .with_chained_calls(vec![ChainedCall {
         program_id: callee_program_id,
         instruction_data: callee_instruction,
-        accounts,
+        pre_state_ids,
         pda_seeds,
     }])
     .write();

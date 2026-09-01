@@ -33,7 +33,7 @@ fn main() {
     let mut chained_calls = vec![ChainedCall {
         program_id: callee_program_id,
         instruction_data: callee_instruction,
-        accounts: std::iter::once(pda.account_id)
+        pre_state_ids: std::iter::once(pda.account_id)
             .chain(rest.iter().map(|r| r.account_id))
             .collect(),
         pda_seeds: vec![delegated_seed],
@@ -45,7 +45,7 @@ fn main() {
         chained_calls.push(ChainedCall {
             program_id: sibling_program_id,
             instruction_data: to_vec(&()).unwrap(),
-            accounts: if include_pda {
+            pre_state_ids: if include_pda {
                 std::iter::once(pda.account_id)
                     .chain(rest.iter().map(|r| r.account_id))
                     .collect()

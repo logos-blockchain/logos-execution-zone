@@ -250,10 +250,10 @@ pub struct CallerData {
 pub struct ChainedCall {
     /// The program ID of the program to execute.
     pub program_id: ProgramId,
-    /// The accounts the callee should receive as `pre_states`, named by id only. The protocol
+    /// The ids of the accounts the callee should receive as `pre_states`. The protocol
     /// resolves each account's real value and `is_authorized` from its own tracked state — never
     /// supplied by the calling program.
-    pub accounts: Vec<AccountId>,
+    pub pre_state_ids: Vec<AccountId>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
     /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
@@ -266,12 +266,12 @@ impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
     pub fn new<I: BorshSerialize>(
         program_id: ProgramId,
-        accounts: Vec<AccountId>,
+        pre_state_ids: Vec<AccountId>,
         instruction: &I,
     ) -> Self {
         Self {
             program_id,
-            accounts,
+            pre_state_ids,
             instruction_data: borsh::to_vec(instruction)
                 .expect("borsh serialization is infallible"),
             pda_seeds: Vec::new(),

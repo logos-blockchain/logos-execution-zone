@@ -382,7 +382,7 @@ fn program_should_fail_if_it_references_an_undeclared_account() {
 }
 
 /// A program can echo its real `pre_states` honestly and still fabricate an extra, untouched
-/// account in its own output — one it was never given via `ChainedCall.accounts`. This must be
+/// account in its own output — one it was never given via `ChainedCall.pre_state_ids`. This must be
 /// rejected independently of whether the fabricated account happens to already exist anywhere.
 #[test]
 fn program_should_fail_if_it_injects_an_undeclared_pre_state() {

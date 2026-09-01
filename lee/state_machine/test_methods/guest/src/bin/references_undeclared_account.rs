@@ -36,7 +36,7 @@ fn main() {
     .with_chained_calls(vec![ChainedCall {
         program_id: callee_program_id,
         instruction_data: callee_instruction,
-        accounts: vec![undeclared_account_id],
+        pre_state_ids: vec![undeclared_account_id],
         pda_seeds: vec![],
     }])
     .write();

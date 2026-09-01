@@ -148,7 +148,7 @@ fn dispatch(
         call_accounts.extend(target_accounts.iter().map(|a| a.account_id));
         let call = ChainedCall {
             program_id: msg.target_program_id,
-            accounts: call_accounts,
+            pre_state_ids: call_accounts,
             instruction_data: call_instruction_data,
             pda_seeds: vec![],
         };

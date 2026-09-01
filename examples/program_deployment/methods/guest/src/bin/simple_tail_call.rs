@@ -49,7 +49,7 @@ fn main() {
     let chained_call = ChainedCall {
         program_id: hello_world_program_id(),
         instruction_data: chained_call_instruction_data,
-        accounts: vec![pre_state.account_id],
+        pre_state_ids: vec![pre_state.account_id],
         pda_seeds: vec![],
     };
 
