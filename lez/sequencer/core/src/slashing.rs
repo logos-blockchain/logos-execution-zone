@@ -166,6 +166,7 @@ pub(crate) fn build_slash_tx(
         program_id,
         vec![
             ownership_id,
+            sequencer_stake_core::stake_funds_account_id(program_id, &ownership_id),
             sequencer_stake_core::slash_sink_account_id(program_id),
             system_accounts::sequencer_stake_config_account_id(),
         ],

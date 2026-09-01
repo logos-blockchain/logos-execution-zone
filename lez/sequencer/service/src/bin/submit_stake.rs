@@ -100,6 +100,12 @@ async fn main() -> Result<()> {
                     vec![
                         AccountIdentity::Public(funding_account),
                         AccountIdentity::Public(ownership_account),
+                        AccountIdentity::PublicNoSign(
+                            sequencer_stake_core::stake_funds_account_id(
+                                programs::sequencer_stake().id(),
+                                &ownership_account,
+                            ),
+                        ),
                         AccountIdentity::PublicNoSign(config_id),
                     ],
                     instruction_data,
