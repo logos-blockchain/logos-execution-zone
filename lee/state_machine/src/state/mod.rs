@@ -17,11 +17,9 @@ use crate::{
     validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
 
-pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
+pub use program_loader_core::MAX_PROGRAM_SEGMENTS;
 
-/// Hard cap on a deployed program's segment chain length (~2 MiB of bytecode at 96 KiB/segment).
-/// `get_program` re-walks the chain uncached on every dispatch, so length must be bounded.
-pub const MAX_PROGRAM_SEGMENTS: usize = 20;
+pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
@@ -326,51 +324,7 @@ impl V03State {
         &self,
         program_account_id: AccountId,
     ) -> Result<Option<(ProgramId, Vec<u8>)>, LeeError> {
-        let Some(account) = self.get_account_by_id_ref(program_account_id) else {
-            return Ok(None);
-        };
-        if account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
-            return Ok(None);
-        }
-        let Ok(header) = ProgramHeader::try_from(&account.data) else {
-            return Ok(None);
-        };
-
-        let mut elf = Vec::new();
-        let mut next = Some(header.program_first_segment);
-        let mut segment_count = 0_usize;
-        while let Some(segment_account_id) = next {
-            segment_count += 1;
-            if segment_count > MAX_PROGRAM_SEGMENTS {
-                return Err(LeeError::InvalidProgramBytecode(anyhow::anyhow!(
-                    "segment chain for {program_account_id} exceeds the {MAX_PROGRAM_SEGMENTS}-segment cap"
-                )));
-            }
-            let Some(segment_account) = self.get_account_by_id_ref(segment_account_id) else {
-                return Ok(None);
-            };
-            if segment_account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
-                return Ok(None);
-            }
-            let Ok(segment) = ProgramSegment::try_from(&segment_account.data) else {
-                return Ok(None);
-            };
-            elf.extend_from_slice(&segment.bytecode);
-            next = segment.next_segment;
-        }
-
-        let real_image_id: ProgramId = risc0_binfmt::compute_image_id(&elf)
-            .map_err(LeeError::InvalidProgramBytecode)?
-            .into();
-        if real_image_id != header.image_id {
-            return Err(LeeError::InvalidProgramBytecode(anyhow::anyhow!(
-                "reconstructed elf for {program_account_id} has image_id {real_image_id:?}, \
-                 header declares {:?}",
-                header.image_id
-            )));
-        }
-
-        Ok(Some((header.image_id, elf)))
+        get_program_via(program_account_id, |id| self.get_account_by_id(id))
     }
 
     /// The `image_id` a deployed program's header declares, without reading its bytecode.
@@ -464,6 +418,59 @@ impl V03State {
         }
         Ok(())
     }
+}
+
+/// [`V03State::get_program`]'s core, parameterized over an account `lookup` closure.
+///
+/// `Ok(None)` means no such program exists, including a chain still missing a segment.
+/// `Err(LeeError::InvalidProgramBytecode(_))` means either the chain exceeds
+/// [`MAX_PROGRAM_SEGMENTS`] or every segment exists but the reconstructed bytecode doesn't
+/// hash to the `image_id` the header declares.
+pub fn get_program_via(
+    program_account_id: AccountId,
+    lookup: impl Fn(AccountId) -> Account,
+) -> Result<Option<(ProgramId, Vec<u8>)>, LeeError> {
+    let account = lookup(program_account_id);
+    if account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
+        return Ok(None);
+    }
+    let Ok(header) = ProgramHeader::try_from(&account.data) else {
+        return Ok(None);
+    };
+
+    let mut elf = Vec::new();
+    let mut next = Some(header.program_first_segment);
+    let mut segment_count = 0_usize;
+    while let Some(segment_account_id) = next {
+        segment_count = segment_count.saturating_add(1);
+        if segment_count > MAX_PROGRAM_SEGMENTS {
+            return Err(LeeError::InvalidProgramBytecode(anyhow::anyhow!(
+                "segment chain for {program_account_id} exceeds the {MAX_PROGRAM_SEGMENTS}-segment cap"
+            )));
+        }
+        let segment_account = lookup(segment_account_id);
+        if segment_account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
+            return Ok(None);
+        }
+        let Ok(segment) = ProgramSegment::try_from(&segment_account.data) else {
+            return Ok(None);
+        };
+        elf.extend_from_slice(&segment.bytecode);
+        next = segment.next_segment;
+    }
+
+    let real_image_id: ProgramId = risc0_binfmt::compute_image_id(&elf)
+        .map_err(LeeError::InvalidProgramBytecode)?
+        .into();
+    if real_image_id != header.image_id {
+        return Err(LeeError::InvalidProgramBytecode(anyhow::anyhow!(
+            "reconstructed elf for {program_account_id} has image_id {real_image_id:?}, \
+             header declares {:?}",
+            header.image_id
+        )));
+    }
+
+    Ok(Some((header.image_id, elf)))
 }
 
 #[cfg(any(test, feature = "test-utils"))]

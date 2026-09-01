@@ -6,8 +6,11 @@ use lee_core::{
 };
 
 /// Max bytes of bytecode per segment. Under `DATA_MAX_LENGTH` with headroom for a segment's own
-/// borsh framing; not enforced here — `Data::try_from` in `execute_new_segment` does that.
+/// borsh framing; not enforced here — `Data::try_from` in `write_segment` does that.
 pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
+
+/// Hard cap on a deployed program's segment chain length (~2 MiB of bytecode at 96 KiB/segment).
+pub const MAX_PROGRAM_SEGMENTS: usize = 20;
 
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
@@ -69,7 +72,7 @@ pub fn genesis_segment_account_id(header_account_id: AccountId, segment_number: 
 
 /// Executes `NewSegment`.
 #[must_use]
-pub fn execute_new_segment(
+pub fn write_segment(
     pre_states: Vec<AccountWithMetadata>,
     bytecode: Vec<u8>,
     next_segment: Option<AccountId>,
@@ -121,7 +124,7 @@ pub fn execute_new_segment(
 
 /// Executes `UploadHeader`.
 #[must_use]
-pub fn execute_upload_header(
+pub fn create_header(
     pre_states: Vec<AccountWithMetadata>,
     first_segment: AccountId,
     immutable: bool,
@@ -135,8 +138,13 @@ pub fn execute_upload_header(
         Account::default(),
         "header target already deployed"
     );
+    assert_eq!(
+        pre_states.get(1).map(|pre| pre.account_id),
+        Some(first_segment),
+        "first_segment must match the first supplied segment account"
+    );
 
-    let image_id = recompute_image_id(&pre_states, first_segment);
+    let image_id = compute_image_id(&pre_states);
 
     let mut post_states = vec![AccountPostState::new_claimed(
         Account {
@@ -159,7 +167,7 @@ pub fn execute_upload_header(
 
 /// Executes `UpdateHeader`.
 #[must_use]
-pub fn execute_update_header(
+pub fn update_header(
     pre_states: Vec<AccountWithMetadata>,
     first_segment: AccountId,
     immutable: bool,
@@ -178,8 +186,13 @@ pub fn execute_update_header(
         pre_states[0].is_authorized,
         "UpdateHeader target must be authorized by the signer"
     );
+    assert_eq!(
+        pre_states.get(1).map(|pre| pre.account_id),
+        Some(first_segment),
+        "first_segment must match the first supplied segment account"
+    );
 
-    let image_id = recompute_image_id(&pre_states, first_segment);
+    let image_id = compute_image_id(&pre_states);
 
     let mut post_states = vec![AccountPostState::new(Account {
         data: Data::from(&ProgramHeader {
@@ -197,20 +210,27 @@ pub fn execute_update_header(
     post_states
 }
 
-/// Walks the segment chain starting at `first_segment` — `pre_states[1..]`, which must appear in
-/// exactly link order — concatenating bytecode and recomputing the real `image_id` over the
-/// result. Never trusts a caller-supplied `image_id`.
-fn recompute_image_id(pre_states: &[AccountWithMetadata], first_segment: AccountId) -> ProgramId {
+/// `segments_with_header[0]` is the header account, not part of the chain. Walks
+/// `segments_with_header[1..]`, which must appear in exact link order, concatenating bytecode
+/// and recomputing the real `image_id` over the result. Never trusts a caller-supplied
+/// `image_id`, and rejects a chain over `MAX_PROGRAM_SEGMENTS`.
+fn compute_image_id(segments_with_header: &[AccountWithMetadata]) -> ProgramId {
     let mut elf = Vec::new();
-    let mut expected_next = Some(first_segment);
-    for pre in &pre_states[1..] {
+    let mut expected_next = segments_with_header.get(1).map(|pre| pre.account_id);
+    let mut segment_count = 0_usize;
+    for pre in &segments_with_header[1..] {
+        segment_count = segment_count.saturating_add(1);
+        assert!(
+            segment_count <= MAX_PROGRAM_SEGMENTS,
+            "segment chain exceeds the {MAX_PROGRAM_SEGMENTS}-segment cap"
+        );
         let account_id = expected_next.expect(
             "chain ended (a segment declared `next_segment: None`) before all supplied \
              segment accounts were consumed",
         );
         assert_eq!(
             pre.account_id, account_id,
-            "segment accounts must be supplied in exact chain order starting at `first_segment`"
+            "segment accounts must be supplied in exact chain order"
         );
         assert_eq!(
             pre.account.program_owner, PROGRAM_LOADER_ACCOUNT_ID,

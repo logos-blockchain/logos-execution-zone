@@ -136,7 +136,7 @@ impl ValidatedStateDiff {
                     program_loader_core::Instruction::NewSegment {
                         bytecode,
                         next_segment,
-                    } => program_loader_core::execute_new_segment(
+                    } => program_loader_core::write_segment(
                         deploy_pre_states,
                         bytecode,
                         next_segment,
@@ -144,7 +144,7 @@ impl ValidatedStateDiff {
                     program_loader_core::Instruction::UploadHeader {
                         first_segment,
                         immutable,
-                    } => program_loader_core::execute_upload_header(
+                    } => program_loader_core::create_header(
                         deploy_pre_states,
                         first_segment,
                         immutable,
@@ -152,16 +152,17 @@ impl ValidatedStateDiff {
                     program_loader_core::Instruction::UpdateHeader {
                         first_segment,
                         immutable,
-                    } => program_loader_core::execute_update_header(
+                    } => program_loader_core::update_header(
                         deploy_pre_states,
                         first_segment,
                         immutable,
                     ),
                 })
-                .map_err(|_panic_payload| {
-                    LeeError::ProgramExecutionFailed(
-                        "program_loader rejected the given input".into(),
-                    )
+                .map_err(|panic_payload| {
+                    LeeError::ProgramExecutionFailed(format!(
+                        "program_loader rejected the given input: {}",
+                        panic_message(&*panic_payload)
+                    ))
                 })?;
                 ProgramOutput::new(
                     chained_call.program_account_id,
@@ -172,10 +173,20 @@ impl ValidatedStateDiff {
                 )
             } else {
                 // The real `image_id`, sourced from the program's own account rather than
-                // guessed from its address — see `V03State::get_program`'s doc comment for
-                // why that distinction matters once a program's address can outlive its
-                // current bytecode (upgrades).
-                let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)?
+                // guessed from its address: an update can leave a program's address pointing
+                // at different bytecode, so the address alone no longer determines it.
+                //
+                // Reads through `state_diff` first, so an earlier chained call in this same
+                // transaction that deployed or updated this program is seen immediately.
+                let Some((program_id, elf)) = crate::state::get_program_via(
+                    chained_call.program_account_id,
+                    |id| {
+                        state_diff
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(|| state.get_account_by_id(id))
+                    },
+                )?
                 else {
                     return Err(LeeError::InvalidInput("Unknown program".into()));
                 };
@@ -609,6 +620,15 @@ fn check_privacy_preserving_circuit_proof_is_valid(
 fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
     let set: HashSet<&T> = data.iter().collect();
     set.len()
+}
+
+/// Best-effort extraction of a panic payload's message (panics carry a `String` or `&str`).
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_else(|| "<non-string panic payload>".to_owned())
 }
 
 #[cfg(test)]

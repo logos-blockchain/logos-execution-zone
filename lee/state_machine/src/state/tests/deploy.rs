@@ -1,4 +1,5 @@
 use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramSegment};
+use program_loader_core::Instruction;
 
 use super::*;
 use crate::state::MAX_PROGRAM_SEGMENTS;
@@ -149,5 +150,60 @@ fn program_with_more_than_max_segments_is_rejected() {
         ),
         "a chain of {} segments must be rejected by the {MAX_PROGRAM_SEGMENTS}-segment cap",
         MAX_PROGRAM_SEGMENTS + 1
+    );
+}
+
+/// An `UploadHeader` transaction naming an over-long chain is rejected outright.
+#[test]
+fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
+    let mut state = V03State::new();
+
+    let segment_account_ids: Vec<AccountId> = (0..=MAX_PROGRAM_SEGMENTS)
+        .map(|i| AccountId::new([u8::try_from(i + 1).unwrap(); 32]))
+        .collect();
+
+    for i in (0..segment_account_ids.len()).rev() {
+        state.force_insert_account(
+            segment_account_ids[i],
+            Account {
+                program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+                data: Data::from(&ProgramSegment {
+                    bytecode: vec![],
+                    next_segment: segment_account_ids.get(i + 1).copied(),
+                }),
+                ..Account::default()
+            },
+        );
+    }
+
+    let header_key = PrivateKey::try_new([0xAB; 32]).unwrap();
+    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+
+    let mut account_ids = vec![header_account_id];
+    account_ids.extend_from_slice(&segment_account_ids);
+    let message = public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        account_ids,
+        vec![Nonce(0)],
+        Instruction::UploadHeader {
+            first_segment: segment_account_ids[0],
+            immutable: true,
+        },
+    )
+    .expect("UploadHeader instruction data should always be serializable");
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&header_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    let err = result.expect_err("an over-long chain must be rejected at deploy time");
+    assert!(
+        err.to_string().contains("segment chain exceeds"),
+        "rejection should cite the segment cap, got: {err}"
+    );
+    assert_eq!(
+        state.get_account_by_id(header_account_id),
+        Account::default(),
+        "the header account must remain unclaimed after a rejected deploy"
     );
 }
