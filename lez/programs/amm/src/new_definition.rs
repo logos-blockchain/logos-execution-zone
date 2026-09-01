@@ -42,6 +42,9 @@ pub fn new_definition(
         definition_token_a_id != definition_token_b_id,
         "Cannot set up a swap for a token with itself"
     );
+    // TODO(squatting): the pool address is derivable from the token pair, so a
+    // program can own it before the first definition and brick that pair.
+    // Accepted: there is no reclaim path today.
     assert_eq!(
         pool.account_id,
         compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id),

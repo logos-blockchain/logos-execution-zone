@@ -70,6 +70,12 @@ fn main() {
             // "already credited by a peer" without deriving the receipt id and
             // checking its owner before this block — the receipt is the only
             // on-chain signal. Relevant once the explorer surfaces deposits.
+            // TODO(squatting): the receipt address is derivable from the op id
+            // alone. A program that writes data to it before this mint owns it,
+            // and the marker write below then fails for ever — the deposit
+            // bricks loudly rather than being silently skipped, and the
+            // sequencer keeps re-driving the mint every block (see the deposit
+            // drain). Accepted: there is no reclaim path today.
             if receipt.account.program_owner == self_program_id.into() {
                 (unchanged_post_states(&pre_states_clone), vec![], vec![])
             } else {

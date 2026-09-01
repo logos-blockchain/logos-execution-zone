@@ -102,6 +102,9 @@ pub enum SenderInstruction {
 }
 
 /// The account a `ping_receiver` records the latest delivered payload into.
+///
+/// TODO(squatting): a derivable address; a squatter who writes data first owns
+/// it and denies the demo flow.
 #[must_use]
 pub fn ping_record_pda(receiver_id: ProgramId) -> AccountId {
     AccountId::for_public_pda(&receiver_id, &ping_record_seed())

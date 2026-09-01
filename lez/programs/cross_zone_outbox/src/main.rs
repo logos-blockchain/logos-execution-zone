@@ -54,14 +54,15 @@ fn main() {
     // slot.
     //
     // The record is the signal, not the slot: anyone can credit a foreign slot
-    // into existence, but only this program writes its data, so a bare credit
-    // cannot deny an ordinal.
+    // into existence, but a bare credit writes no data, so it cannot deny an
+    // ordinal.
     //
     // A slot can still be denied to its intended writer by a real emission: the
     // ordinal is caller-chosen in a namespace every user of an emitter shares,
     // and an emission needs no signature, so anyone can occupy one. A client must
     // pick an ordinal the chain does not already hold rather than counting from
-    // zero.
+    // zero. TODO(squatting): a foreign data write at the address denies the
+    // ordinal the same way, since whoever writes data first owns the account.
     assert!(
         outbox.account.data.is_empty(),
         "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"

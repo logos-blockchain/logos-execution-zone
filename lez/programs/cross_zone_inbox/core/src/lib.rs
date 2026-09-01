@@ -287,6 +287,11 @@ const fn inbox_config_seed() -> PdaSeed {
 }
 
 /// The seen-set shard for the peer block the message came from.
+///
+/// TODO(squatting): the address is derivable from `(src_zone, src_block_id)`,
+/// so a squatter can own a future shard first. The dispatch trusts a shard only
+/// when the inbox owns it, so delivery from that peer block then fails loudly
+/// rather than the squatter's bytes deciding what counts as delivered.
 #[must_use]
 pub fn inbox_seen_shard_account_id(
     inbox_id: ProgramId,

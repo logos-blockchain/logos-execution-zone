@@ -105,6 +105,10 @@ fn mint(
     }
     source.minted = minted;
 
+    // TODO(squatting): the holding address is derivable from the recipient
+    // alone, so a program can write data to it first and own it, after which
+    // every mint to that recipient fails. Accepted: there is no reclaim path
+    // today.
     assert_eq!(
         holding.account_id,
         holding_account_id(self_program_id, &recipient),
@@ -119,20 +123,18 @@ fn mint(
     let new_balance = read_balance(&holding.account.data)
         .checked_add(amount)
         .expect("wrapped-token balance overflow");
-    let mut holding_account = holding.account.clone();
-    holding_account.data = balance_bytes(new_balance)
+    let mut holding_post = holding.account.clone();
+    holding_post.data = balance_bytes(new_balance)
         .to_vec()
         .try_into()
         .expect("balance fits in account data");
-    let holding_post = holding_account;
     // The advanced counter is written back, so the cap survives restarts and
     // re-derivation alike: it is state, not host memory.
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
+    let mut config_post = config.account.clone();
+    config_post.data = cfg
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
-    let config_post = config_account;
 
     ProgramOutput::new(
         self_program_id,
@@ -329,12 +331,11 @@ fn init_config(
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = config_value
+    let mut config_post = config.account.clone();
+    config_post.data = config_value
         .to_bytes()
         .try_into()
         .expect("wrapped-token config fits in account data");
-    let config_post = config_account;
 
     ProgramOutput::new(
         self_program_id,
