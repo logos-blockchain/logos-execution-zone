@@ -103,17 +103,17 @@ fn initial_state() -> lee::V03State {
         public_accounts.push((fee_id, system_accounts::fee_account()));
     }
 
-    let mut state = lee::V03State::new()
+    // simulate the producer's stake so charged blocks
+    // can credit its reward account
+    public_accounts.push(common::test_utils::claimed_producer_seed());
+
+    lee::V03State::new()
         .with_public_accounts(public_accounts)
         .with_programs([
             programs::authenticated_transfer(),
             programs::clock(),
             programs::fee(),
-        ]);
-    // Simulate the producer's stake so charged blocks can credit its reward
-    // account (crediting an unclaimed account is rejected).
-    common::test_utils::claim_producer_account(&mut state);
-    state
+        ])
 }
 
 #[test]

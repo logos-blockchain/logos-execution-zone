@@ -594,7 +594,7 @@ mod tests {
 
     #[test]
     fn producer_signature_must_verify() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         // Forge the producer: replace it with a different key and re-hash so
         // the hash check passes but the signature no longer verifies.
@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn fee_state_advances_with_the_chain() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let mut tip = tip_of(&genesis);
@@ -672,7 +672,7 @@ mod tests {
 
     #[test]
     fn missing_fee_tx_is_invalid_fee() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         // Correct clock tail but no fee tx before it.
         let block = HashableBlockData {
             block_id: 1,
@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn nonzero_fee_summary_is_invalid_fee() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let bad_summary = fee_core::BlockFeeSummary {
             gas_used_exec: 1,
             ..fee_core::BlockFeeSummary::default()
@@ -731,7 +731,11 @@ mod tests {
 
     #[test]
     fn applies_transfers_and_advances_state() {
-        let mut state = initial_state(true);
+        // The producer's reward account is claimed from genesis, simulating the
+        // stake a real sequencer holds before producing, so the charged blocks
+        // below can credit it (crediting an unclaimed account is rejected).
+        let mut state =
+            initial_state(true).with_public_accounts([common::test_utils::claimed_producer_seed()]);
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
@@ -742,9 +746,6 @@ mod tests {
         // Genesis (block 1): fee/clock only.
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
-        // Simulate the producer's stake: its reward account is claimed before
-        // it produces, so the charged blocks below can credit it.
-        common::test_utils::claim_producer_account(&mut state);
         let mut tip = tip_of(&genesis);
 
         // Blocks 2..=11: one charged native transfer of 10 each (nonces 0..=9).
@@ -794,7 +795,7 @@ mod tests {
         // invoke the fee program's Refund to sweep the inbox to an attacker
         // account, and honest followers would apply the block. The apply-path
         // guard must reject it.
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -856,7 +857,7 @@ mod tests {
         // transfer were classified exempt, any signer could opt out of fees by
         // dropping the declaration. A correctly-signed transfer that omits the
         // fee must be rejected outright, and must move nothing.
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -895,7 +896,7 @@ mod tests {
 
     #[test]
     fn a_charged_action_that_reverts_is_charged_not_block_rejected() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -953,7 +954,7 @@ mod tests {
 
     #[test]
     fn a_non_genesis_block_rewarding_a_system_account_is_rejected() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let tip = tip_of(&genesis);

@@ -501,9 +501,17 @@ fn settled_test_block(
         transactions,
     }
     .into_pending_block(&sequencer_sign_key_for_testing());
-    common::test_utils::claim_producer_account(state);
     chain_state::apply::apply_block_to_state(&block, state).expect("settled block applies");
     block
+}
+
+/// A mirror build-state seeded like the store's genesis (the producer's reward
+/// account claimed), so `settled_test_block` can credit fees to it — crediting
+/// an unclaimed account is rejected.
+#[cfg(test)]
+fn claimed_build_state() -> lee::V03State {
+    testnet_initial_state::initial_state(true)
+        .with_public_accounts([common::test_utils::claimed_producer_seed()])
 }
 
 #[cfg(test)]
@@ -566,7 +574,7 @@ mod tests {
         // The invoke is a charged transaction, so its block's forced fee tail
         // must carry the summary it settles to; `settled_test_block` derives it,
         // which needs a mirror `build_state` advanced past each block.
-        let mut build_state = testnet_initial_state::initial_state();
+        let mut build_state = claimed_build_state();
 
         let genesis = produce_dummy_block(1, None, vec![]);
         chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
@@ -631,7 +639,7 @@ mod tests {
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
         // Genesis (block 1): fee/clock only.
-        let mut build_state = testnet_initial_state::initial_state();
+        let mut build_state = claimed_build_state();
         let initial_from = build_state.get_account_by_id(from).balance;
         let initial_to = build_state.get_account_by_id(to).balance;
         let genesis = produce_dummy_block(1, None, vec![]);
@@ -675,7 +683,7 @@ mod tests {
         let to = initial_accounts[1].account_id;
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
-        let mut build_state = testnet_initial_state::initial_state();
+        let mut build_state = claimed_build_state();
         let initial_from = build_state.get_account_by_id(from).balance;
         let initial_to = build_state.get_account_by_id(to).balance;
         let genesis = produce_dummy_block(1, None, vec![]);
@@ -1320,7 +1328,7 @@ mod accept_tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
-        let mut build_state = testnet_initial_state::initial_state();
+        let mut build_state = claimed_build_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
             .expect("genesis applies");
@@ -1379,7 +1387,7 @@ mod accept_tests {
         let sign_key = accounts[0].pub_sign_key.clone();
 
         // Build a short chain: genesis (1) -> block 2 -> block 3, so the tip is 3.
-        let mut build_state = testnet_initial_state::initial_state();
+        let mut build_state = claimed_build_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
             .expect("genesis applies");
@@ -1451,7 +1459,7 @@ mod accept_tests {
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
 
-        let mut build_state = testnet_initial_state::initial_state();
+        let mut build_state = claimed_build_state();
         let initial_from = build_state.get_account_by_id(from).balance;
         let genesis = produce_dummy_block(1, None, vec![]);
         chain_state::apply::apply_block_to_state(&genesis, &mut build_state)

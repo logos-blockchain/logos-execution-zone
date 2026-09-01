@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn a_funded_transfer_is_admitted() {
-        let state = initial_state();
+        let state = initial_state(true);
         let (from, sign_key) = funded();
         let tx = create_transaction_native_token_transfer(from, 0, recipient(), 10, &sign_key);
 
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn a_transfer_without_a_fee_is_rejected() {
-        let state = initial_state();
+        let state = initial_state(true);
         let (from, sign_key) = funded();
         // Omitting the fee would be executed for free if admitted; the door
         // turns it away, and the block transition agrees.
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn a_gas_limit_beyond_the_block_cap_is_rejected() {
-        let state = initial_state();
+        let state = initial_state(true);
         let (from, sign_key) = funded();
         let tx = create_transaction_native_token_transfer_with_fees(
             from,
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn a_max_fee_below_the_reserve_is_rejected() {
-        let state = initial_state();
+        let state = initial_state(true);
         let (from, sign_key) = funded();
         let tx = create_transaction_native_token_transfer_with_fees(
             from,
@@ -288,7 +288,7 @@ mod tests {
     /// reservation the next block would take cannot succeed.
     #[test]
     fn a_payer_that_cannot_fund_the_reserve_is_rejected() {
-        let state = initial_state();
+        let state = initial_state(true);
         let broke_key = key(9);
         let broke = account_of(&broke_key);
         let tx = create_transaction_native_token_transfer_with_fees(
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn a_payer_nothing_authorizes_is_rejected() {
-        let state = initial_state();
+        let state = initial_state(true);
         let (from, sign_key) = funded();
         let stranger = account_of(&key(9));
         let tx = create_transaction_native_token_transfer_with_fees(
@@ -344,7 +344,7 @@ mod tests {
     /// sweeper holds nothing yet.
     #[test]
     fn a_full_vault_sweep_by_an_unfunded_account_is_admitted() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let sweeper_key = key(9);
         let sweeper = account_of(&sweeper_key);
         let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), sweeper);
@@ -386,7 +386,7 @@ mod tests {
             WitnessSet as PrivateWitnessSet, circuit::Proof,
         };
 
-        let state = initial_state();
+        let state = initial_state(true);
         let tx = LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
             PrivateMessage::default(),
             PrivateWitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
@@ -402,7 +402,7 @@ mod tests {
     /// The block size limit at ingest is what bounds it.
     #[test]
     fn an_oversized_deployment_is_admitted_unscreened() {
-        let state = initial_state();
+        let state = initial_state(true);
         let bytecode = vec![0_u8; usize::try_from(market::MAX_GAS_STOR).expect("fits") + 1];
         let tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
             lee::program_deployment_transaction::Message::new(bytecode),
@@ -416,7 +416,7 @@ mod tests {
     /// guaranteed +1 step.
     #[test]
     fn the_quote_prices_the_head_fee_state() {
-        let state = initial_state();
+        let state = initial_state(true);
         let quote = fee_quote(&state);
 
         assert_eq!(quote.height, 0);
@@ -435,7 +435,7 @@ mod tests {
     /// headroom below it is exactly what admission rejects.
     #[test]
     fn a_reserve_computed_from_the_quote_matches_the_one_admission_uses() {
-        let state = initial_state();
+        let state = initial_state(true);
         let (from, sign_key) = funded();
         let quote = fee_quote(&state);
         let build = |max_fee: u128| {

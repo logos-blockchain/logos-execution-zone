@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn genesis_fee_accounts_are_registered_and_owned() {
-        let state = initial_state();
+        let state = initial_state(true);
         let fee_program_id = programs::fee().id();
 
         let ids = system_accounts::fee_account_ids();
