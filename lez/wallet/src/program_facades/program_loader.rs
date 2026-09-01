@@ -52,10 +52,9 @@ impl ProgramLoader<'_> {
     }
 
     /// Creates a new program header at `target` (must already be a default/unclaimed account,
-    /// signed for by `target`'s own key). The header stores only `first_segment`;
-    /// `chain_segment_ids` (the full chain, `first_segment` included) is supplied as transaction
-    /// inputs so `program_loader` can verify the `next_segment` links and derive `image_id`
-    /// itself, never trusting a caller-supplied value.
+    /// signed for by `target`'s own key). The header stores only the id of the chain's head
+    /// segment account; `chain_segment_ids` (head included) lets `program_loader` verify the
+    /// chain and derive `image_id` itself.
     pub async fn create_header(
         &self,
         target: AccountId,
