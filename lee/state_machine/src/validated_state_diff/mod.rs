@@ -150,6 +150,7 @@ impl ValidatedStateDiff {
             );
             let (program_id, mut program_output) = execute_chained_call(
                 state,
+                &state_diff,
                 &chained_call,
                 caller_data.account_id,
                 &real_pre_states,
@@ -535,8 +536,13 @@ struct CallerData {
 ///
 /// `real_pre_states` are the protocol-resolved account values for `chained_call.pre_state_ids`
 /// (see the caller) — never `chained_call`'s own claims, which this function must not trust.
+///
+/// Looks a callee's program up through `state_diff` first, falling back to `state` — so an
+/// earlier chained call in this same transaction that deployed or updated this program is seen
+/// immediately, rather than only on the next transaction.
 fn execute_chained_call(
     state: &V03State,
+    state_diff: &HashMap<AccountId, Account>,
     chained_call: &ChainedCall,
     caller_account_id: Option<AccountId>,
     real_pre_states: &[AccountWithMetadata],
@@ -556,30 +562,21 @@ fn execute_chained_call(
             program_loader_core::Instruction::NewSegment {
                 bytecode,
                 next_segment,
-            } => program_loader_core::execute_new_segment(
-                loader_pre_states,
-                bytecode,
-                next_segment,
-            ),
+            } => program_loader_core::write_segment(loader_pre_states, bytecode, next_segment),
             program_loader_core::Instruction::UploadHeader {
                 first_segment,
                 immutable,
-            } => program_loader_core::execute_upload_header(
-                loader_pre_states,
-                first_segment,
-                immutable,
-            ),
+            } => program_loader_core::create_header(loader_pre_states, first_segment, immutable),
             program_loader_core::Instruction::UpdateHeader {
                 first_segment,
                 immutable,
-            } => program_loader_core::execute_update_header(
-                loader_pre_states,
-                first_segment,
-                immutable,
-            ),
+            } => program_loader_core::update_header(loader_pre_states, first_segment, immutable),
         })
-        .map_err(|_panic_payload| {
-            LeeError::ProgramExecutionFailed("program_loader rejected the given input".into())
+        .map_err(|panic_payload| {
+            LeeError::ProgramExecutionFailed(format!(
+                "program_loader rejected the given input: {}",
+                panic_message(&*panic_payload)
+            ))
         })?;
         Ok((
             program_id,
@@ -592,7 +589,19 @@ fn execute_chained_call(
             ),
         ))
     } else {
-        let Some((program_id, elf)) = state.get_program(chained_call.program_account_id)? else {
+        // The real `image_id`, sourced from the program's own account rather than guessed from
+        // its address: an update can leave a program's address pointing at different bytecode,
+        // so the address alone no longer determines it.
+        let Some((program_id, elf)) = crate::state::get_program_via(
+            chained_call.program_account_id,
+            |id| {
+                state_diff
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| state.get_account_by_id(id))
+            },
+        )?
+        else {
             return Err(LeeError::InvalidInput("Unknown program".into()));
         };
         let program = Program::new_unchecked(program_id, Cow::Owned(elf));
@@ -688,6 +697,15 @@ fn check_privacy_preserving_circuit_proof_is_valid(
 fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
     let set: HashSet<&T> = data.iter().collect();
     set.len()
+}
+
+/// Best-effort extraction of a panic payload's message (panics carry a `String` or `&str`).
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_else(|| "<non-string panic payload>".to_owned())
 }
 
 #[cfg(test)]
