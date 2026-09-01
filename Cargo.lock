@@ -9109,23 +9109,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "pinata_program"
-version = "0.1.0"
-dependencies = [
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "pinata_token_program"
-version = "0.1.0"
-dependencies = [
- "lee_core",
- "risc0-zkvm",
- "token_core",
-]
-
-[[package]]
 name = "ping_core"
 version = "0.1.0"
 dependencies = [
@@ -9488,7 +9471,6 @@ dependencies = [
  "lee",
  "lee_core",
  "ping_core",
- "risc0-zkvm",
  "sequencer_stake_core",
  "token_core",
  "token_program",
@@ -13632,7 +13614,6 @@ dependencies = [
  "sequencer_service_rpc",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "system_accounts",
  "tempfile",
  "testnet_initial_state",

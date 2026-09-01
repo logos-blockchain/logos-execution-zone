@@ -10,9 +10,9 @@ use common::{
 };
 use kameo::actor::Spawn as _;
 use lee::{
-    Account, AccountId, Data, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
+    Account, AccountId, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
 };
-use lee_core::{account::Nonce, program::PdaSeed};
+use lee_core::account::Nonce;
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
     mantle::{
@@ -2112,107 +2112,6 @@ fn pinata_cooldown_claim_fails_during_cooldown() {
     assert!(result.is_err(), "Claim should fail during cooldown period");
     assert_eq!(state.get_account_by_id(pinata_id).balance, 1000);
     assert_eq!(state.get_account_by_id(winner_id).balance, 0);
-}
-
-#[test]
-fn pda_mechanism_with_pinata_token_program() {
-    let pinata_token = programs::pinata_token();
-    let token = programs::token();
-
-    let pinata_definition_id = AccountId::new([1; 32]);
-    let pinata_token_definition_id = AccountId::new([2; 32]);
-    // Total supply of pinata token will be in an account under a PDA.
-    let pinata_token_holding_id =
-        AccountId::for_public_pda(&pinata_token.id(), &PdaSeed::new([0; 32]));
-    let winner_token_holding_id = AccountId::new([3; 32]);
-
-    let expected_winner_account_holding = token_core::TokenHolding::Fungible {
-        definition_id: pinata_token_definition_id,
-        balance: 150,
-    };
-    let expected_winner_token_holding_post = Account {
-        program_owner: token.id().into(),
-        data: Data::from(&expected_winner_account_holding),
-        ..Account::default()
-    };
-
-    // Register the pinata-token and token programs and create the pinata definition account.
-    // This replaces the removed `add_pinata_token_program` helper.
-    let mut state = V03State::new().with_programs([pinata_token.clone(), token.clone()]);
-    state.force_insert_account(
-        pinata_definition_id,
-        Account {
-            program_owner: pinata_token.id().into(),
-            // Difficulty: 3
-            data: vec![3; 33].try_into().unwrap(),
-            ..Account::default()
-        },
-    );
-
-    // Set up the token accounts directly (bypassing public transactions which
-    // would require signers for Claim::Authorized). The focus of this test is
-    // the PDA mechanism in the pinata program's chained call, not token creation.
-    let total_supply: u128 = 10_000_000;
-    let token_definition = token_core::TokenDefinition::Fungible {
-        name: String::from("PINATA"),
-        total_supply,
-        metadata_id: None,
-    };
-    let token_holding = token_core::TokenHolding::Fungible {
-        definition_id: pinata_token_definition_id,
-        balance: total_supply,
-    };
-    let winner_holding = token_core::TokenHolding::Fungible {
-        definition_id: pinata_token_definition_id,
-        balance: 0,
-    };
-    state.force_insert_account(
-        pinata_token_definition_id,
-        Account {
-            program_owner: token.id().into(),
-            data: Data::from(&token_definition),
-            ..Account::default()
-        },
-    );
-    state.force_insert_account(
-        pinata_token_holding_id,
-        Account {
-            program_owner: token.id().into(),
-            data: Data::from(&token_holding),
-            ..Account::default()
-        },
-    );
-    state.force_insert_account(
-        winner_token_holding_id,
-        Account {
-            program_owner: token.id().into(),
-            data: Data::from(&winner_holding),
-            ..Account::default()
-        },
-    );
-
-    // Submit a solution to the pinata program to claim the prize
-    let solution: u128 = 989_106;
-    let message = lee::public_transaction::Message::try_new(
-        pinata_token.id(),
-        vec![
-            pinata_definition_id,
-            pinata_token_holding_id,
-            winner_token_holding_id,
-        ],
-        vec![],
-        solution,
-    )
-    .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
-
-    let winner_token_holding_post = state.get_account_by_id(winner_token_holding_id);
-    assert_eq!(
-        winner_token_holding_post,
-        expected_winner_token_holding_post
-    );
 }
 
 #[test]

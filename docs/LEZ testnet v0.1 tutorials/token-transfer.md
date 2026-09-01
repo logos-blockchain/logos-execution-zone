@@ -1,6 +1,6 @@
-This tutorial walks through native token transfers between public and private accounts using the Authenticated-Transfers program. You will create and initialize accounts, fund them with the Pinata program, and run transfers across different privacy combinations. By the end, you will have practiced:
+This tutorial walks through native token transfers between public and private accounts using the Authenticated-Transfers program. You will create and initialize accounts, fund them from an account that already holds tokens, and run transfers across different privacy combinations. By the end, you will have practiced:
 1. Public account creation and initialization.
-2. Account funding through the Pinata program.
+2. Account funding.
 3. Native token transfers between public accounts.
 4. Private account creation.
 5. Native token transfer from a public account to a private account.
@@ -70,15 +70,15 @@ Account owned by authenticated-transfer program
 > Owned accounts can only be modified through executions of the owning program. The only exception is native-token credits: any program may credit native tokens to any account.
 > Debiting native tokens must always be performed by the owning program.
 
-## 2. Account funding through the Piñata program
-Now that the account is initialized under the authenticated-tansfer program, fund it using the testnet Piñata program.
+## 2. Account funding
+Now that the account is initialized under the authenticated-tansfer program, fund it from an account of yours that already holds tokens (for example a genesis-funded devnet account):
 
 ```bash
-# Replace with your id
-wallet pinata claim --to Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
+# Replace with your funded account and your new id
+wallet auth-transfer send --amount 150 --from my-account --to Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
 ```
 
-After the claim succeeds, the account is funded:
+After the transfer succeeds, the account is funded:
 
 ```bash
 wallet account get --account-id Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ

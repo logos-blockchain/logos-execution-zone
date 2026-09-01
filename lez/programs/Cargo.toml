@@ -35,16 +35,6 @@ path = "faucet/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
-name = "pinata"
-path = "pinata/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "pinata_token"
-path = "pinata_token/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
 name = "token"
 path = "token/src/main.rs"
 required-features = ["programs"]
@@ -101,7 +91,6 @@ artifacts = ["dep:build_utils", "dep:lee"]
 # You don't need this if you only want to use the library target.
 programs = [
   "dep:lee_core",
-  "dep:risc0-zkvm",
   "dep:amm_program",
   "dep:associated_token_account_program",
   "dep:token_program",
@@ -126,7 +115,6 @@ programs = [
 borsh.workspace = true
 lee = { workspace = true, optional = true }
 lee_core = { workspace = true, optional = true }
-risc0-zkvm = { workspace = true, optional = true }
 amm_core = { workspace = true, optional = true }
 associated_token_account_core = { workspace = true, optional = true }
 authenticated_transfer_core = { workspace = true, optional = true }

@@ -45,8 +45,6 @@ members = [
   "lez/programs/bridge",
   "lez/programs/clock",
   "lez/programs/faucet",
-  "lez/programs/pinata",
-  "lez/programs/pinata_token",
   "lez/programs/token",
   "lez/programs/vault",
   "lez/programs/cross_zone_marker",

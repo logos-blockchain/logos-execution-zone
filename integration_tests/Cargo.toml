@@ -14,7 +14,7 @@ test_fixtures.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 lee.workspace = true
 authenticated_transfer_core.workspace = true
-sequencer_core = { workspace = true, features = ["default", "testnet"] }
+sequencer_core.workspace = true
 wallet.workspace = true
 common.workspace = true
 key_protocol.workspace = true
@@ -66,11 +66,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-sequencer_core = { workspace = true, features = [
-  "default",
-  "testnet",
-  "test-utils",
-] }
+sequencer_core = { workspace = true, features = ["test-utils"] }
 
 [features]
 cucumber = ["dep:cucumber"]

@@ -29,11 +29,7 @@ impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
     pub fn open_db(location: &Path, cross_zone: bool, event_filter: EventFilter) -> Result<Self> {
-        #[cfg(not(feature = "testnet"))]
         let initial_state = testnet_initial_state::initial_state(cross_zone);
-
-        #[cfg(feature = "testnet")]
-        let initial_state = testnet_initial_state::initial_state_testnet(cross_zone);
 
         // Nothing zone-specific is seeded: configs and holdings are reconstructed
         // by replaying the genesis block, so this state matches the sequencer's

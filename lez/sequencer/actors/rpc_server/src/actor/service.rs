@@ -209,7 +209,6 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             programs::authenticated_transfer().id(),
         );
         program_ids.insert("token".to_owned(), programs::token().id());
-        program_ids.insert("pinata".to_owned(), programs::pinata().id());
         program_ids.insert("amm".to_owned(), programs::amm().id());
         program_ids.insert(
             "privacy_preserving_circuit".to_owned(),

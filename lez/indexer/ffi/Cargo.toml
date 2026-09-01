@@ -6,7 +6,7 @@ version = "0.1.0"
 
 [dependencies]
 lee.workspace = true
-indexer_core = { workspace = true, features = ["testnet"] }
+indexer_core.workspace = true
 indexer_service_protocol = { workspace = true, features = ["convert"] }
 
 env_logger.workspace = true

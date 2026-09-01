@@ -1939,11 +1939,7 @@ fn genesis_block_and_state(
 /// applied as genesis transactions in [`build_genesis_state`] so followers replay it.
 fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
     let cross_zone = config.cross_zone.is_some();
-    #[cfg(not(feature = "testnet"))]
     let base = testnet_initial_state::initial_state(cross_zone);
-
-    #[cfg(feature = "testnet")]
-    let base = testnet_initial_state::initial_state_testnet(cross_zone);
 
     // Stamped on fresh genesis and restore-replay: compare against the
     // indexer's on divergence.

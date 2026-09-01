@@ -4,6 +4,9 @@
 export KEYCARD_PIN=111111
 export KEYCARD_CA_PUBLIC_KEY=025877220aaae6e54a6f974602d5995c0fe24a3ea7ddabd8644bec795b9da00743
 
+# A genesis-funded account of this wallet, used to fund the keycard accounts.
+FUNDED_ACCOUNT="${FUNDED_ACCOUNT:-my-account}"
+
 # Tests wallet keycard available
 #   - Checks whether smart reader and keycard are both available.
 echo "Test: wallet keycard available"
@@ -21,8 +24,8 @@ wallet auth-transfer init --account-id "m/44'/60'/0'/0/0"
 echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
 wallet account get --account-id "m/44'/60'/0'/0/0"
 
-echo "Test: wallet pinata claim --to \"m/44'/60'/0'/0/0\""
-wallet pinata claim --to "m/44'/60'/0'/0/0"
+echo "Test: fund keycard account via wallet auth-transfer send"
+wallet auth-transfer send --amount 200 --from "$FUNDED_ACCOUNT" --to "m/44'/60'/0'/0/0"
 
 echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
 wallet account get --account-id "m/44'/60'/0'/0/0"
@@ -109,12 +112,12 @@ echo "Fresh private sender account: $PRIV_SENDER"
 
 wallet auth-transfer init --account-id "$PRIV_SENDER"
 
-echo "Test: wallet pinata claim to private sender"
-wallet pinata claim --to "$PRIV_SENDER"
+echo "Test: fund private sender via wallet auth-transfer send"
+wallet auth-transfer send --amount 200 --from "$FUNDED_ACCOUNT" --to "$PRIV_SENDER"
 
 sleep 15
 
-echo "priv-sender state after claim:"
+echo "priv-sender state after funding:"
 wallet account get --account-id "$PRIV_SENDER"
 
 wallet auth-transfer send \

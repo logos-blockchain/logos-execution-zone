@@ -165,36 +165,27 @@ To restore the standard build without `keycard-debug` afterwards:
 cargo install --path lez/wallet --force
 ```
 
-### Pinata (testnet)
+### Funding a Keycard account
 
-| Command               | Description                                                              |
-|-----------------------|--------------------------------------------------------------------------|
-| `wallet pinata claim` | Claims a testnet pinata reward to a public or private recipient account  |
+Fund a Keycard-backed account from an account of yours that already holds tokens:
 
-Note: The recipient account must be initialized with `wallet auth-transfer init` before claiming.
+| Command                     | Description                                          |
+|-----------------------------|------------------------------------------------------|
+| `wallet auth-transfer send` | Sends native tokens to a public or private recipient |
+
+Note: The recipient account must be initialized with `wallet auth-transfer init` before receiving.
 
 `--to` accepts any of:
 - A BIP32 key path — uses Keycard (e.g. `m/44'/60'/0'/0/0`)
 - An account ID with privacy prefix (e.g. `Public/9bKm...`)
 - An account label (e.g. `my-account`)
 
-1. Claim to a Keycard public account
 ```bash
-wallet pinata claim --to "m/44'/60'/0'/0/0"
+wallet auth-transfer send --amount 200 --from my-account --to "m/44'/60'/0'/0/0"
 
 # Output:
 Keycard PIN:
-Computing solution for pinata...
-Found solution 989106 in 33.739525ms
 Transaction hash is fd320c01f5469e62d2486afa1d9d5be39afcca0cd01d1575905b7acd95cf6397
-```
-
-2. Claim to a local wallet account by label
-```bash
-wallet pinata claim --to my-account
-
-# Output:
-Transaction hash is 2c8a4f1e903d5b76e80214c5b82e1d46a105e28930ad71bcce48f2d07b49a16f
 ```
 
 ### Authenticated-transfer program

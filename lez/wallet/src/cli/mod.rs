@@ -22,8 +22,8 @@ use crate::{
         network::NetworkAlias,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
-            native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
-            token::TokenProgramAgnosticSubcommand, vault::VaultSubcommand,
+            native_token_transfer::AuthTransferSubcommand, token::TokenProgramAgnosticSubcommand,
+            vault::VaultSubcommand,
         },
         statistics::StatisticsSubcommand,
     },
@@ -58,9 +58,6 @@ pub enum Command {
     /// Account view and sync subcommand.
     #[command(subcommand)]
     Account(AccountSubcommand),
-    /// Pinata program interaction subcommand.
-    #[command(subcommand)]
-    Pinata(PinataProgramAgnosticSubcommand),
     /// Token program interaction subcommand.
     #[command(subcommand)]
     Token(TokenProgramAgnosticSubcommand),
@@ -231,9 +228,6 @@ pub async fn execute_subcommand(
         }
         Command::Account(account_subcommand) => {
             account_subcommand.handle_subcommand(wallet_core).await?
-        }
-        Command::Pinata(pinata_subcommand) => {
-            pinata_subcommand.handle_subcommand(wallet_core).await?
         }
         Command::CheckHealth => {
             let remote_program_ids = wallet_core

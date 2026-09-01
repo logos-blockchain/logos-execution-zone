@@ -53,7 +53,6 @@ libp2p.workspace = true
 
 [features]
 default = []
-testnet = []
 # Generate mock external clients implementations for testing
 mock = []
 # Enable mDNS-based local peer discovery for gossip.

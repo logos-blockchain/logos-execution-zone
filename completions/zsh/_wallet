@@ -21,7 +21,6 @@ _wallet() {
                 'auth-transfer:Authenticated transfer subcommand'
                 'chain-info:Generic chain info subcommand'
                 'account:Account view and sync subcommand'
-                'pinata:Pinata program interaction subcommand'
                 'token:Token program interaction subcommand'
                 'amm:AMM program interaction subcommand'
                 'ata:Associated Token Account program interaction subcommand'
@@ -45,9 +44,6 @@ _wallet() {
                     ;;
                 account)
                     _wallet_account
-                    ;;
-                pinata)
-                    _wallet_pinata
                     ;;
                 token)
                     _wallet_token
@@ -215,34 +211,6 @@ _wallet_account() {
                         '(-a --account-id)'{-a,--account-id}'[Account ID to label]:account_id:_wallet_account_ids' \
                         '--account-label[Account label (alternative to --account-id)]:label:' \
                         '(-l --label)'{-l,--label}'[The label to assign to the account]:label:'
-                    ;;
-            esac
-            ;;
-    esac
-}
-
-# pinata subcommand
-_wallet_pinata() {
-    local -a subcommands
-
-    _arguments -C \
-        '1: :->subcommand' \
-        '*:: :->args'
-
-    case $state in
-        subcommand)
-            subcommands=(
-                'claim:Claim tokens from the Piñata faucet'
-                'help:Print this message or the help of the given subcommand(s)'
-            )
-            _describe -t subcommands 'pinata subcommands' subcommands
-            ;;
-        args)
-            case $line[1] in
-                claim)
-                    _arguments \
-                        '--to[Destination account ID to receive claimed tokens]:to_account:_wallet_account_ids' \
-                        '--to-label[To account label (alternative to --to)]:label:'
                     ;;
             esac
             ;;
@@ -582,7 +550,6 @@ _wallet_help() {
         'auth-transfer:Authenticated transfer subcommand'
         'chain-info:Generic chain info subcommand'
         'account:Account view and sync subcommand'
-        'pinata:Pinata program interaction subcommand'
         'token:Token program interaction subcommand'
         'amm:AMM program interaction subcommand'
         'ata:Associated Token Account program interaction subcommand'

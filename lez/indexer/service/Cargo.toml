@@ -10,7 +10,7 @@ workspace = true
 [dependencies]
 indexer_service_protocol = { workspace = true, features = ["convert"] }
 indexer_service_rpc = { workspace = true, features = ["server"] }
-indexer_core = { workspace = true, features = ["testnet"] }
+indexer_core.workspace = true
 
 clap = { workspace = true, features = ["derive"] }
 anyhow.workspace = true
