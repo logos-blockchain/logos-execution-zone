@@ -23,6 +23,19 @@ impl ProgramLoader<'_> {
         bytecode: Vec<u8>,
         next_segment: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
+        if let Some(next_segment_id) = next_segment {
+            let next_segment_acc = self
+                .0
+                .get_account_public(next_segment_id)
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?;
+            if next_segment_acc.program_owner != PROGRAM_LOADER_ACCOUNT_ID
+                || program_loader_core::ProgramSegment::try_from(&next_segment_acc.data).is_err()
+            {
+                return Err(ExecutionFailureKind::AccountDataError(next_segment_id));
+            }
+        }
+
         let instruction = Instruction::WriteSegment {
             bytecode,
             next_segment,
@@ -39,14 +52,15 @@ impl ProgramLoader<'_> {
     }
 
     /// Creates a new program header at `target` (must already be a default/unclaimed account,
-    /// signed for by `target`'s own key) pointing at `chain` — the entire segment chain, in link
-    /// order, starting at `first_segment`. `image_id` is always recomputed from the chain by
-    /// `program_loader`, never trusted from the caller.
+    /// signed for by `target`'s own key). The header stores only `first_segment`;
+    /// `chain_segment_ids` (the full chain, `first_segment` included) is supplied as transaction
+    /// inputs so `program_loader` can verify the `next_segment` links and derive `image_id`
+    /// itself, never trusting a caller-supplied value.
     pub async fn create_header(
         &self,
         target: AccountId,
         first_segment: AccountId,
-        chain: &[AccountId],
+        chain_segment_ids: &[AccountId],
         immutable: bool,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = Instruction::CreateHeader {
@@ -57,7 +71,12 @@ impl ProgramLoader<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         let mut accounts = vec![AccountIdentity::Public(target)];
-        accounts.extend(chain.iter().copied().map(AccountIdentity::PublicNoSign));
+        accounts.extend(
+            chain_segment_ids
+                .iter()
+                .copied()
+                .map(AccountIdentity::PublicNoSign),
+        );
 
         self.0
             .send_pub_tx_to_account(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID)
@@ -65,13 +84,13 @@ impl ProgramLoader<'_> {
     }
 
     /// Rewrites an existing header at `header` — an ordinary `is_authorized`-gated data
-    /// mutation, so `header`'s own (still-authorized) key must sign. Same chain/`image_id`
-    /// handling as [`Self::create_header`].
+    /// mutation, so `header`'s own (still-authorized) key must sign. Same
+    /// `chain_segment_ids`/`image_id` handling as [`Self::create_header`].
     pub async fn update_header(
         &self,
         header: AccountId,
         first_segment: AccountId,
-        chain: &[AccountId],
+        chain_segment_ids: &[AccountId],
         immutable: bool,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = Instruction::UpdateHeader {
@@ -82,7 +101,12 @@ impl ProgramLoader<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         let mut accounts = vec![AccountIdentity::Public(header)];
-        accounts.extend(chain.iter().copied().map(AccountIdentity::PublicNoSign));
+        accounts.extend(
+            chain_segment_ids
+                .iter()
+                .copied()
+                .map(AccountIdentity::PublicNoSign),
+        );
 
         self.0
             .send_pub_tx_to_account(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID)

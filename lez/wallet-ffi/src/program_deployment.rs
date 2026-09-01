@@ -130,8 +130,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_upload_header(
     let first_segment = AccountId::from(unsafe { *first_segment });
 
     let loader = ProgramLoader(&wallet);
-    let chain = match block_on(loader.resolve_chain(first_segment)) {
-        Ok(chain) => chain,
+    let chain_segment_ids = match block_on(loader.resolve_chain(first_segment)) {
+        Ok(chain_segment_ids) => chain_segment_ids,
         Err(e) => {
             print_error(format!("Failed to resolve segment chain: {e:?}"));
             write_failure(out_result);
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_upload_header(
         }
     };
 
-    match block_on(loader.create_header(target, first_segment, &chain, immutable)) {
+    match block_on(loader.create_header(target, first_segment, &chain_segment_ids, immutable)) {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
             WalletFfiError::Success
@@ -189,8 +189,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
     let first_segment = AccountId::from(unsafe { *first_segment });
 
     let loader = ProgramLoader(&wallet);
-    let chain = match block_on(loader.resolve_chain(first_segment)) {
-        Ok(chain) => chain,
+    let chain_segment_ids = match block_on(loader.resolve_chain(first_segment)) {
+        Ok(chain_segment_ids) => chain_segment_ids,
         Err(e) => {
             print_error(format!("Failed to resolve segment chain: {e:?}"));
             write_failure(out_result);
@@ -198,7 +198,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
         }
     };
 
-    match block_on(loader.update_header(header, first_segment, &chain, immutable)) {
+    match block_on(loader.update_header(header, first_segment, &chain_segment_ids, immutable)) {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
             WalletFfiError::Success

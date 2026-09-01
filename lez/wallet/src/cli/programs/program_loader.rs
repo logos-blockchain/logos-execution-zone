@@ -126,10 +126,10 @@ impl ProgramLoaderSubcommand {
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let target_id = resolve_public(&target, wallet_core)?;
-        let chain = ProgramLoader(wallet_core).resolve_chain(first_segment).await?;
+        let chain_segment_ids = ProgramLoader(wallet_core).resolve_chain(first_segment).await?;
 
         let tx_hash = ProgramLoader(wallet_core)
-            .create_header(target_id, first_segment, &chain, immutable)
+            .create_header(target_id, first_segment, &chain_segment_ids, immutable)
             .await?;
 
         println!("Header uploaded at {target_id}");
@@ -145,10 +145,10 @@ impl ProgramLoaderSubcommand {
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let header_id = resolve_public(&header, wallet_core)?;
-        let chain = ProgramLoader(wallet_core).resolve_chain(first_segment).await?;
+        let chain_segment_ids = ProgramLoader(wallet_core).resolve_chain(first_segment).await?;
 
         let tx_hash = ProgramLoader(wallet_core)
-            .update_header(header_id, first_segment, &chain, immutable)
+            .update_header(header_id, first_segment, &chain_segment_ids, immutable)
             .await?;
 
         println!("Header {header_id} updated");
