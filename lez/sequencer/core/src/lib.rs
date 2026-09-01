@@ -2208,12 +2208,10 @@ fn build_genesis_state(
     // the signing key's account: this genesis is a throwaway placeholder (the real
     // one is replayed from the channel), the summary is the default, so the
     // credit is zero and the unclaimed account is left untouched.
-    let producer = staked
-        .first()
-        .map(|(_, ownership_public_key, _)| lee::AccountId::from(ownership_public_key))
-        .unwrap_or_else(|| {
-            lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key))
-        });
+    let producer = staked.first().map_or_else(
+        || lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key)),
+        |(_, ownership_public_key, _)| lee::AccountId::from(ownership_public_key),
+    );
     for tx in [
         fee_invocation(fee_core::BlockFeeSummary::default(), producer),
         clock_invocation(0),
