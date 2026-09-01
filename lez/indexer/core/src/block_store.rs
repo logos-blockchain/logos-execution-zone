@@ -1076,7 +1076,9 @@ mod tests {
         dbio.put_event_filter_segments_bytes(b"garbage").unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err());
+        assert!(
+            IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err()
+        );
     }
 
     #[test]
@@ -1092,7 +1094,9 @@ mod tests {
             .unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err());
+        assert!(
+            IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err()
+        );
     }
 
     #[test]
@@ -1107,7 +1111,9 @@ mod tests {
             .unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err());
+        assert!(
+            IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err()
+        );
     }
 
     #[tokio::test]

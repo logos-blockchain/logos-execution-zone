@@ -11,9 +11,8 @@ use log::{error, warn};
 use sequencer_core::{block_publisher::BlockPublisherTrait, gossip::GossipTxPublisher};
 use sequencer_service_protocol::{
     Account, AccountId, AdmissionRejection, Block, BlockId, ChannelId, Commitment,
-    CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue,
-    FeeStateQuote, HashType,
-    MembershipProof, Nonce, ProgramId,
+    CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
+    CrossZoneDeadLetterRequeue, FeeStateQuote, HashType, MembershipProof, Nonce, ProgramId,
 };
 
 pub struct Service<BP: BlockPublisherTrait + Send + Sync + 'static> {
