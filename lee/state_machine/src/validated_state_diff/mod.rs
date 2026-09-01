@@ -559,11 +559,11 @@ fn execute_chained_call(
         // FIXME: catch_unwind won't catch aborts; remove once lez programs have better
         // error handling than panicking on invalid input.
         let post_states = std::panic::catch_unwind(|| match instruction {
-            program_loader_core::Instruction::NewSegment {
+            program_loader_core::Instruction::WriteSegment {
                 bytecode,
                 next_segment,
             } => program_loader_core::write_segment(loader_pre_states, bytecode, next_segment),
-            program_loader_core::Instruction::UploadHeader {
+            program_loader_core::Instruction::CreateHeader {
                 first_segment,
                 immutable,
             } => program_loader_core::create_header(loader_pre_states, first_segment, immutable),

@@ -185,7 +185,7 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
         PROGRAM_LOADER_ACCOUNT_ID,
         account_ids,
         vec![Nonce(0)],
-        Instruction::UploadHeader {
+        Instruction::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
         },
