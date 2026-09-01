@@ -86,10 +86,10 @@ fn program_should_fail_with_missing_output_accounts() {
 /// declared in the transaction must appear somewhere in the final diff.
 #[test]
 fn program_should_fail_if_it_drops_a_declared_account() {
-    // Both accounts need a non-default program_owner: an account left at DEFAULT_PROGRAM_ID with
-    // non-default data would itself violate the (separate, pre-existing) "claim before mutating a
-    // default-owned account" rule the moment it's echoed back — unrelated to what this test
-    // targets. `with_public_account_balances` leaves program_owner at DEFAULT_PROGRAM_ID, so use
+    // Both accounts enter owned, which keeps them out of the `DataBearingUnownedAccount`
+    // backstop's scope entirely: it only inspects accounts that entered unowned. Nothing
+    // unrelated to the drop can then reject this transaction.
+    // `with_public_account_balances` leaves program_owner at DEFAULT_PROGRAM_ID, so use
     // `with_public_accounts` to set it explicitly instead.
     let mut state = V03State::new()
         .with_public_accounts([
@@ -323,6 +323,41 @@ fn program_should_fail_if_debits_owned_but_unauthorized_account() {
             ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id }
         ))) if err_account_id == sender_account_id
     ));
+}
+
+#[test]
+fn program_should_transfer_balance_from_authorized_non_owned_account() {
+    let sender_key = PrivateKey::try_new([3; 32]).unwrap();
+    let sender_account_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let receiver_account_id = AccountId::new([2; 32]);
+    let owner_program_id = crate::test_methods::data_changer().id();
+    let program_id = crate::test_methods::simple_balance_transfer().id();
+    assert_ne!(owner_program_id, program_id);
+    let mut state = V03State::new().with_test_programs();
+    for (account_id, balance) in [(sender_account_id, 100), (receiver_account_id, 0)] {
+        state.force_insert_account(
+            account_id,
+            Account {
+                program_owner: owner_program_id.into(),
+                balance,
+                ..Account::default()
+            },
+        );
+    }
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![sender_account_id, receiver_account_id],
+        vec![Nonce(0)],
+        1_u128,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sender_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    assert_eq!(state.get_account_by_id(sender_account_id).balance, 99);
+    assert_eq!(state.get_account_by_id(receiver_account_id).balance, 1);
 }
 
 #[test]

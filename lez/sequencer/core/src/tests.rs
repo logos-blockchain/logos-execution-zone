@@ -4106,6 +4106,67 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     );
 }
 
+/// The mover is chosen by whoever stakes, and it is handed the custody account
+/// so it can credit it. It is handed it UNAUTHORIZED and under no seed grant, so
+/// a mover that reaches for the custody balance instead of funding it is refused.
+#[test]
+fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
+    let funding_key = PrivateKey::try_new([64; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let ownership_key = PrivateKey::try_new([65; 32]).unwrap();
+    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let mut state =
+        stake_test_state(funding_id, amount).with_programs([test_programs::reverse_transfer()]);
+
+    // Seed the custody account so there is something worth taking.
+    let funds_id = stake_funds_id(ownership_id);
+    state.force_insert_account(
+        funds_id,
+        lee::Account {
+            balance: amount,
+            ..lee::Account::default()
+        },
+    );
+
+    // A mover that moves balance the wrong way: out of the custody account it was
+    // handed, into the staker's own funding account.
+    let mover_instruction_data = Program::serialize_instruction(amount).unwrap();
+    let message = lee::public_transaction::Message::try_new(
+        programs::sequencer_stake().id(),
+        vec![
+            funding_id,
+            ownership_id,
+            funds_id,
+            system_accounts::sequencer_stake_config_account_id(),
+        ],
+        vec![
+            state.get_account_by_id(funding_id).nonce,
+            state.get_account_by_id(ownership_id).nonce,
+        ],
+        sequencer_stake_core::Instruction::Stake {
+            sequencer_key: test_sequencer_key(0x64),
+            amount,
+            mover_program_id: test_programs::reverse_transfer().id(),
+            mover_instruction_data,
+        },
+    )
+    .unwrap();
+    let witness_set =
+        lee::public_transaction::WitnessSet::for_message(&message, &[&funding_key, &ownership_key]);
+
+    let err = state
+        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 1, 0)
+        .expect_err("a mover must not be able to debit the custody account");
+    let reason = format!("{err:?}");
+    assert!(
+        reason.contains("UnauthorizedBalanceDecrease"),
+        "expected the custody debit to be refused for want of authorization, got {reason}"
+    );
+    assert_eq!(state.get_account_by_id(funds_id).balance, amount);
+}
+
 /// The sink burned stakes land in.
 fn slash_sink_id() -> AccountId {
     sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake().id())
@@ -4198,6 +4259,79 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
             .transition_from_public_transaction(&slash, 3, 0)
             .is_err()
     );
+}
+
+/// Squats `ownership_id`'s funds PDA: a stranger's data write takes the address. The
+/// custody flows must not care — `authenticated_transfer` moves balance only, and the
+/// seed grant authorizes the debit whoever owns the account.
+fn squat_stake_funds(state: &mut V03State, ownership_id: AccountId) -> AccountId {
+    let funds_id = stake_funds_id(ownership_id);
+    let mut funds = state.get_account_by_id(funds_id);
+    funds.program_owner = AccountId::new([66; 32]);
+    funds.data = vec![1].try_into().expect("1 byte fits in account data");
+    state.force_insert_account(funds_id, funds);
+    funds_id
+}
+
+#[test]
+fn a_slash_burns_from_a_squatted_funds_pda() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, _ownership_key) = slashable_state(amount);
+    let funds_id = squat_stake_funds(&mut state, ownership_id);
+
+    let slash = slash_transaction(
+        ownership_id,
+        sequencer_key,
+        vec![test_approval(0x44, sequencer_key)],
+    );
+    state
+        .transition_from_public_transaction(&slash, 2, 0)
+        .expect("a squatted funds PDA still burns");
+
+    assert_eq!(state.get_account_by_id(funds_id).balance, 0);
+    assert_eq!(state.get_account_by_id(slash_sink_id()).balance, amount);
+    assert_eq!(
+        state.get_account_by_id(funds_id).program_owner,
+        AccountId::new([66; 32]),
+        "the squatter keeps the address"
+    );
+}
+
+#[test]
+fn a_finalize_unstake_releases_from_a_squatted_funds_pda() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, ownership_key) = slashable_state(amount);
+    let destination = AccountId::new([67; 32]);
+    let request = unstake_request_transaction(
+        &state,
+        (ownership_id, &ownership_key),
+        system_accounts::sequencer_stake_config_account_id(),
+        amount,
+        destination,
+    );
+    state
+        .transition_from_public_transaction(&request, 2, 0)
+        .expect("UnstakeRequest should succeed");
+    let funds_id = squat_stake_funds(&mut state, ownership_id);
+
+    let finalize = build_finalize_unstake_tx(
+        ownership_id,
+        sequencer_stake_core::PendingUnstake {
+            amount,
+            destination,
+        },
+    )
+    .unwrap();
+    let LeeTransaction::Public(finalize) = finalize else {
+        panic!("FinalizeUnstake should be a public transaction");
+    };
+    state
+        .transition_from_public_transaction(&finalize, 3, 0)
+        .expect("a squatted funds PDA still releases");
+
+    assert_eq!(state.get_account_by_id(funds_id).balance, 0);
+    assert_eq!(state.get_account_by_id(destination).balance, amount);
+    assert_eq!(stake_entry(&state, sequencer_key), None);
 }
 
 #[test]

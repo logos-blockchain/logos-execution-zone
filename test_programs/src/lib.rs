@@ -28,6 +28,26 @@ pub const fn simple_balance_transfer() -> Program {
 
 #[must_use]
 #[inline]
+pub const fn reverse_transfer() -> Program {
+    use guests::{REVERSE_TRANSFER_ELF, REVERSE_TRANSFER_ID, REVERSE_TRANSFER_PATH};
+
+    let _unused = REVERSE_TRANSFER_PATH;
+
+    Program::new_unchecked(REVERSE_TRANSFER_ID, Cow::Borrowed(REVERSE_TRANSFER_ELF))
+}
+
+#[must_use]
+#[inline]
+pub const fn data_writer() -> Program {
+    use guests::{DATA_WRITER_ELF, DATA_WRITER_ID, DATA_WRITER_PATH};
+
+    let _unused = DATA_WRITER_PATH;
+
+    Program::new_unchecked(DATA_WRITER_ID, Cow::Borrowed(DATA_WRITER_ELF))
+}
+
+#[must_use]
+#[inline]
 pub const fn chain_caller() -> Program {
     use guests::{CHAIN_CALLER_ELF, CHAIN_CALLER_ID, CHAIN_CALLER_PATH};
 

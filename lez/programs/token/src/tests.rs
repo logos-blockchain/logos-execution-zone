@@ -581,6 +581,30 @@ fn new_definition_data_bearing_second_account_should_fail() {
     );
 }
 
+/// A definition address is derivable, and anyone may credit an unowned account.
+/// Creation must therefore turn on whether the address already holds data, not on
+/// whether it is pristine — otherwise one unit of balance bricks the address for ever.
+#[test]
+fn new_definition_succeeds_on_an_address_someone_credited() {
+    let mut definition_account = AccountForTests::definition_account_uninit();
+    definition_account.account.balance = 1;
+    let holding_account = AccountForTests::holding_account_uninit();
+
+    let post_states = new_fungible_definition(
+        definition_account,
+        holding_account,
+        String::from("test"),
+        BalanceForTests::init_supply(),
+    );
+
+    let [definition_post, _holding_post] = post_states.try_into().unwrap();
+    assert_eq!(definition_post.balance, 1, "the credit is left alone");
+    assert!(
+        !definition_post.data.is_empty(),
+        "the definition is written"
+    );
+}
+
 #[test]
 fn new_definition_with_valid_inputs_succeeds() {
     let definition_account = AccountForTests::definition_account_uninit();

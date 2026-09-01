@@ -1510,3 +1510,71 @@ fn two_private_pda_family_members_receive_and_spend() {
 
     assert_eq!(state.get_account_by_id(recipient_id).balance, amount);
 }
+
+/// Rule 5′ in the circuit: a debit needs the account's authorization, and a witness without
+/// the spending credential provides none — whoever owns the account. The program asserts
+/// nothing itself, so the refusal is the state machine's.
+#[test]
+fn a_private_balance_decrease_without_the_credential_is_refused_in_the_circuit() {
+    let program = crate::test_methods::simple_balance_transfer();
+    let sender_keys = test_private_account_keys_1();
+    let recipient_keys = test_private_account_keys_2();
+    let sender_account = Account {
+        program_owner: program.id().into(),
+        balance: 100,
+        ..Account::default()
+    };
+    let state = V03State::new().with_private_account(&sender_keys, &sender_account);
+    let sender_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let membership_proof = state
+        .get_proof_for_commitment(&Commitment::new(&sender_id, &sender_account))
+        .expect("sender's commitment must be in state");
+    let sender = AccountWithMetadata::new(sender_account, false, sender_id);
+    let recipient = AccountWithMetadata::new(
+        Account::default(),
+        false,
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+    );
+
+    let result = execute_and_prove(
+        vec![sender, recipient],
+        Program::serialize_instruction(10_u128).unwrap(),
+        vec![
+            InputAccountIdentity::Private(PrivateWitness {
+                vpk: sender_keys.vpk(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular { ask: None },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_keys.nsk(),
+                    membership_proof,
+                },
+            }),
+            InputAccountIdentity::Private(PrivateWitness {
+                vpk: recipient_keys.vpk(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular { ask: None },
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
+        ],
+        &program.into(),
+    );
+
+    let Err(err) = result else {
+        panic!("the debit went through without the credential");
+    };
+    assert!(
+        matches!(
+            &err,
+            LeeError::CircuitProvingError(msg)
+                if msg.contains("Trying to decrease balance of unauthorized account")
+        ),
+        "refused for the wrong reason: {err:?}"
+    );
+}

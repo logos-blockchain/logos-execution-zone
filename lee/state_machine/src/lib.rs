@@ -120,6 +120,22 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn squatter() -> Program {
+        Program::new_unchecked(
+            test_methods::SQUATTER_ID,
+            Cow::Borrowed(test_methods::SQUATTER_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn acquire_and_forward() -> Program {
+        Program::new_unchecked(
+            test_methods::ACQUIRE_AND_FORWARD_ID,
+            Cow::Borrowed(test_methods::ACQUIRE_AND_FORWARD_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn burner() -> Program {
         Program::new_unchecked(
             test_methods::BURNER_ID,

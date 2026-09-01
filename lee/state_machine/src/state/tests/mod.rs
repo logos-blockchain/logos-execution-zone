@@ -33,8 +33,8 @@ use crate::{
 };
 
 mod authenticated_transfer;
+mod chained_calls;
 mod circuit;
-mod claiming;
 mod events;
 mod flash_swap;
 mod genesis;
@@ -56,6 +56,8 @@ impl V03State {
         self.insert_program(&crate::test_methods::data_changer());
         self.insert_program(&crate::test_methods::minter());
         self.insert_program(&crate::test_methods::burner());
+        self.insert_program(&crate::test_methods::squatter());
+        self.insert_program(&crate::test_methods::acquire_and_forward());
         self.insert_program(&crate::test_methods::auth_asserting_noop());
         self.insert_program(&crate::test_methods::private_pda_delegator());
         self.insert_program(&crate::test_methods::noop());

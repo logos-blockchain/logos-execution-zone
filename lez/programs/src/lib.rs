@@ -200,6 +200,21 @@ mod inner {
             assert_eq!(sequencer_stake_program.elf(), SEQUENCER_STAKE_ELF);
         }
 
+        /// The committed constant that consumer guests `include!` must track
+        /// the built artifact; `just build-artifacts` refreshes it through
+        /// `tools/image_id_pin`. Red here means the artifacts and the pin are
+        /// out of step — rebuild, don't edit the constant.
+        #[test]
+        fn the_committed_image_id_pin_matches_the_artifact() {
+            mod pinned {
+                include!("../authenticated_transfer/image_id.rs");
+            }
+            assert_eq!(
+                pinned::AUTHENTICATED_TRANSFER_IMAGE_ID,
+                AUTHENTICATED_TRANSFER_ID
+            );
+        }
+
         #[test]
         fn builtin_program_ids_match_elfs() {
             let cases: &[(&[u8], [u32; 8])] = &[

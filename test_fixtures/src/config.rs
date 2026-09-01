@@ -411,6 +411,45 @@ pub const fn source_only_cross_zone() -> CrossZoneConfig {
 mod tests {
     use super::*;
 
+    /// `fund_private_accounts` drains the private balances out of the funder, so genesis has to
+    /// supply it that much on top of its own or the last private account goes unfunded.
+    #[test]
+    fn genesis_supplies_the_funder_enough_to_seed_every_private_account() {
+        let public_accounts = default_public_accounts_for_wallet();
+        let private_accounts = default_private_accounts_for_wallet();
+        let private_total = private_total(&private_accounts);
+        let genesis = genesis_from_accounts(&public_accounts, private_total);
+
+        let funder = AccountId::from(&PublicKey::new_from_private_key(
+            &public_accounts[PRIVATE_FUNDER_INDEX].0,
+        ));
+        let supplied = |wanted: AccountId| {
+            genesis.iter().find_map(|action| match action {
+                GenesisAction::SupplyAccount {
+                    account_id,
+                    balance,
+                } if *account_id == wanted => Some(*balance),
+                GenesisAction::SupplyAccount { .. }
+                | GenesisAction::SupplyBridgeAccount { .. }
+                | GenesisAction::SupplyBridgeLockHolding { .. }
+                | GenesisAction::StakeSequencer { .. } => None,
+            })
+        };
+
+        let funder_supply = supplied(funder).expect("the funder is supplied at genesis");
+        assert_eq!(
+            funder_supply.checked_sub(public_accounts[PRIVATE_FUNDER_INDEX].1),
+            Some(private_total),
+            "genesis must give the funder its own balance plus every private balance"
+        );
+
+        // A private account has no state until the circuit writes its commitment, so a genesis
+        // supply at its id would only strand the balance in the public map.
+        for account in &private_accounts {
+            assert_eq!(supplied(account.account_id()), None);
+        }
+    }
+
     #[test]
     fn default_priority_fee_percent_matches_sequencer_default() {
         assert_eq!(
