@@ -42,7 +42,7 @@ impl ProgramLoader<'_> {
     /// signed for by `target`'s own key) pointing at `chain` — the entire segment chain, in link
     /// order, starting at `first_segment`. `image_id` is always recomputed from the chain by
     /// `program_loader`, never trusted from the caller.
-    pub async fn upload_header(
+    pub async fn create_header(
         &self,
         target: AccountId,
         first_segment: AccountId,
@@ -66,7 +66,7 @@ impl ProgramLoader<'_> {
 
     /// Rewrites an existing header at `header` — an ordinary `is_authorized`-gated data
     /// mutation, so `header`'s own (still-authorized) key must sign. Same chain/`image_id`
-    /// handling as [`Self::upload_header`].
+    /// handling as [`Self::create_header`].
     pub async fn update_header(
         &self,
         header: AccountId,
@@ -164,9 +164,9 @@ impl ProgramLoader<'_> {
                 .await
                 .context("failed to update header")?
         } else {
-            self.upload_header(header, first_segment, segments, immutable)
+            self.create_header(header, first_segment, segments, immutable)
                 .await
-                .context("failed to upload header")?
+                .context("failed to create header")?
         };
         self.0
             .poll_and_finalize_public_transaction(tx_hash)
@@ -177,7 +177,7 @@ impl ProgramLoader<'_> {
     }
 
     /// Walks a segment chain from `first_segment` via the network, following `next_segment`
-    /// until `None`. Used by the standalone `UploadHeader`/`UpdateHeader` entry points, which
+    /// until `None`. Used by the standalone `CreateHeader`/`UpdateHeader` entry points, which
     /// only take `first_segment` from the caller rather than the whole chain (unlike
     /// [`Self::deploy`]/[`Self::update`], which already have it from their own `segments` arg).
     pub async fn resolve_chain(&self, first_segment: AccountId) -> Result<Vec<AccountId>> {

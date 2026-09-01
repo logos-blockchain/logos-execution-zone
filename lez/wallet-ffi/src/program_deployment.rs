@@ -139,7 +139,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_upload_header(
         }
     };
 
-    match block_on(loader.upload_header(target, first_segment, &chain, immutable)) {
+    match block_on(loader.create_header(target, first_segment, &chain, immutable)) {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
             WalletFfiError::Success

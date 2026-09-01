@@ -119,7 +119,7 @@ impl ProgramLoaderSubcommand {
             .await
     }
 
-    async fn handle_upload_header(
+    async fn handle_create_header(
         target: CliAccountMention,
         first_segment: AccountId,
         immutable: bool,
@@ -129,7 +129,7 @@ impl ProgramLoaderSubcommand {
         let chain = ProgramLoader(wallet_core).resolve_chain(first_segment).await?;
 
         let tx_hash = ProgramLoader(wallet_core)
-            .upload_header(target_id, first_segment, &chain, immutable)
+            .create_header(target_id, first_segment, &chain, immutable)
             .await?;
 
         println!("Header uploaded at {target_id}");
@@ -221,7 +221,7 @@ impl WalletSubcommand for ProgramLoaderSubcommand {
                 target,
                 first_segment,
                 immutable,
-            } => Self::handle_upload_header(target, first_segment, immutable, wallet_core).await,
+            } => Self::handle_create_header(target, first_segment, immutable, wallet_core).await,
             Self::UpdateHeader {
                 header,
                 first_segment,
