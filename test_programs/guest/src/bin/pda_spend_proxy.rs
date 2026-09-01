@@ -31,7 +31,7 @@ fn main() {
         program_id: auth_transfer_id,
         instruction_data: to_vec(&authenticated_transfer_core::Instruction::Transfer { amount })
             .unwrap(),
-        accounts: vec![first.account_id, second.account_id],
+        pre_state_ids: vec![first.account_id, second.account_id],
         pda_seeds: vec![seed],
     };
 

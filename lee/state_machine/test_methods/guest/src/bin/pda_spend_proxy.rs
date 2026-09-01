@@ -30,7 +30,7 @@ fn main() {
     let chained_call = ChainedCall {
         program_id: simple_transfer_id,
         instruction_data: to_vec(&amount).unwrap(),
-        accounts: vec![first.account_id, second.account_id],
+        pre_state_ids: vec![first.account_id, second.account_id],
         pda_seeds: vec![seed],
     };
 

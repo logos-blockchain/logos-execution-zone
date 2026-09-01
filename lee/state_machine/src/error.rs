@@ -148,6 +148,15 @@ pub enum InvalidProgramBehaviorError {
          in appropriate order."
     )]
     ChainedCallAccountsMismatch { program_id: ProgramId },
+
+    #[error(
+        "Program {program_id:?}'s own output reports account {account_id}, which the chained \
+         call that invoked it never named"
+    )]
+    UndeclaredAccountInProgramOutput {
+        program_id: ProgramId,
+        account_id: AccountId,
+    },
 }
 
 #[cfg(test)]
