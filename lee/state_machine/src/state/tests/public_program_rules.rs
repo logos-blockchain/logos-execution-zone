@@ -1,5 +1,6 @@
-use super::*;
 use lee_core::program::InstructionData;
+
+use super::*;
 
 #[test]
 fn program_should_fail_if_modifies_nonces() {

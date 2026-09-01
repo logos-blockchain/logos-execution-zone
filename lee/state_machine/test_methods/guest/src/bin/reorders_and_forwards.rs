@@ -2,7 +2,7 @@ use lee_core::program::{
     ChainedCall, InstructionData, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
-/// Reports empty pre/post (pure passthrough) and forwards its two pre_states to one callee in
+/// Reports empty pre/post (pure passthrough) and forwards its two `pre_states` to one callee in
 /// reversed order, delegating `pda_seeds`.
 type Instruction = (ProgramId, InstructionData, Vec<PdaSeed>);
 

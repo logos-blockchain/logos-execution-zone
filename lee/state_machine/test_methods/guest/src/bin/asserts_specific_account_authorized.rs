@@ -3,7 +3,7 @@ use lee_core::{
     program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
-/// Asserts only the named account is authorized, ignoring every other pre_state it receives.
+/// Asserts only the named account is authorized, ignoring every other `pre_state` it receives.
 type Instruction = AccountId;
 
 fn main() {
