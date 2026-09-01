@@ -10,7 +10,9 @@
 //! fee.
 //! Omitting it is rejected outright ([`ClassifyError::MissingFeeDeclaration`]).
 
-use common::transaction::{LeeTransaction, is_cross_zone_lock, is_full_vault_sweep};
+use common::transaction::{
+    LeeTransaction, is_cross_zone_lock, is_full_vault_sweep, is_sequencer_stake_operation,
+};
 use fee_core::assess::FeeTxView;
 use lee::V03State;
 
@@ -74,6 +76,12 @@ pub fn classify(
     // A cross-zone outbound lock is signed by the holder but has no spendable
     // account to charge: its funds move from the holding PDA into escrow.
     if is_cross_zone_lock(tx) {
+        return Ok(FeeClass::Exempt);
+    }
+
+    // Sequencer-stake lifecycle txs (stake, unstake, slash) govern committee
+    // membership, not user value; a staker funds only the stake itself.
+    if is_sequencer_stake_operation(tx) {
         return Ok(FeeClass::Exempt);
     }
 

@@ -281,6 +281,20 @@ pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
     )
 }
 
+/// Whether `tx` invokes the sequencer-stake program.
+///
+/// Committee-lifecycle operations (stake, unstake, slash) are fee-exempt: a
+/// staker funds only the stake itself, and these transactions govern who may
+/// produce blocks rather than moving user value. Charging them would demand a
+/// separately funded payer no staker holds.
+#[must_use]
+pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
+    let LeeTransaction::Public(public_tx) = tx else {
+        return false;
+    };
+    public_tx.message().program_id == programs::sequencer_stake().id()
+}
+
 /// Whether `tx` is a full-sweep vault claim.
 ///
 /// A `vault::Claim` whose amount equals the vault's entire balance in `state`.
