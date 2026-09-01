@@ -45,12 +45,6 @@ pub enum Instruction {
         outbox_program_id: ProgramId,
         target_program_id: ProgramId,
     },
-    /// Byte-identical echo of the holder's holding PDA: claiming is implicit
-    /// now and a balance-only account acquires no owner, so this changes
-    /// nothing.
-    ///
-    /// Required accounts (1): the holder's holding PDA.
-    InitHolding { holder: [u8; 32] },
 }
 
 /// PDA accumulating all locked balance on this zone.
@@ -158,14 +152,6 @@ mod tests {
             holding_account_id(id, &[1; 32]),
             holding_account_id(id, &[1; 32])
         );
-    }
-
-    /// Genesis blocks already carry `InitHolding` at this tag: wire format.
-    #[test]
-    fn init_holding_is_the_third_variant() {
-        let init = Instruction::InitHolding { holder: [7; 32] };
-        let bytes = borsh::to_vec(&init).expect("InitHolding serializes");
-        assert_eq!(bytes[0], 2);
     }
 
     /// `extract_emission` decodes `Lock` off peer transactions, so its tag byte is

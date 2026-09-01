@@ -1267,6 +1267,7 @@ dependencies = [
 name = "bridge_lock_program"
 version = "0.1.0"
 dependencies = [
+ "authenticated_transfer_core",
  "borsh",
  "bridge_lock_core",
  "cross_zone_outbox_core",

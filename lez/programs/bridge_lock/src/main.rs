@@ -1,15 +1,16 @@
+use authenticated_transfer_core::Instruction as TransferInstruction;
 use bridge_lock_core::{
     Instruction, config_account_id, config_bytes, escrow_account_id, holding_account_id,
-    read_config,
+    holding_seed, read_config,
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
     account::AccountWithMetadata,
-    program::{
-        ChainedCall, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
+
+include!("../../authenticated_transfer/image_id.rs");
 
 fn main() {
     let (
@@ -58,50 +59,7 @@ fn main() {
             outbox_program_id,
             target_program_id,
         ),
-        Instruction::InitHolding { holder } => init_holding(
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction_data,
-            &holder,
-        ),
     }
-}
-
-/// Byte-identical echo of the holding PDA: claiming is implicit now and a
-/// balance-only account acquires no owner, so this arm changes nothing.
-fn init_holding(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
-    pre_states: Vec<AccountWithMetadata>,
-    instruction_data: Vec<u8>,
-    holder: &[u8; 32],
-) {
-    // pre_states: [holding PDA].
-    let [holding] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitHolding requires the holding account");
-    assert_eq!(
-        holding.account_id,
-        holding_account_id(self_program_id, holder),
-        "account must be the holder's bridge-lock holding PDA"
-    );
-    if holding.account.program_owner != DEFAULT_PROGRAM_OWNER {
-        assert_eq!(
-            holding.account.program_owner,
-            self_program_id.into(),
-            "bridge-lock holding PDA is owned by another program"
-        );
-    }
-    let holding_post = holding.account.clone();
-
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![holding],
-        vec![holding_post],
-    )
-    .write();
 }
 
 #[expect(
@@ -186,27 +144,20 @@ fn lock(
         "fourth account must be the escrow PDA"
     );
 
-    // bridge_lock owns holding and escrow, so the same amount moves between
-    // them and conservation holds. An unclaimed holding reads as balance 0, so
-    // a positive lock against one fails here.
-    let holding_new = holding
-        .account
-        .balance
-        .checked_sub(amount)
-        .expect("insufficient holding balance to lock");
-    let escrow_new = escrow
-        .account
-        .balance
-        .checked_add(amount)
-        .expect("escrow balance overflow");
+    // The balance moves in a chained authenticated_transfer frame: a debit
+    // needs the account's own authorization, and a keyless PDA can only get it
+    // from the seed granted below. The callee is the pinned image id, never a
+    // caller-named program — whatever receives the grant can spend the holding.
+    let mut holding_authorized = holding.clone();
+    holding_authorized.is_authorized = true;
+    let move_call = ChainedCall::new(
+        AUTHENTICATED_TRANSFER_IMAGE_ID,
+        vec![holding_authorized, escrow.clone()],
+        &TransferInstruction::Transfer { amount },
+    )
+    .with_pda_seeds(vec![holding_seed(&holder.account_id.into_value())]);
 
-    let mut holding_post = holding.account.clone();
-    holding_post.balance = holding_new;
-
-    let mut escrow_post = escrow.account.clone();
-    escrow_post.balance = escrow_new;
-
-    let call = ChainedCall::new(
+    let emit_call = ChainedCall::new(
         outbox_program_id,
         vec![outbox.clone()],
         &OutboxInstruction::Emit {
@@ -224,17 +175,24 @@ fn lock(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config, holder.clone(), holding, escrow, outbox.clone()],
+        vec![
+            config,
+            holder.clone(),
+            holding.clone(),
+            escrow.clone(),
+            outbox.clone(),
+        ],
         vec![
             config_post,
-            // The holder only signs; its account is echoed untouched.
+            // The holder only signs; its account is echoed untouched, as are
+            // the holding and escrow: their balances move one frame down.
             holder.account,
-            holding_post,
-            escrow_post,
+            holding.account,
+            escrow.account,
             outbox.account,
         ],
     )
-    .with_chained_calls(vec![call])
+    .with_chained_calls(vec![move_call, emit_call])
     .write();
 }
 
