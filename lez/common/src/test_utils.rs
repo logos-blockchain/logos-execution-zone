@@ -22,8 +22,10 @@ pub fn sequencer_sign_key_for_testing() -> lee::PrivateKey {
 }
 
 /// Claims the test block-producer's reward account, simulating the stake a real
-/// sequencer holds before producing. Fee settlement credits real fees to this
-/// account, and crediting an unclaimed (default-owner) account is rejected.
+/// sequencer holds before producing.
+///
+/// Fee settlement credits real fees to this account, and crediting an unclaimed
+/// (default-owner) account is rejected.
 pub fn claim_producer_account(state: &mut lee::V03State) {
     state.initialize_account_owner(
         producer_account_for_testing(),

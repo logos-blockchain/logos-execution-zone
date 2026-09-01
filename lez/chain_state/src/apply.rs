@@ -209,17 +209,20 @@ pub fn apply_block_to_state(
     }
 
     // The forced fee transaction must carry exactly the summary this block's
-    // settlement produced. Its reward target — a staked sequencer's ownership
-    // account, already claimed by that sequencer's stake — rides inside the tx
-    // (the account after the fixed fee accounts). The byte-compare pins the
-    // summary and tx shape; authenticating the target as the block's true L1
-    // producer is the follower's job, not this signer-free path the indexer
-    // also runs.
+    // settlement produced. Its reward target rides inside the tx (the account
+    // after the fixed fee accounts); the byte-compare pins the summary and tx
+    // shape. The producer chooses that account freely, like a coinbase output,
+    // but it must not be a restricted system account: the fee tx settles via the
+    // direct transition, bypassing the user-tx restricted-account guards, so
+    // without this floor a producer could credit the bridge and decouple its
+    // balance from L1 deposits (or the faucet and inflate its supply).
     let producer_account = common::transaction::fee_invocation_producer(fee_tx)
         .ok_or(BlockIngestError::InvalidFeeTransaction)?;
     if *fee_tx != fee_invocation(summary, producer_account) {
         return Err(BlockIngestError::InvalidFeeTransaction);
     }
+    common::transaction::validate_reward_target(producer_account)
+        .map_err(|reason| BlockIngestError::InvalidRewardTarget { reason })?;
 
     let fee_events = state
         .transition_from_public_transaction(fee_tx, block.header.block_id, block.header.timestamp)
@@ -948,21 +951,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_non_genesis_block_rewarding_a_system_account_is_rejected() {
+        let mut state = initial_state();
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let tip = tip_of(&genesis);
+
+        // A non-genesis block whose forced fee tx credits the bridge — a system
+        // account — must be rejected before the fee settlement runs.
+        let block = settled_block_rewarding(
+            2,
+            tip.hash,
+            vec![],
+            &state,
+            system_accounts::bridge_account_id(),
+        );
+        let err = apply_block(Some(&tip), &block, &mut state)
+            .expect_err("a reward to a system account is rejected");
+        assert!(matches!(err, BlockIngestError::InvalidRewardTarget { .. }));
+    }
+
     /// A block whose forced fee transaction carries the summary its user
     /// transactions actually settle to, signed by the shared test key.
     fn settled_block(
         id: u64,
         prev_hash: HashType,
+        transactions: Vec<LeeTransaction>,
+        state: &V03State,
+    ) -> common::block::Block {
+        settled_block_rewarding(
+            id,
+            prev_hash,
+            transactions,
+            state,
+            common::test_utils::producer_account_for_testing(),
+        )
+    }
+
+    /// [`settled_block`] with an explicit reward target, for exercising the
+    /// reward-target guard.
+    fn settled_block_rewarding(
+        id: u64,
+        prev_hash: HashType,
         mut transactions: Vec<LeeTransaction>,
         state: &V03State,
+        reward: lee::AccountId,
     ) -> common::block::Block {
         let timestamp = id.saturating_mul(100);
         let summary = super::derive_block_summary(state, &transactions, id, timestamp)
             .expect("test transactions settle");
-        let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
-            &sequencer_sign_key_for_testing(),
-        ));
-        transactions.push(LeeTransaction::Public(fee_invocation(summary, producer)));
+        transactions.push(LeeTransaction::Public(fee_invocation(summary, reward)));
         transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
         HashableBlockData {
             block_id: id,

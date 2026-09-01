@@ -319,10 +319,7 @@ pub fn fee_invocation(
     )
 }
 
-/// The producer account a [`fee_invocation`] credits: the entry riding after
-/// the fixed fee accounts. `None` if the transaction is too short to carry one.
-/// Shared by settlement and the follower's producer check so both read the
-/// reward target the same way.
+/// The producer account credited by [`fee_invocation`].
 #[must_use]
 pub fn fee_invocation_producer(fee_tx: &lee::PublicTransaction) -> Option<lee::AccountId> {
     fee_tx
@@ -331,6 +328,27 @@ pub fn fee_invocation_producer(fee_tx: &lee::PublicTransaction) -> Option<lee::A
         // get the 4th account, which is the producer
         .get(system_accounts::fee_account_ids().len())
         .copied()
+}
+
+/// Validates that the block reward target is not a restricted system account.
+///
+/// This is needed because the producer chooses its own payout account.
+pub fn validate_reward_target(target: AccountId) -> Result<(), String> {
+    let is_restricted = system_accounts::clock_account_ids()
+        .into_iter()
+        .chain(system_accounts::fee_account_ids())
+        .chain([
+            system_accounts::faucet_account_id(),
+            system_accounts::bridge_account_id(),
+        ])
+        .any(|id| id == target);
+    if is_restricted {
+        Err(format!(
+            "reward target {target} is a restricted system account"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// The fee reserve: hold `amount` from `payer` in the fee inbox.
@@ -450,8 +468,33 @@ mod tests {
     use lee::{Account, AccountId, PrivateKey, PublicKey, V03State};
     use lee_core::account::Nonce;
 
-    use super::{validate_bridge_account_modification, validate_doesnt_modify_account};
+    use super::{
+        validate_bridge_account_modification, validate_doesnt_modify_account,
+        validate_reward_target,
+    };
     use crate::test_utils::{create_transaction_native_token_transfer, state_and_diff};
+
+    #[test]
+    fn a_restricted_system_account_is_not_a_valid_reward_target() {
+        // A plain account is a fine reward target, claimed or not — a producer
+        // picks its own payout account.
+        validate_reward_target(AccountId::new([1; 32]))
+            .expect("an ordinary account is a valid reward target");
+
+        // The restricted system accounts are rejected.
+        validate_reward_target(system_accounts::bridge_account_id())
+            .expect_err("the bridge is not a valid reward target");
+        validate_reward_target(system_accounts::faucet_account_id())
+            .expect_err("the faucet is not a valid reward target");
+        for fee_account in system_accounts::fee_account_ids() {
+            validate_reward_target(fee_account)
+                .expect_err("a fee account is not a valid reward target");
+        }
+        for clock_account in system_accounts::clock_account_ids() {
+            validate_reward_target(clock_account)
+                .expect_err("a clock account is not a valid reward target");
+        }
+    }
 
     #[test]
     fn bridge_guard_allows_balance_only_increase() {
