@@ -285,8 +285,43 @@ fn program_should_fail_if_transfers_balance_from_non_owned_account() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id, owner_account_id, executing_program_id }
-        ))) if err_account_id == sender_account_id && owner_account_id != program_id.into() && executing_program_id == program_id
+            ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id }
+        ))) if err_account_id == sender_account_id
+    ));
+}
+
+#[test]
+fn program_should_fail_if_debits_owned_but_unauthorized_account() {
+    let sender_account_id = AccountId::new([1; 32]);
+    let receiver_account_id = AccountId::new([2; 32]);
+    let program_id = crate::test_methods::simple_balance_transfer().id();
+    let mut state = V03State::new().with_test_programs();
+    state.force_insert_account(
+        sender_account_id,
+        Account {
+            program_owner: program_id.into(),
+            balance: 100,
+            ..Account::default()
+        },
+    );
+    let balance_to_move: u128 = 1;
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![sender_account_id, receiver_account_id],
+        vec![],
+        balance_to_move,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+            ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id }
+        ))) if err_account_id == sender_account_id
     ));
 }
 
@@ -347,24 +382,29 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
 
 #[test]
 fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
-    let initial_data = HashMap::new();
-    let mut state = V03State::new()
-        .with_public_accounts(initial_data)
-        .with_test_programs()
-        .with_account_owned_by_burner_program();
     let program_id = crate::test_methods::burner().id();
-    let account_id = AccountId::new([252; 32]);
-    assert_eq!(
-        state.get_account_by_id(account_id).program_owner,
-        program_id.into()
+    let key = PrivateKey::try_new([7; 32]).unwrap();
+    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = V03State::new().with_test_programs();
+    state.force_insert_account(
+        account_id,
+        Account {
+            program_owner: program_id.into(),
+            balance: 100,
+            ..Account::default()
+        },
     );
     let balance_to_burn: u128 = 1;
     assert!(state.get_account_by_id(account_id).balance > balance_to_burn);
 
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], balance_to_burn)
-            .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![account_id],
+        vec![Nonce(0)],
+        balance_to_burn,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&key]);
     let tx = PublicTransaction::new(message, witness_set);
     let result = state.transition_from_public_transaction(&tx, 2, 0);
 

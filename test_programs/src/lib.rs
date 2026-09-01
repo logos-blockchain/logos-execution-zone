@@ -81,12 +81,12 @@ pub const fn time_locked_transfer() -> Program {
 
 #[must_use]
 #[inline]
-pub const fn pinata_cooldown() -> Program {
-    use guests::{PINATA_COOLDOWN_ELF, PINATA_COOLDOWN_ID, PINATA_COOLDOWN_PATH};
+pub const fn cooldown() -> Program {
+    use guests::{COOLDOWN_ELF, COOLDOWN_ID, COOLDOWN_PATH};
 
-    let _unused = PINATA_COOLDOWN_PATH;
+    let _unused = COOLDOWN_PATH;
 
-    Program::new_unchecked(PINATA_COOLDOWN_ID, Cow::Borrowed(PINATA_COOLDOWN_ELF))
+    Program::new_unchecked(COOLDOWN_ID, Cow::Borrowed(COOLDOWN_ELF))
 }
 
 #[must_use]

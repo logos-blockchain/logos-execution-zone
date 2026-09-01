@@ -467,7 +467,7 @@ fn program_owner_changer_should_fail_in_privacy_preserving_circuit() {
 }
 
 #[test]
-fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
+fn unauthorized_debit_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::simple_balance_transfer();
     let public_account_1 = AccountWithMetadata::new(
         Account {
@@ -475,7 +475,7 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
             balance: 100,
             ..Account::default()
         },
-        true,
+        false,
         AccountId::new([0; 32]),
     );
     let public_account_2 = AccountWithMetadata::new(
@@ -495,7 +495,7 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert_circuit_proving_failure(&result, "which is not the owner");
+    assert_circuit_proving_failure(&result, "decrease balance of unauthorized account");
 }
 
 #[test]

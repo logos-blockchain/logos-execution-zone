@@ -111,17 +111,6 @@ impl V03State {
     }
 
     #[must_use]
-    pub fn with_account_owned_by_burner_program(mut self) -> Self {
-        let account = Account {
-            program_owner: crate::test_methods::burner().id().into(),
-            balance: 100,
-            ..Default::default()
-        };
-        self.force_insert_account(AccountId::new([252; 32]), account);
-        self
-    }
-
-    #[must_use]
     pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
         let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
         let commitment = Commitment::new(&account_id, account);

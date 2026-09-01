@@ -665,14 +665,8 @@ pub enum ExecutionValidationError {
     #[error("Unallowed modification of program owner for account {account_id}")]
     ModifiedProgramOwner { account_id: AccountId },
 
-    #[error(
-        "Trying to decrease balance of account {account_id} owned by {owner_account_id:?} in a program {executing_program_id:?} which is not the owner"
-    )]
-    UnauthorizedBalanceDecrease {
-        account_id: AccountId,
-        owner_account_id: AccountId,
-        executing_program_id: ProgramId,
-    },
+    #[error("Trying to decrease balance of unauthorized account {account_id}")]
+    UnauthorizedBalanceDecrease { account_id: AccountId },
 
     #[error(
         "Unauthorized modification of data for account {account_id} which is not default and not owned by executing program {executing_program_id:?}"
@@ -802,14 +796,10 @@ pub fn validate_execution(
 
         let account_program_owner = pre.account.program_owner;
 
-        // 5. Decreasing balance only allowed if owned by executing program
-        if post.account.balance < pre.account.balance
-            && account_program_owner != executing_account_id
-        {
+        // 5. Decreasing balance requires the account to be authorized
+        if post.account.balance < pre.account.balance && !pre.is_authorized {
             return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
                 account_id: pre.account_id,
-                owner_account_id: account_program_owner,
-                executing_program_id,
             });
         }
 

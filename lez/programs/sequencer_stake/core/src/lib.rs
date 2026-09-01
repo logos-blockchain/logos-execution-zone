@@ -176,9 +176,8 @@ pub struct SequencerEntry {
 impl SequencerEntry {
     /// Stake still backing this key once every pending release has been
     /// finalized. Candidacy and every release check measure this, never the
-    /// ownership account's balance: only balance decreases require owning an
-    /// account, so anyone can credit one and push its balance above
-    /// `total_staked`.
+    /// ownership account's balance: credits are free, so anyone can push its
+    /// balance above `total_staked`.
     #[must_use]
     pub const fn net_stake(&self) -> u128 {
         self.total_staked.saturating_sub(self.total_pending_unstake)

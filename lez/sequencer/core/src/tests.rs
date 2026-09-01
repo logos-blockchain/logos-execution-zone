@@ -1994,23 +1994,18 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
 }
 
-fn pinata_cooldown_data(prize: u128, cooldown_ms: u64, last_claim_timestamp: u64) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(32);
-    buf.extend_from_slice(&prize.to_le_bytes());
+fn cooldown_data(cooldown_ms: u64, last_run_timestamp: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(16);
     buf.extend_from_slice(&cooldown_ms.to_le_bytes());
-    buf.extend_from_slice(&last_claim_timestamp.to_le_bytes());
+    buf.extend_from_slice(&last_run_timestamp.to_le_bytes());
     buf
 }
 
-fn pinata_cooldown_transaction(
-    pinata_id: AccountId,
-    winner_id: AccountId,
-    clock_account_id: AccountId,
-) -> PublicTransaction {
-    let program_id = test_programs::pinata_cooldown().id();
+fn cooldown_transaction(state_id: AccountId, clock_account_id: AccountId) -> PublicTransaction {
+    let program_id = test_programs::cooldown().id();
     let message = lee::public_transaction::Message::try_new(
         program_id,
-        vec![pinata_id, winner_id, clock_account_id],
+        vec![state_id, clock_account_id],
         vec![],
         (),
     )
@@ -2020,98 +2015,76 @@ fn pinata_cooldown_transaction(
 }
 
 #[test]
-fn pinata_cooldown_claim_succeeds_after_cooldown() {
-    let winner_id = AccountId::new([11; 32]);
-    let pinata_id = AccountId::new([99; 32]);
+fn cooldown_opens_after_the_cooldown_elapses() {
+    let state_id = AccountId::new([99; 32]);
 
     let genesis_timestamp = 1000;
-    let prize = 50;
     let cooldown_ms = 500;
-    // Last claim was at genesis, so any timestamp >= genesis + cooldown should work.
-    let last_claim_timestamp = genesis_timestamp;
+    // Last run was at genesis, so any timestamp >= genesis + cooldown should work.
+    let last_run_timestamp = genesis_timestamp;
 
     // Advance the clock so the cooldown check reads an updated timestamp.
     let block_timestamp = genesis_timestamp + cooldown_ms;
-    let mut state = state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
+    let mut state = state_with_clock_and_program(test_programs::cooldown(), block_timestamp);
 
-    // The winner must be a non-default account so the program may credit it without claiming.
     state.force_insert_account(
-        winner_id,
+        state_id,
         Account {
-            program_owner: programs::authenticated_transfer().id().into(),
-            ..Account::default()
-        },
-    );
-    state.force_insert_account(
-        pinata_id,
-        Account {
-            program_owner: test_programs::pinata_cooldown().id().into(),
-            balance: 1000,
-            data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
+            program_owner: test_programs::cooldown().id().into(),
+            data: cooldown_data(cooldown_ms, last_run_timestamp)
                 .try_into()
                 .unwrap(),
             ..Account::default()
         },
     );
 
-    let tx = pinata_cooldown_transaction(
-        pinata_id,
-        winner_id,
-        system_accounts::clock_account_ids()[0],
-    );
+    let tx = cooldown_transaction(state_id, system_accounts::clock_account_ids()[0]);
 
     state
         .transition_from_public_transaction(&tx, 2, block_timestamp)
         .unwrap();
 
-    assert_eq!(state.get_account_by_id(pinata_id).balance, 1000 - prize);
-    assert_eq!(state.get_account_by_id(winner_id).balance, prize);
+    assert_eq!(
+        state.get_account_by_id(state_id).data.as_ref(),
+        cooldown_data(cooldown_ms, block_timestamp)
+    );
 }
 
 #[test]
-fn pinata_cooldown_claim_fails_during_cooldown() {
-    let winner_id = AccountId::new([11; 32]);
-    let pinata_id = AccountId::new([99; 32]);
+fn cooldown_rejects_before_the_cooldown_elapses() {
+    let state_id = AccountId::new([99; 32]);
 
     let genesis_timestamp = 1000;
-    let prize = 50;
     let cooldown_ms = 500;
-    let last_claim_timestamp = genesis_timestamp;
+    let last_run_timestamp = genesis_timestamp;
 
-    // Timestamp is only 100ms after the last claim, well within the 500ms cooldown.
+    // Timestamp is only 100ms after the last run, well within the 500ms cooldown.
     let block_timestamp = genesis_timestamp + 100;
-    let mut state = state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
+    let mut state = state_with_clock_and_program(test_programs::cooldown(), block_timestamp);
 
     state.force_insert_account(
-        winner_id,
+        state_id,
         Account {
-            program_owner: programs::authenticated_transfer().id().into(),
-            ..Account::default()
-        },
-    );
-    state.force_insert_account(
-        pinata_id,
-        Account {
-            program_owner: test_programs::pinata_cooldown().id().into(),
-            balance: 1000,
-            data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
+            program_owner: test_programs::cooldown().id().into(),
+            data: cooldown_data(cooldown_ms, last_run_timestamp)
                 .try_into()
                 .unwrap(),
             ..Account::default()
         },
     );
 
-    let tx = pinata_cooldown_transaction(
-        pinata_id,
-        winner_id,
-        system_accounts::clock_account_ids()[0],
-    );
+    let tx = cooldown_transaction(state_id, system_accounts::clock_account_ids()[0]);
 
     let result = state.transition_from_public_transaction(&tx, 2, block_timestamp);
 
-    assert!(result.is_err(), "Claim should fail during cooldown period");
-    assert_eq!(state.get_account_by_id(pinata_id).balance, 1000);
-    assert_eq!(state.get_account_by_id(winner_id).balance, 0);
+    assert!(
+        result.is_err(),
+        "The program should fail during the cooldown period"
+    );
+    assert_eq!(
+        state.get_account_by_id(state_id).data.as_ref(),
+        cooldown_data(cooldown_ms, last_run_timestamp)
+    );
 }
 
 #[test]
