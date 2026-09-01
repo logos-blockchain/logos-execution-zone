@@ -36,6 +36,9 @@ macro_rules! bytes_of {
 const INITIAL_BALANCE: u128 = 100;
 const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
+/// The peer source the mint tests authorize.
+const MINT_SRC_ZONE: [u8; 32] = [2; 32];
+const MINT_SRC_PROGRAM: lee_core::program::ProgramId = [9_u32; 8];
 /// These tests drive the guest directly, so any fixed source-block hash does.
 const SRC_BLOCK_HASH: [u8; 32] = [7; 32];
 
@@ -69,12 +72,38 @@ fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
     )]);
 }
 
+/// Uncapped policies from peer pairs, the shape most tests still exercise.
+fn uncapped_policies(
+    pairs: &[([u8; 32], lee_core::program::ProgramId)],
+) -> Vec<wrapped_token_core::SourcePolicy> {
+    pairs
+        .iter()
+        .map(
+            |&(src_zone, src_program_id)| wrapped_token_core::SourcePolicy {
+                src_zone,
+                src_program_id,
+                mint_cap: None,
+            },
+        )
+        .collect()
+}
+
+/// The entries the guest writes for `uncapped_policies` applied to a fresh list.
+fn uncapped_entries(
+    pairs: &[([u8; 32], lee_core::program::ProgramId)],
+) -> Vec<wrapped_token_core::SourceEntry> {
+    uncapped_policies(pairs)
+        .into_iter()
+        .map(|policy| wrapped_token_core::SourceEntry { policy, minted: 0 })
+        .collect()
+}
+
 /// Seeds the wrapped-token config pinning the inbox as minter and `sources` as the
 /// peer pairs it will mint for, matching what genesis seeds for a real zone.
 fn seed_wrapped_config(
     state: &mut V03State,
     authority: Option<AccountId>,
-    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+    sources: &[([u8; 32], lee_core::program::ProgramId)],
 ) {
     seed_wrapped_config_with_governance(state, None, authority, sources);
 }
@@ -84,14 +113,25 @@ fn seed_wrapped_config_with_governance(
     state: &mut V03State,
     governance: Option<lee_core::program::ProgramId>,
     authority: Option<AccountId>,
-    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+    sources: &[([u8; 32], lee_core::program::ProgramId)],
+) {
+    seed_wrapped_config_entries(state, governance, authority, uncapped_entries(sources));
+}
+
+/// The same, with full entries: caps and counters exactly as the config holds
+/// them.
+fn seed_wrapped_config_entries(
+    state: &mut V03State,
+    governance: Option<lee_core::program::ProgramId>,
+    authority: Option<AccountId>,
+    entries: Vec<wrapped_token_core::SourceEntry>,
 ) {
     let wrapped_token_id = programs::wrapped_token().id();
     let config = wrapped_token_core::WrappedTokenConfig {
         minter: programs::cross_zone_inbox().id(),
         governance,
         authority,
-        sources,
+        sources: entries,
     };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         wrapped_token_core::config_account_id(wrapped_token_id),
@@ -155,6 +195,24 @@ fn seed_ping_sender_config(state: &mut V03State) {
                 .to_vec()
                 .try_into()
                 .expect("outbox id fits in account data"),
+            ..Default::default()
+        },
+    )]);
+}
+
+/// The holding PDA a holder's bridgeable balance lives in.
+fn holding_id_of(holder_id: AccountId) -> AccountId {
+    bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder_id.into_value())
+}
+
+/// Seeds a funded holding PDA for `holder_id`, matching genesis.
+fn seed_holding(state: &mut V03State, holder_id: AccountId, balance: u128) {
+    let bridge_lock_id = programs::bridge_lock().id();
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        holding_id_of(holder_id),
+        Account {
+            program_owner: bridge_lock_id.into(),
+            balance,
             ..Default::default()
         },
     )]);
@@ -309,24 +367,42 @@ fn mint_payload_of(amount: u128) -> Vec<u8> {
     borsh::to_vec(&mint).expect("serialize mint")
 }
 
-/// Runs a bridge mint of `amount` through the inbox, as the watcher would.
-fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeError> {
+/// A state authorizing [`MINT_SRC_ZONE`]/[`MINT_SRC_PROGRAM`] as the one
+/// wrapped-token source, with the given mint policy and counter.
+fn capped_mint_state(
+    mint_cap: Option<u128>,
+    minted: u128,
+    authority: Option<AccountId>,
+) -> V03State {
+    let mut state = base_state();
+    seed_inbox_config(&mut state, [1_u8; 32]);
+    seed_wrapped_config_entries(
+        &mut state,
+        None,
+        authority,
+        vec![wrapped_token_core::SourceEntry {
+            policy: wrapped_token_core::SourcePolicy {
+                src_zone: MINT_SRC_ZONE,
+                src_program_id: MINT_SRC_PROGRAM,
+                mint_cap,
+            },
+            minted,
+        }],
+    );
+    state
+}
+
+/// The inbox dispatch a watcher would build for a mint of `amount` emitted at
+/// `src_tx_index` on the canonical peer source.
+fn mint_dispatch_tx(amount: u128, src_tx_index: u32) -> PublicTransaction {
     let inbox_id = programs::cross_zone_inbox().id();
     let wrapped_token_id = programs::wrapped_token().id();
-    let self_zone = [1_u8; 32];
-    let src_zone = [2_u8; 32];
-    let src_block_id = 5;
-
-    let mut state = base_state();
-    seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
-
     let msg = CrossZoneMessage {
-        src_zone,
-        src_block_id,
+        src_zone: MINT_SRC_ZONE,
+        src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index: 0,
-        src_program_id: [9_u32; 8],
+        src_tx_index,
+        src_program_id: MINT_SRC_PROGRAM,
         target_program_id: wrapped_token_id,
         payload: mint_payload_of(amount),
         l1_inclusion_witness: None,
@@ -346,9 +422,44 @@ fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeErro
         InboxInstruction::Dispatch(msg),
     )
     .expect("build dispatch message");
-    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+}
 
-    ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+/// Runs one mint dispatch against `state` at `block`.
+fn dispatch_mint_on(
+    state: &V03State,
+    amount: u128,
+    src_tx_index: u32,
+    block: u64,
+) -> Result<ValidatedStateDiff, lee::error::LeeError> {
+    ValidatedStateDiff::from_public_transaction(
+        &mint_dispatch_tx(amount, src_tx_index),
+        state,
+        block,
+        0,
+    )
+}
+
+/// Runs a bridge mint of `amount` through the inbox, as the watcher would.
+fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeError> {
+    dispatch_mint_on(&capped_mint_state(None, 0, None), amount, 0, 1)
+}
+
+/// The lifetime counter the config holds for the canonical source.
+fn source_minted(state: &V03State) -> u128 {
+    let config_id = wrapped_token_core::config_account_id(programs::wrapped_token().id());
+    let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    cfg.sources
+        .iter()
+        .find(|entry| {
+            entry.policy.src_zone == MINT_SRC_ZONE
+                && entry.policy.src_program_id == MINT_SRC_PROGRAM
+        })
+        .expect("the canonical source is configured")
+        .minted
 }
 
 /// One message must not be able to pin a holding near `u128::MAX`, which would
@@ -371,6 +482,265 @@ fn a_mint_at_the_cap_is_accepted() {
         &diff.public_diff()[&holding_id].data.clone().into_inner(),
     );
     assert_eq!(minted, wrapped_token_core::MAX_MINT_AMOUNT);
+}
+
+/// A policy the update tests hand the guest for the canonical source.
+const fn mint_src_policy(mint_cap: Option<u128>) -> wrapped_token_core::SourcePolicy {
+    wrapped_token_core::SourcePolicy {
+        src_zone: MINT_SRC_ZONE,
+        src_program_id: MINT_SRC_PROGRAM,
+        mint_cap,
+    }
+}
+
+/// The signed `UpdateSources` the configured authority sends at `nonce`.
+fn update_sources_tx(
+    key: &PrivateKey,
+    authority: AccountId,
+    nonce: u128,
+    sources: Vec<wrapped_token_core::SourcePolicy>,
+) -> PublicTransaction {
+    let wrapped_token_id = programs::wrapped_token().id();
+    signed_tx(
+        wrapped_token_id,
+        vec![
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            authority,
+        ],
+        nonce,
+        bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
+        key,
+    )
+}
+
+/// Asserts a mint dispatch is refused by the lifetime cap itself, not by an
+/// unrelated guard.
+fn rejects_on_cap(state: &V03State, amount: u128, src_tx_index: u32, block: u64) {
+    let Err(err) = dispatch_mint_on(state, amount, src_tx_index, block) else {
+        panic!("expected the lifetime cap to refuse the mint");
+    };
+    assert!(
+        format!("{err:?}").contains("lifetime cap"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The cap itself is spendable: a mint landing exactly on it executes, and the
+/// counter records the whole allowance as spent.
+#[test]
+fn a_mint_that_reaches_the_lifetime_cap_is_accepted() {
+    let mut state = capped_mint_state(Some(LOCK_AMOUNT), 0, None);
+    let diff = dispatch_mint_on(&state, LOCK_AMOUNT, 0, 1).expect("the cap itself is spendable");
+    drop(state.apply_state_diff(diff));
+    assert_eq!(source_minted(&state), LOCK_AMOUNT);
+}
+
+/// The refusal is the cap's own, pinned to its message so an unrelated guard
+/// cannot keep this green.
+#[test]
+fn a_mint_over_the_lifetime_cap_is_rejected() {
+    let state = capped_mint_state(Some(LOCK_AMOUNT), 0, None);
+    rejects_on_cap(&state, LOCK_AMOUNT + 1, 0, 1);
+}
+
+/// The cap bounds the counter, not any single amount: mints that are each fine
+/// alone refuse once their sum would cross it, and the remainder stays
+/// spendable.
+#[test]
+fn mints_accumulate_into_the_lifetime_cap() {
+    let mut state = capped_mint_state(Some(100), 0, None);
+    let first = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
+    drop(state.apply_state_diff(first));
+    rejects_on_cap(&state, 60, 1, 2);
+    let exact = dispatch_mint_on(&state, 40, 1, 2).expect("the remainder is spendable");
+    drop(state.apply_state_diff(exact));
+    assert_eq!(source_minted(&state), 100);
+}
+
+/// `None` is uncapped: the counter still advances, so a cap added later starts
+/// from the true total, but nothing is ever refused.
+#[test]
+fn an_uncapped_source_counts_but_never_refuses() {
+    let mut state = capped_mint_state(None, 0, None);
+    for index in 0..2 {
+        let diff = dispatch_mint_on(
+            &state,
+            wrapped_token_core::MAX_MINT_AMOUNT,
+            index,
+            u64::from(index) + 1,
+        )
+        .expect("an uncapped source refuses nothing");
+        drop(state.apply_state_diff(diff));
+    }
+    assert_eq!(
+        source_minted(&state),
+        2 * wrapped_token_core::MAX_MINT_AMOUNT
+    );
+}
+
+/// The inbox no-ops a replayed delivery without reaching the token, so a replay
+/// must not spend allowance.
+#[test]
+fn a_replayed_delivery_does_not_advance_the_counter() {
+    let mut state = capped_mint_state(Some(100), 0, None);
+    let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
+    drop(state.apply_state_diff(diff));
+
+    let replay = dispatch_mint_on(&state, 60, 0, 2).expect("the inbox no-ops a replay");
+    drop(state.apply_state_diff(replay));
+    assert_eq!(
+        source_minted(&state),
+        60,
+        "a replay must not spend allowance"
+    );
+}
+
+/// An update keeps a surviving source's spent allowance: the new cap applies to
+/// the old counter, so an update cannot re-arm a spent source.
+#[test]
+fn the_counter_survives_a_source_update() {
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = capped_mint_state(Some(100), 0, Some(authority));
+    let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
+    drop(state.apply_state_diff(diff));
+
+    let update = update_sources_tx(&key, authority, 0, vec![mint_src_policy(Some(70))]);
+    let applied = ValidatedStateDiff::from_public_transaction(&update, &state, 2, 0)
+        .expect("the authority updates the cap");
+    drop(state.apply_state_diff(applied));
+    assert_eq!(
+        source_minted(&state),
+        60,
+        "an update cannot reset spent allowance"
+    );
+
+    rejects_on_cap(&state, 11, 1, 3);
+    let exact = dispatch_mint_on(&state, 10, 1, 3).expect("the remaining headroom is spendable");
+    drop(state.apply_state_diff(exact));
+    assert_eq!(source_minted(&state), 70);
+}
+
+/// Removing a source forgets its counter: whoever re-adds one grants a fresh
+/// allowance, which is the authority's call to make.
+#[test]
+fn a_source_removed_and_re_added_restarts_its_counter() {
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = capped_mint_state(Some(100), 0, Some(authority));
+    let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
+    drop(state.apply_state_diff(diff));
+
+    let removed = update_sources_tx(&key, authority, 0, vec![]);
+    let applied = ValidatedStateDiff::from_public_transaction(&removed, &state, 2, 0)
+        .expect("the authority removes the source");
+    drop(state.apply_state_diff(applied));
+
+    let re_added = update_sources_tx(&key, authority, 1, vec![mint_src_policy(Some(100))]);
+    let restored = ValidatedStateDiff::from_public_transaction(&re_added, &state, 3, 0)
+        .expect("the authority re-adds the source");
+    drop(state.apply_state_diff(restored));
+    assert_eq!(source_minted(&state), 0, "a re-added source starts at zero");
+
+    let full = dispatch_mint_on(&state, 100, 1, 4).expect("the fresh allowance is spendable");
+    drop(state.apply_state_diff(full));
+    assert_eq!(source_minted(&state), 100);
+}
+
+/// Mint advances the first matching entry, so a source listed twice would
+/// split one policy across entries an auditor reads as two; the guest refuses
+/// the update outright.
+#[test]
+fn an_update_listing_a_source_twice_is_refused() {
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let state = capped_mint_state(Some(100), 0, Some(authority));
+
+    let duplicated = update_sources_tx(
+        &key,
+        authority,
+        0,
+        vec![mint_src_policy(Some(100)), mint_src_policy(Some(1_000))],
+    );
+    rejects_at(&state, &duplicated, 1, "same source twice");
+}
+
+/// A cap breach fails the whole delivery, so nothing marks the message seen:
+/// after the authority raises the cap, the very same message delivers.
+#[test]
+fn a_refused_mint_leaves_the_message_deliverable() {
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = capped_mint_state(Some(50), 0, Some(authority));
+    rejects_on_cap(&state, 60, 0, 1);
+
+    let raised = update_sources_tx(&key, authority, 0, vec![mint_src_policy(Some(60))]);
+    let applied = ValidatedStateDiff::from_public_transaction(&raised, &state, 2, 0)
+        .expect("the authority raises the cap");
+    drop(state.apply_state_diff(applied));
+
+    let delivered =
+        dispatch_mint_on(&state, 60, 0, 3).expect("the refused delivery was never marked seen");
+    drop(state.apply_state_diff(delivered));
+    assert_eq!(source_minted(&state), 60);
+}
+
+/// A source list of realistic breadth, all capped with live counters, still
+/// fits the config account and still mints for its last entry.
+#[test]
+fn a_many_source_config_still_fits_and_mints() {
+    // Entry 0 shares the canonical zone under another program, so a mint that
+    // matched on zone alone would draw down the wrong counter.
+    let mut entries: Vec<_> = (0..16_u8)
+        .map(|index| wrapped_token_core::SourceEntry {
+            policy: wrapped_token_core::SourcePolicy {
+                src_zone: if index == 0 {
+                    MINT_SRC_ZONE
+                } else {
+                    [index.wrapping_add(10); 32]
+                },
+                src_program_id: [u32::from(index) + 100; 8],
+                mint_cap: Some(u128::MAX),
+            },
+            minted: u128::from(u64::MAX),
+        })
+        .collect();
+    entries.push(wrapped_token_core::SourceEntry {
+        policy: wrapped_token_core::SourcePolicy {
+            src_zone: MINT_SRC_ZONE,
+            src_program_id: MINT_SRC_PROGRAM,
+            mint_cap: Some(100),
+        },
+        minted: 0,
+    });
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, [1_u8; 32]);
+    seed_wrapped_config_entries(&mut state, None, None, entries);
+
+    let diff = dispatch_mint_on(&state, 100, 0, 1)
+        .expect("a mint against the last of many sources executes");
+    drop(state.apply_state_diff(diff));
+    assert_eq!(source_minted(&state), 100);
+
+    // Only the (zone, program) pair that emitted spends; every other entry,
+    // the shared-zone one included, is untouched.
+    let config_id = wrapped_token_core::config_account_id(programs::wrapped_token().id());
+    let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    for entry in cfg
+        .sources
+        .iter()
+        .filter(|entry| entry.policy.src_program_id != MINT_SRC_PROGRAM)
+    {
+        assert_eq!(
+            entry.minted,
+            u128::from(u64::MAX),
+            "a mint must not spend another source's allowance"
+        );
+    }
 }
 
 /// Drives `cross_zone_inbox::Dispatch` directly through the state machine
@@ -450,14 +820,7 @@ fn lock_escrows_balance_and_emits_to_outbox() {
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    state = state.with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: bridge_lock_id.into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     let payload = mint_payload();
@@ -469,11 +832,11 @@ fn lock_escrows_balance_and_emits_to_outbox() {
         .expect("lock must validate and execute");
     let public_diff = diff.public_diff();
 
-    let holder_after = public_diff[&holder_id].balance;
+    let holding_after = public_diff[&holding_id_of(holder_id)].balance;
     assert_eq!(
-        holder_after,
+        holding_after,
         INITIAL_BALANCE - LOCK_AMOUNT,
-        "holder debited"
+        "holding debited"
     );
 
     let escrow_after = public_diff[&escrow_id].balance;
@@ -551,6 +914,7 @@ fn lock_tx_to(
         vec![
             bridge_lock_core::config_account_id(bridge_lock_id),
             holder_id,
+            holding_id_of(holder_id),
             bridge_lock_core::escrow_account_id(bridge_lock_id),
             outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
         ],
@@ -573,20 +937,14 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: programs::bridge_lock().id().into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     let first = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
     let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
         .expect("the first lock executes");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
 
     // Same slot, fresh nonce, so the only thing that can reject it is the slot
     // already holding a record. Matched on the guest's own message rather than
@@ -621,14 +979,8 @@ fn two_emitters_share_an_ordinal_without_colliding() {
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: bridge_lock_id.into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_ping_sender_config(&mut state);
     seed_bridge_lock_config(&mut state);
 
@@ -642,7 +994,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     let lock = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
     let diff = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0)
         .expect("the lock executes");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
 
     let send = send_tx(
         vec![sender_config_account_id(sender_id), send_slot],
@@ -706,19 +1058,12 @@ fn a_send_into_a_foreign_outbox_slot_is_rejected() {
 /// debit.
 #[test]
 fn a_lock_naming_another_target_program_is_rejected() {
-    let bridge_lock_id = programs::bridge_lock().id();
     let zone_b = [2_u8; 32];
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: bridge_lock_id.into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     let elsewhere = programs::ping_receiver().id();
@@ -740,9 +1085,9 @@ fn a_lock_naming_another_target_program_is_rejected() {
         "rejected for the wrong reason: {err:?}"
     );
     assert_eq!(
-        state.get_account_by_id(holder_id).balance,
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
         INITIAL_BALANCE,
-        "a refused lock leaves the holder's balance alone"
+        "a refused lock leaves the holding's balance alone"
     );
 }
 
@@ -751,20 +1096,13 @@ fn a_lock_naming_another_target_program_is_rejected() {
 /// destination, so the escrow has to be refused here instead.
 #[test]
 fn a_lock_naming_other_mint_accounts_is_rejected() {
-    let bridge_lock_id = programs::bridge_lock().id();
     let wrapped_token_id = programs::wrapped_token().id();
     let zone_b = [2_u8; 32];
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: bridge_lock_id.into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     // A holding under someone other than the payload's recipient: a mint the
@@ -792,9 +1130,9 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
         "rejected for the wrong reason: {err:?}"
     );
     assert_eq!(
-        state.get_account_by_id(holder_id).balance,
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
         INITIAL_BALANCE,
-        "a refused lock leaves the holder's balance alone"
+        "a refused lock leaves the holding's balance alone"
     );
 }
 
@@ -815,27 +1153,18 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
     // the address check stands between it and being read as the config.
     let decoy_key = PrivateKey::try_new([8; 32]).expect("valid key");
     let decoy_id = AccountId::from(&PublicKey::new_from_private_key(&decoy_key));
-    let mut state = base_state().with_public_accounts([
-        (
-            holder_id,
-            Account {
-                program_owner: bridge_lock_id.into(),
-                balance: INITIAL_BALANCE,
-                ..Default::default()
-            },
-        ),
-        (
-            decoy_id,
-            Account {
-                program_owner: bridge_lock_id.into(),
-                data: bridge_lock_core::config_bytes([3; 8], [4; 8])
-                    .to_vec()
-                    .try_into()
-                    .expect("pinned ids fit in account data"),
-                ..Default::default()
-            },
-        ),
-    ]);
+    let mut state = base_state().with_public_accounts([(
+        decoy_id,
+        Account {
+            program_owner: bridge_lock_id.into(),
+            data: bridge_lock_core::config_bytes([3; 8], [4; 8])
+                .to_vec()
+                .try_into()
+                .expect("pinned ids fit in account data"),
+            ..Default::default()
+        },
+    )]);
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     let lock = bridge_lock_core::Instruction::Lock {
@@ -851,6 +1180,7 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
         vec![
             decoy_id,
             holder_id,
+            holding_id_of(holder_id),
             bridge_lock_core::escrow_account_id(bridge_lock_id),
             outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
         ],
@@ -872,23 +1202,204 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
     );
 }
 
-/// A bridge with no pin cannot fall back to caller-named programs: it stops
-/// locking. The state a zone reaches by skipping the genesis init.
+/// Post-genesis anyone may claim any holder's holding PDA: the result is a
+/// zero-balance holding that funds nothing.
+#[test]
+fn a_post_genesis_init_holding_claims_a_zero_balance_holding() {
+    let bridge_lock_id = programs::bridge_lock().id();
+    let holder = [7_u8; 32];
+    let state = base_state();
+
+    let init = bridge_lock_core::Instruction::InitHolding { holder };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![bridge_lock_core::holding_account_id(
+            bridge_lock_id,
+            &holder,
+        )],
+        vec![],
+        init,
+    )
+    .expect("build init message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .expect("a stranger's InitHolding executes");
+    let holding =
+        &diff.public_diff()[&bridge_lock_core::holding_account_id(bridge_lock_id, &holder)];
+    assert_eq!(holding.balance, 0, "nothing funds a post-genesis holding");
+    assert_eq!(
+        holding.program_owner,
+        bridge_lock_id.into(),
+        "the claim lands with bridge_lock"
+    );
+}
+
+/// A repeated `InitHolding` must echo a funded holding untouched.
+#[test]
+fn a_repeated_init_holding_leaves_a_funded_holding_untouched() {
+    let bridge_lock_id = programs::bridge_lock().id();
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+
+    let init = bridge_lock_core::Instruction::InitHolding {
+        holder: holder_id.into_value(),
+    };
+    let message = Message::try_new(bridge_lock_id, vec![holding_id_of(holder_id)], vec![], init)
+        .expect("build init message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .expect("a repeated InitHolding is a no-op");
+    drop(state.apply_state_diff(diff));
+    assert_eq!(
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
+        INITIAL_BALANCE,
+        "a re-run must not reset a funded holding"
+    );
+}
+
+/// The debit lands on the holding PDA; the holder only signs.
+#[test]
+fn lock_debits_the_holding_not_the_holder() {
+    let zone_b = [9_u8; 32];
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state().with_public_accounts([(
+        holder_id,
+        Account {
+            balance: 55,
+            ..Default::default()
+        },
+    )]);
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let tx = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
+    let diff =
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).expect("the lock executes");
+    drop(state.apply_state_diff(diff));
+
+    assert_eq!(
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
+        INITIAL_BALANCE - LOCK_AMOUNT,
+        "the holding is what a lock debits"
+    );
+    assert_eq!(
+        state.get_account_by_id(holder_id).balance,
+        55,
+        "the holder's own balance is untouched"
+    );
+}
+
+/// A zero lock costs nothing yet would emit a real dispatch.
+#[test]
+fn a_zero_amount_lock_is_refused() {
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let bridge_lock_id = programs::bridge_lock().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let zone_b = [9_u8; 32];
+    let lock = bridge_lock_core::Instruction::Lock {
+        amount: 0,
+        target_zone: zone_b,
+        target_program_id: wrapped_token_id,
+        target_accounts: mint_target_accounts(wrapped_token_id),
+        payload: mint_payload_of(0),
+        ordinal: 0,
+    };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![
+            bridge_lock_core::config_account_id(bridge_lock_id),
+            holder_id,
+            holding_id_of(holder_id),
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+            outbox_pda(
+                programs::cross_zone_outbox().id(),
+                bridge_lock_id,
+                &zone_b,
+                0,
+            ),
+        ],
+        vec![0_u128.into()],
+        lock,
+    )
+    .expect("build lock message");
+    let tx = PublicTransaction::new(
+        message.clone(),
+        WitnessSet::for_message(&message, &[&holder_key]),
+    );
+    rejects_at(&state, &tx, 1, "locked amount must be positive");
+}
+
+/// A lock naming any account but the signer's derived holding is refused.
+#[test]
+fn a_lock_naming_someone_elses_holding_is_refused() {
+    let attacker_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let attacker_id = AccountId::from(&PublicKey::new_from_private_key(&attacker_key));
+    let victim_key = PrivateKey::try_new([8; 32]).expect("valid key");
+    let victim_id = AccountId::from(&PublicKey::new_from_private_key(&victim_key));
+    let mut state = base_state();
+    seed_holding(&mut state, victim_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let bridge_lock_id = programs::bridge_lock().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let zone_b = [9_u8; 32];
+    let lock = bridge_lock_core::Instruction::Lock {
+        amount: LOCK_AMOUNT,
+        target_zone: zone_b,
+        target_program_id: wrapped_token_id,
+        target_accounts: mint_target_accounts(wrapped_token_id),
+        payload: mint_payload(),
+        ordinal: 0,
+    };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![
+            bridge_lock_core::config_account_id(bridge_lock_id),
+            attacker_id,
+            holding_id_of(victim_id),
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+            outbox_pda(
+                programs::cross_zone_outbox().id(),
+                bridge_lock_id,
+                &zone_b,
+                0,
+            ),
+        ],
+        vec![0_u128.into()],
+        lock,
+    )
+    .expect("build lock message");
+    let tx = PublicTransaction::new(
+        message.clone(),
+        WitnessSet::for_message(&message, &[&attacker_key]),
+    );
+    rejects_at(&state, &tx, 1, "holder's bridge-lock holding");
+    assert_eq!(
+        state.get_account_by_id(holding_id_of(victim_id)).balance,
+        INITIAL_BALANCE,
+        "the victim's holding is untouched"
+    );
+}
+
+/// A bridge with no pin cannot fall back to caller-named programs: it stops locking.
 #[test]
 fn a_lock_before_the_pins_are_set_is_rejected() {
-    let bridge_lock_id = programs::bridge_lock().id();
     let zone_b = [2_u8; 32];
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: bridge_lock_id.into(),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
 
     let lock = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
     let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {
@@ -932,7 +1443,7 @@ fn the_bridge_pins_are_written_once_and_replayable() {
         0,
     )
     .expect("the first init claims the config PDA");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
     assert_eq!(
         bridge_lock_core::read_config(&state.get_account_by_id(config_id).data.into_inner()),
         Some((outbox_id, wrapped_token_id)),
@@ -1038,7 +1549,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     let first = init(outbox_id);
     let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
         .expect("the first init claims the config PDA");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
     assert_eq!(
         read_outbox(&state.get_account_by_id(config_id).data.into_inner()),
         Some(outbox_id),
@@ -1079,7 +1590,9 @@ fn the_token_authority_path_holds() {
             wrapped_token_id,
             vec![config_id, account],
             nonce,
-            bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
+                sources: uncapped_policies(&sources),
+            }),
             signer,
         )
     };
@@ -1096,7 +1609,7 @@ fn the_token_authority_path_holds() {
 
     // With no authority configured, nothing moves in either direction.
     let mut unset = base_state();
-    seed_wrapped_config(&mut unset, None, vec![]);
+    seed_wrapped_config(&mut unset, None, &[]);
     rejects_at(
         &unset,
         &update(authority, &key, 0, bridge_source.clone()),
@@ -1113,7 +1626,7 @@ fn the_token_authority_path_holds() {
     // With one configured: the wrong account, and the right account without its
     // own signature, are refused for their own reasons.
     let mut state = base_state();
-    seed_wrapped_config(&mut state, Some(authority), vec![]);
+    seed_wrapped_config(&mut state, Some(authority), &[]);
     rejects_at(
         &state,
         &update(other, &other_key, 0, bridge_source.clone()),
@@ -1153,7 +1666,7 @@ fn the_token_authority_path_holds() {
     rejects_at(
         &state,
         &substituted(bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-            sources: bridge_source.clone(),
+            sources: uncapped_policies(&bridge_source),
         })),
         1,
         "must be the wrapped-token config PDA",
@@ -1176,12 +1689,16 @@ fn the_token_authority_path_holds() {
         0,
     )
     .expect("the configured authority changes sources");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
     let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
     .expect("config decodes");
-    assert_eq!(cfg.sources, bridge_source, "the new source is authorized");
+    assert_eq!(
+        cfg.sources,
+        uncapped_entries(&bridge_source),
+        "the new source is authorized"
+    );
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         wrapped_token_id.into(),
@@ -1196,13 +1713,14 @@ fn the_token_authority_path_holds() {
         0,
     )
     .expect("the authority acts again");
-    state.apply_state_diff(second);
+    drop(state.apply_state_diff(second));
     let updated_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
     .expect("config decodes");
     assert_eq!(
-        updated_cfg.sources, sender_source,
+        updated_cfg.sources,
+        uncapped_entries(&sender_source),
         "the second change took effect"
     );
     assert_eq!(
@@ -1216,14 +1734,15 @@ fn the_token_authority_path_holds() {
     let renounced =
         ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 2), &state, 3, 0)
             .expect("the authority renounces itself");
-    state.apply_state_diff(renounced);
+    drop(state.apply_state_diff(renounced));
     let renounced_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
     .expect("config decodes");
     assert_eq!(renounced_cfg.authority, None, "the authority is gone");
     assert_eq!(
-        renounced_cfg.sources, sender_source,
+        renounced_cfg.sources,
+        uncapped_entries(&sender_source),
         "renouncing leaves the sources it froze"
     );
     assert_eq!(
@@ -1427,7 +1946,7 @@ fn the_receiver_authority_path_holds() {
     let diff =
         ValidatedStateDiff::from_public_transaction(&update(authority, &key, 0), &state, 1, 0)
             .expect("the configured authority changes sources");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
     let cfg = ping_core::ReceiverConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1438,7 +1957,7 @@ fn the_receiver_authority_path_holds() {
     let renounce_diff =
         ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 1), &state, 2, 0)
             .expect("the authority renounces itself");
-    state.apply_state_diff(renounce_diff);
+    drop(state.apply_state_diff(renounce_diff));
     let renounced_cfg = ping_core::ReceiverConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1480,7 +1999,7 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
             config_id,
             authority,
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-                sources: vec![(src_zone, programs::bridge_lock().id())],
+                sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id())]),
             }),
         )
     };
@@ -1488,7 +2007,7 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
     // No governance named: the chained call is refused.
     let mut closed = base_state();
     seed_inbox_config(&mut closed, self_zone);
-    seed_wrapped_config(&mut closed, Some(authority), vec![]);
+    seed_wrapped_config(&mut closed, Some(authority), &[]);
     rejects_at(
         &closed,
         &update(),
@@ -1502,7 +2021,7 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
     // check, before the caller check is even reached.
     let mut open = base_state();
     seed_inbox_config(&mut open, self_zone);
-    seed_wrapped_config_with_governance(&mut open, Some(inbox_id), Some(authority), vec![]);
+    seed_wrapped_config_with_governance(&mut open, Some(inbox_id), Some(authority), &[]);
     rejects_at(&open, &update(), 1, "must be the wrapped-token config PDA");
 }
 
@@ -1521,7 +2040,7 @@ fn the_governance_path_holds() {
     let authority = AccountId::for_public_pda(&proxy_id, &seed);
 
     let mut state = base_state().with_programs([test_programs::authority_proxy()]);
-    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
+    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);
 
     let update = |sources: Vec<([u8; 32], lee_core::program::ProgramId)>| {
         via_proxy(
@@ -1530,7 +2049,9 @@ fn the_governance_path_holds() {
             config_id,
             authority,
             Some(seed),
-            bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
+                sources: uncapped_policies(&sources),
+            }),
         )
     };
     let renounce = || {
@@ -1551,13 +2072,16 @@ fn the_governance_path_holds() {
         0,
     )
     .expect("the governance path changes sources");
-    state.apply_state_diff(first);
+    drop(state.apply_state_diff(first));
 
     let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
     .expect("config decodes");
-    assert_eq!(cfg.sources, vec![(src_zone, programs::bridge_lock().id())]);
+    assert_eq!(
+        cfg.sources,
+        uncapped_entries(&[(src_zone, programs::bridge_lock().id())])
+    );
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         wrapped_token_id.into(),
@@ -1566,7 +2090,7 @@ fn the_governance_path_holds() {
 
     let second = ValidatedStateDiff::from_public_transaction(&update(vec![]), &state, 2, 0)
         .expect("the governance path acts again");
-    state.apply_state_diff(second);
+    drop(state.apply_state_diff(second));
     let cleared_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1579,7 +2103,7 @@ fn the_governance_path_holds() {
 
     let renounced = ValidatedStateDiff::from_public_transaction(&renounce(), &state, 3, 0)
         .expect("the governance path renounces");
-    state.apply_state_diff(renounced);
+    drop(state.apply_state_diff(renounced));
     let renounced_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1619,7 +2143,7 @@ fn the_governance_path_guards_hold() {
             authority,
             delegated,
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-                sources: vec![(src_zone, programs::bridge_lock().id())],
+                sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id())]),
             }),
         )
     };
@@ -1630,7 +2154,7 @@ fn the_governance_path_guards_hold() {
         &mut other,
         Some(programs::ping_sender().id()),
         Some(authority),
-        vec![],
+        &[],
     );
     rejects_at(
         &other,
@@ -1641,7 +2165,7 @@ fn the_governance_path_guards_hold() {
 
     // No governance configured: every chained caller is refused.
     let mut closed = base_state().with_programs([test_programs::authority_proxy()]);
-    seed_wrapped_config(&mut closed, Some(authority), vec![]);
+    seed_wrapped_config(&mut closed, Some(authority), &[]);
     seed_receiver_config(&mut closed, Some(authority), vec![]);
     rejects_at(
         &closed,
@@ -1689,7 +2213,7 @@ fn the_governance_path_guards_hold() {
 
     // The configured governance itself, but not delegating the authority.
     let mut undelegated = base_state().with_programs([test_programs::authority_proxy()]);
-    seed_wrapped_config_with_governance(&mut undelegated, Some(proxy_id), Some(authority), vec![]);
+    seed_wrapped_config_with_governance(&mut undelegated, Some(proxy_id), Some(authority), &[]);
     rejects_at(
         &undelegated,
         &call(None),
@@ -1726,7 +2250,7 @@ fn the_receiver_governance_path_holds() {
 
     let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
         .expect("the receiver governance path changes sources");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
     let cfg = ping_core::ReceiverConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1755,7 +2279,7 @@ fn a_shared_authority_survives_the_first_claim() {
     let authority = AccountId::for_public_pda(&proxy_id, &seed);
 
     let mut state = base_state().with_programs([test_programs::authority_proxy()]);
-    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
+    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);
     seed_receiver_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
 
     let token_update = via_proxy(
@@ -1765,12 +2289,12 @@ fn a_shared_authority_survives_the_first_claim() {
         authority,
         Some(seed),
         bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-            sources: vec![(src_zone, programs::bridge_lock().id())],
+            sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id())]),
         }),
     );
     let first = ValidatedStateDiff::from_public_transaction(&token_update, &state, 1, 0)
         .expect("the token claims the shared authority");
-    state.apply_state_diff(first);
+    drop(state.apply_state_diff(first));
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         wrapped_token_id.into(),
@@ -1789,7 +2313,7 @@ fn a_shared_authority_survives_the_first_claim() {
     );
     let second = ValidatedStateDiff::from_public_transaction(&receiver_update, &state, 2, 0)
         .expect("the other target still acts on the token-owned authority");
-    state.apply_state_diff(second);
+    drop(state.apply_state_diff(second));
     let receiver_cfg = ping_core::ReceiverConfig::from_bytes(
         &state
             .get_account_by_id(receiver_config_id)
@@ -1817,7 +2341,7 @@ fn a_shared_authority_survives_the_first_claim() {
     );
     let third = ValidatedStateDiff::from_public_transaction(&receiver_renounce, &state, 3, 0)
         .expect("the other target renounces on the token-owned authority");
-    state.apply_state_diff(third);
+    drop(state.apply_state_diff(third));
     let renounced_cfg = ping_core::ReceiverConfig::from_bytes(
         &state
             .get_account_by_id(receiver_config_id)
@@ -1849,7 +2373,7 @@ fn an_authority_account_with_history_is_refused() {
     let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
 
     let mut state = base_state();
-    seed_wrapped_config(&mut state, Some(authority), vec![]);
+    seed_wrapped_config(&mut state, Some(authority), &[]);
     seed_receiver_config(&mut state, Some(authority), vec![]);
     // Unowned but already used: exactly what one prior signature leaves behind.
     state = state.with_public_accounts([(
@@ -1865,7 +2389,7 @@ fn an_authority_account_with_history_is_refused() {
             wrapped_token_id,
             wrapped_token_core::config_account_id(wrapped_token_id),
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-                sources: vec![(src_zone, programs::bridge_lock().id())],
+                sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id())]),
             }),
         ),
         (
@@ -1916,7 +2440,7 @@ fn the_remaining_authority_guards_hold() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, Some(authority), vec![]);
+    seed_wrapped_config(&mut state, Some(authority), &[]);
     seed_receiver_config(&mut state, Some(authority), vec![]);
 
     // Config address, on both receiver instructions.
@@ -1987,7 +2511,7 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, None, vec![]);
+    seed_wrapped_config(&mut state, None, &[]);
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -2035,7 +2559,7 @@ fn a_top_level_mint_is_refused() {
     let src_program_id = programs::bridge_lock().id();
 
     let mut state = base_state();
-    seed_wrapped_config(&mut state, None, vec![(src_zone, src_program_id)]);
+    seed_wrapped_config(&mut state, None, &[(src_zone, src_program_id)]);
 
     let marker_id = inbox_source_marker_account_id(inbox_id, &src_zone, src_program_id);
     let message = Message::try_new(
@@ -2099,7 +2623,7 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     seed_wrapped_config(
         &mut state,
         None,
-        vec![(src_zone, programs::bridge_lock().id())],
+        &[(src_zone, programs::bridge_lock().id())],
     );
 
     let msg = CrossZoneMessage {
@@ -2153,7 +2677,7 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     seed_wrapped_config(
         &mut state,
         None,
-        vec![(src_zone, programs::bridge_lock().id())],
+        &[(src_zone, programs::bridge_lock().id())],
     );
 
     let msg = CrossZoneMessage {
@@ -2202,7 +2726,7 @@ fn mint_replay_rejected() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    seed_wrapped_config(&mut state, None, vec![(src_zone, [9_u32; 8])]);
+    seed_wrapped_config(&mut state, None, &[(src_zone, [9_u32; 8])]);
 
     // Seed the seen-shard as already holding this delivery, so the inbox takes
     // the replay no-op branch. The shard is inbox-owned (claimed on a prior

@@ -58,6 +58,8 @@ testnet = []
 mock = []
 # Enable mDNS-based local peer discovery for gossip.
 mdns = []
+# Expose hooks integration tests need to provoke misbehaviour. Never in a release build.
+test-utils = []
 
 [dev-dependencies]
 cross_zone = { workspace = true, features = ["test-utils"] }

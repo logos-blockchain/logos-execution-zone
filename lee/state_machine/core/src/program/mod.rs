@@ -474,6 +474,17 @@ impl<T> From<std::ops::RangeFull> for ValidityWindow<T> {
 #[error("Invalid window")]
 pub struct InvalidWindow;
 
+/// The event struct emitted by a program.
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct ProgramEvent {
+    /// Selector bytes allowing to distinguish event type. By convention, the
+    /// first 8 bytes of `sha256("<program>::<EventName>")`.
+    pub selector: [u8; 8],
+    /// The arbitrary event-data emitted in the program output.
+    pub data: Vec<u8>,
+}
+
 #[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use = "ProgramOutput does nothing unless written"]
@@ -495,6 +506,9 @@ pub struct ProgramOutput {
     pub block_validity_window: BlockValidityWindow,
     /// The timestamp window where the program output is valid.
     pub timestamp_validity_window: TimestampValidityWindow,
+    /// A vector of event data. Dropped for private transaction for function
+    /// privacy.
+    pub events: Vec<ProgramEvent>,
 }
 
 impl ProgramOutput {
@@ -514,6 +528,7 @@ impl ProgramOutput {
             chained_calls: Vec::new(),
             block_validity_window: ValidityWindow::new_unbounded(),
             timestamp_validity_window: ValidityWindow::new_unbounded(),
+            events: Vec::new(),
         }
     }
 
@@ -523,6 +538,11 @@ impl ProgramOutput {
 
     pub fn with_chained_calls(mut self, chained_calls: Vec<ChainedCall>) -> Self {
         self.chained_calls = chained_calls;
+        self
+    }
+
+    pub fn with_events(mut self, events: Vec<ProgramEvent>) -> Self {
+        self.events = events;
         self
     }
 
@@ -574,6 +594,16 @@ impl ProgramOutput {
         self.timestamp_validity_window = (self.timestamp_validity_window.start(), ts).try_into()?;
         Ok(self)
     }
+}
+
+/// A struct holding an event-output of a program.
+#[cfg(feature = "host")]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct TransactionEvent {
+    /// Which program emitted the event.
+    pub program_id: ProgramId,
+    /// Program event-data with selector.
+    pub event: ProgramEvent,
 }
 
 /// Representation of a number as `lo + hi * 2^128`.
@@ -810,15 +840,18 @@ pub fn validate_execution(
             });
         }
 
-        // 7. If a post state has default program owner, the pre state must have been a default
-        //    account
+        // 7. A non-default account left with the default owner must be a claimless byte-identical
+        //    echo: `Claim` is applied after this check, so a claimed echo would seize the account.
         if post.account.program_owner == DEFAULT_PROGRAM_OWNER && pre.account != Account::default()
         {
-            return Err(
-                ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
-                    account_id: pre.account_id,
-                },
-            );
+            let claimless_echo = post.account == pre.account && post.required_claim().is_none();
+            if !claimless_echo {
+                return Err(
+                    ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
+                        account_id: pre.account_id,
+                    },
+                );
+            }
         }
     }
 

@@ -16,7 +16,7 @@ chain_state.workspace = true
 common.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 lee.workspace = true
-lee_core.workspace = true
+lee_core = { workspace = true, features = ["host"] }
 cross_zone.workspace = true
 cross_zone_inbox_core.workspace = true
 programs.workspace = true
@@ -24,6 +24,7 @@ storage.workspace = true
 testnet_initial_state.workspace = true
 
 anyhow.workspace = true
+serde_with.workspace = true
 arc-swap.workspace = true
 log.workspace = true
 serde.workspace = true
@@ -42,3 +43,4 @@ thiserror.workspace = true
 cross_zone = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
 ping_core.workspace = true
+test_methods.workspace = true

@@ -95,8 +95,8 @@ impl LezLocalApp {
 
     /// Sets the priority fee used by the LEZ sequencer when publishing to Bedrock.
     #[must_use]
-    pub const fn with_priority_fee(mut self, priority_fee: u64) -> Self {
-        self.sequencer.priority_fee = priority_fee;
+    pub const fn with_priority_fee_percent(mut self, priority_fee_percent: u64) -> Self {
+        self.sequencer.priority_fee_percent = priority_fee_percent;
         self
     }
 

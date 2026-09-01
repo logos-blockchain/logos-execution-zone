@@ -3,14 +3,12 @@ use std::{path::Path, sync::Arc};
 use anyhow::Result;
 use arc_swap::ArcSwap;
 pub use chain_state::{AcceptOutcome, BlockIngestError, StallReason};
-use chain_state::{Anchor, ChainConsistency};
+use chain_state::{Anchor, ChainConsistency, zone_indexer::ZoneIndexer};
 use common::block::Block;
 // TODO: Remove after testnet
 use futures::StreamExt as _;
 use log::{error, warn};
-use logos_blockchain_zone_sdk::{
-    CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
-};
+use logos_blockchain_zone_sdk::{CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient};
 use retry::ApplyRetryGate;
 
 use crate::{
@@ -23,6 +21,7 @@ use crate::{
 pub mod block_store;
 pub mod config;
 pub mod cross_zone_verifier;
+pub mod event_filter;
 mod retry;
 pub mod status;
 
@@ -117,21 +116,15 @@ impl IndexerCore {
         );
         let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
 
-        // Cross-zone programs are base builtins, and their config accounts are
-        // reconstructed by replaying the genesis block's InitConfig transactions;
-        // neither is seeded here. Only bridge-lock holdings (source side), not
-        // produced by any transaction, are still seeded directly.
-        let genesis_accounts: Vec<_> = config
-            .bridge_lock_holdings
-            .iter()
-            .map(|holding| cross_zone::build_holding_account(holding.holder, holding.amount))
-            .collect();
-
         // Option B verifier: re-derives each cross-zone dispatch from the peer's
         // finalized blocks. `None` when cross-zone messaging is disabled.
         let verifier = CrossZoneVerifier::start(&config);
 
-        let store = IndexerStore::open_db(&home, genesis_accounts)?;
+        let store = IndexerStore::open_db(
+            &home,
+            config.cross_zone.is_some(),
+            config.event_filter.to_filter()?,
+        )?;
         // A persisted halt outlives the process: report it from boot with its
         // stored reason. The ingest loop may still start and re-halt
         // identically, which refreshes the record.
@@ -591,7 +584,7 @@ mod tests {
     use logos_blockchain_zone_sdk::Slot;
 
     use super::*;
-    use crate::config::{ChannelId, ClientConfig, IndexerConfig};
+    use crate::config::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 
     /// The cursor must not move while more of the same slot may still arrive.
     ///
@@ -657,7 +650,7 @@ mod tests {
             cross_zone: None,
             cross_zone_accept_unverified,
             peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
-            bridge_lock_holdings: Vec::new(),
+            event_filter: EventFilterConfig::default(),
         };
         IndexerCore::open(config, dir).expect("open core")
     }

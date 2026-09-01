@@ -11,7 +11,8 @@ use log::{error, warn};
 use sequencer_core::{block_publisher::BlockPublisherTrait, gossip::GossipTxPublisher};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
-    CrossZoneDeadLetter, CrossZoneDeadLetterReport, HashType, MembershipProof, Nonce, ProgramId,
+    CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, HashType,
+    MembershipProof, Nonce, ProgramId,
 };
 
 pub struct Service<BP: BlockPublisherTrait + Send + Sync + 'static> {
@@ -247,9 +248,33 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
                     src_block_id: record.origin.src_block_id,
                     src_tx_index: record.origin.src_tx_index,
                     failed_attempts: record.failed_attempts,
-                    transaction_bytes: record.transaction_bytes,
+                    transaction_bytes: u32::try_from(record.transaction.len()).unwrap_or(u32::MAX),
                 })
                 .collect(),
+        })
+    }
+
+    async fn requeue_cross_zone_dead_letter(
+        &self,
+        message_key: HashType,
+    ) -> Result<CrossZoneDeadLetterRequeue, ErrorObjectOwned> {
+        use sequencer_executor_actor::protocol::DeadLetterRequeue;
+
+        let reply = self
+            .executor_ref
+            .ask(
+                sequencer_executor_actor::protocol::RequeueCrossZoneDeadLetter {
+                    message_key: message_key.0,
+                },
+            )
+            .await
+            .map_err(internal_error)?;
+
+        Ok(match reply.outcome {
+            DeadLetterRequeue::Requeued => CrossZoneDeadLetterRequeue::Requeued,
+            DeadLetterRequeue::AlreadyPending => CrossZoneDeadLetterRequeue::AlreadyPending,
+            DeadLetterRequeue::NotFound => CrossZoneDeadLetterRequeue::NotFound,
+            DeadLetterRequeue::NotRetained => CrossZoneDeadLetterRequeue::NotRetained,
         })
     }
 }

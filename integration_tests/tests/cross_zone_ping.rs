@@ -26,7 +26,8 @@ use ping_core::{
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
-    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{MultiNodeTestContextConfig, source_only_cross_zone},
 };
 use tokio::test;
 
@@ -50,8 +51,10 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
             allowed_routes: vec![CrossZoneRoute {
                 src_program_id: programs::ping_sender().id(),
                 target_program_id: receiver_id,
+                mint_cap: None,
             }],
             expected_block_signing_pubkeys: Vec::new(),
+            min_committee_size: 0,
         }],
         source_authority: None,
         source_governance: None,
@@ -66,7 +69,8 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
             .disable_wallet()
             .disable_indexer()
             .with_sequencer_partial_config(partial)
-            .with_genesis(vec![]),
+            .with_genesis(vec![])
+            .with_cross_zone(Some(source_only_cross_zone())),
         )
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {

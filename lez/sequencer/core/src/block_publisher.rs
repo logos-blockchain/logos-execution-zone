@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, ensure};
+use chain_state::zone_indexer::ZoneIndexer;
 use common::block::Block;
 use futures::{Stream, future::BoxFuture};
 use log::{info, warn};
@@ -34,11 +35,10 @@ pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage,
     adapter::{Node as _, NodeHttpClient},
-    indexer::ZoneIndexer,
     sequencer::{
         ChannelUpdateTx, DepositInfo, Event, FinalizedOp, FundingConfig, InscriptionInfo,
         PendingTx, SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg,
-        WithdrawInfo, ZoneSequencer,
+        WithdrawInfo, WithdrawInputs, ZoneSequencer, channel_inscriptions,
     },
 };
 use tokio::sync::{mpsc, oneshot, watch};
@@ -52,27 +52,34 @@ use crate::{config::BedrockConfig, task_group::TaskGroup};
 const PUBLISH_INBOX_CAPACITY: usize = 32;
 
 /// Everything one `Event::BlocksProcessed` carries, with inscription payloads
-/// decoded into `(MsgId, Block)` pairs.
+/// decoded into blocks.
 ///
 /// One struct rather than a sink per effect, because the `checkpoint` and
 /// everything it covers must reach the store in a single write.
 pub struct FollowUpdate {
     /// Resume cursor for this event. Persist only together with the effects
-    /// below, never ahead of them.
+    /// below, never ahead of them. Its `last_msg_id` is the channel tip on
+    /// the view this update leaves behind — non-block entries and the rewind
+    /// after an orphan included — and is what the next publish pins on.
     pub checkpoint: SequencerCheckpoint,
-    /// Inscriptions newly on the followed L1 branch, in channel order: they
-    /// extend (or, after a reorg, replace part of) the `head` tier.
-    pub adopted: Vec<(MsgId, Block)>,
-    /// Inscriptions dropped from the branch by an L1 reorg: their blocks are
-    /// reverted from the `head` and their user txs resubmitted to the mempool.
-    pub orphaned: Vec<(MsgId, Block)>,
-    /// Inscriptions whose containing L1 block reached finality: their blocks
-    /// move into the irreversible `final` tier.
-    pub finalized: Vec<(MsgId, Block)>,
+    /// Blocks newly on the followed L1 branch, in channel order; they extend
+    /// or replace part of the `head` tier. Non-block entries (garbage, a
+    /// config op) surface only through the checkpoint's tip. No inscription
+    /// ids ride along: blocks correlate by hash (a re-inscription changes the
+    /// id, never the hash), and the only publishable id is the checkpoint's.
+    pub adopted: Vec<Block>,
+    /// Blocks dropped from the branch by an L1 reorg: reverted from the
+    /// `head`, their user txs resubmitted to the mempool.
+    pub orphaned: Vec<Block>,
+    /// Blocks whose containing L1 block reached finality: they move into the
+    /// irreversible `final` tier.
+    pub finalized: Vec<Block>,
     /// Finalized Bedrock deposit events, to record and mint on L2.
     pub deposits: Vec<DepositInfo>,
     /// Finalized Bedrock withdraw events, to reconcile against local intents.
     pub withdrawals: Vec<WithdrawInfo>,
+    /// Finalized inscriptions that are not blocks, with the key that signed each.
+    pub undecodable: Vec<(MsgId, Ed25519PublicKey)>,
 }
 
 /// Sink for the follow path: apply the channel delta to chain state and
@@ -145,6 +152,17 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
         withdrawals: Vec<WithdrawArg>,
     ) -> Result<PublishOutcome>;
 
+    /// Publish `block` as an inscription chained on `parent`, rather than on
+    /// whatever the channel tip happens to be when the publish is serviced.
+    ///
+    /// L1 rejects it if the tip moved, which costs the turn and leaves the
+    /// height free.
+    fn publish_block_chained_on(
+        &self,
+        block: &Block,
+        parent: MsgId,
+    ) -> impl Future<Output = Result<PublishOutcome>> + Send;
+
     /// Create the channel and write `block` into it in one Mantle tx. Only valid
     /// while the channel does not exist, and `keys[0]` must be this sequencer's
     /// own key, since creation hands the first turn to index 0.
@@ -155,9 +173,12 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
     ) -> Result<PublishOutcome>;
 
     /// Live (adopted, possibly not yet finalized) accredited-key snapshot for
-    /// this channel with the slot its tip sits at, from one read of the
+    /// this channel with the config entry it comes from, from one read of the
     /// connected Bedrock node. `None` if the channel does not exist.
-    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, Slot)>>;
+    ///
+    /// The config entry is what tells a caller whether this committee is the
+    /// finalized one: compare it to the checkpoint's `finalized_config`.
+    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, MsgId)>>;
 
     /// Submit a committee `ChannelConfigOp` as its own, independent Mantle
     /// tx (not bundled with any block publish). `new_keys` is the full
@@ -187,6 +208,9 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
     /// channel does not exist there. Drives the startup frontier check.
     async fn channel_tip_slot(&self) -> Result<Option<Slot>>;
 
+    /// Live channel tip message id; `None` if the channel does not exist.
+    async fn channel_tip_message(&self) -> Result<Option<MsgId>>;
+
     /// Finalized channel messages from `after_slot` (exclusive) up to LIB, used
     /// for the startup consistency check and reconstruction. Pass `None` to read
     /// from the channel's genesis.
@@ -212,7 +236,7 @@ pub struct ZoneSdkPublisher {
     indexer: ZoneIndexer<NodeHttpClient>,
     bedrock_signing_key: Ed25519Key,
     funding_key: ZkPublicKey,
-    priority_fee: u64,
+    priority_fee_percent: u64,
 }
 
 impl ZoneSdkPublisher {
@@ -229,6 +253,30 @@ impl ZoneSdkPublisher {
         resp_rx
             .await
             .map_err(|_closed| anyhow!("Drive task dropped the response"))?
+    }
+
+    /// Reads the live channel state; `None` if the channel does not exist.
+    async fn live_channel_state(&self) -> Result<Option<ChannelState>> {
+        self.node
+            .channel_state(self.channel_id)
+            .await
+            .context("Failed to read channel state")
+    }
+
+    /// Inscribes raw bytes on the channel. Only a test that provokes an offence
+    /// needs it.
+    #[cfg(feature = "test-utils")]
+    pub async fn publish_raw_inscription(&self, data: Vec<u8>) -> Result<PublishOutcome> {
+        let inscription: Inscription = data
+            .try_into()
+            .context("Raw inscription exceeds the maximum allowed size")?;
+
+        self.dispatch(|resp| Command::Publish {
+            inscription,
+            withdrawals: Vec::new(),
+            resp,
+        })
+        .await
     }
 }
 
@@ -251,8 +299,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             resubmit_interval,
             ..ZoneSdkSequencerConfig::new(FundingConfig {
                 funding_pk: config.funding_key,
+                // Withdraw change goes back to the funding key.
+                change_pk: None,
                 max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-                priority_fee: config.priority_fee,
+                priority_fee_percent: config.priority_fee_percent,
             })
         };
 
@@ -273,6 +323,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let (command_tx, mut command_rx): (CommandSender, _) =
             mpsc::channel(PUBLISH_INBOX_CAPACITY);
 
+        let channel_id = config.channel_id;
         let driver_cancellation = CancellationToken::new();
         let driver_guard = driver_cancellation.clone().drop_guard();
         let drive_task = tokio::spawn(async move {
@@ -299,7 +350,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                             .context("Failed to publish block")
                                     } else {
                                         sequencer.handle()
-                                            .publish_atomic_withdraw(data_bounded, withdrawals)
+                                            .publish_atomic_withdraw(data_bounded, withdrawals, WithdrawInputs::Auto)
                                             .await
                                             .context("Failed to publish block with withdrawals")
                                     };
@@ -383,8 +434,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     let adopted = channel_update
                                         .adopted
                                         .iter()
-                                        .filter_map(channel_update_inscription)
-                                        .filter_map(block_from_inscription)
+                                        .flat_map(|tx| adopted_blocks(tx, channel_id))
                                         .collect();
                                     let orphaned = channel_update
                                         .orphaned
@@ -396,18 +446,39 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     let mut finalized_blocks = Vec::new();
                                     let mut deposits = Vec::new();
                                     let mut withdrawals = Vec::new();
-                                    for op in finalized.into_iter().flat_map(|item| item.ops) {
+                                    let mut undecodable = Vec::new();
+                                    for op in finalized
+                                        .into_iter()
+                                        .flat_map(|item| item.ops.into_iter())
+                                    {
                                         match op {
                                             FinalizedOp::Inscription(inscription) => {
-                                                if let Some(entry) = block_from_inscription(&inscription)
-                                                {
-                                                    finalized_blocks.push(entry);
+                                                match block_from_inscription(&inscription) {
+                                                    Some(block) => finalized_blocks.push(block),
+                                                    // An empty payload is not a
+                                                    // block, but we don't slash
+                                                    // for it.
+                                                    None if <Inscription as AsRef<[u8]>>::as_ref(
+                                                        &inscription.payload,
+                                                    )
+                                                    .is_empty() => {}
+                                                    // An inscription always names
+                                                    // its signer.
+                                                    None => undecodable.extend(
+                                                        inscription.signer.map(|signer| {
+                                                            (inscription.this_msg, signer)
+                                                        }),
+                                                    ),
                                                 }
                                             }
                                             FinalizedOp::Deposit(deposit) => deposits.push(deposit),
                                             FinalizedOp::Withdraw(withdraw) => {
                                                 withdrawals.push(withdraw);
                                             }
+                                            // Neither carries a block or an
+                                            // author the LEZ chain models.
+                                            FinalizedOp::Config(_)
+                                            | FinalizedOp::ChannelTransfer(_) => {}
                                         }
                                     }
 
@@ -418,6 +489,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         finalized: finalized_blocks,
                                         deposits,
                                         withdrawals,
+                                        undecodable,
                                     }).await;
                                 }
                                 Event::Ready => {}
@@ -454,7 +526,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             drive_task: TaskGroup::new(vec![drive_task]),
             bedrock_signing_key,
             funding_key: config.funding_key,
-            priority_fee: config.priority_fee,
+            priority_fee_percent: config.priority_fee_percent,
         })
     }
 
@@ -476,6 +548,48 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         .await
     }
 
+    async fn publish_block_chained_on(
+        &self,
+        block: &Block,
+        parent: MsgId,
+    ) -> Result<PublishOutcome> {
+        let data = borsh::to_vec(block).context("Failed to serialize block")?;
+        let inscription: Inscription = data
+            .try_into()
+            .context("Block data exceeds maximum allowed size")?;
+
+        let inscribe_op = InscriptionOp {
+            channel_id: self.channel_id,
+            inscription,
+            parent,
+            signer: self.bedrock_signing_key.public_key(),
+        };
+        let msg_id = inscribe_op.id();
+
+        let funded = fund_ops(
+            &self.node,
+            self.funding_key,
+            self.priority_fee_percent,
+            [Op::ChannelInscribe(inscribe_op)],
+        )
+        .await?;
+        let mantle_tx = funded.funded_tx;
+
+        let signature = self
+            .bedrock_signing_key
+            .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
+        let mut ops_proofs: OpsProofs = OpProof::Ed25519Sig(signature).into();
+        if let Some(transfer_proof) = funded.transfer_proof {
+            ops_proofs
+                .try_push(transfer_proof)
+                .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
+        }
+
+        let tx = Box::new(SignedMantleTx::new(mantle_tx, ops_proofs));
+        self.dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
+            .await
+    }
+
     async fn publish_genesis_creating_channel(
         &self,
         block: &Block,
@@ -492,6 +606,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
         let config_op = ChannelConfigOp {
             channel: self.channel_id,
+            // The channel does not exist yet, so the config lineage starts here.
+            parent: MsgId::root(),
             keys,
             posting_timeframe: SlotTimeframe::from(
                 system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
@@ -505,11 +621,11 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let inscription: Inscription = data
             .try_into()
             .context("Genesis block exceeds maximum allowed size")?;
-        // The config op runs first and becomes the tip, so it is the parent.
+        // A config moves the config tip only, so the first block chains on the root.
         let inscribe_op = InscriptionOp {
             channel_id: self.channel_id,
             inscription,
-            parent: config_op.id(),
+            parent: MsgId::root(),
             signer: own_key,
         };
         let msg_id = inscribe_op.id();
@@ -517,7 +633,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let funded = fund_ops(
             &self.node,
             self.funding_key,
-            self.priority_fee,
+            self.priority_fee_percent,
             [
                 Op::ChannelConfig(config_op),
                 Op::ChannelInscribe(inscribe_op),
@@ -552,13 +668,11 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             .await
     }
 
-    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, Slot)>> {
+    async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, MsgId)>> {
         Ok(self
-            .node
-            .channel_state(self.channel_id)
-            .await
-            .context("Failed to read channel state")?
-            .map(|state| (state.accredited_keys.to_vec(), state.tip_slot)))
+            .live_channel_state()
+            .await?
+            .map(|state| (state.accredited_keys.to_vec(), state.config_tip_hash)))
     }
 
     async fn submit_channel_config(&self, new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
@@ -590,12 +704,14 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
     }
 
     async fn channel_tip_slot(&self) -> Result<Option<Slot>> {
+        Ok(self.live_channel_state().await?.map(|state| state.tip_slot))
+    }
+
+    async fn channel_tip_message(&self) -> Result<Option<MsgId>> {
         Ok(self
-            .node
-            .channel_state(self.channel_id)
-            .await
-            .context("Failed to read channel state")?
-            .map(|state| state.tip_slot))
+            .live_channel_state()
+            .await?
+            .map(|state| state.tip_message))
     }
 
     async fn read_channel_after(
@@ -613,13 +729,34 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
 /// Deserialize an inscription payload into `(this_msg, Block)`. Bad payloads are
 /// logged and skipped.
-fn block_from_inscription(inscription: &InscriptionInfo) -> Option<(MsgId, Block)> {
+fn block_from_inscription(inscription: &InscriptionInfo) -> Option<Block> {
     borsh::from_slice::<Block>(&inscription.payload)
         .inspect_err(|err| {
             warn!("Failed to deserialize block from inscription: {err:?}");
         })
         .ok()
-        .map(|block| (inscription.this_msg, block))
+}
+
+/// Every block an adopted tx carries, in op order. Non-block entries are
+/// dropped: they reach consumers as the checkpoint's tip, not as payloads.
+fn adopted_blocks(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<Block> {
+    let entry = |inscription: &InscriptionInfo| {
+        if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
+            None
+        } else {
+            block_from_inscription(inscription)
+        }
+    };
+    match tx {
+        ChannelUpdateTx::Inscription(info) => entry(info).into_iter().collect(),
+        ChannelUpdateTx::AtomicWithdraw(bundle) => entry(&bundle.inscription).into_iter().collect(),
+        // A config-only tx carries no payload to apply.
+        ChannelUpdateTx::Config(_) => Vec::new(),
+        ChannelUpdateTx::Custom(signed_tx) => channel_inscriptions(signed_tx, channel_id)
+            .iter()
+            .filter_map(entry)
+            .collect(),
+    }
 }
 
 /// Channel notes the withdraws bundled with a published tx release; empty for a
@@ -640,7 +777,7 @@ const fn channel_update_inscription(orphan: &ChannelUpdateTx) -> Option<&Inscrip
     match orphan {
         ChannelUpdateTx::Inscription(info) => Some(info),
         ChannelUpdateTx::AtomicWithdraw(bundle) => Some(&bundle.inscription),
-        ChannelUpdateTx::Custom(_signed_mantle_tx) => None,
+        ChannelUpdateTx::Config(_) | ChannelUpdateTx::Custom(_) => None,
     }
 }
 
@@ -649,7 +786,7 @@ const fn channel_update_inscription(orphan: &ChannelUpdateTx) -> Option<&Inscrip
 async fn fund_ops(
     node: &NodeHttpClient,
     funding_key: ZkPublicKey,
-    priority_fee: u64,
+    priority_fee_percent: u64,
     ops: impl IntoIterator<Item = Op>,
 ) -> Result<logos_blockchain_http_api_common::bodies::wallet::fund::WalletFundResponseBody> {
     let tx_builder = MantleTxBuilder::new()
@@ -661,7 +798,7 @@ async fn fund_ops(
         change_public_key: funding_key,
         funding_public_keys: vec![funding_key],
         max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-        priority_fee,
+        priority_fee_percent,
     })
     .await
     .context("Failed to fund channel transaction")
@@ -714,8 +851,14 @@ pub async fn post_channel_config(
     );
 
     let keys = Keys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
+    // Configs chain on the channel's config tip, or the root if there is none.
+    let parent = read_channel_state(config)
+        .await
+        .context("Failed to read the channel state for the config parent")?
+        .map_or_else(MsgId::root, |channel| channel.config_tip_hash);
     let config_op = ChannelConfigOp {
         channel: config.channel_id,
+        parent,
         keys,
         posting_timeframe: SlotTimeframe::from(posting_timeframe),
         posting_timeout: SlotTimeout::from(posting_timeout),
@@ -731,7 +874,7 @@ pub async fn post_channel_config(
     let funded = fund_ops(
         &node,
         config.funding_key,
-        config.priority_fee,
+        config.priority_fee_percent,
         [Op::ChannelConfig(config_op)],
     )
     .await?;

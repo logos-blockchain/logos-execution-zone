@@ -372,8 +372,10 @@ fn watch_peer(peer: ZoneId, receiver_id: ProgramId) -> CrossZoneConfig {
             allowed_routes: vec![CrossZoneRoute {
                 src_program_id: programs::ping_sender().id(),
                 target_program_id: receiver_id,
+                mint_cap: None,
             }],
             expected_block_signing_pubkeys: Vec::new(),
+            min_committee_size: 0,
         }],
         source_authority: None,
         source_governance: None,

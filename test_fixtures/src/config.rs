@@ -2,7 +2,7 @@ use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
-use indexer_service::{ChannelId, ClientConfig, IndexerConfig};
+use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
@@ -60,7 +60,7 @@ pub struct SequencerPartialConfig {
     pub max_block_size: ByteSize,
     pub mempool_max_size: usize,
     pub block_create_timeout: Duration,
-    pub priority_fee: u64,
+    pub priority_fee_percent: u64,
 }
 
 impl Default for SequencerPartialConfig {
@@ -70,7 +70,7 @@ impl Default for SequencerPartialConfig {
             max_block_size: ByteSize::mib(1),
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(10),
-            priority_fee: sequencer_core::config::default_priority_fee(),
+            priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
         }
     }
 }
@@ -126,7 +126,7 @@ pub fn sequencer_config(
         max_block_size,
         mempool_max_size,
         block_create_timeout,
-        priority_fee,
+        priority_fee_percent,
     } = partial;
 
     Ok(SequencerConfig {
@@ -144,7 +144,7 @@ pub fn sequencer_config(
                 .context("Failed to convert bedrock addr to URL")?,
             funding_key,
             auth: None,
-            priority_fee,
+            priority_fee_percent,
         },
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
@@ -275,8 +275,8 @@ pub fn indexer_config(
         channel_id,
         cross_zone,
         peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
-        bridge_lock_holdings: Vec::new(),
         allow_chain_reset: false,
+        event_filter: EventFilterConfig::Archival,
     })
 }
 
@@ -383,24 +383,34 @@ pub fn bedrock_funding_key() -> ZkPublicKey {
     ZkPublicKey::from(BigUint::from_bytes_le(&bytes))
 }
 
+/// A source-only zone: programs registered, `InitConfig`s emitted, nobody watched.
+#[must_use]
+pub const fn source_only_cross_zone() -> CrossZoneConfig {
+    CrossZoneConfig {
+        peers: Vec::new(),
+        source_authority: None,
+        source_governance: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn default_priority_fee_matches_sequencer_default() {
+    fn default_priority_fee_percent_matches_sequencer_default() {
         assert_eq!(
-            SequencerPartialConfig::default().priority_fee,
-            sequencer_core::config::default_priority_fee()
+            SequencerPartialConfig::default().priority_fee_percent,
+            sequencer_core::config::default_priority_fee_percent()
         );
     }
 
     #[test]
-    fn custom_priority_fee_reaches_bedrock_config() {
-        let priority_fee = 1_000;
+    fn custom_priority_fee_percent_reaches_bedrock_config() {
+        let priority_fee_percent = 20;
         let config = sequencer_config(
             SequencerPartialConfig {
-                priority_fee,
+                priority_fee_percent,
                 ..SequencerPartialConfig::default()
             },
             PathBuf::from("test-sequencer"),
@@ -414,6 +424,9 @@ mod tests {
         )
         .expect("custom priority fee should produce a valid sequencer config");
 
-        assert_eq!(config.bedrock_config.priority_fee, priority_fee);
+        assert_eq!(
+            config.bedrock_config.priority_fee_percent,
+            priority_fee_percent
+        );
     }
 }

@@ -3,12 +3,12 @@
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockIngestError, Ciphertext,
-    Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData, EphemeralPublicKey,
-    HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
+    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, BlockIngestError,
+    Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData,
+    EphemeralPublicKey, EventRecord, HashType, IndexerStatus, IndexerSyncState, Nullifier,
+    PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID,
-    PublicKey, PublicMessage, PublicTransaction, Signature, StallReason, Transaction,
+    PublicKey, PublicMessage, PublicTransaction, Selector, Signature, StallReason, Transaction,
     ValidityWindow, WitnessSet,
 };
 
@@ -783,6 +783,7 @@ impl From<indexer_core::status::PeerHealth> for PeerHealth {
             indexer_core::status::PeerHealth::Live => Self::Live,
             indexer_core::status::PeerHealth::Lagging => Self::Lagging,
             indexer_core::status::PeerHealth::Holed => Self::Holed,
+            indexer_core::status::PeerHealth::Suspended => Self::Suspended,
             indexer_core::status::PeerHealth::Halted => Self::Halted,
         }
     }
@@ -884,5 +885,75 @@ impl From<indexer_core::status::IndexerStatus> for IndexerStatus {
             cross_zone_halt: cross_zone_halt.map(Into::into),
             cross_zone_peers: cross_zone_peers.into_iter().map(Into::into).collect(),
         }
+    }
+}
+
+// ============================================================================
+// Event-related conversions
+// ============================================================================
+
+impl From<[u8; 8]> for Selector {
+    fn from(value: [u8; 8]) -> Self {
+        Self(value)
+    }
+}
+
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "We prefer to group methods by functionality rather than by type for conversions"
+)]
+impl EventRecord {
+    // Not `From`: the orphan rule forbids implementing a foreign trait for `Vec<EventRecord>`.
+    #[must_use]
+    pub fn from_tx_events(block_id: BlockId, group: common::transaction::TxEvents) -> Vec<Self> {
+        let common::transaction::TxEvents {
+            tx_index,
+            tx_hash,
+            events,
+        } = group;
+        events
+            .into_iter()
+            .map(|event| Self {
+                block_id,
+                tx_index,
+                tx_hash: tx_hash.into(),
+                program_id: event.program_id.into(),
+                selector: event.event.selector.into(),
+                data: event.event.data,
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_tx_events_copies_block_and_tx_context_onto_every_record() {
+        let event = |selector: u8| lee_core::program::TransactionEvent {
+            program_id: [7_u32; 8],
+            event: lee_core::program::ProgramEvent {
+                selector: [selector; 8],
+                data: vec![selector; 2],
+            },
+        };
+        let group = common::transaction::TxEvents {
+            tx_index: 4,
+            tx_hash: common::HashType([9_u8; 32]),
+            events: vec![event(1), event(2), event(3)],
+        };
+
+        let records = EventRecord::from_tx_events(77, group);
+
+        assert_eq!(records.len(), 3);
+        assert!(records.iter().all(|r| r.block_id == 77 && r.tx_index == 4));
+        assert!(
+            records
+                .iter()
+                .all(|r| r.tx_hash == HashType([9_u8; 32]) && r.program_id == ProgramId([7; 8]))
+        );
+        assert_eq!(records[1].selector, Selector([2; 8]));
+        assert_eq!(records[2].data, vec![3, 3]);
     }
 }

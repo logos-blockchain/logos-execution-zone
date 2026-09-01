@@ -11,3 +11,6 @@ workspace = true
 lee_core.workspace = true
 borsh.workspace = true
 risc0-zkvm.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true

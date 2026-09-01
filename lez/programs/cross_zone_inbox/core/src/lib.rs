@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, data::DATA_MAX_LENGTH},
+    account::{AccountId, Balance, data::DATA_MAX_LENGTH},
     program::{PdaSeed, ProgramId},
 };
 use serde::{Deserialize, Serialize};
@@ -28,12 +28,20 @@ pub type MessageKey = [u8; 32];
 /// caller choose the target, so a zone-wide allowance would let it mint with no
 /// lock behind it. That rule now lives in each target, seeded from these pairs at
 /// genesis, rather than in the inbox.
+/// Unknown fields are refused so a misspelled `mint_cap` fails startup instead
+/// of silently seeding the source uncapped.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CrossZoneRoute {
     /// The program on the peer zone that emitted the message.
     pub src_program_id: ProgramId,
     /// The program on this zone it may be delivered to.
     pub target_program_id: ProgramId,
+    /// Lifetime mint allowance for this source at the target; `None` is
+    /// uncapped. Only meaningful on a route whose target mints against the
+    /// message (`wrapped_token`); genesis refuses it on any other target.
+    #[serde(default)]
+    pub mint_cap: Option<Balance>,
 }
 
 /// A peer zone whose outbox a zone watches for inbound cross-zone messages.
@@ -59,6 +67,15 @@ pub struct CrossZonePeer {
     /// (the channel signer is still authenticated by the zone-sdk).
     #[serde(default)]
     pub expected_block_signing_pubkeys: Vec<[u8; 32]>,
+    /// Minimum live committee size (accredited keys on the peer's channel)
+    /// below which reading from this peer is suspended, by the sequencer's
+    /// watcher and the indexer's verifier alike. 0, the default, disables the
+    /// floor. With a floor set, a channel state unreadable before the first
+    /// successful read counts as below it (fail-closed), while a bounded run
+    /// of later read failures keeps the last known size. Unknown fields are refused above, so
+    /// a misspelling fails startup instead of silently running floorless.
+    #[serde(default)]
+    pub min_committee_size: u32,
 }
 
 /// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer
@@ -69,6 +86,8 @@ pub struct CrossZonePeer {
 pub struct CrossZoneConfig {
     /// Read once at startup by the watchers and the verifier, so adding a peer
     /// zone needs a config change and a restart on both sequencer and indexer.
+    /// Defaulted so a source-only zone declares `"cross_zone": {}`.
+    #[serde(default)]
     pub peers: Vec<CrossZonePeer>,
     /// Account allowed to change which peer sources each target program accepts,
     /// seeded into every target's own config at genesis.

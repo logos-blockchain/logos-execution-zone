@@ -5,9 +5,10 @@
 use common::{
     HashType,
     block::{Block, BlockMeta},
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::{LeeTransaction, TxEvents, clock_invocation},
 };
 use lee::{GENESIS_BLOCK_ID, V03State};
+use lee_core::program::TransactionEvent;
 
 use crate::ingest_error::BlockIngestError;
 
@@ -122,27 +123,35 @@ pub fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), Bloc
 /// Applies a block's transactions to `state`, mapping every failure to a
 /// [`BlockIngestError`] so the caller can park rather than crash. Operates in
 /// place; the caller commits only on `Ok`.
-pub fn apply_block_to_state(block: &Block, state: &mut V03State) -> Result<(), BlockIngestError> {
-    let (clock_tx, user_txs) = block
+///
+/// On `Ok` also returns the vector of indexed transaction events in the emitted order.
+pub fn apply_block_to_state(
+    block: &Block,
+    state: &mut V03State,
+) -> Result<Vec<TxEvents>, BlockIngestError> {
+    let (clock_entry, user_txs) = block
         .body
         .transactions
         .split_last()
         .ok_or(BlockIngestError::EmptyBlock)?;
 
-    let LeeTransaction::Public(clock_tx) = clock_tx else {
+    let LeeTransaction::Public(clock_tx) = clock_entry else {
         return Err(BlockIngestError::InvalidClockTransaction);
     };
     if *clock_tx != clock_invocation(block.header.timestamp) {
         return Err(BlockIngestError::InvalidClockTransaction);
     }
 
+    let mut block_events = Vec::new();
     let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
     for (tx_index, transaction) in user_txs.iter().enumerate() {
         let state_transition = |err: anyhow::Error| BlockIngestError::StateTransition {
             tx_index: tx_index.try_into().expect("tx index fits in u64"),
             reason: format!("{err:#}"),
         };
-        if is_genesis {
+
+        // Collect all events based on user-submitted transactions.
+        let events = if is_genesis {
             let LeeTransaction::Public(public_tx) = transaction else {
                 return Err(BlockIngestError::NonPublicGenesisTransaction);
             };
@@ -152,23 +161,46 @@ pub fn apply_block_to_state(block: &Block, state: &mut V03State) -> Result<(), B
                     block.header.block_id,
                     block.header.timestamp,
                 )
-                .map_err(|err| state_transition(err.into()))?;
+                .map_err(|err| state_transition(err.into()))?
         } else {
             transaction
-                .clone()
                 .execute_on_state(state, block.header.block_id, block.header.timestamp)
-                .map_err(|err| state_transition(err.into()))?;
-        }
+                .map_err(|err| state_transition(err.into()))?
+        };
+        collect_tx_events(&mut block_events, tx_index, transaction, events);
     }
 
-    state
+    // Collect all events connected to the clock program separately.
+    // NOTE: Currently clock program does not have any events.
+    // This future-proofs the design in case they are introduced and has no bearing
+    // on current semantics.
+    let clock_events = state
         .transition_from_public_transaction(clock_tx, block.header.block_id, block.header.timestamp)
         .map_err(|err| BlockIngestError::StateTransition {
             tx_index: user_txs.len().try_into().expect("tx index fits in u64"),
             reason: format!("{:#}", anyhow::Error::from(err)),
         })?;
+    collect_tx_events(&mut block_events, user_txs.len(), clock_entry, clock_events);
 
-    Ok(())
+    Ok(block_events)
+}
+
+/// Function collecting all block events into a vector of transaction events
+/// with a stamp indicating which transaction emitted it.
+fn collect_tx_events(
+    block_events: &mut Vec<TxEvents>,
+    tx_index: usize,
+    transaction: &LeeTransaction,
+    events: Vec<TransactionEvent>,
+) {
+    if events.is_empty() {
+        return;
+    }
+    block_events.push(TxEvents {
+        tx_index: tx_index.try_into().expect("tx index fits in u32"),
+        tx_hash: transaction.hash(),
+        events,
+    });
 }
 
 #[cfg(test)]
@@ -190,14 +222,14 @@ mod tests {
 
     #[test]
     fn genesis_applies_on_empty_tip() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
     }
 
     #[test]
     fn non_genesis_first_block_is_unexpected_id() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let block = produce_dummy_block(2, None, vec![]);
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(
@@ -211,7 +243,7 @@ mod tests {
 
     #[test]
     fn skip_ahead_block_is_unexpected_id() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -230,7 +262,7 @@ mod tests {
 
     #[test]
     fn broken_chain_link_detected() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -243,7 +275,7 @@ mod tests {
 
     #[test]
     fn hash_mismatch_detected() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let mut genesis = produce_dummy_block(1, None, vec![]);
         // Tampering with the header invalidates the stored hash.
         genesis.header.timestamp = 999;
@@ -253,7 +285,7 @@ mod tests {
 
     #[test]
     fn empty_block_rejected() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         // A block with no transactions at all (not even the mandatory clock tx).
         let block = HashableBlockData {
             block_id: 1,
@@ -268,7 +300,7 @@ mod tests {
 
     #[test]
     fn missing_clock_tail_is_invalid_clock() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         // Last tx is not the expected clock invocation for the timestamp.
         let block = HashableBlockData {
             block_id: 1,
@@ -283,7 +315,7 @@ mod tests {
 
     #[test]
     fn applies_transfers_and_advances_state() {
-        let mut state = initial_state();
+        let mut state = initial_state(true);
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
