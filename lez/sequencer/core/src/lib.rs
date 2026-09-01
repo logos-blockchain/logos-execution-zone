@@ -2076,7 +2076,8 @@ fn genesis_block_and_state(
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     config: &SequencerConfig,
 ) -> (Block, lee::V03State) {
-    let (genesis_state, genesis_txs) = build_genesis_state(config, bootstrap_sequencer_key);
+    let (genesis_state, genesis_txs) =
+        build_genesis_state(signing_key, config, bootstrap_sequencer_key);
     let genesis_block = HashableBlockData {
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
@@ -2112,6 +2113,7 @@ fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
 /// [`LeeTransaction`]s that should be committed to the genesis block so external
 /// observers can replay them.
 fn build_genesis_state(
+    signing_key: &lee::PrivateKey,
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> (lee::V03State, Vec<LeeTransaction>) {
@@ -2199,12 +2201,19 @@ fn build_genesis_state(
 
     // The genesis fee tx credits the first staked sequencer's ownership
     // account, already claimed by its stake tx above (which ran earlier in this
-    // same genesis block), so no separate initialization is needed. A genesis
-    // that stakes no sequencer cannot produce blocks.
+    // same genesis block), so no separate initialization is needed.
+    //
+    // A stakeless genesis (e.g. a sequencer reconstructing an existing channel
+    // it did not bootstrap) has no staked account to reward, so it falls back to
+    // the signing key's account: this genesis is a throwaway placeholder (the real
+    // one is replayed from the channel), the summary is the default, so the
+    // credit is zero and the unclaimed account is left untouched.
     let producer = staked
         .first()
         .map(|(_, ownership_public_key, _)| lee::AccountId::from(ownership_public_key))
-        .expect("genesis must stake at least one sequencer");
+        .unwrap_or_else(|| {
+            lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key))
+        });
     for tx in [
         fee_invocation(fee_core::BlockFeeSummary::default(), producer),
         clock_invocation(0),
