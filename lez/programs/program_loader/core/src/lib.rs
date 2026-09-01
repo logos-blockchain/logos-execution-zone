@@ -20,7 +20,7 @@ pub enum Instruction {
     ///
     /// If `next_segment` is `Some`, that account must already hold a valid [`ProgramSegment`]
     /// (read-only, `pre_states[1]`) — chains are always linked tail-to-head.
-    NewSegment {
+    WriteSegment {
         bytecode: Vec<u8>,
         next_segment: Option<AccountId>,
     },
@@ -28,13 +28,13 @@ pub enum Instruction {
     /// `Claim::Authorized`). `pre_states[1..]` is the segment chain from `first_segment`, in link
     /// order, read-only. `image_id` is always recomputed from the chain, never taken from the
     /// caller.
-    UploadHeader {
+    CreateHeader {
         first_segment: AccountId,
         immutable: bool,
     },
     /// Rewrites an existing header at `pre_states[0]` (must already hold a valid
     /// [`ProgramHeader`], be `is_authorized`, and not already be `immutable`) — an ordinary data
-    /// mutation, not a claim. Same chain/`image_id` handling as `UploadHeader`.
+    /// mutation, not a claim. Same chain/`image_id` handling as `CreateHeader`.
     UpdateHeader {
         first_segment: AccountId,
         immutable: bool,

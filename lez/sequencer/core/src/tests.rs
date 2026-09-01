@@ -1712,7 +1712,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
             PROGRAM_LOADER_ACCOUNT_ID,
             account_ids,
             vec![Nonce(0)],
-            program_loader_core::Instruction::NewSegment {
+            program_loader_core::Instruction::WriteSegment {
                 bytecode: (*chunk).to_vec(),
                 next_segment,
             },
@@ -1735,7 +1735,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         PROGRAM_LOADER_ACCOUNT_ID,
         header_account_ids,
         vec![Nonce(0)],
-        program_loader_core::Instruction::UploadHeader {
+        program_loader_core::Instruction::CreateHeader {
             first_segment: segment_ids[0],
             immutable: true,
         },
@@ -3772,7 +3772,7 @@ fn upload_program_segments(
             state,
             &segment_keys[i],
             next_segment.into_iter().collect(),
-            program_loader_core::Instruction::NewSegment {
+            program_loader_core::Instruction::WriteSegment {
                 bytecode: (*chunk).to_vec(),
                 next_segment,
             },
@@ -3801,7 +3801,7 @@ fn deploy_program(
         state,
         header_key,
         segment_ids.clone(),
-        program_loader_core::Instruction::UploadHeader {
+        program_loader_core::Instruction::CreateHeader {
             first_segment: segment_ids[0],
             immutable,
         },
@@ -3934,7 +3934,7 @@ fn loader_rejects_new_segment_against_an_already_claimed_target() {
         &mut state,
         &segment_key,
         vec![],
-        program_loader_core::Instruction::NewSegment {
+        program_loader_core::Instruction::WriteSegment {
             bytecode: bytecode.clone(),
             next_segment: None,
         },
@@ -3946,7 +3946,7 @@ fn loader_rejects_new_segment_against_an_already_claimed_target() {
         &mut state,
         &segment_key,
         vec![],
-        program_loader_core::Instruction::NewSegment {
+        program_loader_core::Instruction::WriteSegment {
             bytecode,
             next_segment: None,
         },
@@ -3974,7 +3974,7 @@ fn loader_rejects_invalid_bytecode() {
         &mut state,
         &segment_key,
         vec![],
-        program_loader_core::Instruction::NewSegment {
+        program_loader_core::Instruction::WriteSegment {
             bytecode,
             next_segment: None,
         },
@@ -3986,7 +3986,7 @@ fn loader_rejects_invalid_bytecode() {
         &mut state,
         &header_key,
         vec![segment_id],
-        program_loader_core::Instruction::UploadHeader {
+        program_loader_core::Instruction::CreateHeader {
             first_segment: segment_id,
             immutable: true,
         },
@@ -4010,7 +4010,7 @@ fn loader_rejects_claim_without_authorization() {
         PROGRAM_LOADER_ACCOUNT_ID,
         vec![unsigned_target],
         vec![Nonce(0)],
-        program_loader_core::Instruction::NewSegment {
+        program_loader_core::Instruction::WriteSegment {
             bytecode: vec![7_u8; 1024],
             next_segment: None,
         },
@@ -4039,7 +4039,7 @@ fn loader_rejects_upload_header_with_wrong_number_of_segment_accounts() {
         &mut state,
         &segment_key,
         vec![],
-        program_loader_core::Instruction::NewSegment {
+        program_loader_core::Instruction::WriteSegment {
             bytecode: vec![7_u8; 1024],
             next_segment: None,
         },
@@ -4053,7 +4053,7 @@ fn loader_rejects_upload_header_with_wrong_number_of_segment_accounts() {
         &mut state,
         &header_key,
         vec![segment_id, extra],
-        program_loader_core::Instruction::UploadHeader {
+        program_loader_core::Instruction::CreateHeader {
             first_segment: segment_id,
             immutable: true,
         },
@@ -4211,7 +4211,7 @@ fn loader_deploys_program_via_chained_call() {
     let bytecode = test_programs::claimer().elf().to_vec();
 
     let inner_instruction_data = lee::program::Program::serialize_instruction(
-        program_loader_core::Instruction::NewSegment {
+        program_loader_core::Instruction::WriteSegment {
             bytecode,
             next_segment: None,
         },

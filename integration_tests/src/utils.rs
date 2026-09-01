@@ -335,7 +335,7 @@ pub fn new_segment_transaction(
         PROGRAM_LOADER_ACCOUNT_ID,
         vec![segment],
         vec![lee_core::account::Nonce(0)],
-        program_loader_core::Instruction::NewSegment {
+        program_loader_core::Instruction::WriteSegment {
             bytecode,
             next_segment: None,
         },
@@ -380,7 +380,7 @@ pub fn segment_upload_transactions(
             PROGRAM_LOADER_ACCOUNT_ID,
             account_ids,
             vec![lee_core::account::Nonce(0)],
-            program_loader_core::Instruction::NewSegment {
+            program_loader_core::Instruction::WriteSegment {
                 bytecode: (*chunk).to_vec(),
                 next_segment,
             },
@@ -407,7 +407,7 @@ pub fn upload_header_transaction(
         PROGRAM_LOADER_ACCOUNT_ID,
         account_ids,
         vec![lee_core::account::Nonce(0)],
-        program_loader_core::Instruction::UploadHeader {
+        program_loader_core::Instruction::CreateHeader {
             first_segment: all_segment_ids[0],
             immutable: true,
         },

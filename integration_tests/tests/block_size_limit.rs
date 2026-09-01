@@ -29,7 +29,7 @@ async fn reject_oversized_transaction() -> Result<()> {
         PROGRAM_LOADER_ACCOUNT_ID,
         vec![AccountId::new([1; 32])],
         vec![],
-        program_loader_core::Instruction::NewSegment {
+        program_loader_core::Instruction::WriteSegment {
             bytecode,
             next_segment: None,
         },
@@ -84,7 +84,7 @@ async fn accept_transaction_within_limit() -> Result<()> {
         PROGRAM_LOADER_ACCOUNT_ID,
         vec![AccountId::new([2; 32])],
         vec![],
-        program_loader_core::Instruction::NewSegment {
+        program_loader_core::Instruction::WriteSegment {
             bytecode,
             next_segment: None,
         },

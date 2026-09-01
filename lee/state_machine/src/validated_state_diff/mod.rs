@@ -133,7 +133,7 @@ impl ValidatedStateDiff {
                     })?;
                 let deploy_pre_states = chained_call.pre_states.clone();
                 let post_states = std::panic::catch_unwind(|| match instruction {
-                    program_loader_core::Instruction::NewSegment {
+                    program_loader_core::Instruction::WriteSegment {
                         bytecode,
                         next_segment,
                     } => program_loader_core::write_segment(
@@ -141,7 +141,7 @@ impl ValidatedStateDiff {
                         bytecode,
                         next_segment,
                     ),
-                    program_loader_core::Instruction::UploadHeader {
+                    program_loader_core::Instruction::CreateHeader {
                         first_segment,
                         immutable,
                     } => program_loader_core::create_header(
