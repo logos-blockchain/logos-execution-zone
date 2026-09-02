@@ -11052,6 +11052,8 @@ dependencies = [
  "lee",
  "log",
  "sequencer_core",
+ "sequencer_executor_actor",
+ "sequencer_storage_actor",
  "serde_json",
  "tokio",
 ]

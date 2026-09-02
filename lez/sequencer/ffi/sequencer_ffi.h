@@ -16,6 +16,28 @@ typedef enum OperationStatus {
 extern "C" {
 #endif // __cplusplus
 
+/**
+ * Initializes logging for the sequencer at `level`.
+ *
+ * - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
+ *   case-insensitive); null or unparseable falls back to `info`.
+ *
+ * Only the `sequencer_ffi` and `sequencer_core` targets are enabled!
+ *
+ * # Safety
+ * - `level` must be a valid null-terminated C string, or null.
+ * - First call to this function wins; subsequent calls are no-ops.
+ */
+void init_logger(const char *level);
+
+/**
+ * # Safety
+ * It's up to the caller to pass a proper pointer, if somehow from c/c++ side
+ * this is called with a type which doesn't come from a returned `CString` it
+ * will cause a segfault.
+ */
+void free_cstring(char *block);
+
 bool is_ok(const enum OperationStatus *self);
 
 bool is_error(const enum OperationStatus *self);
