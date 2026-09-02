@@ -263,7 +263,6 @@ impl ValidatedStateDiff {
             LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
         );
 
-
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
         let declared_account_ids: HashSet<AccountId> = account_ids.iter().copied().collect();
         let mut events: Vec<TransactionEvent> = Vec::new();
