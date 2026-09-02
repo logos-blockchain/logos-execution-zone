@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 
+use kameo::actor::ActorRef;
 use sequencer_core::block_publisher::ZoneSdkPublisher;
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_storage_actor::StorageActor;
@@ -21,7 +22,11 @@ pub struct SequencerServiceFFI {
 
 impl SequencerServiceFFI {
     #[must_use]
-    pub fn new(storage_actor: StorageActor, executor_actor: ExecutorActor<ZoneSdkPublisher, StorageActor>, runtime: Runtime) -> Self {
+    pub fn new(
+        storage_actor: ActorRef<StorageActor>,
+        executor_actor: ActorRef<ExecutorActor<ZoneSdkPublisher, StorageActor>>,
+        runtime: Runtime,
+    ) -> Self {
         Self {
             storage_actor: Box::into_raw(Box::new(storage_actor)).cast::<c_void>(),
             executor_actor: Box::into_raw(Box::new(executor_actor)).cast::<c_void>(),
@@ -31,10 +36,10 @@ impl SequencerServiceFFI {
 
     /// Borrow the [`StorageActor`] to run a query against the store.
     #[must_use]
-    pub const fn storage_actor(&self) -> &StorageActor {
+    pub const fn storage_actor(&self) -> &ActorRef<StorageActor> {
         unsafe {
             self.storage_actor
-                .cast::<StorageActor>()
+                .cast::<ActorRef<StorageActor>>()
                 .as_ref()
                 .expect("StorageActor must be a non-null pointer")
         }
@@ -42,10 +47,10 @@ impl SequencerServiceFFI {
 
     /// Borrow the [`ExecutorActor`] to run a query against the node.
     #[must_use]
-    pub const fn executor_actor(&self) -> &ExecutorActor<ZoneSdkPublisher, StorageActor> {
+    pub const fn executor_actor(&self) -> &ActorRef<ExecutorActor<ZoneSdkPublisher, StorageActor>> {
         unsafe {
             self.executor_actor
-                .cast::<ExecutorActor<ZoneSdkPublisher, StorageActor>>()
+                .cast::<ActorRef<ExecutorActor<ZoneSdkPublisher, StorageActor>>>()
                 .as_ref()
                 .expect("ExecutorActor must be a non-null pointer")
         }
@@ -61,12 +66,26 @@ impl SequencerServiceFFI {
 impl Drop for SequencerServiceFFI {
     fn drop(&mut self) {
         if !self.executor_actor.is_null() {
-            let executor_actor = unsafe { Box::from_raw(self.executor_actor.cast::<ExecutorActor<ZoneSdkPublisher, StorageActor>>()) };
+            let executor_actor = unsafe {
+                Box::from_raw(
+                    self.executor_actor
+                        .cast::<ActorRef<ExecutorActor<ZoneSdkPublisher, StorageActor>>>(),
+                )
+            };
             // stop the executor actor before storage.
+            let send_res = self.runtime.block_on(executor_actor.stop_gracefully());
+            if let Err(err) = send_res {
+                log::error!("Failed to send shutdown signal: {err}");
+            }
             drop(executor_actor);
         }
         if !self.storage_actor.is_null() {
-            let storage_actor = unsafe { Box::from_raw(self.executor_actor.cast::<StorageActor>()) };
+            let storage_actor =
+                unsafe { Box::from_raw(self.executor_actor.cast::<ActorRef<StorageActor>>()) };
+            let send_res = self.runtime.block_on(storage_actor.stop_gracefully());
+            if let Err(err) = send_res {
+                log::error!("Failed to send shutdown signal: {err}");
+            }
             drop(storage_actor);
         }
 

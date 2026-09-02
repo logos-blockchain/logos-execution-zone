@@ -15,6 +15,9 @@ log = { workspace = true }
 tokio = { features = ["rt-multi-thread"], workspace = true }
 futures.workspace = true
 serde_json.workspace = true
+kameo.workspace = true
+kameo_actors.workspace = true
+anyhow.workspace = true
 
 [build-dependencies]
 cbindgen = "0.29"

@@ -11046,9 +11046,12 @@ dependencies = [
 name = "sequencer_ffi"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cbindgen",
  "env_logger",
  "futures",
+ "kameo",
+ "kameo_actors",
  "lee",
  "log",
  "sequencer_core",
