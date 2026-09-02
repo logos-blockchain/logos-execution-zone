@@ -4579,10 +4579,15 @@ fn slash_transaction(
     sequencer_key: sequencer_stake_core::SequencerKey,
     approvals: Vec<sequencer_stake_core::SlashApproval>,
 ) -> PublicTransaction {
-    let LeeTransaction::Public(tx) =
-        crate::slashing::build_slash_tx(ownership_id, sequencer_key, TEST_INSCRIPTION, approvals)
-            .expect("Slash tx should build")
-    else {
+    let LeeTransaction::Public(tx) = sequencer_slasher_actor::build_slash_tx(
+        ownership_id,
+        &sequencer_slasher_actor::Offence {
+            offender: sequencer_key,
+            inscription: TEST_INSCRIPTION,
+        },
+        approvals,
+    )
+    .expect("Slash tx should build") else {
         unreachable!("build_slash_tx builds a public transaction")
     };
     tx
