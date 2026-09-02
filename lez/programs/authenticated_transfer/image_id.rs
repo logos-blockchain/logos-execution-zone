@@ -4,4 +4,4 @@
 // `rustfmt::skip`: a wrap would make the committed form differ from the generated one.
 #[rustfmt::skip]
 #[expect(clippy::unreadable_literal, reason = "generated image id from risc0")]
-pub const AUTHENTICATED_TRANSFER_IMAGE_ID: [u32; 8] = [2476711475, 1224982153, 3117873563, 2523167880, 1035873034, 1388799342, 361406495, 3850721221];
+pub const AUTHENTICATED_TRANSFER_IMAGE_ID: [u32; 8] = [448160964, 415034640, 1605478306, 2878126321, 1202689157, 3622063330, 890398041, 3908316328];
