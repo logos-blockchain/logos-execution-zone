@@ -25,7 +25,7 @@ impl Token<'_> {
             .send_pub_tx(
                 vec![definition, supply],
                 instruction_data,
-                programs::token().id(),
+                programs::token().deployed_account_id(),
             )
             .await
     }
@@ -143,7 +143,7 @@ impl Token<'_> {
             .send_pub_tx(
                 vec![sender, recipient],
                 instruction_data,
-                programs::token().id(),
+                programs::token().deployed_account_id(),
             )
             .await
     }
@@ -337,7 +337,7 @@ impl Token<'_> {
             .send_pub_tx(
                 vec![AccountIdentity::PublicNoSign(definition_account_id), holder],
                 instruction_data,
-                programs::token().id(),
+                programs::token().deployed_account_id(),
             )
             .await
     }
@@ -458,7 +458,7 @@ impl Token<'_> {
             .send_pub_tx(
                 vec![definition, holder],
                 instruction_data,
-                programs::token().id(),
+                programs::token().deployed_account_id(),
             )
             .await
     }

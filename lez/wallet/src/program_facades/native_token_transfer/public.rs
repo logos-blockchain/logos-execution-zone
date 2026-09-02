@@ -21,7 +21,7 @@ impl NativeTokenTransfer<'_> {
             .send_pub_tx_with_pre_check(
                 vec![from, to],
                 instruction_data,
-                program.id(),
+                program.deployed_account_id(),
                 tx_pre_check,
             )
             .await
@@ -37,7 +37,7 @@ impl NativeTokenTransfer<'_> {
             .send_pub_tx(
                 vec![account],
                 instruction_data,
-                programs::authenticated_transfer().id(),
+                programs::authenticated_transfer().deployed_account_id(),
             )
             .await
     }

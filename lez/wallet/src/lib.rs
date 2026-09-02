@@ -829,48 +829,13 @@ impl WalletCore {
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program_id: ProgramId,
+        program_account_id: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_id, |_| Ok(()))
+        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_account_id, |_| Ok(()))
             .await
     }
 
     pub async fn send_pub_tx_with_pre_check(
-        &self,
-        accounts: Vec<AccountIdentity>,
-        instruction_data: InstructionData,
-        program_id: ProgramId,
-        tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_to_account_with_pre_check(
-            accounts,
-            instruction_data,
-            program_loader_core::immutable_deploy_account_id(program_id),
-            tx_pre_check,
-        )
-        .await
-    }
-
-    /// Like [`Self::send_pub_tx`], but dispatches to an explicit `program_account_id` instead of
-    /// bijecting a `ProgramId` to its legacy address. Needed for any program whose dispatch
-    /// address isn't the bijection of its image id — e.g. `program_loader` itself
-    /// (`PROGRAM_LOADER_ACCOUNT_ID`) or any live-deployed program's header account.
-    pub async fn send_pub_tx_to_account(
-        &self,
-        accounts: Vec<AccountIdentity>,
-        instruction_data: InstructionData,
-        program_account_id: AccountId,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_to_account_with_pre_check(
-            accounts,
-            instruction_data,
-            program_account_id,
-            |_| Ok(()),
-        )
-        .await
-    }
-
-    pub async fn send_pub_tx_to_account_with_pre_check(
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,

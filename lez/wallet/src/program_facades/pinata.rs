@@ -26,7 +26,7 @@ impl Pinata<'_> {
                     AccountIdentity::PublicNoSign(winner_account_id),
                 ],
                 instruction_data,
-                programs::pinata().id(),
+                programs::pinata().deployed_account_id(),
             )
             .await
     }

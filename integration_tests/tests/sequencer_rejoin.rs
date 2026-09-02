@@ -195,7 +195,11 @@ async fn send_stake_tx(
     let data = Program::serialize_instruction(instruction.clone())
         .context("Failed to serialize the sequencer_stake instruction")?;
     ctx.wallet()
-        .send_pub_tx(accounts, data, programs::sequencer_stake().id())
+        .send_pub_tx(
+            accounts,
+            data,
+            programs::sequencer_stake().deployed_account_id(),
+        )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit sequencer_stake transaction: {err:?}"))?;
     Ok(())

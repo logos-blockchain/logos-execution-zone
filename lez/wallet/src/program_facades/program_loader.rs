@@ -47,7 +47,7 @@ impl ProgramLoader<'_> {
         accounts.extend(next_segment.map(AccountIdentity::PublicNoSign));
 
         self.0
-            .send_pub_tx_to_account(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID)
+            .send_pub_tx(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID)
             .await
     }
 
@@ -78,7 +78,7 @@ impl ProgramLoader<'_> {
         );
 
         self.0
-            .send_pub_tx_to_account(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID)
+            .send_pub_tx(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID)
             .await
     }
 
@@ -108,7 +108,7 @@ impl ProgramLoader<'_> {
         );
 
         self.0
-            .send_pub_tx_to_account(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID)
+            .send_pub_tx(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID)
             .await
     }
 

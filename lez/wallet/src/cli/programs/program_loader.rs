@@ -106,7 +106,10 @@ impl ProgramLoaderSubcommand {
     ) -> Result<SubcommandReturnValue> {
         let target_id = resolve_public(&target, wallet_core)?;
         let bytecode = std::fs::read(&bytecode_file).with_context(|| {
-            format!("failed to read segment bytecode at {}", bytecode_file.display())
+            format!(
+                "failed to read segment bytecode at {}",
+                bytecode_file.display()
+            )
         })?;
 
         let tx_hash = ProgramLoader(wallet_core)
@@ -126,7 +129,9 @@ impl ProgramLoaderSubcommand {
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let target_id = resolve_public(&target, wallet_core)?;
-        let chain_segment_ids = ProgramLoader(wallet_core).resolve_chain(first_segment).await?;
+        let chain_segment_ids = ProgramLoader(wallet_core)
+            .resolve_chain(first_segment)
+            .await?;
 
         let tx_hash = ProgramLoader(wallet_core)
             .create_header(target_id, first_segment, &chain_segment_ids, immutable)
@@ -145,7 +150,9 @@ impl ProgramLoaderSubcommand {
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let header_id = resolve_public(&header, wallet_core)?;
-        let chain_segment_ids = ProgramLoader(wallet_core).resolve_chain(first_segment).await?;
+        let chain_segment_ids = ProgramLoader(wallet_core)
+            .resolve_chain(first_segment)
+            .await?;
 
         let tx_hash = ProgramLoader(wallet_core)
             .update_header(header_id, first_segment, &chain_segment_ids, immutable)

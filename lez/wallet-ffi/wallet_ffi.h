@@ -1095,8 +1095,8 @@ enum WalletFfiError wallet_ffi_program_loader_upload_header(struct WalletHandle 
  *
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `header` must be a valid pointer to a `FfiBytes32` for an existing header the wallet is
- *   still authorized over
+ * - `header` must be a valid pointer to a `FfiBytes32` for an existing header the wallet is still
+ *   authorized over
  * - `first_segment` must be a valid pointer to a `FfiBytes32` for an already-uploaded segment
  * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
  */
@@ -1116,8 +1116,8 @@ enum WalletFfiError wallet_ffi_program_loader_update_header(struct WalletHandle 
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `header` must be a valid pointer to a `FfiBytes32`; the wallet must hold its signing key
- * - `segments` must be a valid pointer to `segments_len` contiguous `FfiBytes32`s, in chain
- *   order (first chunk first); the wallet must hold every segment's signing key
+ * - `segments` must be a valid pointer to `segments_len` contiguous `FfiBytes32`s, in chain order
+ *   (first chunk first); the wallet must hold every segment's signing key
  * - `elf_data` must be a valid pointer to `elf_size` bytes
  * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
  */
@@ -1139,10 +1139,10 @@ enum WalletFfiError wallet_ffi_program_loader_deploy(struct WalletHandle *handle
  *
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `header` must be a valid pointer to a `FfiBytes32` for an existing header the wallet is
- *   still authorized over
- * - `segments` must be a valid pointer to `segments_len` contiguous `FfiBytes32`s, in chain
- *   order; the wallet must hold every segment's signing key
+ * - `header` must be a valid pointer to a `FfiBytes32` for an existing header the wallet is still
+ *   authorized over
+ * - `segments` must be a valid pointer to `segments_len` contiguous `FfiBytes32`s, in chain order;
+ *   the wallet must hold every segment's signing key
  * - `elf_data` must be a valid pointer to `elf_size` bytes
  * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
  */

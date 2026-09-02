@@ -21,9 +21,9 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let ata_program_id = programs::ata().id();
+        let ata_account_id = programs::ata().deployed_account_id();
         let ata_id = get_associated_token_account_id(
-            &programs::ata().deployed_account_id(),
+            &ata_account_id,
             &compute_ata_seed(owner_id, definition_id),
         );
         let instruction = associated_token_account_core::Instruction::Create;
@@ -38,7 +38,7 @@ impl Ata<'_> {
                     AccountIdentity::PublicNoSign(ata_id),
                 ],
                 instruction_data,
-                ata_program_id,
+                ata_account_id,
             )
             .await
     }
@@ -54,9 +54,9 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let ata_program_id = programs::ata().id();
+        let ata_account_id = programs::ata().deployed_account_id();
         let sender_ata_id = get_associated_token_account_id(
-            &programs::ata().deployed_account_id(),
+            &ata_account_id,
             &compute_ata_seed(owner_id, definition_id),
         );
         let instruction = associated_token_account_core::Instruction::Transfer { amount };
@@ -71,7 +71,7 @@ impl Ata<'_> {
                     AccountIdentity::PublicNoSign(recipient_id),
                 ],
                 instruction_data,
-                ata_program_id,
+                ata_account_id,
             )
             .await
     }
@@ -86,9 +86,9 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let ata_program_id = programs::ata().id();
+        let ata_account_id = programs::ata().deployed_account_id();
         let holder_ata_id = get_associated_token_account_id(
-            &programs::ata().deployed_account_id(),
+            &ata_account_id,
             &compute_ata_seed(owner_id, definition_id),
         );
         let instruction = associated_token_account_core::Instruction::Burn { amount };
@@ -103,7 +103,7 @@ impl Ata<'_> {
                     AccountIdentity::PublicNoSign(definition_id),
                 ],
                 instruction_data,
-                ata_program_id,
+                ata_account_id,
             )
             .await
     }
