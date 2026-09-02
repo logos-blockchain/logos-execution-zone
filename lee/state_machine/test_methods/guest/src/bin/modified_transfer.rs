@@ -8,23 +8,6 @@ use lee_core::{
     program::{ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
-/// Echoes an authorized default account back unchanged.
-fn initialize_account(pre_state: AccountWithMetadata) -> Account {
-    let account = pre_state.account;
-    let is_authorized = pre_state.is_authorized;
-
-    // Continue only if the account has default values
-    assert!(
-        account == Account::default(),
-        "Account is already initialized"
-    );
-
-    // Continue only if the owner authorized this operation
-    assert!(is_authorized, "Missing required authorization");
-
-    account
-}
-
 /// Transfers `balance_to_move` native balance from `sender` to `recipient`.
 fn transfer(
     sender: AccountWithMetadata,
@@ -69,10 +52,6 @@ fn main() {
     ) = read_lee_inputs();
 
     let post_states = match (pre_states.as_slice(), balance_to_move) {
-        ([account], 0) => {
-            let post = initialize_account(account.clone());
-            vec![post]
-        }
         ([sender, recipient], balance_to_move) => {
             transfer(sender.clone(), recipient.clone(), balance_to_move)
         }
