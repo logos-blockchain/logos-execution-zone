@@ -13,7 +13,7 @@ lee.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
-sequencer_storage_actor.workspace = true
+sequencer_storage_actor = { workspace = true, features = ["actor"] }
 
 logos-blockchain-key-management-system-service.workspace = true
 kameo.workspace = true
@@ -22,7 +22,8 @@ borsh.workspace = true
 hex.workspace = true
 log.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 sequencer_storage_actor = { workspace = true, features = ["mock"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
