@@ -4784,7 +4784,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     ];
     let tx_program = |tx: &LeeTransaction| match tx {
         LeeTransaction::Public(public) => public.message().program_account_id,
-        LeeTransaction::PrivacyPreserving(_) | LeeTransaction::ProgramDeployment(_) => {
+        LeeTransaction::PrivacyPreserving(_) => {
             unreachable!("genesis holds only public transactions")
         }
     };

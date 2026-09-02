@@ -541,19 +541,71 @@ mod tests {
         }
     }
 
-    fn deploy_emitter_tx() -> LeeTransaction {
-        LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-            lee::program_deployment_transaction::Message::new(
-                test_methods::EVENT_EMITTER_ELF.to_vec(),
-            ),
-        ))
+    fn emitter_header_key() -> lee::PrivateKey {
+        lee::PrivateKey::try_new([201; 32]).unwrap()
+    }
+
+    fn emitter_header_account_id() -> AccountId {
+        AccountId::from(&lee::PublicKey::new_from_private_key(&emitter_header_key()))
+    }
+
+    // Deploys the emitter guest through `program_loader`: a `WriteSegment` claiming a fresh
+    // segment account, then a `CreateHeader` claiming a fresh header account that points at it.
+    // Both land in the same block, in order, so the header's `CreateHeader` sees the segment
+    // the preceding transaction just committed. Both are ordinary (non-exempt) public
+    // transactions, so each needs its own fee declaration; a funded genesis account co-signs
+    // as payer since the freshly-claimed segment/header accounts hold nothing to self-pay with.
+    fn deploy_emitter_txs() -> Vec<LeeTransaction> {
+        let payer = &initial_pub_accounts_private_keys()[0];
+        let segment_key = lee::PrivateKey::try_new([200; 32]).unwrap();
+        let segment_id = AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key));
+        let header_key = emitter_header_key();
+        let header_id = emitter_header_account_id();
+
+        let segment_message = lee::public_transaction::Message::try_new_with_fees(
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            vec![segment_id],
+            vec![lee_core::account::Nonce(0)],
+            program_loader_core::Instruction::WriteSegment {
+                bytecode: test_methods::EVENT_EMITTER_ELF.to_vec(),
+                next_segment: None,
+            },
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )
+        .expect("WriteSegment instruction data should always be serializable");
+        let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
+            &segment_message,
+            &[&segment_key, &payer.pub_sign_key],
+        );
+        let segment_tx =
+            LeeTransaction::Public(lee::PublicTransaction::new(segment_message, segment_witness_set));
+
+        let header_message = lee::public_transaction::Message::try_new_with_fees(
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            vec![header_id, segment_id],
+            vec![lee_core::account::Nonce(0)],
+            program_loader_core::Instruction::CreateHeader {
+                first_segment: segment_id,
+                immutable: true,
+            },
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )
+        .expect("CreateHeader instruction data should always be serializable");
+        let header_witness_set = lee::public_transaction::WitnessSet::for_message(
+            &header_message,
+            &[&header_key, &payer.pub_sign_key],
+        );
+        let header_tx =
+            LeeTransaction::Public(lee::PublicTransaction::new(header_message, header_witness_set));
+
+        vec![segment_tx, header_tx]
     }
 
     fn invoke_emitter_tx(events: Vec<ProgramEvent>) -> LeeTransaction {
         // create message with payer so that it's not rejected due to missing fee declaration
         let payer = &initial_pub_accounts_private_keys()[0];
         let message = lee::public_transaction::Message::try_new_with_fees(
-            test_methods::EVENT_EMITTER_ID.into(),
+            emitter_header_account_id(),
             vec![AccountId::new([42; 32])],
             vec![0_u128.into()],
             EmitterInstruction {
@@ -588,7 +640,7 @@ mod tests {
             &mut build_state,
             2,
             Some(genesis.header.hash),
-            vec![deploy_emitter_tx()],
+            deploy_emitter_txs(),
         );
         assert!(matches!(
             store

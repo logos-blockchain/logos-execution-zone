@@ -23,7 +23,6 @@ use crate::{
         PrivacyPreservingTransaction, circuit::Proof, message::Message,
     },
     program::Program,
-    program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
     state::MAX_NUMBER_CHAINED_CALLS,
 };
@@ -777,21 +776,6 @@ impl ValidatedStateDiff {
             new_commitments: commitments,
             new_nullifiers,
             program: None,
-            events: vec![],
-        }))
-    }
-
-    pub fn from_program_deployment_transaction(
-        tx: &ProgramDeploymentTransaction,
-    ) -> Result<Self, LeeError> {
-        // TODO: remove clone
-        let program = Program::new(tx.message.bytecode.clone().into())?;
-        Ok(Self(StateDiff {
-            signer_account_ids: vec![],
-            public_diff: HashMap::new(),
-            new_commitments: vec![],
-            new_nullifiers: vec![],
-            program: Some(program),
             events: vec![],
         }))
     }
