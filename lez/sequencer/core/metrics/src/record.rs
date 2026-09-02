@@ -24,7 +24,6 @@ pub enum TransactionOrigin {
 pub enum TxKind {
     Public,
     PrivacyPreserving,
-    ProgramDeployment,
 }
 
 /// Whether applying a transaction to the block's working state succeeded.
@@ -40,7 +39,6 @@ impl From<common::transaction::TxKind> for TxKind {
         match kind {
             common::transaction::TxKind::Public => Self::Public,
             common::transaction::TxKind::PrivacyPreserving => Self::PrivacyPreserving,
-            common::transaction::TxKind::ProgramDeployment => Self::ProgramDeployment,
         }
     }
 }

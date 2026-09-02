@@ -6,10 +6,9 @@ use crate::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockIngestError, Ciphertext,
     Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData, EphemeralPublicKey,
     HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, ProgramImageClaim, Proof,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature, StallReason,
-    Transaction, ValidityWindow, WitnessSet,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramId,
+    ProgramImageClaim, Proof, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction,
+    Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -403,21 +402,6 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
     }
 }
 
-impl From<lee::program_deployment_transaction::Message> for ProgramDeploymentMessage {
-    fn from(value: lee::program_deployment_transaction::Message) -> Self {
-        Self {
-            bytecode: value.into_bytecode(),
-        }
-    }
-}
-
-impl From<ProgramDeploymentMessage> for lee::program_deployment_transaction::Message {
-    fn from(value: ProgramDeploymentMessage) -> Self {
-        let ProgramDeploymentMessage { bytecode } = value;
-        Self::new(bytecode)
-    }
-}
-
 // ============================================================================
 // WitnessSet conversions
 // ============================================================================
@@ -546,34 +530,12 @@ impl TryFrom<PrivacyPreservingTransaction> for lee::PrivacyPreservingTransaction
     }
 }
 
-impl From<lee::ProgramDeploymentTransaction> for ProgramDeploymentTransaction {
-    fn from(value: lee::ProgramDeploymentTransaction) -> Self {
-        let hash = HashType(value.hash());
-        let lee::ProgramDeploymentTransaction { message } = value;
-
-        Self {
-            hash,
-            message: message.into(),
-        }
-    }
-}
-
-impl From<ProgramDeploymentTransaction> for lee::ProgramDeploymentTransaction {
-    fn from(value: ProgramDeploymentTransaction) -> Self {
-        let ProgramDeploymentTransaction { hash: _, message } = value;
-        Self::new(message.into())
-    }
-}
-
 impl From<common::transaction::LeeTransaction> for Transaction {
     fn from(value: common::transaction::LeeTransaction) -> Self {
         match value {
             common::transaction::LeeTransaction::Public(tx) => Self::Public(tx.into()),
             common::transaction::LeeTransaction::PrivacyPreserving(tx) => {
                 Self::PrivacyPreserving(tx.into())
-            }
-            common::transaction::LeeTransaction::ProgramDeployment(tx) => {
-                Self::ProgramDeployment(tx.into())
             }
         }
     }
@@ -586,7 +548,6 @@ impl TryFrom<Transaction> for common::transaction::LeeTransaction {
         match value {
             Transaction::Public(tx) => Ok(Self::Public(tx.try_into()?)),
             Transaction::PrivacyPreserving(tx) => Ok(Self::PrivacyPreserving(tx.try_into()?)),
-            Transaction::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx.into())),
         }
     }
 }
@@ -645,9 +606,6 @@ impl From<common::block::BlockBody> for BlockBody {
                 common::transaction::LeeTransaction::Public(tx) => Transaction::Public(tx.into()),
                 common::transaction::LeeTransaction::PrivacyPreserving(tx) => {
                     Transaction::PrivacyPreserving(tx.into())
-                }
-                common::transaction::LeeTransaction::ProgramDeployment(tx) => {
-                    Transaction::ProgramDeployment(tx.into())
                 }
             })
             .collect();

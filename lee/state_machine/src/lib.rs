@@ -15,7 +15,6 @@ pub use privacy_preserving_circuit::{
 pub use privacy_preserving_transaction::{
     PrivacyPreservingTransaction, circuit::execute_and_prove,
 };
-pub use program_deployment_transaction::ProgramDeploymentTransaction;
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::V03State;
@@ -26,7 +25,6 @@ pub mod error;
 mod merkle_tree;
 pub mod privacy_preserving_transaction;
 pub mod program;
-pub mod program_deployment_transaction;
 pub mod public_transaction;
 mod signature;
 mod state;

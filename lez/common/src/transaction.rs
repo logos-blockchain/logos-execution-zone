@@ -10,7 +10,6 @@ use crate::HashType;
 pub enum LeeTransaction {
     Public(lee::PublicTransaction),
     PrivacyPreserving(lee::PrivacyPreservingTransaction),
-    ProgramDeployment(lee::ProgramDeploymentTransaction),
 }
 
 impl Serialize for LeeTransaction {
@@ -31,7 +30,6 @@ impl LeeTransaction {
         HashType(match self {
             Self::Public(tx) => tx.hash(),
             Self::PrivacyPreserving(tx) => tx.hash(),
-            Self::ProgramDeployment(tx) => tx.hash(),
         })
     }
 
@@ -40,14 +38,12 @@ impl LeeTransaction {
         match self {
             Self::Public(_) => TxKind::Public,
             Self::PrivacyPreserving(_) => TxKind::PrivacyPreserving,
-            Self::ProgramDeployment(_) => TxKind::ProgramDeployment,
         }
     }
 
     #[must_use]
     pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
         match self {
-            Self::ProgramDeployment(tx) => tx.affected_public_account_ids(),
             Self::Public(tx) => tx.affected_public_account_ids(),
             Self::PrivacyPreserving(tx) => tx.affected_public_account_ids(),
         }
@@ -71,7 +67,6 @@ impl LeeTransaction {
                     Err(TransactionMalformationError::InvalidSignature)
                 }
             }
-            Self::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx)),
         }
     }
 
@@ -116,9 +111,6 @@ impl LeeTransaction {
             Self::PrivacyPreserving(tx) => ValidatedStateDiff::from_privacy_preserving_transaction(
                 tx, state, block_id, timestamp,
             ),
-            Self::ProgramDeployment(tx) => {
-                ValidatedStateDiff::from_program_deployment_transaction(tx)
-            }
         }
     }
 
@@ -202,19 +194,12 @@ impl From<lee::PrivacyPreservingTransaction> for LeeTransaction {
     }
 }
 
-impl From<lee::ProgramDeploymentTransaction> for LeeTransaction {
-    fn from(value: lee::ProgramDeploymentTransaction) -> Self {
-        Self::ProgramDeployment(value)
-    }
-}
-
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub enum TxKind {
     Public,
     PrivacyPreserving,
-    ProgramDeployment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]

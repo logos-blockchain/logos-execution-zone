@@ -1,9 +1,9 @@
 use indexer_service_protocol::{
     AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
     EphemeralPublicKey, HashType, Nullifier, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
-    ProgramDeploymentTransaction, ProgramImageClaim, Proof, PublicActionWithID, PublicKey,
-    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    PrivacyPreservingTransaction, PrivateAction, ProgramImageClaim, Proof, PublicActionWithID,
+    PublicKey, PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow,
+    WitnessSet,
 };
 
 use crate::api::types::{
@@ -12,8 +12,7 @@ use crate::api::types::{
     account::FfiAccount,
     vectors::{
         FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList,
-        FfiProgramDeploymentMessage, FfiProgramImageClaimList, FfiProof, FfiPublicActionList,
-        FfiSignaturePubKeyList, FfiVecU8,
+        FfiProgramImageClaimList, FfiProof, FfiPublicActionList, FfiSignaturePubKeyList, FfiVecU8,
     },
 };
 
@@ -376,38 +375,9 @@ impl From<(Signature, PublicKey)> for FfiSignaturePubKeyEntry {
 }
 
 #[repr(C)]
-pub struct FfiProgramDeploymentTransactionBody {
-    pub hash: FfiHashType,
-    pub message: FfiProgramDeploymentMessage,
-}
-
-impl From<Box<FfiProgramDeploymentTransactionBody>> for ProgramDeploymentTransaction {
-    fn from(value: Box<FfiProgramDeploymentTransactionBody>) -> Self {
-        Self {
-            hash: HashType(value.hash.data),
-            message: ProgramDeploymentMessage {
-                bytecode: value.message.into(),
-            },
-        }
-    }
-}
-
-impl From<ProgramDeploymentTransaction> for FfiProgramDeploymentTransactionBody {
-    fn from(value: ProgramDeploymentTransaction) -> Self {
-        let ProgramDeploymentTransaction { hash, message } = value;
-
-        Self {
-            hash: hash.into(),
-            message: message.bytecode.into(),
-        }
-    }
-}
-
-#[repr(C)]
 pub struct FfiTransactionBody {
     pub public_body: *mut FfiPublicTransactionBody,
     pub private_body: *mut FfiPrivateTransactionBody,
-    pub program_deployment_body: *mut FfiProgramDeploymentTransactionBody,
 }
 
 #[repr(C)]
@@ -423,7 +393,6 @@ impl From<Transaction> for FfiTransaction {
                 body: FfiTransactionBody {
                     public_body: Box::into_raw(Box::new(pub_tx.into())),
                     private_body: std::ptr::null_mut(),
-                    program_deployment_body: std::ptr::null_mut(),
                 },
                 kind: FfiTransactionKind::Public,
             },
@@ -431,17 +400,8 @@ impl From<Transaction> for FfiTransaction {
                 body: FfiTransactionBody {
                     public_body: std::ptr::null_mut(),
                     private_body: Box::into_raw(Box::new(priv_tx.into())),
-                    program_deployment_body: std::ptr::null_mut(),
                 },
                 kind: FfiTransactionKind::Private,
-            },
-            Transaction::ProgramDeployment(pr_dep_tx) => Self {
-                body: FfiTransactionBody {
-                    public_body: std::ptr::null_mut(),
-                    private_body: std::ptr::null_mut(),
-                    program_deployment_body: Box::into_raw(Box::new(pr_dep_tx.into())),
-                },
-                kind: FfiTransactionKind::ProgramDeploy,
             },
         }
     }
@@ -451,7 +411,6 @@ impl From<Transaction> for FfiTransaction {
 pub enum FfiTransactionKind {
     Public = 0x0,
     Private,
-    ProgramDeploy,
 }
 
 /// Frees the resources associated with the given ffi transaction.
@@ -479,11 +438,6 @@ pub unsafe extern "C" fn free_ffi_transaction(val: FfiTransaction) {
         FfiTransactionKind::Private => {
             let body = unsafe { Box::from_raw(val.body.private_body) };
             let std_body: PrivacyPreservingTransaction = body.into();
-            drop(std_body);
-        }
-        FfiTransactionKind::ProgramDeploy => {
-            let body = unsafe { Box::from_raw(val.body.program_deployment_body) };
-            let std_body: ProgramDeploymentTransaction = body.into();
             drop(std_body);
         }
     }

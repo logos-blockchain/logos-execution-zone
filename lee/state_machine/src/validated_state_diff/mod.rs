@@ -22,7 +22,6 @@ use crate::{
         PrivacyPreservingTransaction, circuit::Proof, message::Message,
     },
     program::Program,
-    program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
     state::MAX_NUMBER_CHAINED_CALLS,
 };
@@ -178,15 +177,13 @@ impl ValidatedStateDiff {
                 //
                 // Reads through `state_diff` first, so an earlier chained call in this same
                 // transaction that deployed or updated this program is seen immediately.
-                let Some((program_id, elf)) = crate::state::get_program_via(
-                    chained_call.program_account_id,
-                    |id| {
+                let Some((program_id, elf)) =
+                    crate::state::get_program_via(chained_call.program_account_id, |id| {
                         state_diff
                             .get(&id)
                             .cloned()
                             .unwrap_or_else(|| state.get_account_by_id(id))
-                    },
-                )?
+                    })?
                 else {
                     return Err(LeeError::InvalidInput("Unknown program".into()));
                 };
@@ -507,20 +504,6 @@ impl ValidatedStateDiff {
             new_commitments: commitments,
             new_nullifiers,
             program: None,
-        }))
-    }
-
-    pub fn from_program_deployment_transaction(
-        tx: &ProgramDeploymentTransaction,
-    ) -> Result<Self, LeeError> {
-        // TODO: remove clone
-        let program = Program::new(tx.message.bytecode.clone().into())?;
-        Ok(Self(StateDiff {
-            signer_account_ids: vec![],
-            public_diff: HashMap::new(),
-            new_commitments: vec![],
-            new_nullifiers: vec![],
-            program: Some(program),
         }))
     }
 

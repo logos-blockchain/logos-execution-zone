@@ -20,8 +20,6 @@ pub type FfiSignaturePubKeyList = FfiVec<FfiSignaturePubKeyEntry>;
 
 pub type FfiProof = FfiVecU8;
 
-pub type FfiProgramDeploymentMessage = FfiVecU8;
-
 pub type FfiPublicActionList = FfiVec<FfiPublicAction>;
 
 pub type FfiPrivateActionList = FfiVec<FfiPrivateAction>;

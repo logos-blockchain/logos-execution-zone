@@ -1,6 +1,6 @@
 use indexer_service_protocol::{
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
-    ProgramDeploymentTransaction, PublicMessage, PublicTransaction, WitnessSet,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicMessage, PublicTransaction,
+    WitnessSet,
 };
 use leptos::prelude::*;
 
@@ -124,28 +124,6 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
 
             <h3>"Public Accounts"</h3>
             <AccountNonceList account_ids=public_account_ids nonces=nonces />
-        </div>
-    }
-}
-
-/// Program deployment transaction details component
-#[component]
-pub fn ProgramDeploymentTxDetails(tx: ProgramDeploymentTransaction) -> impl IntoView {
-    let ProgramDeploymentTransaction { hash: _, message } = tx;
-    let ProgramDeploymentMessage { bytecode } = message;
-
-    let bytecode_len = bytecode.len();
-    view! {
-        <div class="transaction-details">
-            <h2>"Program Deployment Transaction Details"</h2>
-            <div class="info-grid">
-                <div class="info-row">
-                    <span class="info-label">"Bytecode Size:"</span>
-                    <span class="info-value">
-                        {format!("{bytecode_len} bytes")}
-                    </span>
-                </div>
-            </div>
         </div>
     }
 }

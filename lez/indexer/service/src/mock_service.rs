@@ -11,9 +11,8 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use indexer_service_protocol::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
     CommitmentSetDigest, Data, EncryptedAccountData, HashType, IndexerStatus, IndexerSyncState,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    ProgramDeploymentMessage, ProgramDeploymentTransaction, PublicActionWithID, PublicMessage,
-    PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, PublicActionWithID,
+    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -307,7 +306,6 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                         .public_actions
                         .iter()
                         .any(|action| action.account_id == account_id),
-                    Transaction::ProgramDeployment(_) => false,
                 })
                 .cloned()
                 .collect()
@@ -418,15 +416,6 @@ fn mock_privacy_preserving_tx(
     })
 }
 
-fn mock_program_deployment_tx(tx_hash: HashType) -> Transaction {
-    Transaction::ProgramDeployment(ProgramDeploymentTransaction {
-        hash: tx_hash,
-        message: ProgramDeploymentMessage {
-            bytecode: vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
-        },
-    })
-}
-
 fn build_mock_block(
     block_id: BlockId,
     prev_hash: HashType,
@@ -452,10 +441,9 @@ fn build_mock_block(
             HashType(hash)
         };
 
-        let tx = match (block_id + tx_idx) % 5 {
-            0 | 1 => mock_public_tx(tx_hash, block_id, tx_idx, account_ids),
-            2 | 3 => mock_privacy_preserving_tx(tx_hash, block_id, tx_idx, account_ids),
-            _ => mock_program_deployment_tx(tx_hash),
+        let tx = match (block_id + tx_idx) % 2 {
+            0 => mock_public_tx(tx_hash, block_id, tx_idx, account_ids),
+            _ => mock_privacy_preserving_tx(tx_hash, block_id, tx_idx, account_ids),
         };
 
         block_transactions.push(tx);
@@ -484,7 +472,6 @@ fn index_block_transactions(
         let tx_hash = match tx {
             Transaction::Public(public_tx) => public_tx.hash,
             Transaction::PrivacyPreserving(private_tx) => private_tx.hash,
-            Transaction::ProgramDeployment(deployment_tx) => deployment_tx.hash,
         };
         transactions.insert(tx_hash, (tx.clone(), block.header.block_id));
     }

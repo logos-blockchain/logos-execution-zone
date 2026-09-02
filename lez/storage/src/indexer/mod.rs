@@ -219,7 +219,7 @@ fn apply_block_transactions(mut block: Block, state: &mut V03State) -> DbResult<
         if block.header.block_id == GENESIS_BLOCK_ID {
             let genesis_tx = match transaction {
                 LeeTransaction::Public(public_tx) => public_tx,
-                LeeTransaction::PrivacyPreserving(_) | LeeTransaction::ProgramDeployment(_) => {
+                LeeTransaction::PrivacyPreserving(_) => {
                     return Err(DbError::db_interaction_error(
                         "Genesis block should contain only public transactions".to_owned(),
                     ));
