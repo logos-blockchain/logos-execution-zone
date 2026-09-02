@@ -1707,18 +1707,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
             adopted: outcomes,
             finalized: finalized_outcomes,
             cursor_moved: _,
-        } = chain.apply_follow(
-            &orphaned,
-            &adopted,
-            &finalized,
-            // FIXME: thread the finalized inscription's L1 slot instead of
-            // `Slot::from(0)`; only used for the invalid-finalized stall.
-            // logos-blockchain PR #3147 surfaces it as `FinalizedTx.l1_slot` —
-            // wire it through `FollowUpdate::finalized` once the zone-sdk pin is
-            // bumped past that (a separate PR).
-            Slot::from(0),
-            checkpoint.last_msg_id,
-        );
+        } = chain.apply_follow(&orphaned, &adopted, &finalized, checkpoint.last_msg_id);
 
         // An adoption that does not apply freezes the head where it is, and
         // every later one then fails the same way. Nothing else reports it.
@@ -1750,7 +1739,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // or dropping its deposit records would lose them for good.
         let mut irreversible: Vec<&Block> = Vec::new();
         let mut final_advanced = false;
-        for (block, outcome) in finalized.iter().zip(&finalized_outcomes) {
+        for ((block, _), outcome) in finalized.iter().zip(&finalized_outcomes) {
             match outcome {
                 AcceptOutcome::Applied => {
                     to_persist.push((block, true));

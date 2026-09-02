@@ -164,8 +164,8 @@ impl ChainState {
     /// Drops our record of every block this update reports on. The sdk omits our
     /// own landed block from `adopted` except on a branch change, so `finalized`
     /// carries the ordinary case.
-    fn resolve_own_publishes(&mut self, reports: [&[Block]; 3]) {
-        for block in reports.into_iter().flatten() {
+    fn resolve_own_publishes<'block>(&mut self, reports: impl IntoIterator<Item = &'block Block>) {
+        for block in reports {
             self.own_publishes.remove(&block.header.hash);
         }
     }
@@ -323,17 +323,21 @@ impl ChainState {
         &mut self,
         orphaned: &[Block],
         adopted: &[Block],
-        finalized: &[Block],
-        finalized_slot: Slot,
+        finalized: &[(Block, Slot)],
         channel_tip: MsgId,
     ) -> FollowOutcome {
         // Before the tip is judged, so this update's news frees its own parents.
-        self.resolve_own_publishes([orphaned, adopted, finalized]);
+        self.resolve_own_publishes(
+            orphaned
+                .iter()
+                .chain(adopted)
+                .chain(finalized.iter().map(|(block, _)| block)),
+        );
 
         let adopted_outcomes = self.apply_channel_update(orphaned, adopted);
         let finalized_outcomes = finalized
             .iter()
-            .map(|block| self.apply_finalized(block, finalized_slot))
+            .map(|(block, l1_slot)| self.apply_finalized(block, *l1_slot))
             .collect();
 
         let cursor_moved = self.cursor_may_move_to(channel_tip);
@@ -938,13 +942,13 @@ mod tests {
         // Nothing published yet: root is the parent the first inscription needs.
         assert!(
             chain
-                .apply_follow(&[], &[], &[], Slot::from(0), MsgId::root())
+                .apply_follow(&[], &[], &[], MsgId::root())
                 .cursor_moved
         );
 
         chain.record_own_inscription(msg(1), genesis.header.hash);
 
-        let outcome = chain.apply_follow(&[], &[], &[], Slot::from(0), MsgId::root());
+        let outcome = chain.apply_follow(&[], &[], &[], MsgId::root());
         assert!(!outcome.cursor_moved);
         assert_eq!(
             chain.pin_parent(),
@@ -959,7 +963,7 @@ mod tests {
     fn a_tip_naming_an_entry_we_already_chained_on_is_refused() {
         let (mut chain, _ours) = chain_with_our_block(msg(2), msg(3));
 
-        let outcome = chain.apply_follow(&[], &[], &[], Slot::from(0), msg(2));
+        let outcome = chain.apply_follow(&[], &[], &[], msg(2));
 
         assert!(!outcome.cursor_moved);
         assert_eq!(
@@ -975,7 +979,7 @@ mod tests {
     fn a_tip_elsewhere_is_taken_even_when_no_block_of_ours_is_named() {
         let (mut chain, _ours) = chain_with_our_block(msg(2), msg(3));
 
-        let outcome = chain.apply_follow(&[], &[], &[], Slot::from(0), msg(9));
+        let outcome = chain.apply_follow(&[], &[], &[], msg(9));
 
         assert!(outcome.cursor_moved);
         assert_eq!(chain.pin_parent(), Some(msg(9)));
@@ -990,11 +994,16 @@ mod tests {
             let (orphaned, adopted, finalized) = match report {
                 "adopted" => (Vec::new(), held, Vec::new()),
                 "orphaned" => (held, Vec::new(), Vec::new()),
-                _ => (Vec::new(), Vec::new(), held),
+                _ => (
+                    Vec::new(),
+                    Vec::new(),
+                    held.into_iter()
+                        .map(|block| (block, Slot::from(0)))
+                        .collect(),
+                ),
             };
 
-            let outcome =
-                chain.apply_follow(&orphaned, &adopted, &finalized, Slot::from(0), msg(2));
+            let outcome = chain.apply_follow(&orphaned, &adopted, &finalized, msg(2));
 
             assert!(
                 outcome.cursor_moved,
@@ -1010,7 +1019,7 @@ mod tests {
         let (mut chain, ours) = chain_with_our_block(msg(2), msg(3));
         assert!(chain.pin_is_ours());
 
-        chain.apply_follow(&[], &[], &[ours], Slot::from(0), msg(3));
+        chain.apply_follow(&[], &[], &[(ours, Slot::from(0))], msg(3));
 
         assert_eq!(chain.pin_parent(), Some(msg(3)));
         assert!(

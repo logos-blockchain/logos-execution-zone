@@ -922,7 +922,7 @@ async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
         &mempool_handle,
         FollowUpdate {
             checkpoint: checkpoint_at(mock_msg_of(&delivery_block)),
-            finalized: vec![delivery_block],
+            finalized: vec![(delivery_block, Slot::from(0))],
             ..empty_follow_update()
         },
     )
@@ -1318,7 +1318,7 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            finalized: vec![genesis],
+            finalized: vec![(genesis, Slot::from(0))],
             ..empty_follow_update()
         },
     )
@@ -2629,7 +2629,7 @@ async fn the_pin_stays_on_a_finalized_entry_through_its_pruning_report() {
         &mempool_handle,
         FollowUpdate {
             checkpoint: checkpoint_at(block2_msg),
-            finalized: vec![block2.clone()],
+            finalized: vec![(block2.clone(), Slot::from(0))],
             ..empty_follow_update()
         },
     )
@@ -2818,7 +2818,7 @@ async fn a_readopted_block_above_the_head_keeps_the_published_height() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            finalized: vec![produced[0].clone()],
+            finalized: vec![(produced[0].clone(), Slot::from(0))],
             ..empty_follow_update()
         },
     )
@@ -3065,7 +3065,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            finalized: vec![block2.clone()],
+            finalized: vec![(block2.clone(), Slot::from(0))],
             ..empty_follow_update()
         },
     )
@@ -3119,7 +3119,7 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
         FollowUpdate {
             adopted: vec![],
             orphaned: vec![],
-            finalized: vec![block2],
+            finalized: vec![(block2, Slot::from(0))],
             ..empty_follow_update()
         },
     )
@@ -3175,7 +3175,7 @@ async fn follow_finalized_delivery_drops_its_pending_record() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            finalized: vec![delivery_block],
+            finalized: vec![(delivery_block, Slot::from(0))],
             ..empty_follow_update()
         },
     )
@@ -3224,7 +3224,7 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
         &sequencer.chain(),
         &mempool_handle,
         FollowUpdate {
-            finalized: vec![parked],
+            finalized: vec![(parked, Slot::from(0))],
             ..empty_follow_update()
         },
     )
@@ -3263,7 +3263,7 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
         FollowUpdate {
             adopted: vec![],
             orphaned: vec![],
-            finalized: vec![peer_block.clone()],
+            finalized: vec![(peer_block.clone(), Slot::from(0))],
             ..empty_follow_update()
         },
     )
@@ -3329,7 +3329,7 @@ async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_r
         FollowUpdate {
             adopted: vec![],
             orphaned: vec![],
-            finalized: vec![parked],
+            finalized: vec![(parked, Slot::from(0))],
             ..empty_follow_update()
         },
     )
@@ -3513,7 +3513,7 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
             FollowUpdate {
                 adopted: vec![],
                 orphaned: vec![],
-                finalized: vec![block2],
+                finalized: vec![(block2, Slot::from(0))],
                 ..empty_follow_update()
             },
         )
@@ -3625,7 +3625,7 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
         FollowUpdate {
             adopted: vec![block2.clone(), block3.clone()],
             orphaned: vec![],
-            finalized: vec![block2],
+            finalized: vec![(block2, Slot::from(0))],
             ..empty_follow_update()
         },
     )
