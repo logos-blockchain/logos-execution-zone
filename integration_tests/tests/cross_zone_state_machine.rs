@@ -1655,7 +1655,6 @@ fn the_token_authority_path_holds() {
         "must be the wrapped-token config PDA",
     );
 
-    // The configured authority can act repeatedly.
     let diff = ValidatedStateDiff::from_public_transaction(
         &update(authority, &key, 0, bridge_source.clone()),
         &state,
@@ -1676,9 +1675,10 @@ fn the_token_authority_path_holds() {
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         lee::AccountId::default(),
-        "the authority carries no data, so no program takes it over"
+        "acting as the authority must not hand the account to wrapped_token"
     );
 
+    // Acting again with a different list must replace it, not accumulate.
     let sender_source = vec![(src_zone, programs::ping_sender().id())];
     let second = ValidatedStateDiff::from_public_transaction(
         &update(authority, &key, 1, sender_source.clone()),
@@ -1999,10 +1999,8 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
     rejects_at(&open, &update(), 1, "must be the wrapped-token config PDA");
 }
 
-/// A program-held authority acts through the governance program delegating its
-/// PDA on the chained call: no target ever takes the account over, so the second
-/// use runs on exactly the same path as the first, and renouncing through it is
-/// as total as renouncing top-level.
+/// A program-held authority acts through the governance program delegating its PDA on the
+/// chained call, and renouncing through it is as total as renouncing top-level.
 #[test]
 fn the_governance_path_holds() {
     let wrapped_token_id = programs::wrapped_token().id();
@@ -2059,7 +2057,7 @@ fn the_governance_path_holds() {
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         lee::AccountId::default(),
-        "the authority carries no data, so no program takes it over"
+        "acting as the authority must not hand the account to wrapped_token"
     );
 
     let second = ValidatedStateDiff::from_public_transaction(&update(vec![]), &state, 2, 0)
@@ -2233,7 +2231,7 @@ fn the_receiver_governance_path_holds() {
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         lee::AccountId::default(),
-        "the authority carries no data, so no program takes it over"
+        "acting as the authority must not hand the account to ping_receiver"
     );
 }
 
