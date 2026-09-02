@@ -11,7 +11,6 @@ use sequencer_core::{
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, verify_commitment_is_in_state};
 use wallet::{
-    AccountIdentity,
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
         account::{AccountSubcommand, NewSubcommand},
@@ -19,7 +18,6 @@ use wallet::{
             native_token_transfer::AuthTransferSubcommand, token::TokenProgramAgnosticSubcommand,
         },
     },
-    program_facades::{native_token_transfer::NativeTokenTransfer, token::Token},
     storage::key_chain::FoundPrivateAccount,
 };
 
@@ -134,34 +132,6 @@ pub async fn send(
     Ok(())
 }
 
-/// Like [`send`], but with the recipient signing the transaction as well.
-///
-/// The wallet CLI's `AuthTransfer::Send` never signs with the recipient's key (by design: the
-/// sender's wallet must not sign on behalf of an account it doesn't own), so this bypasses the
-/// CLI and calls the program facade directly with an explicit `AccountIdentity::Public` for the
-/// recipient, using the key the test wallet holds for it. The credit itself needs no such
-/// signature.
-///
-/// Unlike `send`, this doesn't go through the CLI's own poll-until-included step, so it waits
-/// for block creation itself before returning.
-pub async fn send_with_signing_recipient(
-    ctx: &mut TestContext,
-    from: AccountId,
-    to: AccountId,
-    amount: u128,
-) -> anyhow::Result<()> {
-    NativeTokenTransfer(ctx.wallet())
-        .send_public_transfer(
-            AccountIdentity::Public(from),
-            AccountIdentity::Public(to),
-            amount,
-        )
-        .await?;
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-    Ok(())
-}
-
 /// Create a token (New) and wait for the block to be included.
 pub async fn create_token(
     ctx: &mut TestContext,
@@ -199,28 +169,6 @@ pub async fn token_send(
         amount,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-    Ok(())
-}
-
-/// Like [`token_send`], but with the recipient signing the transaction as well.
-///
-/// See [`send_with_signing_recipient`] for why the CLI can't be used here; the token program
-/// acquires the recipient's holding through its own data write, not through that signature.
-pub async fn token_send_with_signing_recipient(
-    ctx: &mut TestContext,
-    from: AccountId,
-    to: AccountId,
-    amount: u128,
-) -> anyhow::Result<()> {
-    Token(ctx.wallet())
-        .send_transfer_transaction(
-            AccountIdentity::Public(from),
-            AccountIdentity::Public(to),
-            amount,
-        )
-        .await?;
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     Ok(())

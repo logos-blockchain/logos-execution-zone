@@ -10,10 +10,7 @@ use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
     public_mention,
-    utils::{
-        assert_public_account_restored, new_account, restored_private_account, send,
-        send_with_signing_recipient,
-    },
+    utils::{assert_public_account_restored, new_account, restored_private_account, send},
     verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
@@ -124,8 +121,20 @@ async fn restore_keys_from_seed() -> Result<()> {
     let to_account_id4 = new_account(&mut ctx, false, Some(ChainIndex::from_str("/0")?)).await?;
 
     // Send to both public accounts.
-    send_with_signing_recipient(&mut ctx, from, to_account_id3, 102).await?;
-    send_with_signing_recipient(&mut ctx, from, to_account_id4, 103).await?;
+    send(
+        &mut ctx,
+        public_mention(from),
+        public_mention(to_account_id3),
+        102,
+    )
+    .await?;
+    send(
+        &mut ctx,
+        public_mention(from),
+        public_mention(to_account_id4),
+        103,
+    )
+    .await?;
 
     log::info!("Preparation complete, performing keys restoration");
 
