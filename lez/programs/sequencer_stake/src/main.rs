@@ -9,11 +9,11 @@ use lee_core::{
     },
 };
 use sequencer_stake_core::{
-    ChannelParams, Instruction, PendingUnstake, SLASH_APPROVAL_THRESHOLD, SequencerEntry,
-    SequencerKey, SequencerStakeConfig, SlashApproval, StakeRecord,
+    ChannelParams, Instruction, PendingUnstake, SequencerEntry, SequencerKey, SequencerStakeConfig,
+    SlashApproval, StakeRecord,
     ed25519_dalek::{Signature, VerifyingKey},
-    sequencer_stake_config_account_id, slash_approval_message, slash_sink_account_id,
-    stake_funds_account_id, stake_funds_seed,
+    sequencer_stake_config_account_id, slash_approval_message, slash_approval_threshold,
+    slash_sink_account_id, stake_funds_account_id, stake_funds_seed,
 };
 
 fn main() {
@@ -384,7 +384,7 @@ fn verify_approvals(
     let mut approvers: Vec<SequencerKey> = Vec::with_capacity(approvals.len());
     for approval in approvals {
         assert!(
-            config.entries.contains_key(&approval.signer),
+            config.is_accredited_committee_member(&approval.signer),
             "approval from a key this config does not accredit"
         );
         assert!(
@@ -404,7 +404,7 @@ fn verify_approvals(
     }
 
     assert!(
-        approvers.len() >= SLASH_APPROVAL_THRESHOLD,
+        approvers.len() >= slash_approval_threshold(config.accredited_committee_members_count()),
         "slash carries fewer approvals than the threshold"
     );
 }

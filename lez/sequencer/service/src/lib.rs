@@ -9,13 +9,16 @@ pub use sequencer_core::config::*;
 use sequencer_core::load_or_create_signing_key;
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_rpc_server_actor::RpcServerActor;
-use sequencer_slasher_actor::SlasherActor;
+use sequencer_slasher_actor::{SetApprovalPublisher, SlasherActor};
 use sequencer_storage_actor::StorageActor;
 use tokio::select;
 
 use crate::actor_handle::ActorHandle;
 
 mod actor_handle;
+
+/// Depth of the gossip-to-slasher approval channel; overflow only delays a slash.
+const INBOUND_APPROVAL_CHANNEL_CAPACITY: usize = 256;
 
 #[cfg(not(feature = "standalone"))]
 type BlockPublisher = sequencer_core::block_publisher::ZoneSdkPublisher;
@@ -180,6 +183,10 @@ pub fn run(
         let executor_ref = ExecutorActor::spawn(executor);
         info!("Executor Actor spawned");
 
+        // Inbound slash approvals, forwarded to the slasher below.
+        let (approval_tx, mut approval_rx) =
+            tokio::sync::mpsc::channel(INBOUND_APPROVAL_CHANNEL_CAPACITY);
+
         // TODO: Should be a separate actor
         let gossip_network = match gossip_config {
             None => None,
@@ -211,6 +218,7 @@ pub fn run(
                     gossip_config,
                     channel_id,
                     signing_key,
+                    approval_tx,
                     max_block_size.as_u64(),
                     submit,
                 )
@@ -223,6 +231,21 @@ pub fn run(
         let tx_publisher = gossip_network
             .as_ref()
             .map(sequencer_core::gossip::GossipNetwork::tx_publisher);
+
+        // Without gossip the slasher has nowhere to publish and only its own approval.
+        if let Some(network) = gossip_network.as_ref() {
+            slasher_ref
+                .tell(SetApprovalPublisher(network.approval_publisher()))
+                .await?;
+            let slasher = slasher_ref.clone();
+            tokio::spawn(async move {
+                while let Some(approval) = approval_rx.recv().await {
+                    if slasher.tell(approval).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
 
         let rpc_server = RpcServerActor::new(
             listen_addr,

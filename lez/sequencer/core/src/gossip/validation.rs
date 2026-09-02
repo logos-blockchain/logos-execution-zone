@@ -1,9 +1,10 @@
-//! Pure decision function for an inbound gossiped transaction.
+//! Pure decision functions for inbound gossiped messages.
 //!
 //! The same stateless admission the RPC performs, minus mempool/seen-cache
 //! side effects (those live in the drive task). Testable without a swarm.
 
 use common::transaction::LeeTransaction;
+use sequencer_slasher_actor::Approval;
 
 use crate::config::BLOCK_OVERHEAD;
 
@@ -16,6 +17,13 @@ pub enum TxEvaluation {
     Accept(LeeTransaction),
     /// Malformed / forbidden; do not forward. `GossipSub` peer scoring is not
     /// configured, so this does not currently penalize the propagating peer.
+    Reject(String),
+}
+
+#[derive(Debug)]
+pub enum ApprovalEvaluation {
+    /// Correctly signed by the key it names; forward and hand to the slasher.
+    Accept(Approval),
     Reject(String),
 }
 
@@ -47,6 +55,22 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     }
 
     TxEvaluation::Accept(authenticated)
+}
+
+/// Decodes a gossiped slash approval and checks its signature; the slasher
+/// judges whether the signer is accredited and the offence real.
+#[must_use]
+pub fn evaluate_approval(data: &[u8]) -> ApprovalEvaluation {
+    let approval: Approval = match borsh::from_slice(data) {
+        Ok(approval) => approval,
+        Err(err) => return ApprovalEvaluation::Reject(format!("undecodable approval: {err}")),
+    };
+
+    if approval.verify() {
+        ApprovalEvaluation::Accept(approval)
+    } else {
+        ApprovalEvaluation::Reject("approval signature does not verify".to_owned())
+    }
 }
 
 #[cfg(test)]
