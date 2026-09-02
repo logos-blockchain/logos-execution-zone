@@ -8,7 +8,8 @@ use core::cmp::Ordering;
 use lee_core::account::{Fee, Gas};
 
 pub const TARGET_GAS_EXEC: Gas = 5_000_000;
-pub const MAX_GAS_EXEC: Gas = 10_000_000;
+/// The ±12.5% controller bound and elasticity framing assume `MAX = 2·TARGET`
+pub const MAX_GAS_EXEC: Gas = 2 * TARGET_GAS_EXEC;
 pub const D_EXEC: u64 = 8;
 pub const BASE_FEE_EXEC_MIN: Fee = 8;
 #[expect(
@@ -19,7 +20,8 @@ pub const BASE_FEE_EXEC_MIN: Fee = 8;
 pub const BASE_FEE_EXEC_MAX: Fee = u64::MAX / MAX_GAS_EXEC;
 
 pub const TARGET_GAS_STOR: Gas = 500_000;
-pub const MAX_GAS_STOR: Gas = 1_000_000;
+/// The ±12.5% controller bound and elasticity framing assume `MAX = 2·TARGET`
+pub const MAX_GAS_STOR: Gas = 2 * TARGET_GAS_STOR;
 pub const D_STOR: u64 = 8;
 pub const BASE_FEE_STOR_MIN: Fee = 8;
 #[expect(
@@ -32,8 +34,8 @@ pub const BASE_FEE_STOR_MAX: Fee = u64::MAX / MAX_GAS_STOR;
 pub const SMOOTHING_WINDOW: usize = 50;
 
 // FIXME: Provisional: re-pin with the LEZ wire-format numbers (spec Parameters TODO).
-/// Execution gas charged to every private transaction (STARK receipt
-/// verification, RISC Zero 3.0.5).
+/// Execution gas charged to every private transaction (STARK receipt verification,
+/// RISC Zero 3.0.5). THIS WILL BE WORKED ON WHILE HANDLING PPTX FEES!
 pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
 /// Proof bytes inside every private transaction.
 pub const PROOF_BYTES: u64 = 223_551;
@@ -42,12 +44,6 @@ pub const PRIVATE_PAD_BYTES: u64 = 512;
 /// Canonical serialized size of every private transaction. Derived from its
 /// parts so the relationship cannot drift silently on a re-pin.
 pub const PRIVATE_GAS_STOR: u64 = PROOF_BYTES + PRIVATE_PAD_BYTES;
-
-// Genesis validation: the ±12.5% bound and elasticity framing assume
-// MAX = 2·TARGET for both resources.
-// FIXME: we can derive one from another, no need for this
-const _: () = assert!(MAX_GAS_EXEC == 2 * TARGET_GAS_EXEC);
-const _: () = assert!(MAX_GAS_STOR == 2 * TARGET_GAS_STOR);
 
 /// One base-fee update.
 ///
@@ -106,9 +102,6 @@ mod tests {
 
     #[test]
     fn constants_satisfy_genesis_validation() {
-        // MAX_GAS_r = 2·TARGET_GAS_r for both resources.
-        assert_eq!(MAX_GAS_EXEC, 2 * TARGET_GAS_EXEC);
-        assert_eq!(MAX_GAS_STOR, 2 * TARGET_GAS_STOR);
         // MAX_GAS_r · BASE_FEE_r_MAX fits u64 for both resources.
         assert_eq!(BASE_FEE_EXEC_MAX, u64::MAX / MAX_GAS_EXEC);
         assert_eq!(BASE_FEE_STOR_MAX, u64::MAX / MAX_GAS_STOR);
