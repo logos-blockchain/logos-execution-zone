@@ -1,3 +1,5 @@
+use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader};
+
 use super::*;
 
 #[test]
@@ -455,6 +457,75 @@ fn private_pda_claim_succeeds() {
     let (output, _proof) = result.expect("private PDA claim should succeed");
     assert_eq!(output.private_actions.len(), 1);
     assert!(output.public_actions.is_empty());
+}
+
+/// Same as `private_pda_claim_succeeds`, but the claiming program has never been deployed
+/// anywhere and is dispatched as a shadow program instead — its identity is established fresh,
+/// in this one proof, from its elf supplied as a witness. Confirms the shadow-resolved dispatch
+/// address flows into the same `Claim::Pda` ownership mechanics every other program uses, and
+/// that a shadow program never appears in the circuit's `program_image_claims` output.
+#[test]
+fn shadow_program_claims_a_private_pda_it_legitimately_owns() {
+    let program = crate::test_methods::pda_claimer();
+    let keys = test_private_account_keys_1();
+    let npk = keys.npk();
+    let seed = PdaSeed::new([42; 32]);
+
+    let account_id = AccountId::for_private_pda(
+        &AccountId::for_shadow_program(&program.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        u128::MAX,
+    );
+    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let program_with_deps = ProgramWithDependencies::from(program).as_shadow_program();
+
+    let result = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction(seed).unwrap(),
+        vec![init_pda_witness(&keys, u128::MAX, None)],
+        &program_with_deps,
+    );
+
+    let (output, _proof) = result.expect("shadow program's private PDA claim should succeed");
+    assert_eq!(output.private_actions.len(), 1);
+    assert!(output.public_actions.is_empty());
+    assert!(
+        output.program_image_claims.is_empty(),
+        "a shadow program must never appear in the circuit's program_image_claims output"
+    );
+}
+
+/// A shadow-dispatched program can claim a *public* PDA too — nothing restricts shadow programs
+/// to private accounts. Ownership stays gated the same self-authenticating way either way:
+/// reproducing the dispatch address (and later acting as its owner) always requires re-supplying
+/// the exact same elf as a witness, whether the account being claimed is public or private.
+#[test]
+fn shadow_program_claims_a_public_pda_it_legitimately_owns() {
+    let program = crate::test_methods::pda_claimer();
+    let seed = PdaSeed::new([42; 32]);
+    let shadow_account_id = AccountId::for_shadow_program(&program.id());
+    let pda_account_id = AccountId::for_public_pda(&shadow_account_id, &seed);
+    let pre_state = AccountWithMetadata::new(Account::default(), false, pda_account_id);
+
+    let program_with_deps = ProgramWithDependencies::from(program).as_shadow_program();
+
+    let result = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction(seed).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    );
+
+    let (output, _proof) = result.expect("a shadow program's public PDA claim should succeed");
+    assert_eq!(output.public_actions.len(), 1);
+    assert!(output.private_actions.is_empty());
+    assert!(
+        output.program_image_claims.is_empty(),
+        "a shadow program must never appear in the circuit's program_image_claims output"
+    );
 }
 
 /// An npk is supplied that does not match the `pre_state`'s `account_id` under
@@ -1617,4 +1688,121 @@ fn two_private_pda_family_members_receive_and_spend() {
     }
 
     assert_eq!(state.get_account_by_id(recipient_id).balance, amount);
+}
+
+/// Deploys a program with an immutable header (landing the private mirror commitment via
+/// `CreateHeader`), then references it in a privacy-preserving transaction through a
+/// `ProgramImageClaim::Private` claim instead of a `Public` one. The sequencer independently
+/// reconstructs the claimed commitment and finds it in private state, so the transaction
+/// succeeds without ever doing a public `get_program` lookup for this program.
+#[test]
+fn private_claim_matching_a_real_commitment_passes_verification() {
+    let program = crate::test_methods::pda_claimer();
+    let mut state = V03State::new();
+    let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x04);
+
+    let header_key = PrivateKey::try_new([0x11; 32]).unwrap();
+    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+    let mut account_ids = vec![header_account_id];
+    account_ids.extend_from_slice(&segment_account_ids);
+    let create_message = public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        account_ids,
+        vec![Nonce(0)],
+        program_loader_core::Instruction::CreateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: true,
+        },
+    )
+    .unwrap();
+    let create_witness_set =
+        public_transaction::WitnessSet::for_message(&create_message, &[&header_key]);
+    state
+        .transition_from_public_transaction(
+            &PublicTransaction::new(create_message, create_witness_set),
+            1,
+            0,
+        )
+        .expect("deploying the immutable header should succeed");
+
+    let program_header = ProgramHeader {
+        image_id: program.id(),
+        program_first_segment: segment_account_ids[0],
+        immutable: true,
+    };
+
+    let keys = test_private_account_keys_1();
+    let npk = keys.npk();
+    let seed = PdaSeed::new([42; 32]);
+    let account_id =
+        AccountId::for_private_pda(&header_account_id, &seed, &npk, &keys.vpk(), u128::MAX);
+    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let program_with_deps = ProgramWithDependencies::from(program)
+        .with_program_account_id(header_account_id)
+        .as_private_program(program_header);
+
+    let (output, proof) = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction(seed).unwrap(),
+        vec![init_pda_witness(&keys, u128::MAX, None)],
+        &program_with_deps,
+    )
+    .expect("proving a private claim against a real immutable header should succeed");
+
+    let message = Message::from_circuit_output(vec![], output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    state
+        .transition_from_privacy_preserving_transaction(&tx, 2, 0)
+        .expect("the sequencer should verify the Private claim against the real commitment");
+}
+
+/// Same shape as `private_claim_matching_a_real_commitment_passes_verification`, but the header
+/// was never actually deployed — no `CreateHeader` transaction ran, so no matching commitment
+/// exists in private state. The circuit itself has no chain state to check against, so proving
+/// still succeeds; the sequencer's independent reconstruction is what catches it.
+#[test]
+fn private_claim_with_no_matching_commitment_is_rejected() {
+    let program = crate::test_methods::pda_claimer();
+    let mut state = V03State::new();
+
+    let header_account_id = AccountId::new([0x22; 32]);
+    let program_header = ProgramHeader {
+        image_id: program.id(),
+        program_first_segment: AccountId::new([1; 32]),
+        immutable: true,
+    };
+
+    let keys = test_private_account_keys_1();
+    let npk = keys.npk();
+    let seed = PdaSeed::new([42; 32]);
+    let account_id =
+        AccountId::for_private_pda(&header_account_id, &seed, &npk, &keys.vpk(), u128::MAX);
+    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let program_with_deps = ProgramWithDependencies::from(program)
+        .with_program_account_id(header_account_id)
+        .as_private_program(program_header);
+
+    let (output, proof) = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction(seed).unwrap(),
+        vec![init_pda_witness(&keys, u128::MAX, None)],
+        &program_with_deps,
+    )
+    .expect("the circuit has no chain state to check, so proving still succeeds");
+
+    let message = Message::from_circuit_output(vec![], output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    let err = state
+        .transition_from_privacy_preserving_transaction(&tx, 1, 0)
+        .expect_err("a Private claim with no matching commitment must be rejected");
+    assert!(
+        err.to_string().contains("no private commitment"),
+        "rejection should cite the missing commitment, got: {err}"
+    );
 }

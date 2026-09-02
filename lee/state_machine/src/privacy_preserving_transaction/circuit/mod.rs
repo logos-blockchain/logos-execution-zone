@@ -1,12 +1,12 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput, ProgramImageClaim,
+    PrivacyPreservingCircuitOutput, ProgramImageClaim, ShadowProgramWitness,
     account::{AccountId, AccountWithMetadata},
     from_frame,
-    program::{ChainedCall, InstructionData, ProgramOutput},
+    program::{ChainedCall, InstructionData, ProgramHeader, ProgramOutput},
     to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
@@ -48,11 +48,20 @@ pub struct ProgramWithDependencies {
     /// Where `program` is dispatched at. Set by [`Self::new`] to
     /// `program_loader_core::immutable_deploy_account_id(program.id())`, matching how every
     /// genesis-seeded builtin is actually dispatched; override via
-    /// [`Self::with_program_account_id`] for a program deployed to a different PDA (e.g. a
-    /// `Deploy` with a non-default `update_auth`).
+    /// [`Self::with_program_account_id`] for a program deployed to a different address, or
+    /// [`Self::as_shadow_program`] for one never deployed anywhere at all.
     pub program_account_id: AccountId,
     // TODO: avoid having a copy of the bytecode of each dependency.
     pub dependencies: HashMap<AccountId, Program>,
+    /// `account_id`s (of `program` itself, or of a dependency) resolved as shadow programs
+    /// instead of `ProgramImageClaim::Public` claims. Populated by
+    /// [`Self::as_shadow_program`]/[`Self::with_shadow_dependency`].
+    pub shadow_account_ids: HashSet<AccountId>,
+    /// `account_id` → finalized `ProgramHeader` for every program resolved as
+    /// `ProgramImageClaim::Private` instead of `Public` — i.e. an immutable header referenced
+    /// without disclosing which program it is via a public chain-state lookup. Populated by
+    /// [`Self::as_private_program`]/[`Self::with_private_dependency`].
+    pub private_program_headers: HashMap<AccountId, ProgramHeader>,
 }
 
 impl ProgramWithDependencies {
@@ -63,14 +72,59 @@ impl ProgramWithDependencies {
             program,
             program_account_id,
             dependencies,
+            shadow_account_ids: HashSet::new(),
+            private_program_headers: HashMap::new(),
         }
     }
 
     /// Overrides the address `program` is dispatched at, for a program not deployed to the
-    /// default immutable PDA (e.g. a `Deploy` with a non-default `update_auth`).
+    /// default immutable PDA (e.g. a header deployed to a caller-chosen address).
     #[must_use]
     pub const fn with_program_account_id(mut self, program_account_id: AccountId) -> Self {
         self.program_account_id = program_account_id;
+        self
+    }
+
+    /// Marks `program` itself as a shadow program: dispatched at
+    /// `AccountId::for_shadow_program(program.id())`, resolved via a fresh
+    /// [`ShadowProgramWitness`] instead of a public claim.
+    #[must_use]
+    pub fn as_shadow_program(mut self) -> Self {
+        self.program_account_id = AccountId::for_shadow_program(&self.program.id());
+        self.shadow_account_ids.insert(self.program_account_id);
+        self
+    }
+
+    /// Marks the dependency already inserted at `account_id` (which must be
+    /// `AccountId::for_shadow_program(dependency.id())`) as a shadow program.
+    #[must_use]
+    pub fn with_shadow_dependency(mut self, account_id: AccountId) -> Self {
+        self.shadow_account_ids.insert(account_id);
+        self
+    }
+
+    /// Marks `program` itself as an immutable program referenced privately: resolved via
+    /// `ProgramImageClaim::Private { account_id: program_account_id, program_header }` instead of
+    /// a `Public` claim, so which program this is stays hidden from anyone inspecting real public
+    /// chain state. `program_header` must be `program`'s real, currently-immutable header at
+    /// `program_account_id`.
+    #[must_use]
+    pub fn as_private_program(mut self, program_header: ProgramHeader) -> Self {
+        self.private_program_headers
+            .insert(self.program_account_id, program_header);
+        self
+    }
+
+    /// Marks the dependency already inserted at `account_id` as an immutable program referenced
+    /// privately, same as [`Self::as_private_program`].
+    #[must_use]
+    pub fn with_private_dependency(
+        mut self,
+        account_id: AccountId,
+        program_header: ProgramHeader,
+    ) -> Self {
+        self.private_program_headers
+            .insert(account_id, program_header);
         self
     }
 }
@@ -109,29 +163,55 @@ pub fn execute_and_prove_with_padded_inputs(
         program: initial_program,
         program_account_id: initial_program_account_id,
         dependencies,
+        shadow_account_ids,
+        private_program_headers,
     } = program_with_dependencies;
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
 
+    let all_programs_by_account_id =
+        std::iter::once((*initial_program_account_id, initial_program)).chain(
+            dependencies
+                .iter()
+                .map(|(account_id, program)| (*account_id, program)),
+        );
+
     // Real `image_id`s for every program in this call graph whose address doesn't already
     // determine it — i.e. every `Deploy`-created program, PDA-addressed rather than found via
-    // the legacy image-id bijection. A legacy program needs no claim at all:
-    // `ProgramId::from(account_id)` is already exact for it, by construction, with nothing to
-    // authenticate. See `ProgramImageClaim` and `execution_state.rs`'s matching bijection
-    // fallback.
-    let program_image_claims: Vec<ProgramImageClaim> =
-        std::iter::once((*initial_program_account_id, initial_program.id()))
-            .chain(
-                dependencies
-                    .iter()
-                    .map(|(account_id, program)| (*account_id, program.id())),
-            )
-            .filter(|(account_id, image_id)| *account_id != AccountId::from(*image_id))
-            .map(|(account_id, image_id)| ProgramImageClaim {
-                account_id,
-                image_id,
-            })
-            .collect();
+    // the legacy image-id bijection — and isn't resolved as shadow or private instead. A legacy
+    // program needs no claim at all: `ProgramId::from(account_id)` is already exact for it, by
+    // construction, with nothing to authenticate.
+    let program_image_claims: Vec<ProgramImageClaim> = all_programs_by_account_id
+        .clone()
+        .filter(|(account_id, _)| {
+            !shadow_account_ids.contains(account_id)
+                && !private_program_headers.contains_key(account_id)
+        })
+        .map(|(account_id, program)| (account_id, program.id()))
+        .filter(|(account_id, image_id)| *account_id != AccountId::from(*image_id))
+        .map(|(account_id, image_id)| ProgramImageClaim::Public {
+            account_id,
+            image_id,
+        })
+        .chain(
+            private_program_headers
+                .iter()
+                .map(|(account_id, program_header)| ProgramImageClaim::Private {
+                    account_id: *account_id,
+                    program_header: *program_header,
+                }),
+        )
+        .collect();
+
+    // Every program resolved as shadow instead — carries the full elf rather than just a
+    // claimed image_id, since nothing about a shadow program's identity is ever committed to.
+    let shadow_program_witnesses: Vec<ShadowProgramWitness> = all_programs_by_account_id
+        .filter(|(account_id, _)| shadow_account_ids.contains(account_id))
+        .map(|(account_id, program)| ShadowProgramWitness {
+            account_id,
+            full_binary: program.elf().to_vec(),
+        })
+        .collect();
 
     let initial_call = ChainedCall {
         program_account_id: *initial_program_account_id,
@@ -193,6 +273,7 @@ pub fn execute_and_prove_with_padded_inputs(
         program_id: program_with_dependencies.program.id(),
         dummy_inputs,
         program_image_claims,
+        shadow_program_witnesses,
     };
 
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;

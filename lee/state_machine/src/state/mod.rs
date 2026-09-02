@@ -7,6 +7,7 @@ use lee_core::{
     account::{Account, AccountId, Data},
     program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment},
 };
+pub use program_loader_core::MAX_PROGRAM_SEGMENTS;
 
 use crate::{
     error::LeeError,
@@ -16,8 +17,6 @@ use crate::{
     public_transaction::PublicTransaction,
     validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
-
-pub use program_loader_core::MAX_PROGRAM_SEGMENTS;
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
@@ -225,7 +224,8 @@ impl V03State {
                 }),
                 ..Account::default()
             };
-            self.public_state.insert(segment_account_id, segment_account);
+            self.public_state
+                .insert(segment_account_id, segment_account);
             next_segment = Some(segment_account_id);
         }
         let first_segment = next_segment.expect("at least one chunk was inserted above");
@@ -477,6 +477,10 @@ pub fn get_program_via(
 impl V03State {
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert(account_id, account);
+    }
+
+    pub fn force_insert_commitment(&mut self, commitment: Commitment) {
+        self.private_state.0.extend(&[commitment]);
     }
 }
 

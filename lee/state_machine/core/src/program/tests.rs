@@ -270,6 +270,51 @@ fn for_private_pda_differs_from_public_pda() {
     assert_ne!(private_id, public_id);
 }
 
+// ---- AccountId::for_shadow_program tests ----
+
+/// Pins `AccountId::for_shadow_program` against a hardcoded expected output for a specific
+/// `image_id`. Any change to `SHADOW_PROGRAM_PREFIX`, byte ordering, or the underlying hash
+/// breaks this test.
+#[test]
+fn for_shadow_program_matches_pinned_value() {
+    let image_id: ProgramId = [1, 2, 3, 4, 5, 6, 7, 8];
+    let expected = AccountId::new([
+        174, 205, 130, 154, 106, 227, 163, 213, 46, 71, 49, 245, 199, 22, 203, 205, 13, 109, 236,
+        148, 159, 162, 140, 162, 209, 40, 88, 0, 109, 131, 184, 45,
+    ]);
+    assert_eq!(AccountId::for_shadow_program(&image_id), expected);
+}
+
+#[test]
+fn for_shadow_program_is_deterministic() {
+    let image_id: ProgramId = [1, 2, 3, 4, 5, 6, 7, 8];
+    assert_eq!(
+        AccountId::for_shadow_program(&image_id),
+        AccountId::for_shadow_program(&image_id)
+    );
+}
+
+#[test]
+fn for_shadow_program_differs_for_different_image_id() {
+    let image_id_a: ProgramId = [1, 2, 3, 4, 5, 6, 7, 8];
+    let image_id_b: ProgramId = [8, 7, 6, 5, 4, 3, 2, 1];
+    assert_ne!(
+        AccountId::for_shadow_program(&image_id_a),
+        AccountId::for_shadow_program(&image_id_b)
+    );
+}
+
+/// A shadow program's address never collides with the legacy `AccountId::from(image_id)`
+/// bijection it's derived from, since the shadow prefix domain-separates the hash.
+#[test]
+fn for_shadow_program_differs_from_public_pda_bijection() {
+    let image_id: ProgramId = [1, 2, 3, 4, 5, 6, 7, 8];
+    assert_ne!(
+        AccountId::for_shadow_program(&image_id),
+        AccountId::from(image_id)
+    );
+}
+
 #[cfg(feature = "host")]
 #[test]
 fn private_account_kind_header_round_trips() {
