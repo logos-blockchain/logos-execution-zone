@@ -83,13 +83,13 @@ run-monitoring:
 [working-directory: 'lez/sequencer/service']
 run-sequencer *args:
     @echo "🧠 Running sequencer"
-    RUST_LOG=info cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
+    RUST_LOG=info,kameo=warn cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
 
 # Run Sequencer with mocked Bedrock clients. Takes the same args as `run-sequencer`.
 [working-directory: 'lez/sequencer/service']
 run-sequencer-standalone *args:
     @echo "🧪 Running sequencer in standalone mode"
-    RUST_LOG=info cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
+    RUST_LOG=info,kameo=warn cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
 
 # Run Indexer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [working-directory: 'lez/indexer/service']
