@@ -25,11 +25,12 @@ fn main() {
         .map(|account| AccountPostState::new(account.account.clone()))
         .collect();
 
+    let pre_state_ids: Vec<_> = pre_states.iter().map(|pre| pre.account_id).collect();
     let chained_calls = chain
         .into_iter()
         .map(|(program_id, call_instruction_data)| ChainedCall {
             program_id,
-            pre_states: pre_states.clone(),
+            pre_state_ids: pre_state_ids.clone(),
             instruction_data: call_instruction_data,
             pda_seeds: vec![],
         })

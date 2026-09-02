@@ -250,7 +250,10 @@ pub struct CallerData {
 pub struct ChainedCall {
     /// The program ID of the program to execute.
     pub program_id: ProgramId,
-    pub pre_states: Vec<AccountWithMetadata>,
+    /// The ids of the accounts the callee should receive as `pre_states`. The protocol
+    /// resolves each account's real value and `is_authorized` from its own tracked state — never
+    /// supplied by the calling program.
+    pub pre_state_ids: Vec<AccountId>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
     /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
@@ -263,12 +266,12 @@ impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
     pub fn new<I: BorshSerialize>(
         program_id: ProgramId,
-        pre_states: Vec<AccountWithMetadata>,
+        pre_state_ids: Vec<AccountId>,
         instruction: &I,
     ) -> Self {
         Self {
             program_id,
-            pre_states,
+            pre_state_ids,
             instruction_data: borsh::to_vec(instruction)
                 .expect("borsh serialization is infallible"),
             pda_seeds: Vec::new(),
@@ -753,6 +756,18 @@ pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionDa
         },
         instruction_data,
     )
+}
+
+/// Whether a callee's journalled `pre_states` name exactly the accounts in the call
+/// in the appropriate order.
+#[must_use]
+pub fn pre_states_match_accounts(
+    accounts: &[AccountId],
+    pre_states: &[AccountWithMetadata],
+) -> bool {
+    accounts
+        .iter()
+        .eq(pre_states.iter().map(|pre| &pre.account_id))
 }
 
 /// Validates well-behaved program execution.

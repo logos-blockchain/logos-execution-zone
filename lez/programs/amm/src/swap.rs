@@ -109,10 +109,10 @@ pub fn swap_exact_input(
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
         if token_in_id == pool_def_data.definition_token_a_id {
             let (chained_calls, deposit_a, withdraw_b) = swap_logic(
-                user_holding_a.clone(),
-                vault_a.clone(),
-                vault_b.clone(),
-                user_holding_b.clone(),
+                &user_holding_a,
+                &vault_a,
+                &vault_b,
+                &user_holding_b,
                 swap_amount_in,
                 min_amount_out,
                 pool_def_data.reserve_a,
@@ -123,10 +123,10 @@ pub fn swap_exact_input(
             (chained_calls, [deposit_a, 0], [0, withdraw_b])
         } else if token_in_id == pool_def_data.definition_token_b_id {
             let (chained_calls, deposit_b, withdraw_a) = swap_logic(
-                user_holding_b.clone(),
-                vault_b.clone(),
-                vault_a.clone(),
-                user_holding_a.clone(),
+                &user_holding_b,
+                &vault_b,
+                &vault_a,
+                &user_holding_a,
                 swap_amount_in,
                 min_amount_out,
                 pool_def_data.reserve_b,
@@ -157,10 +157,10 @@ pub fn swap_exact_input(
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 fn swap_logic(
-    user_deposit: AccountWithMetadata,
-    vault_deposit: AccountWithMetadata,
-    vault_withdraw: AccountWithMetadata,
-    user_withdraw: AccountWithMetadata,
+    user_deposit: &AccountWithMetadata,
+    vault_deposit: &AccountWithMetadata,
+    vault_withdraw: &AccountWithMetadata,
+    user_withdraw: &AccountWithMetadata,
     swap_amount_in: u128,
     min_amount_out: u128,
     reserve_deposit_vault_amount: u128,
@@ -187,14 +187,11 @@ fn swap_logic(
     let mut chained_calls = Vec::new();
     chained_calls.push(ChainedCall::new(
         token_program_id,
-        vec![user_deposit, vault_deposit],
+        vec![user_deposit.account_id, vault_deposit.account_id],
         &token_core::Instruction::Transfer {
             amount_to_transfer: swap_amount_in,
         },
     ));
-
-    let mut vault_withdraw = vault_withdraw;
-    vault_withdraw.is_authorized = true;
 
     let pda_seed = compute_vault_pda_seed(
         pool_id,
@@ -206,7 +203,7 @@ fn swap_logic(
     chained_calls.push(
         ChainedCall::new(
             token_program_id,
-            vec![vault_withdraw, user_withdraw],
+            vec![vault_withdraw.account_id, user_withdraw.account_id],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: withdraw_amount,
             },
@@ -234,10 +231,10 @@ pub fn swap_exact_output(
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
         if token_in_id == pool_def_data.definition_token_a_id {
             let (chained_calls, deposit_a, withdraw_b) = exact_output_swap_logic(
-                user_holding_a.clone(),
-                vault_a.clone(),
-                vault_b.clone(),
-                user_holding_b.clone(),
+                &user_holding_a,
+                &vault_a,
+                &vault_b,
+                &user_holding_b,
                 exact_amount_out,
                 max_amount_in,
                 pool_def_data.reserve_a,
@@ -248,10 +245,10 @@ pub fn swap_exact_output(
             (chained_calls, [deposit_a, 0], [0, withdraw_b])
         } else if token_in_id == pool_def_data.definition_token_b_id {
             let (chained_calls, deposit_b, withdraw_a) = exact_output_swap_logic(
-                user_holding_b.clone(),
-                vault_b.clone(),
-                vault_a.clone(),
-                user_holding_a.clone(),
+                &user_holding_b,
+                &vault_b,
+                &vault_a,
+                &user_holding_a,
                 exact_amount_out,
                 max_amount_in,
                 pool_def_data.reserve_b,
@@ -282,10 +279,10 @@ pub fn swap_exact_output(
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 fn exact_output_swap_logic(
-    user_deposit: AccountWithMetadata,
-    vault_deposit: AccountWithMetadata,
-    vault_withdraw: AccountWithMetadata,
-    user_withdraw: AccountWithMetadata,
+    user_deposit: &AccountWithMetadata,
+    vault_deposit: &AccountWithMetadata,
+    vault_withdraw: &AccountWithMetadata,
+    user_withdraw: &AccountWithMetadata,
     exact_amount_out: u128,
     max_amount_in: u128,
     reserve_deposit_vault_amount: u128,
@@ -319,14 +316,11 @@ fn exact_output_swap_logic(
     let mut chained_calls = Vec::new();
     chained_calls.push(ChainedCall::new(
         token_program_id,
-        vec![user_deposit, vault_deposit],
+        vec![user_deposit.account_id, vault_deposit.account_id],
         &token_core::Instruction::Transfer {
             amount_to_transfer: deposit_amount,
         },
     ));
-
-    let mut vault_withdraw = vault_withdraw;
-    vault_withdraw.is_authorized = true;
 
     let pda_seed = compute_vault_pda_seed(
         pool_id,
@@ -338,7 +332,7 @@ fn exact_output_swap_logic(
     chained_calls.push(
         ChainedCall::new(
             token_program_id,
-            vec![vault_withdraw, user_withdraw],
+            vec![vault_withdraw.account_id, user_withdraw.account_id],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: exact_amount_out,
             },

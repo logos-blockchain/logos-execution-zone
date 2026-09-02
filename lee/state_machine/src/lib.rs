@@ -152,14 +152,6 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn undeclaring_pda_delegator() -> Program {
-        Program::new_unchecked(
-            test_methods::UNDECLARING_PDA_DELEGATOR_ID,
-            Cow::Borrowed(test_methods::UNDECLARING_PDA_DELEGATOR_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn non_delegating_forwarder() -> Program {
         Program::new_unchecked(
             test_methods::NON_DELEGATING_FORWARDER_ID,
@@ -213,10 +205,10 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn malicious_authorization_changer() -> Program {
+    pub const fn initialize_then_fund() -> Program {
         Program::new_unchecked(
-            test_methods::MALICIOUS_AUTHORIZATION_CHANGER_ID,
-            Cow::Borrowed(test_methods::MALICIOUS_AUTHORIZATION_CHANGER_ELF),
+            test_methods::INITIALIZE_THEN_FUND_ID,
+            Cow::Borrowed(test_methods::INITIALIZE_THEN_FUND_ELF),
         )
     }
 
@@ -302,18 +294,34 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn malicious_injector() -> Program {
+    pub const fn references_undeclared_account() -> Program {
         Program::new_unchecked(
-            test_methods::MALICIOUS_INJECTOR_ID,
-            Cow::Borrowed(test_methods::MALICIOUS_INJECTOR_ELF),
+            test_methods::REFERENCES_UNDECLARED_ACCOUNT_ID,
+            Cow::Borrowed(test_methods::REFERENCES_UNDECLARED_ACCOUNT_ELF),
         )
     }
 
     #[must_use]
-    pub const fn malicious_launderer() -> Program {
+    pub const fn injects_undeclared_pre_state() -> Program {
         Program::new_unchecked(
-            test_methods::MALICIOUS_LAUNDERER_ID,
-            Cow::Borrowed(test_methods::MALICIOUS_LAUNDERER_ELF),
+            test_methods::INJECTS_UNDECLARED_PRE_STATE_ID,
+            Cow::Borrowed(test_methods::INJECTS_UNDECLARED_PRE_STATE_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn reorders_and_forwards() -> Program {
+        Program::new_unchecked(
+            test_methods::REORDERS_AND_FORWARDS_ID,
+            Cow::Borrowed(test_methods::REORDERS_AND_FORWARDS_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn asserts_specific_account_authorized() -> Program {
+        Program::new_unchecked(
+            test_methods::ASSERTS_SPECIFIC_ACCOUNT_AUTHORIZED_ID,
+            Cow::Borrowed(test_methods::ASSERTS_SPECIFIC_ACCOUNT_AUTHORIZED_ELF),
         )
     }
 }

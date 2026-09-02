@@ -188,8 +188,8 @@ impl ChainedCallForTests {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                AccountWithMetadataForTests::user_holding_a(),
-                AccountWithMetadataForTests::vault_a_init(),
+                AccountWithMetadataForTests::user_holding_a().account_id,
+                AccountWithMetadataForTests::vault_a_init().account_id,
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_max_amount_a(),
@@ -200,12 +200,12 @@ impl ChainedCallForTests {
     fn cc_swap_token_b_test_1() -> ChainedCall {
         let swap_amount: u128 = 166;
 
-        let mut vault_b_auth = AccountWithMetadataForTests::vault_b_init();
-        vault_b_auth.is_authorized = true;
-
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
-            vec![vault_b_auth, AccountWithMetadataForTests::user_holding_b()],
+            vec![
+                AccountWithMetadataForTests::vault_b_init().account_id,
+                AccountWithMetadataForTests::user_holding_b().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
             },
@@ -219,12 +219,12 @@ impl ChainedCallForTests {
     fn cc_swap_token_a_test_2() -> ChainedCall {
         let swap_amount: u128 = 285;
 
-        let mut vault_a_auth = AccountWithMetadataForTests::vault_a_init();
-        vault_a_auth.is_authorized = true;
-
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
-            vec![vault_a_auth, AccountWithMetadataForTests::user_holding_a()],
+            vec![
+                AccountWithMetadataForTests::vault_a_init().account_id,
+                AccountWithMetadataForTests::user_holding_a().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
             },
@@ -239,8 +239,8 @@ impl ChainedCallForTests {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                AccountWithMetadataForTests::user_holding_b(),
-                AccountWithMetadataForTests::vault_b_init(),
+                AccountWithMetadataForTests::user_holding_b().account_id,
+                AccountWithMetadataForTests::vault_b_init().account_id,
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_max_amount_b(),
@@ -254,8 +254,8 @@ impl ChainedCallForTests {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                AccountWithMetadataForTests::user_holding_a(),
-                AccountWithMetadataForTests::vault_a_init(),
+                AccountWithMetadataForTests::user_holding_a().account_id,
+                AccountWithMetadataForTests::vault_a_init().account_id,
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
@@ -266,12 +266,12 @@ impl ChainedCallForTests {
     fn cc_swap_exact_output_token_b_test_1() -> ChainedCall {
         let swap_amount: u128 = 166;
 
-        let mut vault_b_auth = AccountWithMetadataForTests::vault_b_init();
-        vault_b_auth.is_authorized = true;
-
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
-            vec![vault_b_auth, AccountWithMetadataForTests::user_holding_b()],
+            vec![
+                AccountWithMetadataForTests::vault_b_init().account_id,
+                AccountWithMetadataForTests::user_holding_b().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
             },
@@ -285,12 +285,12 @@ impl ChainedCallForTests {
     fn cc_swap_exact_output_token_a_test_2() -> ChainedCall {
         let swap_amount: u128 = 285;
 
-        let mut vault_a_auth = AccountWithMetadataForTests::vault_a_init();
-        vault_a_auth.is_authorized = true;
-
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
-            vec![vault_a_auth, AccountWithMetadataForTests::user_holding_a()],
+            vec![
+                AccountWithMetadataForTests::vault_a_init().account_id,
+                AccountWithMetadataForTests::user_holding_a().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
             },
@@ -307,8 +307,8 @@ impl ChainedCallForTests {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                AccountWithMetadataForTests::user_holding_b(),
-                AccountWithMetadataForTests::vault_b_init(),
+                AccountWithMetadataForTests::user_holding_b().account_id,
+                AccountWithMetadataForTests::vault_b_init().account_id,
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
@@ -320,8 +320,8 @@ impl ChainedCallForTests {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                AccountWithMetadataForTests::user_holding_a(),
-                AccountWithMetadataForTests::vault_a_init(),
+                AccountWithMetadataForTests::user_holding_a().account_id,
+                AccountWithMetadataForTests::vault_a_init().account_id,
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_successful_amount_a(),
@@ -333,8 +333,8 @@ impl ChainedCallForTests {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                AccountWithMetadataForTests::user_holding_b(),
-                AccountWithMetadataForTests::vault_b_init(),
+                AccountWithMetadataForTests::user_holding_b().account_id,
+                AccountWithMetadataForTests::vault_b_init().account_id,
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_successful_amount_b(),
@@ -343,14 +343,11 @@ impl ChainedCallForTests {
     }
 
     fn cc_add_pool_lp() -> ChainedCall {
-        let mut pool_lp_auth = AccountWithMetadataForTests::pool_lp_init();
-        pool_lp_auth.is_authorized = true;
-
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                pool_lp_auth,
-                AccountWithMetadataForTests::user_holding_lp_init(),
+                AccountWithMetadataForTests::pool_lp_init().account_id,
+                AccountWithMetadataForTests::user_holding_lp_init().account_id,
             ],
             &token_core::Instruction::Mint {
                 amount_to_mint: 282,
@@ -362,12 +359,12 @@ impl ChainedCallForTests {
     }
 
     fn cc_remove_token_a() -> ChainedCall {
-        let mut vault_a_auth = AccountWithMetadataForTests::vault_a_init();
-        vault_a_auth.is_authorized = true;
-
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
-            vec![vault_a_auth, AccountWithMetadataForTests::user_holding_a()],
+            vec![
+                AccountWithMetadataForTests::vault_a_init().account_id,
+                AccountWithMetadataForTests::user_holding_a().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::remove_actual_a_successful(),
             },
@@ -379,12 +376,12 @@ impl ChainedCallForTests {
     }
 
     fn cc_remove_token_b() -> ChainedCall {
-        let mut vault_b_auth = AccountWithMetadataForTests::vault_b_init();
-        vault_b_auth.is_authorized = true;
-
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
-            vec![vault_b_auth, AccountWithMetadataForTests::user_holding_b()],
+            vec![
+                AccountWithMetadataForTests::vault_b_init().account_id,
+                AccountWithMetadataForTests::user_holding_b().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: 70,
             },
@@ -396,14 +393,11 @@ impl ChainedCallForTests {
     }
 
     fn cc_remove_pool_lp() -> ChainedCall {
-        let mut pool_lp_auth = AccountWithMetadataForTests::pool_lp_init();
-        pool_lp_auth.is_authorized = true;
-
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                pool_lp_auth,
-                AccountWithMetadataForTests::user_holding_lp_init(),
+                AccountWithMetadataForTests::pool_lp_init().account_id,
+                AccountWithMetadataForTests::user_holding_lp_init().account_id,
             ],
             &token_core::Instruction::Burn {
                 amount_to_burn: BalanceForTests::remove_amount_lp(),
@@ -418,8 +412,8 @@ impl ChainedCallForTests {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                AccountWithMetadataForTests::user_holding_a(),
-                AccountWithMetadataForTests::vault_a_init(),
+                AccountWithMetadataForTests::user_holding_a().account_id,
+                AccountWithMetadataForTests::vault_a_init().account_id,
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_successful_amount_a(),
@@ -431,8 +425,8 @@ impl ChainedCallForTests {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                AccountWithMetadataForTests::user_holding_b(),
-                AccountWithMetadataForTests::vault_b_init(),
+                AccountWithMetadataForTests::user_holding_b().account_id,
+                AccountWithMetadataForTests::vault_b_init().account_id,
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_successful_amount_b(),
@@ -444,8 +438,8 @@ impl ChainedCallForTests {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                AccountWithMetadataForTests::pool_lp_init(),
-                AccountWithMetadataForTests::user_holding_lp_uninit(),
+                AccountWithMetadataForTests::pool_lp_init().account_id,
+                AccountWithMetadataForTests::user_holding_lp_uninit().account_id,
             ],
             &token_core::Instruction::Mint {
                 amount_to_mint: BalanceForTests::lp_supply_init(),
@@ -3018,8 +3012,8 @@ fn new_definition_lp_symmetric_amounts() {
     let expected_lp_call = ChainedCall::new(
         TOKEN_PROGRAM_ID,
         vec![
-            AccountWithMetadataForTests::pool_lp_init(),
-            AccountWithMetadataForTests::user_holding_lp_uninit(),
+            AccountWithMetadataForTests::pool_lp_init().account_id,
+            AccountWithMetadataForTests::user_holding_lp_uninit().account_id,
         ],
         &token_core::Instruction::Mint {
             amount_to_mint: expected_lp,

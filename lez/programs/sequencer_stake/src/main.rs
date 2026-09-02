@@ -218,7 +218,7 @@ fn stake(
     .try_into()
     .expect("StakeRecord should fit in account data");
     let ownership_account_post =
-        AccountPostState::new_claimed_if_default(ownership_account_data.clone(), Claim::Authorized);
+        AccountPostState::new_claimed_if_default(ownership_account_data, Claim::Authorized);
 
     let mut config_account_new = config_account.account;
     config_account_new.data = config
@@ -227,25 +227,16 @@ fn stake(
         .expect("SequencerStakeConfig should fit in account data");
     let config_account_post = AccountPostState::new(config_account_new);
 
-    // chained-call pre-states reflect state as of when each call runs
-    let mut ownership_account_claimed = ownership_account;
-    ownership_account_claimed.account = ownership_account_data;
-    ownership_account_claimed.account.program_owner = self_program_id.into();
-
     let mover_call = ChainedCall {
         program_id: mover_program_id,
-        pre_states: vec![funding_account, ownership_account_claimed.clone()],
+        pre_state_ids: vec![funding_account.account_id, ownership_account.account_id],
         instruction_data: mover_instruction_data,
         pda_seeds: Vec::new(),
     };
 
-    // expected balance after the mover call
-    let mut ownership_account_after_mover = ownership_account_claimed;
-    ownership_account_after_mover.account.balance = expected_balance_after;
-
     let confirm_call = ChainedCall::new(
         self_program_id,
-        vec![ownership_account_after_mover],
+        vec![ownership_account.account_id],
         &Instruction::ConfirmStake {
             expected_balance_after,
         },

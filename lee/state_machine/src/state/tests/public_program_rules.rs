@@ -1,3 +1,5 @@
+use lee_core::program::InstructionData;
+
 use super::*;
 
 #[test]
@@ -345,6 +347,78 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
     ));
 }
 
+/// A chained call may only name an account the transaction declared or an earlier call already
+/// touched — never an arbitrary id that merely exists (or not) in global state.
+#[test]
+fn program_should_fail_if_it_references_an_undeclared_account() {
+    let account_id = AccountId::new([1; 32]);
+    let undeclared_account_id = AccountId::new([99; 32]);
+    let mut state = V03State::new()
+        .with_public_account_balances([(account_id, 0)])
+        .with_test_programs();
+    let program_id = crate::test_methods::references_undeclared_account().id();
+    let callee_id = crate::test_methods::noop().id();
+    let instruction: (ProgramId, InstructionData, AccountId) = (
+        callee_id,
+        Program::serialize_instruction(()).unwrap(),
+        undeclared_account_id,
+    );
+    let message =
+        public_transaction::Message::try_new(program_id, vec![account_id], vec![], instruction)
+            .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::UnknownChainedCallAccount { account_id: err_account_id }
+            )) if err_account_id == undeclared_account_id
+        ),
+        "expected UnknownChainedCallAccount for the undeclared account, got {result:?}"
+    );
+}
+
+/// A program can echo its real `pre_states` honestly and still fabricate an extra, untouched
+/// account in its own output — one it was never given via `ChainedCall.pre_state_ids`. This must be
+/// rejected independently of whether the fabricated account happens to already exist anywhere.
+#[test]
+fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
+    let account_id = AccountId::new([1; 32]);
+    let fabricated_account_id = AccountId::new([123; 32]);
+    let mut state = V03State::new()
+        .with_public_account_balances([(account_id, 0)])
+        .with_test_programs();
+    let program_id = crate::test_methods::injects_undeclared_pre_state().id();
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![account_id],
+        vec![],
+        fabricated_account_id,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::UndeclaredAccountInProgramOutput {
+                    account_id: err_account_id,
+                    ..
+                }
+            )) if err_account_id == fabricated_account_id
+        ),
+        "expected UndeclaredAccountInProgramOutput for the fabricated account, got {result:?}"
+    );
+}
+
 #[test]
 fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
     let initial_data = HashMap::new();
@@ -374,4 +448,46 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
             ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
         ))) if total_balance_pre_states == 100.into() && total_balance_post_states == 99.into()
     ));
+}
+
+/// A callee must account for exactly the accounts its caller named. `dropped_account` is handed
+/// two and journals one, so the chained call is rejected — without this, a program's journal need
+/// not correspond to the accounts it was actually called with.
+#[test]
+fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
+    let owner = crate::test_methods::dropped_account().id();
+    let held = |balance| Account {
+        program_owner: owner.into(),
+        balance,
+        ..Account::default()
+    };
+    let mut state = V03State::new()
+        .with_public_accounts([
+            (AccountId::new([1; 32]), held(100)),
+            (AccountId::new([2; 32]), held(0)),
+        ])
+        .with_test_programs();
+
+    // The forwarder names both accounts for the callee; the callee journals only the first.
+    let message = public_transaction::Message::try_new(
+        crate::test_methods::non_delegating_forwarder().id(),
+        vec![AccountId::new([1; 32]), AccountId::new([2; 32])],
+        vec![],
+        (owner, Vec::<u8>::new(), true, Vec::<PdaSeed>::new()),
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ChainedCallAccountsMismatch { program_id }
+            )) if program_id == owner
+        ),
+        "expected ChainedCallAccountsMismatch for the callee, got {result:?}"
+    );
 }

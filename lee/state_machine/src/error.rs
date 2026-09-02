@@ -136,6 +136,27 @@ pub enum InvalidProgramBehaviorError {
         "Account {account_id} was declared in the transaction but is missing from the program output"
     )]
     DeclaredAccountMissingFromOutput { account_id: AccountId },
+
+    #[error(
+        "Chained call named account {account_id}, but it isn't resolvable from the top-level \
+         pre_states or any earlier call's materialized diff in this transaction"
+    )]
+    UnknownChainedCallAccount { account_id: AccountId },
+
+    #[error(
+        "Program {program_id:?} ran on accounts its caller either did not name or did not name \
+         in appropriate order."
+    )]
+    ChainedCallAccountsMismatch { program_id: ProgramId },
+
+    #[error(
+        "Program {program_id:?}'s own output reports account {account_id}, which the chained \
+         call that invoked it never named"
+    )]
+    UndeclaredAccountInProgramOutput {
+        program_id: ProgramId,
+        account_id: AccountId,
+    },
 }
 
 #[cfg(test)]

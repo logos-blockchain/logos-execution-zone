@@ -278,6 +278,214 @@ fn claiming_mechanism_within_chain_call() {
 }
 
 #[test]
+fn separate_initialize_and_fund_chain_calls_allow_unauthorized_private_recipient() {
+    let initializer = crate::test_methods::initialize_then_fund();
+    let claimer = crate::test_methods::claimer();
+    let claimer_id = claimer.id();
+    let simple_transfer = crate::test_methods::simple_balance_transfer();
+    let simple_transfer_id = simple_transfer.id();
+
+    let sender_keys = test_public_account_keys_1();
+    let sender_id = sender_keys.account_id();
+    let initial_balance = 100;
+    let amount: u128 = 37;
+
+    let mut state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(sender_id, initial_balance)]))
+        .with_test_programs();
+
+    let recipient_keys = test_private_account_keys_1();
+    let recipient_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let sender_account = state.get_account_by_id(sender_id);
+    let sender_nonce = sender_account.nonce;
+
+    let program_with_deps = ProgramWithDependencies::new(
+        initializer,
+        [(claimer_id, claimer), (simple_transfer_id, simple_transfer)].into(),
+    );
+
+    let instruction: (u128, ProgramId, ProgramId) = (amount, claimer_id, simple_transfer_id);
+    let (output, proof) = execute_and_prove(
+        vec![
+            AccountWithMetadata::new(Account::default(), false, recipient_id),
+            AccountWithMetadata::new(sender_account, true, sender_id),
+        ],
+        Program::serialize_instruction(instruction).unwrap(),
+        vec![
+            InputAccountIdentity::Private(PrivateWitness {
+                vpk: recipient_keys.vpk(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular { ask: None },
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
+            InputAccountIdentity::Public,
+        ],
+        &program_with_deps,
+    )
+    .expect("unauthorized private recipient claim-and-fund should succeed");
+
+    let message = Message::from_circuit_output(vec![sender_nonce], output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[&sender_keys.signing_key]);
+    state
+        .transition_from_privacy_preserving_transaction(
+            &PrivacyPreservingTransaction::new(message, witness_set),
+            1,
+            0,
+        )
+        .unwrap();
+
+    let expected_recipient_post = Account {
+        program_owner: claimer_id.into(),
+        balance: amount,
+        nonce: Nonce::private_account_nonce_init(&recipient_id),
+        ..Account::default()
+    };
+    assert!(
+        state
+            .get_proof_for_commitment(&Commitment::new(&recipient_id, &expected_recipient_post))
+            .is_some()
+    );
+    assert_eq!(
+        state.get_account_by_id(sender_id).balance,
+        initial_balance - amount
+    );
+}
+
+#[test]
+fn separate_initialize_and_fund_chain_calls_succeed_publicly_for_public_recipient() {
+    let initializer = crate::test_methods::initialize_then_fund();
+    let claimer = crate::test_methods::claimer();
+    let claimer_id = claimer.id();
+    let simple_transfer = crate::test_methods::simple_balance_transfer();
+    let simple_transfer_id = simple_transfer.id();
+
+    let sender_key = PrivateKey::try_new([1; 32]).unwrap();
+    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let initial_balance = 100;
+    let mut state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(sender_id, initial_balance)]))
+        .with_test_programs();
+    let recipient_key = PrivateKey::try_new([2; 32]).unwrap();
+    let recipient_id = AccountId::from(&PublicKey::new_from_private_key(&recipient_key));
+    let amount: u128 = 37;
+
+    assert_eq!(state.get_account_by_id(recipient_id), Account::default());
+
+    let instruction: (u128, ProgramId, ProgramId) = (amount, claimer_id, simple_transfer_id);
+    let message = public_transaction::Message::try_new(
+        initializer.id(),
+        vec![recipient_id, sender_id],
+        vec![Nonce(0), Nonce(0)],
+        instruction,
+    )
+    .unwrap();
+    let witness_set =
+        public_transaction::WitnessSet::for_message(&message, &[&recipient_key, &sender_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    let recipient_post = state.get_account_by_id(recipient_id);
+    assert_eq!(recipient_post.program_owner, claimer_id.into());
+    assert_eq!(recipient_post.balance, amount);
+    assert_eq!(
+        state.get_account_by_id(sender_id).balance,
+        initial_balance - amount
+    );
+}
+
+#[test]
+fn separate_initialize_and_fund_chain_calls_for_public_recipient_privately() {
+    let initializer = crate::test_methods::initialize_then_fund();
+    let claimer = crate::test_methods::claimer();
+    let claimer_id = claimer.id();
+    let simple_transfer = crate::test_methods::simple_balance_transfer();
+    let simple_transfer_id = simple_transfer.id();
+
+    let sender_keys = test_public_account_keys_1();
+    let sender_id = sender_keys.account_id();
+    let initial_balance = 100;
+    let amount: u128 = 37;
+
+    let mut state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(sender_id, initial_balance)]))
+        .with_test_programs();
+
+    let recipient_key = PrivateKey::try_new([2; 32]).unwrap();
+    let recipient_id = AccountId::from(&PublicKey::new_from_private_key(&recipient_key));
+    let sender_account = state.get_account_by_id(sender_id);
+    let sender_nonce = sender_account.nonce;
+
+    // A privacy-preserving transaction requires at least one private action; this account is
+    // untouched by any chained call and exists purely to satisfy that.
+    let padding_keys = test_private_account_keys_2();
+    let padding_id =
+        AccountId::for_regular_private_account(&padding_keys.npk(), &padding_keys.vpk(), 0);
+
+    let program_with_deps = ProgramWithDependencies::new(
+        initializer,
+        [(claimer_id, claimer), (simple_transfer_id, simple_transfer)].into(),
+    );
+
+    let instruction: (u128, ProgramId, ProgramId) = (amount, claimer_id, simple_transfer_id);
+    let result = execute_and_prove(
+        vec![
+            AccountWithMetadata::new(Account::default(), true, recipient_id),
+            AccountWithMetadata::new(sender_account, true, sender_id),
+            AccountWithMetadata::new(Account::default(), false, padding_id),
+        ],
+        Program::serialize_instruction(instruction).unwrap(),
+        vec![
+            InputAccountIdentity::Public,
+            InputAccountIdentity::Public,
+            InputAccountIdentity::Private(PrivateWitness {
+                vpk: padding_keys.vpk(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular { ask: None },
+                nullifier: NullifierWitness::Init {
+                    npk: padding_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
+        ],
+        &program_with_deps,
+    );
+
+    match result {
+        Ok((output, proof)) => {
+            let message = Message::from_circuit_output(vec![Nonce(0), sender_nonce], output);
+            let witness_set = WitnessSet::for_message(
+                &message,
+                proof,
+                &[&recipient_key, &sender_keys.signing_key],
+            );
+            state
+                .transition_from_privacy_preserving_transaction(
+                    &PrivacyPreservingTransaction::new(message, witness_set),
+                    1,
+                    0,
+                )
+                .unwrap();
+
+            let recipient_post = state.get_account_by_id(recipient_id);
+            assert_eq!(recipient_post.program_owner, claimer_id.into());
+            assert_eq!(recipient_post.balance, amount);
+            assert_eq!(
+                state.get_account_by_id(sender_id).balance,
+                initial_balance - amount
+            );
+        }
+        Err(e) => panic!("expected success, got: {e:?}"),
+    }
+}
+
+#[test]
 fn unauthorized_public_account_claiming_fails_when_executed_privately() {
     let program = crate::test_methods::simple_balance_transfer();
     let account_id = AccountId::new([11; 32]);

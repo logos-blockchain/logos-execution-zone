@@ -1,12 +1,14 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
-    account::AccountWithMetadata,
+    account::{Account, AccountId, AccountWithMetadata},
     from_frame,
-    program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
+    program::{
+        ChainedCall, InstructionData, ProgramId, ProgramOutput, compute_public_authorized_pdas,
+    },
     to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
@@ -82,6 +84,12 @@ pub fn execute_and_prove(
     )
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public entry point — taking ownership signals the caller hands off its top-level \
+              account values for the duration of the proof; callers already construct these \
+              freshly per call, so a borrow would just push the clone to every call site"
+)]
 pub fn execute_and_prove_with_padded_inputs(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
@@ -96,24 +104,100 @@ pub fn execute_and_prove_with_padded_inputs(
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
 
+    // Best-effort mirror of the account state the circuit will independently derive; getting it
+    // wrong just wastes a proving attempt, since the circuit itself is the source of truth.
+    let mut materialized_state: HashMap<AccountId, Account> = pre_states
+        .iter()
+        .map(|pre| (pre.account_id, pre.account.clone()))
+        .collect();
+    let pre_state_ids: Vec<AccountId> = pre_states.iter().map(|pre| pre.account_id).collect();
+
+    // Non-PDA accounts authorized at their first sight, anywhere in the call tree — mirrors
+    // the circuit's own `globally_authorized`. Seeded from top-level `is_authorized` since the
+    // circuit never independently re-verifies a credential; nothing else could supply it.
+    let mut globally_authorized: HashSet<AccountId> = pre_states
+        .iter()
+        .filter(|pre| pre.is_authorized)
+        .map(|pre| pre.account_id)
+        .collect();
+
+    // First-sighting position in the circuit's own traversal order, for private-PDA witness
+    // lookup. Assigned lazily from each call's actual output (below), including the top-level
+    // one — never pre-seeded from raw input order, which the top-level program is free to not
+    // honor in its own output.
+    let mut position_by_account: HashMap<AccountId, usize> = HashMap::new();
+    let mut next_position: usize = 0;
+
     let initial_call = ChainedCall {
         program_id: initial_program.id(),
         instruction_data,
-        pre_states,
+        pre_state_ids,
         pda_seeds: vec![],
     };
 
-    let mut chained_calls = VecDeque::from_iter([(initial_call, initial_program, None)]);
+    let mut chained_calls =
+        VecDeque::from_iter([(initial_call, initial_program, None, HashSet::new())]);
     let mut chain_calls_counter = 0;
-    while let Some((chained_call, program, caller_program_id)) = chained_calls.pop_front() {
+    while let Some((chained_call, program, caller_program_id, caller_authorized_accounts)) =
+        chained_calls.pop_front()
+    {
         if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
             return Err(LeeError::MaxChainedCallsDepthExceeded);
         }
 
+        // Best-effort mirror of what the circuit will independently authorize (see comment at
+        // the top), used only to build this callee's input. The top-level call's pre_states
+        // came straight from the caller, not a `ChainedCall`, and are used as-is.
+        let authorized_pdas =
+            compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
+
+        let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_id) = caller_program_id {
+            let mut resolved = Vec::with_capacity(chained_call.pre_state_ids.len());
+            for account_id in &chained_call.pre_state_ids {
+                let account = materialized_state.get(account_id).cloned().ok_or(
+                    InvalidProgramBehaviorError::UnknownChainedCallAccount {
+                        account_id: *account_id,
+                    },
+                )?;
+
+                let position = *position_by_account.entry(*account_id).or_insert_with(|| {
+                    let pos = next_position;
+                    next_position = next_position
+                        .checked_add(1)
+                        .expect("account position count cannot overflow usize");
+                    pos
+                });
+                let private_pda_witness = account_identities
+                    .get(position)
+                    .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
+
+                let pda_match = authorized_pdas.contains(account_id)
+                    || private_pda_witness.is_some_and(|(npk, vpk, identifier)| {
+                        chained_call.pda_seeds.iter().any(|seed| {
+                            AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
+                                == *account_id
+                        })
+                    });
+
+                let is_authorized = caller_authorized_accounts.contains(account_id)
+                    || globally_authorized.contains(account_id)
+                    || pda_match;
+
+                resolved.push(AccountWithMetadata::new(
+                    account,
+                    is_authorized,
+                    *account_id,
+                ));
+            }
+            resolved
+        } else {
+            pre_states.clone()
+        };
+
         let inner_receipt = execute_and_prove_program(
             program,
             caller_program_id,
-            &chained_call.pre_states,
+            &real_pre_states,
             &chained_call.instruction_data,
         )?;
 
@@ -124,6 +208,68 @@ pub fn execute_and_prove_with_padded_inputs(
                 )
             })?)
             .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+
+        // Authorization scoped to this call's own subtree: starts from what this call itself
+        // inherited from its caller, plus every account this call's own output reports
+        // authorized — handed to this call's children only, never to its siblings. Mirrors
+        // `authorized_accounts.extend(authorized_output_accounts)` in-circuit.
+        let mut authorized_output_accounts = caller_authorized_accounts;
+
+        for (pre, post) in program_output
+            .pre_states
+            .iter()
+            .zip(&program_output.post_states)
+        {
+            let account_id = pre.account_id;
+
+            // Assigned here, after this call has actually run, uniformly for the top-level
+            // call too — it's free to never echo a given account in its own output at all.
+            let first_sighting = !position_by_account.contains_key(&account_id);
+            let position = *position_by_account.entry(account_id).or_insert_with(|| {
+                let pos = next_position;
+                next_position = next_position
+                    .checked_add(1)
+                    .expect("account position count cannot overflow usize");
+                pos
+            });
+            let private_pda_witness = account_identities
+                .get(position)
+                .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
+            let pda_match = authorized_pdas.contains(&account_id)
+                || caller_program_id.is_some_and(|caller_id| {
+                    private_pda_witness.is_some_and(|(npk, vpk, identifier)| {
+                        chained_call.pda_seeds.iter().any(|seed| {
+                            AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
+                                == account_id
+                        })
+                    })
+                });
+
+            // A successful claim reassigns ownership; the guest doesn't write this into its own
+            // post_state, the circuit does it afterward, so predict it here too.
+            let program_owner = if post.required_claim().is_some() {
+                AccountId::from(chained_call.program_id)
+            } else {
+                post.account().program_owner
+            };
+            materialized_state.insert(
+                account_id,
+                Account {
+                    program_owner,
+                    ..post.account().clone()
+                },
+            );
+            if pre.is_authorized {
+                authorized_output_accounts.insert(account_id);
+                // Only a first-sighted, non-pda-matched account is a "regular account
+                // authorized by real credential" claim — mirrors the circuit's own
+                // `authorize_first_sight_without_pda_witness` else-branch. A pda match is
+                // already captured, subtree-scoped, by `authorized_output_accounts` above.
+                if first_sighting && !pda_match {
+                    globally_authorized.insert(account_id);
+                }
+            }
+        }
 
         // TODO: remove clone
         program_outputs.push(program_output.clone());
@@ -137,7 +283,12 @@ pub fn execute_and_prove_with_padded_inputs(
                     program_id: new_call.program_id,
                 },
             )?;
-            chained_calls.push_front((new_call, next_program, Some(chained_call.program_id)));
+            chained_calls.push_front((
+                new_call,
+                next_program,
+                Some(chained_call.program_id),
+                authorized_output_accounts.clone(),
+            ));
         }
 
         chain_calls_counter = chain_calls_counter

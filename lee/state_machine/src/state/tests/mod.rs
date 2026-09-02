@@ -62,9 +62,10 @@ impl V03State {
         self.insert_program(&crate::test_methods::two_pda_claimer());
         self.insert_program(&crate::test_methods::noop());
         self.insert_program(&crate::test_methods::chain_caller());
+        self.insert_program(&crate::test_methods::non_delegating_forwarder());
         self.insert_program(&crate::test_methods::event_emitter());
         self.insert_program(&crate::test_methods::modified_transfer_program());
-        self.insert_program(&crate::test_methods::malicious_authorization_changer());
+        self.insert_program(&crate::test_methods::initialize_then_fund());
         self.insert_program(&crate::test_methods::validity_window());
         self.insert_program(&crate::test_methods::flash_swap_initiator());
         self.insert_program(&crate::test_methods::flash_swap_callback());
@@ -75,9 +76,9 @@ impl V03State {
         self.insert_program(&crate::test_methods::changer_claimer());
         self.insert_program(&crate::test_methods::validity_window_chain_caller());
         self.insert_program(&crate::test_methods::simple_transfer_proxy());
-        self.insert_program(&crate::test_methods::malicious_injector());
-        self.insert_program(&crate::test_methods::malicious_launderer());
         self.insert_program(&crate::test_methods::modified_transfer_program());
+        self.insert_program(&crate::test_methods::references_undeclared_account());
+        self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
         self
     }
 
