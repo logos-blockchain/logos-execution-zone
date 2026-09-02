@@ -11138,6 +11138,7 @@ dependencies = [
  "programs",
  "rand 0.8.6",
  "sequencer_core_metrics",
+ "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "serde",
@@ -11185,6 +11186,7 @@ dependencies = [
  "programs",
  "sequencer_core",
  "sequencer_executor_actor_metrics",
+ "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "system_accounts",
@@ -11250,6 +11252,7 @@ dependencies = [
  "sequencer_core",
  "sequencer_executor_actor",
  "sequencer_rpc_server_actor",
+ "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
  "system_accounts",
@@ -11277,6 +11280,26 @@ version = "0.1.0"
 dependencies = [
  "jsonrpsee",
  "sequencer_service_protocol",
+]
+
+[[package]]
+name = "sequencer_slasher_actor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "common",
+ "hex",
+ "kameo",
+ "lee",
+ "log",
+ "logos-blockchain-key-management-system-service",
+ "programs",
+ "sequencer_stake_core",
+ "sequencer_storage_actor",
+ "system_accounts",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

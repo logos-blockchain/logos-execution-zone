@@ -14,6 +14,7 @@ lee_core.workspace = true
 chain_state.workspace = true
 common.workspace = true
 sequencer_core_metrics = { workspace = true, features = ["record"] }
+sequencer_slasher_actor.workspace = true
 sequencer_storage_actor.workspace = true
 mempool.workspace = true
 logos-blockchain-zone-sdk.workspace = true

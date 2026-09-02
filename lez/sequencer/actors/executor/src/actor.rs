@@ -24,6 +24,7 @@ use sequencer_core::{
     config::SequencerConfig,
     task_group::TaskGroup,
 };
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
@@ -125,6 +126,12 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + 'static> ExecutorAct
                 failed_attempts: 0,
             }
         }
+    }
+
+    /// Handle to the slasher, for the service to supervise.
+    #[must_use]
+    pub fn slasher_ref(&self) -> ActorRef<SlasherActor<S>> {
+        self.sequencer.slasher_ref().clone()
     }
 }
 

@@ -9,6 +9,7 @@ pub use sequencer_core::config::*;
 use sequencer_core::load_or_create_signing_key;
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_rpc_server_actor::RpcServerActor;
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActor;
 use tokio::select;
 
@@ -30,6 +31,7 @@ pub struct SequencerHandle {
     scheduler: ActorHandle<Scheduler>,
     rpc_server: ActorHandle<RpcServerActor>,
     executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
+    slasher: ActorHandle<SlasherActor>,
     storage: ActorHandle<StorageActor>,
     addr: SocketAddr,
     /// Held for its lifetime: dropping it stops the gossip drive task.
@@ -42,6 +44,7 @@ impl SequencerHandle {
         scheduler: ActorHandle<Scheduler>,
         rpc_server: ActorHandle<RpcServerActor>,
         executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
+        slasher: ActorHandle<SlasherActor>,
         storage: ActorHandle<StorageActor>,
         addr: SocketAddr,
         gossip: Option<sequencer_core::gossip::GossipNetwork>,
@@ -50,6 +53,7 @@ impl SequencerHandle {
             scheduler,
             rpc_server,
             executor,
+            slasher,
             storage,
             addr,
             gossip,
@@ -63,6 +67,7 @@ impl SequencerHandle {
             scheduler,
             rpc_server,
             executor,
+            slasher,
             storage,
             addr: _,
             gossip: _,
@@ -72,6 +77,7 @@ impl SequencerHandle {
         scheduler.shutdown().await;
         rpc_server.shutdown().await;
         executor.shutdown().await;
+        slasher.shutdown().await;
         storage.shutdown().await;
     }
 
@@ -85,6 +91,7 @@ impl SequencerHandle {
             executor,
             rpc_server,
             scheduler,
+            slasher,
             storage,
             addr: _,
             gossip: _,
@@ -98,6 +105,9 @@ impl SequencerHandle {
                 Err(err)
             }
             Err(err) = scheduler.failed() => {
+                Err(err)
+            }
+            Err(err) = slasher.failed() => {
                 Err(err)
             }
             Err(err) = storage.failed() => {
@@ -116,6 +126,7 @@ impl SequencerHandle {
             executor,
             rpc_server,
             scheduler,
+            slasher,
             storage,
             addr: _,
             gossip: _,
@@ -124,6 +135,7 @@ impl SequencerHandle {
         executor.is_healthy()
             && rpc_server.is_healthy()
             && scheduler.is_healthy()
+            && slasher.is_healthy()
             && storage.is_healthy()
     }
 
@@ -164,6 +176,7 @@ pub fn run(
         info!("Storage Actor spawned");
 
         let executor = ExecutorActor::new(config, storage_ref.clone()).await;
+        let slasher_ref = executor.slasher_ref();
         let executor_ref = ExecutorActor::spawn(executor);
         info!("Executor Actor spawned");
 
@@ -241,6 +254,7 @@ pub fn run(
             ActorHandle::new(scheduler_ref),
             ActorHandle::new(rpc_server_ref),
             ActorHandle::new(executor_ref),
+            ActorHandle::new(slasher_ref),
             ActorHandle::new(storage_ref),
             addr,
             gossip_network,
