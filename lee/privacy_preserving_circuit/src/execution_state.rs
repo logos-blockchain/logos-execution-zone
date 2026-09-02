@@ -169,7 +169,7 @@ impl ExecutionState {
             // Check accounts used are exactly those the call was performed with.
             assert!(
                 // If the call is top-level, nothing to check.
-                caller_data.program_id.is_none()
+                caller_data.account_id.is_none()
                     // Else, match.
                     || pre_states_match_accounts(
                         &chained_call.pre_state_ids,
