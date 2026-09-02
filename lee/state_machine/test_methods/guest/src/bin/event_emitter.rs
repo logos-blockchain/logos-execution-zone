@@ -12,8 +12,8 @@ pub struct EmitterInstruction {
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: EmitterInstruction { events, chain },
         },
@@ -39,8 +39,8 @@ fn main() {
     // Emit both the chained calls and a list of events.
     // This is used to test the end-positioning of events in a transaction.
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         pre_states,
         post_states,

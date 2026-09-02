@@ -151,51 +151,50 @@ pub fn execute_and_prove_with_padded_inputs(
         let authorized_pdas =
             compute_public_authorized_pdas(caller_account_id, &chained_call.pda_seeds);
 
-        let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_account_id) =
-            caller_account_id
-        {
-            let caller_id = ProgramId::from(caller_account_id);
-            let mut resolved = Vec::with_capacity(chained_call.pre_state_ids.len());
-            for account_id in &chained_call.pre_state_ids {
-                let account = materialized_state.get(account_id).cloned().ok_or(
-                    InvalidProgramBehaviorError::UnknownChainedCallAccount {
-                        account_id: *account_id,
-                    },
-                )?;
+        let real_pre_states: Vec<AccountWithMetadata> =
+            if let Some(caller_account_id) = caller_account_id {
+                let caller_id = ProgramId::from(caller_account_id);
+                let mut resolved = Vec::with_capacity(chained_call.pre_state_ids.len());
+                for account_id in &chained_call.pre_state_ids {
+                    let account = materialized_state.get(account_id).cloned().ok_or(
+                        InvalidProgramBehaviorError::UnknownChainedCallAccount {
+                            account_id: *account_id,
+                        },
+                    )?;
 
-                let position = *position_by_account.entry(*account_id).or_insert_with(|| {
-                    let pos = next_position;
-                    next_position = next_position
-                        .checked_add(1)
-                        .expect("account position count cannot overflow usize");
-                    pos
-                });
-                let private_pda_witness = account_identities
-                    .get(position)
-                    .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
-
-                let pda_match = authorized_pdas.contains(account_id)
-                    || private_pda_witness.is_some_and(|(npk, vpk, identifier)| {
-                        chained_call.pda_seeds.iter().any(|seed| {
-                            AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
-                                == *account_id
-                        })
+                    let position = *position_by_account.entry(*account_id).or_insert_with(|| {
+                        let pos = next_position;
+                        next_position = next_position
+                            .checked_add(1)
+                            .expect("account position count cannot overflow usize");
+                        pos
                     });
+                    let private_pda_witness = account_identities
+                        .get(position)
+                        .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
 
-                let is_authorized = caller_authorized_accounts.contains(account_id)
-                    || globally_authorized.contains(account_id)
-                    || pda_match;
+                    let pda_match = authorized_pdas.contains(account_id)
+                        || private_pda_witness.is_some_and(|(npk, vpk, identifier)| {
+                            chained_call.pda_seeds.iter().any(|seed| {
+                                AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
+                                    == *account_id
+                            })
+                        });
 
-                resolved.push(AccountWithMetadata::new(
-                    account,
-                    is_authorized,
-                    *account_id,
-                ));
-            }
-            resolved
-        } else {
-            pre_states.clone()
-        };
+                    let is_authorized = caller_authorized_accounts.contains(account_id)
+                        || globally_authorized.contains(account_id)
+                        || pda_match;
+
+                    resolved.push(AccountWithMetadata::new(
+                        account,
+                        is_authorized,
+                        *account_id,
+                    ));
+                }
+                resolved
+            } else {
+                pre_states.clone()
+            };
 
         let inner_receipt = execute_and_prove_program(
             program,

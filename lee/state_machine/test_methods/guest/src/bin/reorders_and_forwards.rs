@@ -9,8 +9,8 @@ type Instruction = (ProgramId, InstructionData, Vec<PdaSeed>);
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (callee_program_id, callee_instruction, pda_seeds),
         },
@@ -22,8 +22,8 @@ fn main() {
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         Vec::new(),
         Vec::new(),

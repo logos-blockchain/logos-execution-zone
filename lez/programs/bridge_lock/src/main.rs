@@ -78,9 +78,7 @@ fn init_holding(
     instruction_data: Vec<u8>,
     holder: &[u8; 32],
 ) {
-    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
-    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
-    // for the PDA-derivation helper below, which is pinned to the actual image id.
+    // Recover the actual RISC0 image id for the PDA derivation below.
     let self_program_id = ProgramId::from(self_account_id);
 
     // pre_states: [holding PDA].
@@ -93,8 +91,7 @@ fn init_holding(
     );
     if holding.account.program_owner != DEFAULT_PROGRAM_OWNER {
         assert_eq!(
-            holding.account.program_owner,
-            self_account_id,
+            holding.account.program_owner, self_account_id,
             "bridge-lock holding PDA is owned by another program"
         );
     }
