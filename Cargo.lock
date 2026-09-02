@@ -11043,6 +11043,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sequencer_ffi"
+version = "0.1.0"
+dependencies = [
+ "cbindgen",
+ "env_logger",
+ "futures",
+ "lee",
+ "log",
+ "sequencer_core",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "sequencer_rpc_server_actor"
 version = "0.1.0"
 dependencies = [
