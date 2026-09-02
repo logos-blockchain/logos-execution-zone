@@ -1312,16 +1312,16 @@ async fn a_delivery_backlog_is_spread_across_blocks() {
 }
 
 #[tokio::test]
-async fn a_block_full_of_declared_gas_defers_the_rest() {
+async fn unused_declared_gas_is_recredited_after_settlement() {
     let (mut sequencer, mempool_handle) = common_setup().await;
     let acc1 = initial_public_user_accounts()[0].account_id;
     let acc2 = initial_public_user_accounts()[1].account_id;
     let sign_key = create_signing_key_for_account1();
 
-    // Six transfers declaring the default 2M-cycle test gas limit each: five
-    // fill the 10M-cycle block execution budget exactly, so the sixth does
-    // not fit however few cycles the transfers actually use — the budget
-    // prices declared gas, not metered gas.
+    // Six transfers declaring the default 2M-cycle test gas limit each — 12M
+    // declared against the 10M block budget. The budget tracks the gas each
+    // settlement actually charged, so the padded declarations only occupy the
+    // block one at a time and all six fit.
     let transfers: Vec<_> = (0..6_u128)
         .map(|nonce| {
             common::test_utils::create_transaction_native_token_transfer(
@@ -1343,9 +1343,37 @@ async fn a_block_full_of_declared_gas_defers_the_rest() {
         .await
         .unwrap()
         .unwrap();
-    assert_block_tail(&block, &transfers[..5]);
+    assert_block_tail(&block, &transfers);
+}
 
-    // Deferred, not dropped: the sixth leads the next block.
+#[tokio::test]
+async fn a_block_full_of_charged_gas_defers_the_rest() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let sign_key = create_signing_key_for_account1();
+
+    // A normal transfer settles first and charges a few cycles. The second
+    // transfer declares the full per-block cap: it fits an empty budget, but
+    // not on top of what the block already charged — deferred, not dropped.
+    let transfers = vec![
+        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key),
+        common::test_utils::create_transaction_native_token_transfer_with_fees(
+            acc1,
+            1,
+            acc2,
+            10,
+            &sign_key,
+            lee::FeeDeclaration::new(acc1, fee_core::market::MAX_GAS_EXEC, 0, u128::MAX >> 1),
+        ),
+    ];
+    for tx in &transfers {
+        mempool_handle
+            .push((TransactionOrigin::User, tx.clone()))
+            .await
+            .unwrap();
+    }
+
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .store
@@ -1353,7 +1381,17 @@ async fn a_block_full_of_declared_gas_defers_the_rest() {
         .await
         .unwrap()
         .unwrap();
-    assert_block_tail(&block, &transfers[5..]);
+    assert_block_tail(&block, &transfers[..1]);
+
+    // Deferred, not dropped: it leads the next block.
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_block_tail(&block, &transfers[1..]);
 }
 
 #[tokio::test]
