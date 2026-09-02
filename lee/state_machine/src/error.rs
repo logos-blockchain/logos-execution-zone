@@ -82,6 +82,14 @@ pub enum LeeError {
 
     #[error("Execution outside of the validity window")]
     OutOfValidityWindow,
+
+    #[error("Unknown program")]
+    UnknownProgram {
+        /// A top-level unknown program is detectable before execution,
+        /// but if it is part of a chain of calls, we can only learn it
+        /// after executing; therefore, the failure is charged.
+        chained: bool,
+    },
 }
 
 impl LeeError {
@@ -95,7 +103,10 @@ impl LeeError {
     ///   reverted: the payer pays and the nonce advances.
     #[must_use]
     pub const fn is_chargeable(&self) -> bool {
-        !matches!(self, Self::InvalidInput(_))
+        !matches!(
+            self,
+            Self::InvalidInput(_) | Self::UnknownProgram { chained: false }
+        )
     }
 }
 

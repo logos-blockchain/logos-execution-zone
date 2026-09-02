@@ -5,8 +5,7 @@
 
 use common::transaction::LeeTransaction;
 
-/// Reserve ~200 bytes for block header overhead, mirroring the RPC check.
-const BLOCK_HEADER_OVERHEAD: u64 = 200;
+use crate::config::BLOCK_OVERHEAD;
 
 #[derive(Debug)]
 // `Accept` is intentionally left unboxed: it is the common outcome and the enum
@@ -26,7 +25,7 @@ pub enum TxEvaluation {
 #[must_use]
 pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     let tx_size = u64::try_from(data.len()).unwrap_or(u64::MAX);
-    let max_tx_size = max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
+    let max_tx_size = max_block_size.saturating_sub(BLOCK_OVERHEAD);
     if tx_size > max_tx_size {
         return TxEvaluation::Reject(format!("transaction too large: {tx_size} > {max_tx_size}"));
     }

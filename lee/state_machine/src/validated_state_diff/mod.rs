@@ -149,8 +149,10 @@ impl ValidatedStateDiff {
             cycle_budget,
             &mut cycles_used,
         );
-        let cycles = if matches!(result, Err(LeeError::OutOfGas { .. })) {
-            // if it ran out of gas, we can charge the entire usage
+        // Any failure pays the full declared budget: the payer reserved it, and
+        // metering written back on an error path must never undercharge. (For a
+        // non-chargeable error the value is moot — the block is rejected.)
+        let cycles = if result.is_err() {
             cycle_budget
         } else {
             cycles_used
@@ -291,7 +293,9 @@ impl ValidatedStateDiff {
             );
 
             let Some(program_account) = state.get_program(chained_call.program_id) else {
-                return Err(LeeError::InvalidInput("Unknown program".into()));
+                return Err(LeeError::UnknownProgram {
+                    chained: caller_data.program_id.is_some(),
+                });
             };
             let program = Program::new_unchecked(
                 chained_call.program_id,

@@ -130,6 +130,16 @@ impl SequencerConfig {
     }
 }
 
+/// Bytes reserved out of `max_block_size` for the block header plus the forced
+/// fee and clock tail transactions; RPC and gossip cap a single transaction at
+/// `max_block_size - BLOCK_OVERHEAD`.
+pub const BLOCK_OVERHEAD: u64 = 2_048;
+
+/// The largest usable `max_block_size`: an L2 block is published to Bedrock as
+/// a single inscription, which the L1 caps at this many bytes.
+pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
+    logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
+
 const fn default_max_block_size() -> ByteSize {
     ByteSize::mib(1)
 }

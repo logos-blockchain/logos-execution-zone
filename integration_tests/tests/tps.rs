@@ -185,7 +185,8 @@ impl TpsTestManager {
     const fn generate_sequencer_partial_config() -> SequencerPartialConfig {
         SequencerPartialConfig {
             max_num_tx_in_block: 300,
-            max_block_size: ByteSize::mb(500),
+            // The largest block Bedrock can carry as one inscription.
+            max_block_size: ByteSize::b(sequencer_core::config::MAX_PUBLISHABLE_BLOCK_SIZE),
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(12),
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),

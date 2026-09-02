@@ -47,9 +47,6 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         let tx_hash = tx.hash();
 
         let res = async move {
-            // Reserve ~200 bytes for block header overhead
-            const BLOCK_HEADER_OVERHEAD: u64 = 200;
-
             let encoded_tx =
                 borsh::to_vec(&tx).expect("Transaction borsh serialization should not fail");
             let tx_size =
@@ -58,7 +55,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             let max_tx_size = self
                 .max_block_size
                 .as_u64()
-                .saturating_sub(BLOCK_HEADER_OVERHEAD);
+                .saturating_sub(sequencer_core::config::BLOCK_OVERHEAD);
 
             if tx_size > max_tx_size {
                 return Err(ErrorObjectOwned::owned(
