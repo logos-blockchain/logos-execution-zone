@@ -17,6 +17,20 @@ use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+/// Bytes reserved out of `max_block_size` for the block header plus the forced
+/// fee and clock tail transactions; RPC and gossip cap a single transaction at
+/// `max_block_size - BLOCK_OVERHEAD`.
+pub const BLOCK_OVERHEAD: u64 = 2_048;
+
+/// The largest usable `max_block_size`: an L2 block is published to Bedrock as
+/// a single inscription, which the L1 caps at this many bytes.
+#[expect(
+    clippy::as_conversions,
+    reason = "usize::try_from is not const & usize fits u64 on every supported target"
+)]
+pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
+    logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
+
 /// A transaction to be applied at genesis to supply initial balances.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -129,16 +143,6 @@ impl SequencerConfig {
             .join(format!("rocksdb-{}", self.bedrock_config.channel_id))
     }
 }
-
-/// Bytes reserved out of `max_block_size` for the block header plus the forced
-/// fee and clock tail transactions; RPC and gossip cap a single transaction at
-/// `max_block_size - BLOCK_OVERHEAD`.
-pub const BLOCK_OVERHEAD: u64 = 2_048;
-
-/// The largest usable `max_block_size`: an L2 block is published to Bedrock as
-/// a single inscription, which the L1 caps at this many bytes.
-pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
-    logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
 
 const fn default_max_block_size() -> ByteSize {
     ByteSize::mib(1)

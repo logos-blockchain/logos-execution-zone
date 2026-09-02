@@ -100,11 +100,8 @@ type FoundingStake = (
     lee::Signature,
 );
 
-/// The block's declared-gas budget: the sum of included charged transactions'
-/// signed limits, tracked against the caps the transition enforces on actuals.
-/// Each transaction's actual gas is bounded by its declared gas, so a block
-/// built under this budget can never breach the consensus caps — and no
-/// execution is wasted discovering that.
+/// The block's gas budget: the gas the included transactions were actually
+/// charged (read off the settlement summary).
 #[derive(Clone, Copy, Debug, Default)]
 struct DeclaredGasBudget {
     exec: u64,
@@ -130,10 +127,12 @@ impl DeclaredGasBudget {
             && view.gas_stor() <= fee_core::market::MAX_GAS_STOR
     }
 
-    /// Adds a contribution [`Self::fits`] has already cleared.
-    const fn add(&mut self, view: &fee_core::assess::FeeTxView) {
-        self.exec = self.exec.saturating_add(view.gas_limit());
-        self.stor = self.stor.saturating_add(view.gas_stor());
+    /// Snaps the budget to the gas the block's settled transactions were
+    /// actually charged. Failed-but-charged actions pay their full declared
+    /// budget, so the summary never undercounts what replay will enforce.
+    const fn sync(&mut self, summary: &fee_core::BlockFeeSummary) {
+        self.exec = summary.gas_used_exec;
+        self.stor = summary.gas_used_stor;
     }
 }
 
@@ -1419,9 +1418,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 &mut summary,
             );
             if applied {
-                if let Some(view) = &charged_view {
-                    gas_budget.add(view);
-                }
+                // track the charged gas
+                gas_budget.sync(&summary);
                 sequencer_core_metrics::record_mempool_transaction_application_time(
                     origin.into(),
                     tx.kind().into(),

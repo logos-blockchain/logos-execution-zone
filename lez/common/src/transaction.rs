@@ -394,6 +394,8 @@ pub fn validate_reward_target(target: AccountId) -> Result<(), String> {
 /// accounts, and instruction the invocation needs.
 #[must_use]
 pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
+    // TODO: consider a stake-program like pattern where tx carries the program id & the instruction
+    // itself, instead of fixing the auth transfer program here
     lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id(),
         vec![payer, system_accounts::fee_inbox_account_id()],

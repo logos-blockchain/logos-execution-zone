@@ -149,9 +149,7 @@ impl ValidatedStateDiff {
             cycle_budget,
             &mut cycles_used,
         );
-        // Any failure pays the full declared budget: the payer reserved it, and
-        // metering written back on an error path must never undercharge. (For a
-        // non-chargeable error the value is moot — the block is rejected.)
+        // any failure pays the full declared budget
         let cycles = if result.is_err() {
             cycle_budget
         } else {
