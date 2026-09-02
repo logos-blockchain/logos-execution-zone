@@ -5,11 +5,7 @@ use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 // This program reads an arbitrary sequence of bytes as its instruction
 // and appends those bytes to the `data` field of the single input account.
 //
-// Execution succeeds only if the input account **is authorized** and is either:
-// - uninitialized, or
-// - already owned by this program.
-//
-// Writing data to an unowned input account is what makes this program its owner.
+// Execution succeeds only if the input account **is authorized**.
 //
 // The updated account is emitted as the sole post-state.
 

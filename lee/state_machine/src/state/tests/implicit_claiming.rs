@@ -1,5 +1,7 @@
 use super::*;
 
+// Note: these will be gone when namespacing arrives.
+
 #[test]
 fn public_echo_of_a_default_account_leaves_it_unowned() {
     let initial_data = [];
@@ -16,7 +18,7 @@ fn public_echo_of_a_default_account_leaves_it_unowned() {
 
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-    // Writing nothing acquires nothing: the account stays unowned.
+    // Writing nothing does not result in any claims.
     assert!(result.is_ok());
     assert_eq!(state.get_account_by_id(account_id), Account::default());
 }
@@ -129,8 +131,7 @@ fn a_squatter_acquires_a_funded_account_but_still_cannot_spend_it() {
     let program_id = crate::test_methods::squatter().id();
     let data: Vec<u8> = vec![7; 8];
 
-    // A funded address nobody has written to yet: reachable now that a credit
-    // needs no claim, and the address a squatter goes after.
+    // A funded address nobody has written to yet.
     state.force_insert_account(
         target_id,
         Account {
@@ -278,9 +279,6 @@ fn an_unowned_signer_account_survives_its_nonce_advancing() {
 
 #[test]
 fn an_unauthorized_private_data_write_acquires_the_account() {
-    // Delivery to a foreign private account is the whole reason claiming had to
-    // become permissionless: a sender never holds the recipient's `ask`, so the
-    // write must acquire the account without it.
     let program = crate::test_methods::data_changer();
     let program_id = program.id();
     let recipient_keys = test_private_account_keys_1();
@@ -321,8 +319,6 @@ fn an_unauthorized_private_data_write_acquires_the_account() {
 
 #[test]
 fn a_private_write_to_a_foreign_owned_account_is_rejected() {
-    // Rule 6 is what stops acquisition from becoming seizure, and it must hold in
-    // the circuit exactly as it does on the public path.
     let program = crate::test_methods::data_changer();
     let owner_id = crate::test_methods::noop().id();
     let sender_keys = test_private_account_keys_1();
@@ -363,8 +359,6 @@ fn a_private_write_to_a_foreign_owned_account_is_rejected() {
     );
 }
 
-/// A private sender crediting a public unowned recipient: the recipient gains the balance and
-/// stays unowned, exactly as on the public path.
 #[test]
 fn private_credit_to_a_public_unowned_recipient_leaves_it_unowned() {
     let program = crate::test_methods::simple_balance_transfer();
@@ -440,8 +434,6 @@ fn private_credit_to_a_public_unowned_recipient_leaves_it_unowned() {
     );
 }
 
-/// Acquisition lands after the frame, so a callee handed the account in the same
-/// transaction meets it owned by the caller: rule 6 refuses the write.
 #[test]
 fn a_callee_cannot_write_an_account_the_caller_acquired_in_the_same_transaction() {
     let initial_data = [];
@@ -476,8 +468,6 @@ fn a_callee_cannot_write_an_account_the_caller_acquired_in_the_same_transaction(
     assert_eq!(state.get_account_by_id(account_id), Account::default());
 }
 
-/// Naming an account acquires nothing, so a callee handed an account the caller only
-/// echoed is the first to write it — and takes it.
 #[test]
 fn a_callee_acquires_an_account_the_caller_merely_echoed() {
     let initial_data = [];

@@ -1596,9 +1596,7 @@ impl LiveCommittee {
 
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — the bridge
 /// owns its receipt PDA. The receipt is the exactly-once ledger the bridge
-/// program keeps, and this mirrors the guest's own predicate: ownership, not
-/// non-defaultness, since anyone may credit balance to the receipt address and
-/// a bare credit must not make us skip relaying a real deposit.
+/// program keeps.
 fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> bool {
     let receipt_id =
         bridge_core::deposit_receipt_account_id(programs::bridge().id(), deposit_op_id.0);

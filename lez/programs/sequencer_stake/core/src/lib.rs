@@ -75,7 +75,7 @@ impl borsh::BorshDeserialize for SequencerKey {
 pub enum Instruction {
     /// Locks `amount` into the stake funds account of `sequencer_key`'s
     /// ownership account. First use acquires the ownership account; the funds
-    /// PDA is balance-only and stays unowned. Later calls top up the same pair.
+    /// PDA is balance-only and stays unowned.
     Stake {
         sequencer_key: SequencerKey,
         amount: u128,

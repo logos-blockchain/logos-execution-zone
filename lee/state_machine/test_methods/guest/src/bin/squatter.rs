@@ -3,7 +3,7 @@ use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 /// The data to write into the first account, and the balance to move out of it.
 type Instruction = (Vec<u8>, u128);
 
-/// Writes data to an account it does not own — acquiring it — and moves balance
+/// Writes data to an account it does not own - acquiring it - and moves balance
 /// out of it in the same breath.
 fn main() {
     let (

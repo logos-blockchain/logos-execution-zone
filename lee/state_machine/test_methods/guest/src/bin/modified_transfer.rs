@@ -8,8 +8,7 @@ use lee_core::{
     program::{ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
-/// Echoes an authorized default account back unchanged. The echo acquires nothing: only
-/// writing data takes an unowned account over.
+/// Echoes an authorized default account back unchanged.
 fn initialize_account(pre_state: AccountWithMetadata) -> Account {
     let account = pre_state.account;
     let is_authorized = pre_state.is_authorized;

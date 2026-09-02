@@ -11,8 +11,7 @@ use lee_core::program::{
 ///
 /// **Init** (`is_withdraw = false`, 1 pre-state `[pda]`):
 /// Chains to `simple_transfer` with `instruction=0` (init path) and `pda_seeds=[seed]`,
-/// which echoes the PDA unchanged. The seed establishes the private-PDA binding; no
-/// data is written, so the PDA stays unowned.
+/// which echoes the PDA unchanged.
 ///
 /// **Withdraw** (`is_withdraw = true`, 2 pre-states `[pda, recipient]`):
 /// Chains to `simple_transfer` with the amount and `pda_seeds=[seed]` to authorize
@@ -81,8 +80,7 @@ fn main() {
         let pda_post = pda_pre.account.clone();
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
-        // to authorize the PDA. simple_transfer echoes it unchanged, writing no
-        // data, so the PDA acquires no owner.
+        // to authorize the PDA.
         let mut auth_pda_pre = pda_pre;
         auth_pda_pre.is_authorized = true;
         let auth_call = ChainedCall::new(simple_transfer_id, vec![auth_pda_pre], &amount)

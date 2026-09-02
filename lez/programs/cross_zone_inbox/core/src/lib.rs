@@ -96,12 +96,6 @@ pub struct CrossZoneConfig {
     /// ever be set at genesis and there is no rotation. One value seeds every
     /// target, including the ones that mint, and whoever holds it can authorize
     /// a source, so its compromise is theft rather than delay.
-    ///
-    /// Any account serves, fresh or with history: targets treat it purely as an
-    /// authorization source and never write it, so no program ever comes to own
-    /// it, and balance sent to it stays spendable by whoever can authorize the
-    /// account. An `AccountId` rather than a key so a governance program's PDA
-    /// can hold it later.
     #[serde(default)]
     pub source_authority: Option<AccountId>,
     /// Program allowed to act on the source authority's behalf through a chained
@@ -248,10 +242,6 @@ pub enum Instruction {
     /// Delivers a finalized peer message to its target program.
     Dispatch(CrossZoneMessage),
     /// Initializes the inbox config account at genesis.
-    ///
-    /// Written once: an empty config is a first init, and a written one must
-    /// already hold exactly this, so it cannot be re-run to overwrite the
-    /// allowlists and survives a genesis replay.
     InitConfig(InboxConfig),
 }
 

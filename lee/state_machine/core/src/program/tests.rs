@@ -353,8 +353,7 @@ fn program_id_account_id_conversion_round_trips() {
     assert_eq!(ProgramId::from(AccountId::from(program_id)), program_id);
 }
 
-/// An account that is never claimed still accrues a nonce and a balance, so a
-/// pre-state that is neither default nor owned is ordinary and must validate.
+/// A byte-identical echo of an unowned account with history must validate.
 #[test]
 fn an_unowned_account_with_history_may_be_echoed_byte_identically() {
     let account = Account {

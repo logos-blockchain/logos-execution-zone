@@ -6,9 +6,7 @@ use lee_core::program::{
 /// to, and the callee's instruction.
 type Instruction = (Option<Vec<u8>>, ProgramId, InstructionData);
 
-/// Acquires the account by writing data to it — or merely echoes it — then forwards it to
-/// the callee. A written account is forwarded as the caller's own: acquisition lands after
-/// the frame, and the callee's pre-state is checked against that state.
+/// Acquires the account by writing data to it or echoes, then forwards it to the callee.
 fn main() {
     let (
         ProgramInput {

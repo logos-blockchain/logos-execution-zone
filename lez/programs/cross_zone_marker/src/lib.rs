@@ -22,11 +22,7 @@ pub type ZoneId = [u8; 32];
 /// The account the inbox passes at position 0 of a delivery's chained call, so
 /// the target can authenticate its own sources.
 ///
-/// Its contents carry nothing and are never read: a target re-derives this
-/// address from a source it has authorized and compares, so what the account
-/// holds cannot change any decision. Anyone may write it — the address is
-/// derivable and the account is unowned until someone writes it — and that is
-/// harmless for the same reason.
+/// Its contents carry nothing and are never read.
 ///
 /// The address is derivable by anyone, so it is not a secret and not a
 /// capability. What makes it mean something is that a target checks it only after

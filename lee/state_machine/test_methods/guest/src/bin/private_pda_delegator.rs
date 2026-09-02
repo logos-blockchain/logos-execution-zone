@@ -4,10 +4,7 @@ use lee_core::program::{
 };
 
 /// Echoes the sole `pre_state` and chains to `callee_program_id`, delegating authorization with
-/// `delegated_seed` in `pda_seeds`. When `delegated_seed` is the seed the account was derived
-/// under, this exercises the happy caller-seeds authorization path for private PDAs in
-/// `validate_and_sync_states` -- which is also what binds the position's npk. When it differs,
-/// the callee's `pre_state` has no matching authorization source and the circuit must reject.
+/// `delegated_seed` in `pda_seeds`.
 type Instruction = (PdaSeed, ProgramId);
 
 fn main() {

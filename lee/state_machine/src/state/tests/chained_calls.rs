@@ -130,8 +130,7 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
 #[test]
 fn credit_within_chain_call_leaves_the_recipient_unowned() {
     // This test calls the transfer program through the chain_caller program. The transfer is
-    // made from an initialized sender to an uninitialized recipient. Neither program writes
-    // the recipient's data, so neither becomes its owner.
+    // made from an initialized sender to an uninitialized recipient.
     let chain_caller = crate::test_methods::chain_caller();
     let from_key = PrivateKey::try_new([1; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));

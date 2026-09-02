@@ -409,9 +409,6 @@ pub async fn setup_wallet_at(
 }
 
 /// Funds each of the wallet's private accounts from one of its public accounts.
-///
-/// Genesis credits public accounts directly, but a private account has no state until a
-/// transaction writes its commitment, so this is what brings them into existence.
 pub async fn fund_private_accounts(
     wallet: &mut WalletCore,
     funder: &PrivateKey,

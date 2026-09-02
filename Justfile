@@ -26,9 +26,7 @@ build-artifacts:
     fi
 
 # Guests that chain into authenticated_transfer embed its image id as a source
-# constant. Refresh it from the built artifact; when it changed (exit 1), rebuild
-# those guests once — the second pass must converge, since authenticated_transfer's
-# own ELF never includes the constant. Any other non-zero exit is a failure.
+# constant. Refresh it from the built artifact.
 refresh-image-id-pin:
     @status=0; cargo run -q -p image_id_pin || status=$?; \
     if [ "$status" -eq 1 ]; then \

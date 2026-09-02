@@ -86,9 +86,8 @@ fn program_should_fail_with_missing_output_accounts() {
 /// declared in the transaction must appear somewhere in the final diff.
 #[test]
 fn program_should_fail_if_it_drops_a_declared_account() {
-    // Both accounts enter owned, which keeps them out of the `DataBearingUnownedAccount`
-    // backstop's scope entirely: it only inspects accounts that entered unowned. Nothing
-    // unrelated to the drop can then reject this transaction.
+    // Both accounts need a non-default program_owner: an account left at DEFAULT_PROGRAM_ID with
+    // non-default data would itself violate the protocl rule the moment it's echoed back.
     // `with_public_account_balances` leaves program_owner at DEFAULT_PROGRAM_ID, so use
     // `with_public_accounts` to set it explicitly instead.
     let mut state = V03State::new()
@@ -369,8 +368,6 @@ fn program_should_fail_if_modifies_data_of_non_owned_account() {
     let account_id = AccountId::new([255; 32]);
     let program_id = crate::test_methods::data_changer().id();
 
-    // Owned by someone else: rule 6 lets a program write to an *unowned* account, so the
-    // subject of "non-owned" must carry a foreign owner, not merely non-default contents.
     state.force_insert_account(
         account_id,
         Account {

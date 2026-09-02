@@ -4106,9 +4106,6 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     );
 }
 
-/// The mover is chosen by whoever stakes, and it is handed the custody account
-/// so it can credit it. It is handed it UNAUTHORIZED and under no seed grant, so
-/// a mover that reaches for the custody balance instead of funding it is refused.
 #[test]
 fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
     let funding_key = PrivateKey::try_new([64; 32]).unwrap();
@@ -4261,9 +4258,7 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
     );
 }
 
-/// Squats `ownership_id`'s funds PDA: a stranger's data write takes the address. The
-/// custody flows must not care — `authenticated_transfer` moves balance only, and the
-/// seed grant authorizes the debit whoever owns the account.
+/// Squats `ownership_id`'s funds PDA: a stranger's data write takes the address.
 fn squat_stake_funds(state: &mut V03State, ownership_id: AccountId) -> AccountId {
     let funds_id = stake_funds_id(ownership_id);
     let mut funds = state.get_account_by_id(funds_id);

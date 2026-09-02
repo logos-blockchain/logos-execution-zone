@@ -59,7 +59,6 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     let post_state_account = get_account(&ctx, account_id).await?;
 
-    // A deployed program acquires what it writes, exactly as a built-in does.
     assert_eq!(post_state_account.program_owner, deployed.id().into());
     assert_eq!(post_state_account.balance, 0);
     assert_eq!(post_state_account.data.as_ref(), written.as_slice());

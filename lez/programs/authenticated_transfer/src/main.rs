@@ -25,8 +25,7 @@ fn transfer(
     };
 
     let recipient_post = {
-        // Modify recipient's balance. A credit writes no data, so an unowned recipient stays
-        // unowned -- receiving balance never hands a program ownership of the recipient.
+        // Modify recipient's balance.
         let mut recipient_post_account = recipient.account;
         recipient_post_account.balance = recipient_post_account
             .balance

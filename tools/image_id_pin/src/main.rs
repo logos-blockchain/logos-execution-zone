@@ -4,9 +4,7 @@
 //! `lez/programs/authenticated_transfer/image_id.rs` when it differs, exiting 1
 //! so `just build-artifacts` knows to rebuild the guests that embed the
 //! constant; 0 when the pin is current, 2 when the artifact or the fragment
-//! cannot be read. Converges in one extra pass: the constant is `include!`d
-//! only by consumer guests, never by `authenticated_transfer` itself, so the
-//! rewrite cannot move the id it pins.
+//! cannot be read.
 
 #![expect(
     clippy::print_stdout,

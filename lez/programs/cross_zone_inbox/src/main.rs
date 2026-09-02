@@ -108,11 +108,7 @@ fn dispatch(
         msg.src_zone != cfg.self_zone,
         "Source zone must not be this zone"
     );
-    // Mirrors the bridge receipt: the shard is this program's record, so its
-    // bytes count only when this program owns the account. Anyone may write
-    // data at a derivable address first; a foreign-owned shard is no shard,
-    // and the write below then fails loudly rather than a squatter's bytes
-    // deciding which peer messages count as delivered.
+    // Mirrors the bridge receipt.
     let mut shard = if seen.account.program_owner == self_program_id.into() {
         SeenShard::from_bytes(&seen.account.data).expect("seen shard decodes")
     } else {

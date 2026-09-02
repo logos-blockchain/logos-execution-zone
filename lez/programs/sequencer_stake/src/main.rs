@@ -234,9 +234,6 @@ fn stake(
         .try_into()
         .expect("SequencerStakeConfig should fit in account data");
 
-    // chained-call pre-states reflect state as of when each call runs. The funds PDA is
-    // balance-only, so nothing here claims it and it stays unowned: the echo carries whatever
-    // owner the pre-state already had.
     let mover_call = ChainedCall {
         program_id: mover_program_id,
         pre_states: vec![funding_account, funds_account.clone()],
@@ -459,10 +456,7 @@ fn slash(
     let mut funds_account_authorized = funds_account;
     funds_account_authorized.is_authorized = true;
 
-    // The burn happens in a chained authenticated_transfer frame: a debit needs
-    // the account's own authorization, and the keyless funds PDA can only get it
-    // from the seed granted here. The callee is the pinned image id, never a
-    // caller-named program — whatever receives the grant can spend the funds.
+    // The burn happens in a chained authenticated_transfer call.
     let burn_call = ChainedCall::new(
         AUTHENTICATED_TRANSFER_IMAGE_ID,
         vec![funds_account_authorized, sink_account],
@@ -556,9 +550,8 @@ fn finalize_unstake(
     let mut funds_account_authorized = funds_account;
     funds_account_authorized.is_authorized = true;
 
-    // Same shape as the slash burn: the payout runs one frame down in
-    // authenticated_transfer, authorized by the seed granted here, with the
-    // callee pinned to the image id.
+    // Same shape as the slash burn: the payout runs one call down in
+    // authenticated_transfer, authorized by the seed granted here.
     let release_call = ChainedCall::new(
         AUTHENTICATED_TRANSFER_IMAGE_ID,
         vec![funds_account_authorized, destination_account],

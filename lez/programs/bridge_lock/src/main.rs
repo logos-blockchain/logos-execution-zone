@@ -144,10 +144,7 @@ fn lock(
         "fourth account must be the escrow PDA"
     );
 
-    // The balance moves in a chained authenticated_transfer frame: a debit
-    // needs the account's own authorization, and a keyless PDA can only get it
-    // from the seed granted below. The callee is the pinned image id, never a
-    // caller-named program — whatever receives the grant can spend the holding.
+    // The balance moves in a chained authenticated_transfer call.
     let mut holding_authorized = holding.clone();
     holding_authorized.is_authorized = true;
     let move_call = ChainedCall::new(
@@ -184,8 +181,8 @@ fn lock(
         ],
         vec![
             config_post,
-            // The holder only signs; its account is echoed untouched, as are
-            // the holding and escrow: their balances move one frame down.
+            // The holder only signs, its account is echoed untouched, as are
+            // the holding and escrow.
             holder.account,
             holding.account,
             escrow.account,

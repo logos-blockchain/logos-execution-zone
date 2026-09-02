@@ -112,9 +112,7 @@ fn prove_chain_caller(
     deps.insert(auth_transfer.id(), auth_transfer);
     let pwd = ProgramWithDependencies::new(chain_caller, deps);
 
-    // Both accounts are seeded owned by auth_transfer. Nothing forces it: the
-    // sender needs only its authorization to be debited, and a credit writes no
-    // data, so chain_caller echoes each owner unchanged down the whole chain.
+    // Both accounts are seeded owned by auth_transfer.
     let recipient_pre = AccountWithMetadata {
         account: Account {
             program_owner: auth_transfer_id.into(),

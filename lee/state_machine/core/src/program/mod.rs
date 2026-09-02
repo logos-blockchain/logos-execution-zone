@@ -251,9 +251,6 @@ pub struct ChainedCall {
     /// The program ID of the program to execute.
     pub program_id: ProgramId,
     /// The callee's pre-states.
-    ///
-    /// Checked against the state as the caller's frame leaves it, so an account the caller
-    /// acquired in this frame must be forwarded with the caller as its `program_owner`.
     pub pre_states: Vec<AccountWithMetadata>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
@@ -714,8 +711,6 @@ pub fn validate_execution(
         }
 
         // 6. Data changes only allowed if owned by executing program or if the account is unowned.
-        //    Writing data to an unowned account is how ownership is acquired: the caller of
-        //    `validate_execution` assigns the executing program as owner afterwards.
         if pre.account.data != post.data
             && account_program_owner != DEFAULT_PROGRAM_OWNER
             && account_program_owner != executing_account_id
@@ -750,23 +745,14 @@ pub fn validate_execution(
     Ok(())
 }
 
-/// Ownership is implicit: writing data to an unowned account makes the executing program its
-/// owner.
-///
-/// Must be applied by every caller of `validate_execution`, which has already rejected a data
-/// write to an account owned by another program. A balance-only credit leaves it unowned, and so
-/// does an echo: naming an account acquires nothing, only writing to it does. Acquisition lands
-/// after the frame: a guest that forwards an account it just acquired must name itself as its
-/// owner on the forwarded pre-state (see [`ChainedCall::pre_states`]).
+/// Make any program that has changed the data of a default-owned account its owner.
 pub fn acquire_ownership_on_data_write(pre: &Account, post: &mut Account, program_id: ProgramId) {
     if pre.program_owner == DEFAULT_PROGRAM_OWNER && post.data != pre.data {
         post.program_owner = AccountId::from(program_id);
     }
 }
 
-/// An account that ends a transaction unowned must carry no data. Unreachable through
-/// `acquire_ownership_on_data_write`; this pins the program-output surface against a prover
-/// that skips it.
+/// An account that ends a transaction unowned must carry no data.
 #[must_use]
 pub fn is_ownership_settled(post: &Account) -> bool {
     post.program_owner != DEFAULT_PROGRAM_OWNER || post.data.is_empty()

@@ -532,7 +532,7 @@ impl LezRuntime {
             .await
     }
 
-    /// Executes a public transfer to a fresh recipient account, which signs alongside the sender.
+    /// Executes a public transfer to a fresh recipient account.
     pub async fn public_transfer_to_new_account(
         &self,
         from: AccountId,

@@ -80,9 +80,7 @@ fn main() {
                 (unchanged_post_states(&pre_states_clone), vec![], vec![])
             } else {
                 // First mint: write the marker byte into the receipt. The write
-                // is what records the mint -- it also makes this program the
-                // receipt's owner, which is the predicate above. The contents
-                // beyond "non-empty" are never read.
+                // is what records the mint.
                 let mut receipt_post = receipt.account;
                 receipt_post.data = vec![1].try_into().expect("1 byte fits in account data");
 

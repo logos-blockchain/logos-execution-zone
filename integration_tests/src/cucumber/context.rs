@@ -216,8 +216,7 @@ impl LezScenarioContext {
             .map_err(StepError::query_failed_boxed)
     }
 
-    /// Executes an authenticated transfer to a fresh public account, which signs alongside the
-    /// sender.
+    /// Executes an authenticated transfer to a fresh public account.
     pub async fn public_transfer_to_new_account(
         &self,
         from: AccountId,

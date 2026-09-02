@@ -19,7 +19,7 @@ use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, Wallet
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 
-/// The public account fronting the private accounts' balances at genesis.
+/// The public account for funding the private accounts' balances at genesis.
 pub const PRIVATE_FUNDER_INDEX: usize = 0;
 
 /// Fixed sequencer signing key; exposed so the fixture generator can reopen the produced store.
@@ -209,9 +209,7 @@ fn deterministic_private_key_chain(entropy: [u8; 32]) -> KeyChain {
     }
 }
 
-/// What the funder must front at genesis: `fund_private_accounts` draws this much from it,
-/// since genesis itself cannot create the private accounts (only the circuit writes
-/// commitments).
+/// The total value for the shielded pool at genesis.
 #[must_use]
 pub fn private_total(private_accounts: &[InitialPrivateAccountForWallet]) -> u128 {
     private_accounts.iter().map(|account| account.balance).sum()
@@ -411,8 +409,7 @@ pub const fn source_only_cross_zone() -> CrossZoneConfig {
 mod tests {
     use super::*;
 
-    /// `fund_private_accounts` drains the private balances out of the funder, so genesis has to
-    /// supply it that much on top of its own or the last private account goes unfunded.
+    /// `fund_private_accounts` drains the private balances out of the funder.
     #[test]
     fn genesis_supplies_the_funder_enough_to_seed_every_private_account() {
         let public_accounts = default_public_accounts_for_wallet();

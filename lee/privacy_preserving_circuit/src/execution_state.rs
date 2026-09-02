@@ -276,8 +276,7 @@ impl ExecutionState {
         for (mut pre, mut post) in output_pre_states.into_iter().zip(output_post_states) {
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
-            // One rule for public and private identities alike. Applied before the match, which
-            // destructures `pre`; nothing in it reads or writes `post`.
+            // Make sure appropriate accounts are claimed before processing
             acquire_ownership_on_data_write(&pre.account, &mut post, program_id);
             let post_states_entry = self.post_states.entry(pre.account_id);
             match &post_states_entry {

@@ -11,8 +11,6 @@ use wallet::cli::{
     Command, SubcommandReturnValue, programs::native_token_transfer::AuthTransferSubcommand,
 };
 
-/// Every privacy-preserving transaction carries the same number of notes, so the
-/// count of accounts it really touched is not observable on the wire.
 #[test]
 async fn private_transaction_pads_notes_to_max() -> Result<()> {
     let mut ctx = TestContext::new().await?;
@@ -37,7 +35,6 @@ async fn private_transaction_pads_notes_to_max() -> Result<()> {
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
-    // Two accounts moved; the rest of the notes are padding.
     assert_eq!(tx.message.private_actions.len(), 7);
 
     Ok(())

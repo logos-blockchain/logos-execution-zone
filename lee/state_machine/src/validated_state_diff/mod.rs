@@ -269,8 +269,7 @@ impl ValidatedStateDiff {
                 .expect("we check the max depth at the beginning of the loop");
         }
 
-        // Backstop over every account that entered the transaction unowned and changed; see
-        // `is_ownership_settled`.
+        // Check that all programs writing data to default accounts claimed ownership.
         for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
             let pre = state.get_account_by_id(*account_id);
             if pre.program_owner != DEFAULT_PROGRAM_OWNER {

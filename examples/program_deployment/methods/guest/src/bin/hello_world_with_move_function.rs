@@ -11,13 +11,6 @@ use lee_core::{
 // - `write`: appends `data` to the `data` field of a single input account.
 // - `move_data`: moves all bytes from one account to another. The source account is cleared and the
 //   destination account receives the appended bytes.
-//
-// Execution succeeds only if:
-// - the accounts involved are either uninitialized, or
-// - already owned by this program.
-//
-// Writing data to an unowned input account is what makes this program its owner;
-// `move_data` clears the source's data, which acquires nothing.
 
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
@@ -25,8 +18,7 @@ const MOVE_DATA_FUNCTION_ID: u8 = 1;
 type Instruction = (u8, Vec<u8>);
 
 fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> Account {
-    // Construct the post state account value. Writing data to an unowned account is what
-    // makes this program its owner.
+    // Construct the post state account values
     let mut post_account = pre_state.account;
     let mut bytes = post_account.data.into_inner();
     bytes.extend_from_slice(greeting);

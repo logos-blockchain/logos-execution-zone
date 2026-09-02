@@ -1202,11 +1202,6 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
     );
 }
 
-/// A holding PDA has no key, so the only thing that can authorize a debit is the
-/// seed `Lock` grants — and `Lock` grants it only after the holder signs. A
-/// stranger invoking the custody transfer directly is refused outright — by
-/// `authenticated_transfer`'s own sender check, the first gate it meets; the state
-/// machine's rule behind it is pinned by `a_mover_cannot_take_the_stake_funds_it_is_handed`.
 #[test]
 fn a_direct_transfer_from_the_holding_is_refused() {
     let bridge_lock_id = programs::bridge_lock().id();
@@ -1550,9 +1545,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
 }
 
 /// The token's authority path, end to end: each guard refuses for its own
-/// reason, the signed path works more than once because the authority's own
-/// signature and nonce suffice every time, and renouncing is one-way. The
-/// receiver battery mirrors this one.
+/// reason.
 #[test]
 fn the_token_authority_path_holds() {
     let wrapped_token_id = programs::wrapped_token().id();
@@ -1662,8 +1655,7 @@ fn the_token_authority_path_holds() {
         "must be the wrapped-token config PDA",
     );
 
-    // The authority itself works, and more than once: the first use acquires
-    // nothing, so the second runs on exactly the same path.
+    // The configured authority can act repeatedly.
     let diff = ValidatedStateDiff::from_public_transaction(
         &update(authority, &key, 0, bridge_source.clone()),
         &state,
@@ -2707,10 +2699,8 @@ fn mint_replay_rejected() {
     }
 }
 
-/// A squatter who writes shard-shaped bytes at a future seen-shard address owns
-/// the account but not the record: the inbox trusts a shard only when it owns
-/// the account, so the delivery is refused loudly by the data-write rule instead
-/// of the squatter's bytes marking the peer message already delivered.
+// TODO! Remove this once namespacing comes in.
+// This just checks a squatting bug and will be fully removed.
 #[test]
 fn a_squatted_seen_shard_cannot_mark_peer_messages_delivered() {
     let inbox_id = programs::cross_zone_inbox().id();
@@ -2725,9 +2715,6 @@ fn a_squatted_seen_shard_cannot_mark_peer_messages_delivered() {
     seed_inbox_config(&mut state, self_zone);
     seed_wrapped_config(&mut state, None, &[(src_zone, [9_u32; 8])]);
 
-    // The squatter pre-writes the exact bytes a delivered shard would hold —
-    // the peer block hash is public once the block exists — but owns the
-    // account itself.
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let mut shard = SeenShard::default();
     shard.insert(SRC_BLOCK_HASH, src_tx_index);

@@ -53,9 +53,8 @@ fn main() {
     // happens to be free is reported as the wrong account rather than as a used
     // slot.
     //
-    // The record is the signal, not the slot: anyone can credit a foreign slot
-    // into existence, but a bare credit writes no data, so it cannot deny an
-    // ordinal.
+    // This is the same predicate the state machine already requires of a first
+    // write, so guest and host agree by construction rather than by coincidence.
     //
     // A slot can still be denied to its intended writer by a real emission: the
     // ordinal is caller-chosen in a namespace every user of an emitter shares,

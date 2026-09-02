@@ -245,11 +245,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // Exit flow: full UnstakeRequest, wait for the committee removal to land on
     // Bedrock, then check the sequencer's own FinalizeUnstake releases the stake.
     //
-    // The destination is free: crediting one acquires nothing and needs no
-    // signature of its own, which is just as well since FinalizeUnstake is
-    // unsigned. Reuse funding_id out of convenience — genesis credited it, so it
-    // is unowned, and the Stake above drained it to 0, which leaves the released
-    // stake as its whole balance below.
+    // Unstake recipient is freely chosen during the request.
     let destination_id = funding_id;
 
     let unstake_request_data =

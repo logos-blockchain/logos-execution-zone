@@ -49,12 +49,6 @@ export EXAMPLE_PROGRAMS_BUILD_DIR=$(pwd)/target/riscv32im-risc0-zkvm-elf/docker
 # 3. Hello world example
 
 The Hello world program reads an arbitrary sequence of bytes from its instruction and appends them to the data field of the input account.
-Execution succeeds only if the account is:
-
-- Uninitialized, or
-- Already owned by this program
-
-If the account is unowned, writing data to it makes the program its owner, and the updated state is emitted.
 
 ## Navigate to the example directory
 All remaining commands must be run from:
@@ -108,7 +102,7 @@ cargo run --bin run_hello_world \
 > [!NOTE]
 > - Passing the `.bin` lets the script compute the program ID and build the transaction.
 > - Because this program executes publicly, the node performs the execution.
-> - The program will write data into the account, which makes it the owner.
+> - The program will write data into the account.
 
 Monitor the sequencer terminal to confirm execution.
 
@@ -144,8 +138,7 @@ Its purpose is very simple: append the instruction bytes to the data field of a 
   - The raw instruction data (used again when writing outputs)
 2. Checks that there is exactly one input account: this example operates on a single account, so it expects `pre_states` to contain exactly one entry.
 3. Builds the post-state: It clones the input account and appends the instruction bytes to its data field.
-4. Acquires ownership implicitly: if the account is unowned (its `program_owner` equals `DEFAULT_PROGRAM_ID`), writing data to it makes this program its owner. Nothing is requested — writing the data is the whole of it.
-5. Outputs the proposed state transition: `write_lee_outputs` emits:
+4. Outputs the proposed state transition: `write_lee_outputs` emits:
   - The original instruction data
   - The original pre-states
   - The new post-states
@@ -169,8 +162,7 @@ let mut bytes = this.data.into_inner();
 bytes.extend_from_slice(&greeting);
 this.data = bytes.try_into().expect("Data should fit within the allowed limits");
 ```
-4. There is no claiming step. Ownership is implicit: because step 3 wrote `data` to an account no program owns, the state machine assigns this program as its owner. A program that only moved balance would leave the account unowned.
-5. Emmiting the output
+4. Emmiting the output
 ```rust
 write_lee_outputs(instruction_data, vec![pre_state], vec![post_state]);
 ```
@@ -199,7 +191,7 @@ The program expects two arguments:
 - Path to the guest binary
 - AccountId of the public account to operate on
 
-This is the account the program will write data into, becoming its owner.
+This is the account the program will write data into.
 
 ### 3. Loading the program bytecode
 ```rust

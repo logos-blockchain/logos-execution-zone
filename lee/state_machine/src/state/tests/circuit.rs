@@ -427,9 +427,7 @@ fn private_pda_without_binding_fails() {
 /// Happy path for a private PDA at top level: the witness carries
 /// `binding: Some((authority, seed))`, so the circuit derives
 /// `AccountId::for_private_pda(authority, seed, npk, vpk, identifier)` and asserts it equals the
-/// `pre_state`'s `account_id`. That equality binds the supplied npk to the `account_id`, which is
-/// what the post-loop bound-position check requires. Caller `pda_seeds` cannot serve here --
-/// there is no caller on the initial call -- so the witness binding is the only path.
+/// `pre_state`'s `account_id`.
 #[test]
 fn private_pda_witness_binding_succeeds() {
     let program = crate::test_methods::noop();
@@ -491,8 +489,8 @@ fn private_pda_npk_mismatch_fails() {
 
 /// Happy path for the caller-seeds authorization of a private PDA. The delegator echoes the
 /// private PDA, then chains to a callee delegating the account's own seed via
-/// `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization -- and the
-/// position's npk binding -- are established via the private derivation
+/// `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization are
+///  established via the private derivation
 /// `AccountId::for_private_pda(delegator, seed, npk) == pre.account_id`.
 #[test]
 fn caller_pda_seeds_authorize_private_pda_for_callee() {
@@ -1511,9 +1509,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     assert_eq!(state.get_account_by_id(recipient_id).balance, amount);
 }
 
-/// Rule 5′ in the circuit: a debit needs the account's authorization, and a witness without
-/// the spending credential provides none — whoever owns the account. The program asserts
-/// nothing itself, so the refusal is the state machine's.
+/// Unauthorized balance decrease is refused.
 #[test]
 fn a_private_balance_decrease_without_the_credential_is_refused_in_the_circuit() {
     let program = crate::test_methods::simple_balance_transfer();

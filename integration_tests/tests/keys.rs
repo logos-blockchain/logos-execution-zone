@@ -46,7 +46,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .private_account(to_account_id)
         .context("Failed to get private account")?;
 
-    // Send to this account over the foreign-keys path (npk and vpk instead of the account ID)
+    // Send to this account (using npk and vpk instead of the account ID)
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from: private_mention(from),
         to: None,
@@ -86,7 +86,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .context("Failed to get recipient's private account")?;
     assert_eq!(to_res_acc.balance, 100);
 
-    log::info!("Successfully transferred over the foreign-keys path");
+    log::info!("Successfully transferred");
 
     Ok(())
 }
@@ -123,8 +123,7 @@ async fn restore_keys_from_seed() -> Result<()> {
     let to_account_id3 = new_account(&mut ctx, false, Some(ChainIndex::root())).await?;
     let to_account_id4 = new_account(&mut ctx, false, Some(ChainIndex::from_str("/0")?)).await?;
 
-    // Send to both public accounts, with each recipient signing alongside the sender. The wallet
-    // CLI never signs with the recipient's key, so bypass it and sign directly.
+    // Send to both public accounts.
     send_with_signing_recipient(&mut ctx, from, to_account_id3, 102).await?;
     send_with_signing_recipient(&mut ctx, from, to_account_id4, 103).await?;
 
@@ -141,7 +140,7 @@ async fn restore_keys_from_seed() -> Result<()> {
     assert_public_account_restored(&ctx, to_account_id3, "Acc 3");
     assert_public_account_restored(&ctx, to_account_id4, "Acc 4");
 
-    // Funding credits balance without writing data, so a fresh recipient stays unowned.
+    // Funding does not write data, so recipients stays unowned.
     assert_eq!(acc1.account.program_owner, lee::AccountId::default());
     assert_eq!(acc2.account.program_owner, lee::AccountId::default());
 

@@ -63,8 +63,7 @@ fn main() {
     };
 
     // Recipient presented as an existing authenticated_transfer account (program_owner =
-    // auth_transfer_id, balance = 0). Nothing forces this: authenticated_transfer only
-    // credits the recipient, writing no data, so an unowned recipient would work too.
+    // auth_transfer_id, balance = 0).
     let recipient = AccountWithMetadata {
         account: Account {
             program_owner: auth_transfer_id.into(),
