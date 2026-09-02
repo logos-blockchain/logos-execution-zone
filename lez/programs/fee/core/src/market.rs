@@ -8,7 +8,7 @@ use core::cmp::Ordering;
 use lee_core::account::{Fee, Gas};
 
 pub const TARGET_GAS_EXEC: Gas = 5_000_000;
-/// The ±12.5% controller bound and elasticity framing assume `MAX = 2·TARGET`
+/// The ±12.5% controller bound and elasticity framing assume `MAX = 2·TARGET`.
 pub const MAX_GAS_EXEC: Gas = 2 * TARGET_GAS_EXEC;
 pub const D_EXEC: u64 = 8;
 pub const BASE_FEE_EXEC_MIN: Fee = 8;
@@ -20,7 +20,7 @@ pub const BASE_FEE_EXEC_MIN: Fee = 8;
 pub const BASE_FEE_EXEC_MAX: Fee = u64::MAX / MAX_GAS_EXEC;
 
 pub const TARGET_GAS_STOR: Gas = 500_000;
-/// The ±12.5% controller bound and elasticity framing assume `MAX = 2·TARGET`
+/// The ±12.5% controller bound and elasticity framing assume `MAX = 2·TARGET`.
 pub const MAX_GAS_STOR: Gas = 2 * TARGET_GAS_STOR;
 pub const D_STOR: u64 = 8;
 pub const BASE_FEE_STOR_MIN: Fee = 8;

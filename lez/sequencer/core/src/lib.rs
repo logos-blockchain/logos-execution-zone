@@ -354,6 +354,19 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
              one this sequencer can operate on"
         );
 
+        // print your own sequencer entry,
+        // allowing to see that fees land to your account on explorer
+        if let Some(reward_account) =
+            committee_discovery::read_config(&state).and_then(|stake_config| {
+                stake_config
+                    .entries
+                    .get(&own_sequencer_key)
+                    .map(|entry| entry.account_id)
+            })
+        {
+            log::info!("Producer reward account (stake ownership): {reward_account}");
+        }
+
         let chain = Arc::new(Mutex::new(
             Self::restore_chain_state(&config, &store, &state).await,
         ));
