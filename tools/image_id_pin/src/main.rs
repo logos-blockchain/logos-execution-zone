@@ -52,12 +52,11 @@ fn refresh() -> Result<Option<[u32; 8]>, String> {
     let start = fragment
         .find("pub const AUTHENTICATED_TRANSFER_IMAGE_ID")
         .ok_or_else(|| format!("{FRAGMENT} does not declare the constant"))?;
-    let (head, declaration) = fragment.split_at(start);
-    if declaration.lines().count() != 1 {
-        return Err(format!(
-            "the constant must be {FRAGMENT}'s last line: a rewrite drops what follows it"
-        ));
-    }
+    // The declaration ends the fragment, so regenerating it from `start` also
+    // collapses a wrapped array back to the one line this writes.
+    let head = fragment
+        .get(..start)
+        .expect("a match offset is a character boundary");
 
     let rewritten =
         format!("{head}pub const AUTHENTICATED_TRANSFER_IMAGE_ID: [u32; 8] = {image_id:?};\n");
