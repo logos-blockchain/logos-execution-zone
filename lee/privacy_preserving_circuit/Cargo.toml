@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 borsh.workspace = true
 lee_core.workspace = true
+risc0-binfmt.workspace = true
 risc0-zkvm.workspace = true
 
 [dev-dependencies]

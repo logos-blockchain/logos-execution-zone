@@ -11,6 +11,7 @@ fn main() {
         program_id,
         dummy_inputs,
         program_image_claims,
+        shadow_program_witnesses,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
 
     let execution_state = execution_state::ExecutionState::derive_from_outputs(
@@ -18,6 +19,7 @@ fn main() {
         program_id,
         program_outputs,
         &program_image_claims,
+        &shadow_program_witnesses,
     );
 
     let mut output =

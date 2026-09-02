@@ -40,7 +40,7 @@ pub type ProgramId = [u32; 8];
 ///
 /// Defined here, not in `program_loader_core`, so `V03State::get_program` can decode it without
 /// depending on that crate. `program_loader_core` re-exports it.
-#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramHeader {
     pub image_id: ProgramId,
     /// The first node of this program's bytecode segment chain — see [`ProgramSegment`].
@@ -66,7 +66,8 @@ impl From<&ProgramHeader> for crate::account::Data {
     }
 }
 
-/// One node of a deployed program's bytecode, linked rather than formula-addressed:
+/// One node of a deployed program's bytecode, linked rather than formula-addressed.
+///
 /// `next_segment` is `None` for the chain's last node, or the next chunk's `AccountId` otherwise.
 /// Segment addresses carry no derivation requirement — a deployer claims any default account it
 /// likes, as long as the chain from [`ProgramHeader::program_first_segment`] reaches each one in
@@ -88,8 +89,7 @@ impl TryFrom<&crate::account::Data> for ProgramSegment {
 impl From<&ProgramSegment> for crate::account::Data {
     fn from(segment: &ProgramSegment) -> Self {
         let mut data = Vec::new();
-        BorshSerialize::serialize(segment, &mut data)
-            .expect("borsh serialization should not fail");
+        BorshSerialize::serialize(segment, &mut data).expect("borsh serialization should not fail");
         Self::try_from(data).expect("program segment must fit under DATA_MAX_LENGTH")
     }
 }
@@ -238,6 +238,26 @@ impl AccountId {
         bytes[0..32].copy_from_slice(PROGRAM_DERIVED_ACCOUNT_ID_PREFIX);
         bytes[32..64].copy_from_slice(program_account_id.value());
         bytes[64..].copy_from_slice(&seed.0);
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+
+    /// Derives the [`AccountId`] for a shadow program from its `image_id` alone — never
+    /// deployed anywhere, so unlike every other PDA formula there's no seed or authority to
+    /// derive from. Identical bytecode from different provers intentionally collides on the
+    /// same address; that's fine, since ownership is still gated by account authorization.
+    #[must_use]
+    pub fn for_shadow_program(image_id: &ProgramId) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const SHADOW_PROGRAM_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Shadow/\x00\x00\x00\x00\x00";
+
+        let mut bytes = [0_u8; 64];
+        bytes[0..32].copy_from_slice(SHADOW_PROGRAM_PREFIX);
+        bytes[32..64].copy_from_slice(Self::from(*image_id).value());
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()

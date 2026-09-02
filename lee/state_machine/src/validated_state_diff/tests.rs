@@ -556,7 +556,9 @@ fn privacy_garbage_proof_is_rejected() {
 /// Chains `elf` across as many force-inserted segments as it needs, returning the first
 /// segment's `AccountId`.
 fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) -> AccountId {
-    let chunks: Vec<&[u8]> = elf.chunks(program_loader_core::MAX_SEGMENT_DATA_LEN).collect();
+    let chunks: Vec<&[u8]> = elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
     let segment_ids: Vec<AccountId> = (0..chunks.len())
         .map(|i| {
             let mut bytes = [key_seed; 32];

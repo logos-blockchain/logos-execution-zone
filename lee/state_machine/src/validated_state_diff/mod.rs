@@ -89,6 +89,7 @@ impl ValidatedStateDiff {
             .collect();
 
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
+        let mut new_commitments: Vec<Commitment> = Vec::new();
 
         let initial_call = ChainedCall {
             program_account_id: message.program_account_id,
@@ -131,38 +132,45 @@ impl ValidatedStateDiff {
                         LeeError::InvalidInput(format!("invalid program_loader instruction: {e}"))
                     })?;
                 let deploy_pre_states = chained_call.pre_states.clone();
-                let post_states = std::panic::catch_unwind(|| match instruction {
-                    program_loader_core::Instruction::WriteSegment {
-                        bytecode,
-                        next_segment,
-                    } => program_loader_core::write_segment(
-                        deploy_pre_states,
-                        bytecode,
-                        next_segment,
-                    ),
-                    program_loader_core::Instruction::CreateHeader {
-                        first_segment,
-                        immutable,
-                    } => program_loader_core::create_header(
-                        deploy_pre_states,
-                        first_segment,
-                        immutable,
-                    ),
-                    program_loader_core::Instruction::UpdateHeader {
-                        first_segment,
-                        immutable,
-                    } => program_loader_core::update_header(
-                        deploy_pre_states,
-                        first_segment,
-                        immutable,
-                    ),
-                })
-                .map_err(|panic_payload| {
-                    LeeError::ProgramExecutionFailed(format!(
-                        "program_loader rejected the given input: {}",
-                        panic_message(&*panic_payload)
-                    ))
-                })?;
+                // WriteSegment never emits a commitment; CreateHeader/UpdateHeader emit one only
+                // when this call is what makes the header immutable.
+                let (post_states, new_commitment) =
+                    std::panic::catch_unwind(|| match instruction {
+                        program_loader_core::Instruction::WriteSegment {
+                            bytecode,
+                            next_segment,
+                        } => (
+                            program_loader_core::write_segment(
+                                &deploy_pre_states,
+                                bytecode,
+                                next_segment,
+                            ),
+                            None,
+                        ),
+                        program_loader_core::Instruction::CreateHeader {
+                            first_segment,
+                            immutable,
+                        } => program_loader_core::create_header(
+                            &deploy_pre_states,
+                            first_segment,
+                            immutable,
+                        ),
+                        program_loader_core::Instruction::UpdateHeader {
+                            first_segment,
+                            immutable,
+                        } => program_loader_core::update_header(
+                            &deploy_pre_states,
+                            first_segment,
+                            immutable,
+                        ),
+                    })
+                    .map_err(|panic_payload| {
+                        LeeError::ProgramExecutionFailed(format!(
+                            "program_loader rejected the given input: {}",
+                            panic_message(&*panic_payload)
+                        ))
+                    })?;
+                new_commitments.extend(new_commitment);
                 ProgramOutput::new(
                     chained_call.program_account_id,
                     caller_data.account_id,
@@ -386,10 +394,12 @@ impl ValidatedStateDiff {
             );
         }
 
+        state.check_commitments_are_new(&new_commitments)?;
+
         Ok(Self(StateDiff {
             signer_account_ids,
             public_diff: state_diff,
-            new_commitments: vec![],
+            new_commitments,
             new_nullifiers: vec![],
             program: None,
         }))
@@ -558,24 +568,38 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     public_pre_states: &[AccountWithMetadata],
     message: &Message,
 ) -> Result<(), LeeError> {
-    // Anchor each claimed image_id to real chain state: reconstruct the claims using the
-    // program's *actual* current image_id (via `get_program`), not the message's own claim. If
-    // the claim was wrong, the reconstructed journal won't match what the receipt actually
-    // committed to, and `proof.is_valid_for` below fails — the same mechanism `public_actions`
-    // already relies on for authenticating account content against real state.
+    // Anchor each claim to real chain state, reconstructing it independently rather than
+    // trusting the message's own claim. If the claim was wrong, the reconstructed journal won't
+    // match what the receipt actually committed to, and `proof.is_valid_for` below fails — the
+    // same mechanism `public_actions` already relies on for authenticating account content
+    // against real state.
     let program_image_claims = message
         .program_image_claims
         .iter()
-        .map(|claim| {
-            let image_id = state
-                .get_program_image_id(claim.account_id)
-                .ok_or_else(|| {
-                    LeeError::InvalidInput(format!("Unknown program {}", claim.account_id))
+        .map(|claim| match claim {
+            ProgramImageClaim::Public { account_id, .. } => {
+                let image_id = state.get_program_image_id(*account_id).ok_or_else(|| {
+                    LeeError::InvalidInput(format!("Unknown program {account_id}"))
                 })?;
-            Ok(ProgramImageClaim {
-                account_id: claim.account_id,
-                image_id,
-            })
+                Ok(ProgramImageClaim::Public {
+                    account_id: *account_id,
+                    image_id,
+                })
+            }
+            ProgramImageClaim::Private {
+                account_id,
+                program_header,
+            } => {
+                let commitment =
+                    program_loader_core::immutable_mirror_commitment(*account_id, program_header);
+                ensure!(
+                    state.get_proof_for_commitment(&commitment).is_some(),
+                    LeeError::InvalidInput(format!(
+                        "no private commitment matching the claimed program_header for {account_id}"
+                    ))
+                );
+                Ok(*claim)
+            }
         })
         .collect::<Result<Vec<_>, LeeError>>()?;
 
