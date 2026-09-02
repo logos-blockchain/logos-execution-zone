@@ -231,6 +231,42 @@ fn free_outcome_is_zero_cycles() {
 }
 
 #[test]
+fn metered_guest_panic_is_charged_the_full_budget() {
+    // A transfer beyond the sender's balance panics the guest mid-execution —
+    // a chargeable failure that is not OutOfGas. It still pays the whole
+    // declared budget: metering written back on an error path must never
+    // undercharge.
+    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
+    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(from, 100)]))
+        .with_programs(std::iter::once(
+            crate::test_methods::simple_balance_transfer(),
+        ));
+    let program_id = crate::test_methods::simple_balance_transfer().id();
+    let message = Message::try_new(
+        program_id,
+        vec![from, to],
+        vec![Nonce(0), Nonce(0)],
+        1_000_u128,
+    )
+    .unwrap();
+    let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
+    let tx = crate::PublicTransaction::new(message, witness_set);
+
+    let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
+    let (outcome, result) =
+        ValidatedStateDiff::from_public_transaction_metered(&tx, &state, 1, 0, budget);
+    assert_eq!(
+        outcome.cycles, budget,
+        "a failed execution pays its full declared budget"
+    );
+    result.expect("a charged revert still yields an applicable diff");
+}
+
+#[test]
 fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     let (mut state, tx) = metering_transfer_fixture();
     let from = AccountId::from(&PublicKey::new_from_private_key(

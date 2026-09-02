@@ -272,6 +272,11 @@ pub mod tests {
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
-        assert!(matches!(result, Err(LeeError::InvalidInput(_))));
+        // Named top-level by the transaction (not by a chained call), so it is
+        // detectable before execution and stays non-chargeable.
+        assert!(matches!(
+            result,
+            Err(LeeError::UnknownProgram { chained: false })
+        ));
     }
 }

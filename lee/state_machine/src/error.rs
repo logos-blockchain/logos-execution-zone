@@ -222,6 +222,12 @@ mod tests {
         // Post-execution: the validity window is read off the program output.
         assert!(LeeError::OutOfValidityWindow.is_chargeable());
 
+        // An unknown program named by a chained call is only discovered after
+        // the caller already executed, so it is charged; named top-level it is
+        // detectable before execution and rejects instead.
+        assert!(LeeError::UnknownProgram { chained: true }.is_chargeable());
+        assert!(!LeeError::UnknownProgram { chained: false }.is_chargeable());
+
         // A malformed transaction is caught before execution, so it costs no
         // cycles and rejects the block instead of charging.
         assert!(!LeeError::InvalidInput("malformed".into()).is_chargeable());
