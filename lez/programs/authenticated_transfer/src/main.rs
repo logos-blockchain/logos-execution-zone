@@ -24,6 +24,9 @@ fn transfer(
         sender_post_account
     };
 
+    // TODO(squatting): the credit leaves the recipient unowned, and unowned is takeable — the first
+    // program to write data there owns it, on a plain key account as much as on a derivable PDA.
+    // Accepted: no reclaim path today.
     let recipient_post = {
         // Modify recipient's balance.
         let mut recipient_post_account = recipient.account;
