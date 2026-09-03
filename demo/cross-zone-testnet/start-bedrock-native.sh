@@ -18,6 +18,10 @@ DEMO_DIR="$(pwd)"
 BEDROCK_CFG="$DEMO_DIR/../../bedrock"
 LB_REPO="${LB_REPO:-$HOME/logos/logos-blockchain}"
 LB_REF="${LB_REF:-0.2.1}"
+# Build into the node repo's own target/, isolated from any CARGO_TARGET_DIR the
+# shell exports for the LEZ build (a shared target dir mixes two workspaces and
+# also hides the binary from us).
+unset CARGO_TARGET_DIR
 BIN="$LB_REPO/target/release/logos-blockchain-node"
 
 mkdir -p logs
