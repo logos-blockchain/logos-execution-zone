@@ -50,6 +50,7 @@ fn base_state() -> V03State {
         programs::ping_sender(),
         programs::ping_receiver(),
         programs::bridge_lock(),
+        programs::authenticated_transfer(),
         programs::wrapped_token(),
     ])
 }

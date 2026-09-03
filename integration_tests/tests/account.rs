@@ -12,7 +12,7 @@ use integration_tests::{
 };
 use key_protocol::key_management::KeyChain;
 use lee::Data;
-use lee_core::account::Nonce;
+use lee_core::{account::Nonce, program::DEFAULT_PROGRAM_OWNER};
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -29,13 +29,11 @@ async fn get_existing_account() -> Result<()> {
 
     let account = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
 
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
+    // Genesis credits the account; a credit neither claims it nor spends its nonce.
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
     assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
     assert!(account.data.is_empty());
-    assert_eq!(account.nonce.0, 1);
+    assert_eq!(account.nonce.0, 0);
 
     log::info!("Successfully retrieved account with correct details");
 

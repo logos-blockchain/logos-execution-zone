@@ -613,13 +613,11 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
+    // Genesis credits the account; a credit neither claims it nor spends its nonce.
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
     assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
     assert!(account.data.is_empty());
-    assert_eq!(account.nonce.0, 1);
+    assert_eq!(account.nonce.0, 0);
 
     unsafe {
         wallet_ffi_free_account_data(&raw mut out_account);
@@ -653,10 +651,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
     // A private account: private balances stay small (fee-exempt under the
     // interim policy), so this asserts against the private constant, not the
     // LGO-scaled public one.
