@@ -18,3 +18,6 @@ risc0-zkvm.workspace = true
 
 [package.metadata.cargo-machete]
 ignored = ["risc0-zkvm"]
+
+[build-dependencies]
+build_utils.workspace = true

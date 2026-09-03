@@ -11,13 +11,13 @@ ARTIFACTS := "artifacts"
 # Linux/CI, which is unaffected.
 DEMO_ENV := if os() == "macos" { "DYLD_FALLBACK_FRAMEWORK_PATH=/Library/Developer/CommandLineTools/Library/Frameworks" } else { "" }
 
-# Build risc0 program artifacts and test fixture.
+# Build risc0 program artifacts and test fixture. authenticated_transfer goes first: the custody guests embed its image id, read from its artifact by their build script.
 build-artifacts:
     @echo "🔨 Building artifacts"
     @rm -rf {{ARTIFACTS}}
     @just build-artifact lee/privacy_preserving_circuit
+    @just build-artifact lez/programs/authenticated_transfer "" lez/programs
     @just build-artifact lez/programs programs
-    @just refresh-image-id-pin
 
     @if [ "${GITHUB_ACTIONS:-}" = "true" ]; then \
         echo "Skipping test fixture regeneration because CI doesn't need it"; \
@@ -25,21 +25,9 @@ build-artifacts:
         just regenerate-test-fixture; \
     fi
 
-# Guests that chain into authenticated_transfer embed its image id as a source
-# constant. Refresh it from the built artifact.
-refresh-image-id-pin:
-    @status=0; cargo run -q -p image_id_pin || status=$?; \
-    if [ "$status" -eq 1 ]; then \
-        echo "🔁 Rebuilding guests that embed the refreshed image id"; \
-        just build-artifact lez/programs programs || exit 1; \
-        status=0; cargo run -q -p image_id_pin || status=$?; \
-        if [ "$status" -eq 1 ]; then echo "image id pin did not converge"; exit 1; fi; \
-    fi; \
-    if [ "$status" -ne 0 ]; then echo "image id pin failed (exit $status)"; exit "$status"; fi
-
 RISC0_DOCKER_CONTAINER_TAG := "r0.1.91.1"
 
-build-artifact methods_path features="":
+build-artifact methods_path features="" out_dir="":
     @echo "Building artifacts for {{methods_path}}"
     @rm -rf target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin
     @if [ "{{features}}" = "" ]; then \
@@ -47,8 +35,7 @@ build-artifact methods_path features="":
     else \
         RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --no-default-features --features {{features}} --manifest-path {{methods_path}}/Cargo.toml; \
     fi
-    @mkdir -p {{ARTIFACTS}}/{{methods_path}}
-    @cp target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin {{ARTIFACTS}}/{{methods_path}}
+    @out="{{out_dir}}"; out="{{ARTIFACTS}}/${out:-{{methods_path}}}"; mkdir -p "$out" && cp target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin "$out"
 
 # Format codebase.
 fmt:

@@ -2,7 +2,10 @@ use authenticated_transfer_core::custody_transfer;
 use bridge_core::Instruction;
 use lee_core::program::{ProgramEvent, ProgramInput, ProgramOutput, read_lee_inputs};
 
-include!("../../authenticated_transfer/image_id.rs");
+include!(concat!(
+    env!("OUT_DIR"),
+    "/authenticated_transfer_image_id.rs"
+));
 
 fn main() {
     let (

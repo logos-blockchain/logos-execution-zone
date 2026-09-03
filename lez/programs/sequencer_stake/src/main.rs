@@ -16,7 +16,10 @@ use sequencer_stake_core::{
     stake_funds_account_id, stake_funds_seed,
 };
 
-include!("../../authenticated_transfer/image_id.rs");
+include!(concat!(
+    env!("OUT_DIR"),
+    "/authenticated_transfer_image_id.rs"
+));
 
 fn main() {
     let (

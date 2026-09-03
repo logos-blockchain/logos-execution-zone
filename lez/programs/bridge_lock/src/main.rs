@@ -10,7 +10,10 @@ use lee_core::{
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
 
-include!("../../authenticated_transfer/image_id.rs");
+include!(concat!(
+    env!("OUT_DIR"),
+    "/authenticated_transfer_image_id.rs"
+));
 
 fn main() {
     let (
