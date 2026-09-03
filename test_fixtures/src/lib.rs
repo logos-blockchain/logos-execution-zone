@@ -1024,10 +1024,6 @@ pub const fn private_mention(account_id: AccountId) -> CliAccountMention {
     CliAccountMention::Id(AccountIdWithPrivacy::Private(account_id))
 }
 
-#[expect(
-    clippy::wildcard_enum_match_arm,
-    reason = "We want the code to panic if the transaction type is not PrivacyPreserving"
-)]
 pub async fn fetch_privacy_preserving_tx(
     seq_client: &SequencerClient,
     tx_hash: HashType,
@@ -1038,7 +1034,7 @@ pub async fn fetch_privacy_preserving_tx(
         LeeTransaction::PrivacyPreserving(privacy_preserving_transaction) => {
             privacy_preserving_transaction
         }
-        _ => panic!("Invalid tx type"),
+        LeeTransaction::Public(_) => panic!("Invalid tx type"),
     }
 }
 
