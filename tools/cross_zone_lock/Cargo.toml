@@ -1,0 +1,22 @@
+[package]
+name = "cross_zone_lock"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+programs.workspace = true
+lee.workspace = true
+common.workspace = true
+bridge_lock_core.workspace = true
+wrapped_token_core.workspace = true
+cross_zone_outbox_core.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["client"] }
+risc0-zkvm.workspace = true
+anyhow.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+serde_json.workspace = true
+hex.workspace = true

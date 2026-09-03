@@ -1,0 +1,59 @@
+{
+  "home": "/var/lib/sequencer_service",
+  "max_num_tx_in_block": 20,
+  "max_block_size": "1 MiB",
+  "mempool_max_size": 10000,
+  "block_create_timeout": "10s",
+  "retry_pending_blocks_timeout": "7s",
+  "bedrock_config": {
+    "backoff": {
+      "start_delay": "100ms",
+      "max_retries": 5
+    },
+    "channel_id": "aa480ae9c4ed46e477d10944587b5227047cf79e590a51d7f278c3790f2dd2c5",
+    "node_url": "http://65.109.51.37:18080",
+    "funding_key": "c2a6a4a0981d5bdcf8ddeb8d7934fd8c5510efeb1053f613b45871670b6f7b19"
+  },
+  "genesis": [
+    {
+      "supply_bridge_lock_holding": {
+        "holder": "65fTAPEquXmXNvJieTPdsR5FEw4fo2wLZQdS3RCpyX9a",
+        "amount": 100
+      }
+    }
+  ],
+  "signing_key": [
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37,
+    37
+  ]
+}

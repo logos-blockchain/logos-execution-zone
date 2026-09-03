@@ -1,0 +1,68 @@
+# Real two-zone cross-zone bridge demo on the LIVE shared testnet Bedrock.
+#
+# Two LEZ zones, each running the real v0.2.4 service containers pulled from
+# Harbor. There is NO local Bedrock: both zones settle on the testnet Bedrock node
+# at http://65.109.51.37:18080 (unauthenticated), reached over the internet.
+#
+#   docker login harbor.status.im
+#   ./prepare.sh                                  # stamp fresh channel ids into the configs
+#   docker compose up                             # happy path (zone B allows the route)
+#
+# prepare.sh prints the exact cross_zone_lock command (with zone B's channel id)
+# to submit the lock from the host. Watch zone B's indexer (localhost:8779) for
+# the wrapped-token mint.
+#
+# For the REFUSED variant, add the override so zone B loads a config with no
+# authorized route:
+#   docker compose -f docker-compose.yml -f docker-compose.unauthorized.yml up
+#
+# Zone A is shown through its sequencer RPC (localhost:3040); it needs no indexer.
+
+services:
+  sequencer_a:
+    image: harbor.status.im/logos-blockchain/logos-execution-zone/sequencer_service:v0.2.4
+    container_name: cz_sequencer_a
+    restart: unless-stopped
+    volumes:
+      - ./configs/sequencer_a.json:/etc/sequencer_service/sequencer_config.json:ro
+      - seq_a_data:/var/lib/sequencer_service
+    ports:
+      - "3040:3040"   # zone A sequencer RPC (the lock tool targets this)
+
+  sequencer_b:
+    image: harbor.status.im/logos-blockchain/logos-execution-zone/sequencer_service:v0.2.4
+    container_name: cz_sequencer_b
+    restart: unless-stopped
+    volumes:
+      - ./configs/sequencer_b.json:/etc/sequencer_service/sequencer_config.json:ro
+      - seq_b_data:/var/lib/sequencer_service
+    ports:
+      - "3041:3040"   # zone B sequencer RPC
+
+  indexer_b:
+    image: harbor.status.im/logos-blockchain/logos-execution-zone/indexer_service:v0.2.4
+    container_name: cz_indexer_b
+    restart: unless-stopped
+    depends_on:
+      - sequencer_b
+    volumes:
+      - ./configs/indexer_b.json:/etc/indexer_service/indexer_config.json:ro
+      - idx_b_data:/var/lib/indexer_service
+    ports:
+      - "8779:8779"   # zone B indexer RPC (watch the mint here)
+
+  explorer_b:
+    image: harbor.status.im/logos-blockchain/logos-execution-zone/explorer_service:v0.2.4
+    container_name: cz_explorer_b
+    restart: unless-stopped
+    depends_on:
+      - indexer_b
+    environment:
+      INDEXER_RPC_URL: http://indexer_b:8779
+    ports:
+      - "8080:8080"   # zone B explorer UI (browse http://localhost:8080)
+
+volumes:
+  seq_a_data:
+  seq_b_data:
+  idx_b_data:

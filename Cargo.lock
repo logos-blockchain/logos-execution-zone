@@ -2028,6 +2028,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cross_zone_lock"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bridge_lock_core",
+ "common",
+ "cross_zone_outbox_core",
+ "hex",
+ "lee",
+ "programs",
+ "risc0-zkvm",
+ "sequencer_service_rpc",
+ "serde_json",
+ "tokio",
+ "wrapped_token_core",
+]
+
+[[package]]
 name = "cross_zone_outbox_core"
 version = "0.1.0"
 dependencies = [

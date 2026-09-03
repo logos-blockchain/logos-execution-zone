@@ -276,3 +276,25 @@ pub fn bedrock_funding_key() -> ZkPublicKey {
     let bytes = hex::decode(PUBLIC_KEY_HEX).expect("Fixed funding key must be valid hex");
     ZkPublicKey::from(BigUint::from_bytes_le(&bytes))
 }
+
+/// Funding key for the live testnet Bedrock demo: the public validator node's own
+/// faucet wallet key, the one funded, node-custodied, unauthenticated-spendable key
+/// on `testnet.blockchain.logos.co:18080`. The node funds block-publish and channel
+/// ops from it.
+#[must_use]
+pub fn testnet_faucet_funding_key() -> ZkPublicKey {
+    const PUBLIC_KEY_HEX: &str = "c2a6a4a0981d5bdcf8ddeb8d7934fd8c5510efeb1053f613b45871670b6f7b19";
+
+    let bytes = hex::decode(PUBLIC_KEY_HEX).expect("Fixed funding key must be valid hex");
+    ZkPublicKey::from(BigUint::from_bytes_le(&bytes))
+}
+
+/// Build a Bedrock channel id from raw bytes, so callers can mint a fresh,
+/// non-colliding channel per run without naming the `ChannelId` type. The live
+/// testnet demo uses a unique pair each run: a sequencer persists a checkpoint
+/// with its L2 state, and a fresh run has none, so it must not resume a channel
+/// that already carries blocks from an earlier run.
+#[must_use]
+pub fn channel_id_from_bytes(bytes: [u8; 32]) -> ChannelId {
+    ChannelId::from(bytes)
+}
