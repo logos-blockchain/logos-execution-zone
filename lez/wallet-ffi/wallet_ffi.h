@@ -108,6 +108,10 @@ typedef enum WalletFfiError {
    */
   INVALID_BYTECODE = 17,
   /**
+   * Fee payer cannot fund the fee reserve.
+   */
+  PAYER_CANNOT_FUND = 18,
+  /**
    * Internal error (catch-all).
    */
   INTERNAL_ERROR = 99,
@@ -1130,6 +1134,9 @@ enum WalletFfiError wallet_ffi_get_current_block_height(struct WalletHandle *han
  * Send a public token transfer.
  *
  * Transfers tokens from one public account to another on the network.
+ *
+ * If `to` is a fresh, unclaimed account whose key this wallet holds, the
+ * transfer also signs with that key and claims the account.
  *
  * # Parameters
  * - `handle`: Valid wallet handle

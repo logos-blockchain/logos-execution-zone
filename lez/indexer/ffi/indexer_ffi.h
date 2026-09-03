@@ -176,11 +176,25 @@ typedef struct FfiVec_u8 {
 
 typedef struct FfiVec_u8 FfiInstructionDataList;
 
+/**
+ * Fee declaration of a public transaction. Held inline (not behind a
+ * pointer): a fee-exempt transaction carries `has_fee == false` and a zeroed
+ * declaration.
+ */
+typedef struct FfiFeeDeclaration {
+  FfiAccountId payer;
+  uint64_t gas_limit;
+  uint64_t tip;
+  struct FfiU128 max_fee;
+} FfiFeeDeclaration;
+
 typedef struct FfiPublicMessage {
   struct FfiProgramId program_id;
   FfiAccountIdList account_ids;
   FfiNonceList nonces;
   FfiInstructionDataList instruction_data;
+  bool has_fee;
+  struct FfiFeeDeclaration fee;
 } FfiPublicMessage;
 
 typedef struct FfiSignaturePubKeyEntry {

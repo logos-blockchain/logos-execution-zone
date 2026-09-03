@@ -88,6 +88,10 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
     reason = "We want to catch all errors for future proofing"
 )]
 pub(crate) fn map_execution_error(e: ExecutionFailureKind) -> FfiError {
+    if let Some(::wallet::AdmissionRejection::PayerCannotFund { .. }) = e.fee_admission_rejection()
+    {
+        return FfiError::PayerCannotFund;
+    }
     match e {
         ExecutionFailureKind::InsufficientFundsError => FfiError::InsufficientFunds,
         ExecutionFailureKind::KeyNotFoundError => FfiError::KeyNotFound,

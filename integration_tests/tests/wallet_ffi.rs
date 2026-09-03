@@ -29,6 +29,7 @@ use lee::{
     Account, AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
+use lee_core::program::DEFAULT_PROGRAM_OWNER;
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
@@ -796,6 +797,74 @@ fn wallet_ffi_base58_to_account_id() -> Result<()> {
     let expected_account_id = account_id_str.parse()?;
 
     assert_eq!(account_id, expected_account_id);
+
+    Ok(())
+}
+
+#[test]
+fn wallet_ffi_public_account_is_credited_without_being_claimed() -> Result<()> {
+    let ctx = BlockingTestContext::new_default()?;
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
+
+    // Create a new uninitialized public account
+    let mut out_account_id = FfiBytes32::from_bytes([0; 32]);
+    unsafe {
+        wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id).unwrap();
+    }
+
+    // Check its program owner is the default program id
+    let account: Account = unsafe {
+        let mut out_account = FfiAccount::default();
+        wallet_ffi_get_account_public(
+            wallet_ffi_handle,
+            &raw const out_account_id,
+            &raw mut out_account,
+        )
+        .unwrap();
+        (&out_account).try_into().unwrap()
+    };
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
+
+    // There is no registration step: a credit lands on the fresh account and
+    // leaves it unowned.
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let amount: [u8; 16] = 100_u128.to_le_bytes();
+    let mut claim_result = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_transfer_public(
+            wallet_ffi_handle,
+            &raw const from,
+            &raw const out_account_id,
+            &raw const amount,
+            &raw mut claim_result,
+        )
+        .unwrap();
+    }
+
+    log::info!("Waiting for next block creation");
+    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+
+    let account: Account = unsafe {
+        let mut out_account = FfiAccount::default();
+        wallet_ffi_get_account_public(
+            wallet_ffi_handle,
+            &raw const out_account_id,
+            &raw mut out_account,
+        )
+        .unwrap();
+        (&out_account).try_into().unwrap()
+    };
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
+    assert_eq!(ffi_balance(wallet_ffi_handle, &out_account_id, true), 100);
+
+    unsafe {
+        wallet_ffi_free_transfer_result(&raw mut claim_result);
+        wallet_ffi_destroy(wallet_ffi_handle);
+    }
 
     Ok(())
 }
