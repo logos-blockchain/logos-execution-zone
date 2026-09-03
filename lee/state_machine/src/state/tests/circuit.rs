@@ -1655,7 +1655,7 @@ fn two_private_pda_family_members_receive_and_spend() {
 }
 
 /// Mirrors the public path's `program_should_fail_if_it_drops_a_declared_account`:
-/// `dropped_account` is fed two public pre_states but reports only one `AccountStateDiff`,
+/// `dropped_account` is fed two public `pre_states` but reports only one `AccountStateDiff`,
 /// silently dropping the second. `initial_pre_states` catches this — the circuit checks the
 /// dropped account against what the top-level call was actually invoked with, so a valid proof
 /// can no longer be produced.

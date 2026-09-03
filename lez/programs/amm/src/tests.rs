@@ -18,14 +18,6 @@ use crate::{
     swap::{swap_exact_input, swap_exact_output},
 };
 
-/// The diff's effective post-data: `post_data` if the program actually wrote new data, or the
-/// pre-state's data if it was left unchanged.
-fn effective_post_data(diff: &AccountStateDiff) -> Data {
-    diff.post_data
-        .clone()
-        .unwrap_or_else(|| diff.pre_state.account.data.clone())
-}
-
 const TOKEN_PROGRAM_ID: ProgramId = [15; 8];
 const AMM_PROGRAM_ID: ProgramId = [42; 8];
 
@@ -1927,6 +1919,14 @@ impl AccountsForExeTests {
             nonce: 1.into(),
         }
     }
+}
+
+/// The diff's effective post-data: `post_data` if the program actually wrote new data, or the
+/// pre-state's data if it was left unchanged.
+fn effective_post_data(diff: &AccountStateDiff) -> Data {
+    diff.post_data
+        .clone()
+        .unwrap_or_else(|| diff.pre_state.account.data.clone())
 }
 
 #[test]

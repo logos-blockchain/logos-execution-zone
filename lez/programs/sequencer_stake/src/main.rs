@@ -222,7 +222,7 @@ fn stake(
     let ownership_account_post = AccountStateDiff::new_claimed_if_default(
         ownership_account.clone(),
         BalanceDiff::Add(0),
-        new_stake_record_data.clone(),
+        new_stake_record_data,
         Claim::Authorized,
     );
 

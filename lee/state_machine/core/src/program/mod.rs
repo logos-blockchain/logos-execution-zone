@@ -322,7 +322,7 @@ pub struct AccountStateDiff {
 impl AccountStateDiff {
     /// A diff that leaves `pre_state`'s balance and data untouched.
     #[must_use]
-    pub fn unchanged(pre_state: AccountWithMetadata) -> Self {
+    pub const fn unchanged(pre_state: AccountWithMetadata) -> Self {
         Self {
             pre_state,
             post_balance_diff: BalanceDiff::Add(0),
