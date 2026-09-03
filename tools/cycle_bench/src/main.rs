@@ -49,8 +49,10 @@ struct Cli {
     prove: bool,
 
     /// Also run privacy-preserving execution circuit (PPE) composition cases:
-    /// (a) single `auth_transfer` Transfer through `execute_and_prove`, (b) `chain_caller`
-    /// with depth N=1,3,5,9. Requires --features ppe at build time. Very slow.
+    /// (a) single `auth_transfer` Transfer and (b) the no-op program with one private
+    /// account initialised, each through `execute_and_prove`, (c) `chain_caller` with
+    /// depth N=1,3,5,9. Requires --features ppe at build time and locally built
+    /// `test_programs` guests. Very slow.
     #[arg(long)]
     ppe: bool,
 

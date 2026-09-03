@@ -11,8 +11,11 @@ use lee::{
     privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof},
 };
 use lee_core::{
-    InputAccountIdentity, PrivacyPreservingCircuitOutput,
+    AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey,
+    NullifierSecretKey, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness,
+    WitnessKind,
     account::{Account, AccountId, AccountWithMetadata},
+    encryption::ViewingPublicKey,
 };
 
 use super::PpeBenchResult;
@@ -69,6 +72,66 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
     let instruction_data = to_vec(&instruction)?;
 
     let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
+
+    Ok(execute_and_prove(
+        pre_states,
+        instruction_data,
+        account_identities,
+        &pwd,
+    )?)
+}
+
+pub fn run_noop_private_init_in_ppe() -> PpeBenchResult {
+    let label = "noop private init in PPE".to_owned();
+    let started = Instant::now();
+    match prove_noop_private_init_in_ppe() {
+        Ok((_out, proof)) => {
+            let prove_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            PpeBenchResult {
+                label,
+                chain_depth: 0,
+                prove_wall_ms: Some(prove_ms),
+                proof_bytes: Some(proof.into_inner().len()),
+                error: None,
+            }
+        }
+        Err(err) => PpeBenchResult {
+            label,
+            chain_depth: 0,
+            prove_wall_ms: None,
+            proof_bytes: None,
+            error: Some(err.to_string()),
+        },
+    }
+}
+
+fn prove_noop_private_init_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
+    let pwd = ProgramWithDependencies::from(test_programs::noop());
+
+    let ask = AuthorizationSecretKey([13; 32]);
+    let nsk = NullifierSecretKey::from(&ask);
+    let npk = NullifierPublicKey::from(&nsk);
+    let vpk = ViewingPublicKey::from_seed(&[31; 32], &[32; 32]);
+    let identifier = 0;
+    let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);
+
+    let pre_states = vec![AccountWithMetadata::new(
+        Account::default(),
+        true,
+        account_id,
+    )];
+    let account_identities = vec![InputAccountIdentity::Private(PrivateWitness {
+        vpk,
+        random_seed: [0; 32],
+        identifier,
+        kind: WitnessKind::Regular { ask: Some(ask) },
+        nullifier: NullifierWitness::Init {
+            npk,
+            commitment_root: DUMMY_COMMITMENT_HASH,
+        },
+    })];
+
+    let instruction_data = to_vec(&())?;
 
     Ok(execute_and_prove(
         pre_states,

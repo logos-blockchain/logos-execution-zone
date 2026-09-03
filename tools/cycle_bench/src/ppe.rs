@@ -3,7 +3,9 @@
 //! Composition cost is the delta between standalone `prover.prove(env, elf)` for
 //! a single program (measured in the main bench) and a full `execute_and_prove`
 //! that wraps the same program in the privacy circuit. Chained-call depth sweep
-//! uses the `chain_caller` test program (loaded from artifacts/) with N=1, 3, 5, 9.
+//! uses the `chain_caller` test program (from `test_programs`, built locally) with N=1, 3, 5,
+//! 9. The no-op private-init case wraps `test_programs::noop()` with one private account
+//! initialised.
 //!
 //! `Receipt::verify(PRIVACY_PRESERVING_CIRCUIT_ID)` timings (the `G_verify` fee-model
 //! parameter) are measured by the `verify` criterion bench under `benches/verify.rs`,
@@ -45,6 +47,9 @@ pub fn run_all() -> Vec<PpeBenchResult> {
 
     eprintln!("PPE: running composition cost (auth_transfer Transfer in PPE)");
     results.push(ppe_impl::run_auth_transfer_in_ppe());
+
+    eprintln!("PPE: running composition cost (noop private init in PPE)");
+    results.push(ppe_impl::run_noop_private_init_in_ppe());
 
     for depth in [1_u32, 3, 5, 9] {
         eprintln!("PPE: running chain_caller depth={depth}");
