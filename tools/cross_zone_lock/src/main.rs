@@ -42,6 +42,9 @@ fn print_params() {
         "holder_id_base58": holder_id.to_string(),
         "holder_key_seed": HOLDER_KEY_SEED,
         "default_recipient": DEFAULT_RECIPIENT,
+        "recipient_wrapped_holding_id_base58":
+            wrapped_token_core::holding_account_id(programs::wrapped_token().id(), &DEFAULT_RECIPIENT)
+                .to_string(),
     });
     println!("{}", serde_json::to_string_pretty(&params).expect("serialize params"));
 }
