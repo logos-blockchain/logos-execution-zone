@@ -102,6 +102,9 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     // The dump is generated under RISC0_DEV_MODE, so its privacy proofs are
     // fake receipts that cannot verify in a real-proof run if they land after
     // the finalized tip
+    //
+    // TODO: once Bedrock communication lives in its own mockable actor, mock it
+    // here to finalize immediately and drop this direct storage manipulation.
     let state = storage_ref
         .ask(GetLeeState)
         .await
