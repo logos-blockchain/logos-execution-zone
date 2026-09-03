@@ -92,14 +92,16 @@ fn seed_wrapped_config_with_governance(
         authority,
         sources: sources
             .into_iter()
-            .map(|(src_zone, src_account_id)| wrapped_token_core::SourceEntry {
-                policy: wrapped_token_core::SourcePolicy {
-                    src_zone,
-                    src_account_id,
-                    mint_cap: None,
+            .map(
+                |(src_zone, src_account_id)| wrapped_token_core::SourceEntry {
+                    policy: wrapped_token_core::SourcePolicy {
+                        src_zone,
+                        src_account_id,
+                        mint_cap: None,
+                    },
+                    minted: 0,
                 },
-                minted: 0,
-            })
+            )
             .collect(),
     };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
@@ -1246,13 +1248,14 @@ fn the_token_authority_path_holds() {
             signer,
         )
     };
-    let as_entries = |policies: &[wrapped_token_core::SourcePolicy]| -> Vec<wrapped_token_core::SourceEntry> {
-        policies
-            .iter()
-            .cloned()
-            .map(|policy| wrapped_token_core::SourceEntry { policy, minted: 0 })
-            .collect()
-    };
+    let as_entries =
+        |policies: &[wrapped_token_core::SourcePolicy]| -> Vec<wrapped_token_core::SourceEntry> {
+            policies
+                .iter()
+                .cloned()
+                .map(|policy| wrapped_token_core::SourceEntry { policy, minted: 0 })
+                .collect()
+        };
     let bridge_source = vec![wrapped_token_core::SourcePolicy {
         src_zone,
         src_account_id: program_loader_core::immutable_deploy_account_id(
@@ -1785,13 +1788,14 @@ fn the_governance_path_holds() {
             bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
         )
     };
-    let as_entries = |policies: &[wrapped_token_core::SourcePolicy]| -> Vec<wrapped_token_core::SourceEntry> {
-        policies
-            .iter()
-            .cloned()
-            .map(|policy| wrapped_token_core::SourceEntry { policy, minted: 0 })
-            .collect()
-    };
+    let as_entries =
+        |policies: &[wrapped_token_core::SourcePolicy]| -> Vec<wrapped_token_core::SourceEntry> {
+            policies
+                .iter()
+                .cloned()
+                .map(|policy| wrapped_token_core::SourceEntry { policy, minted: 0 })
+                .collect()
+        };
     let bridge_source = vec![wrapped_token_core::SourcePolicy {
         src_zone,
         src_account_id: program_loader_core::immutable_deploy_account_id(
@@ -1800,13 +1804,9 @@ fn the_governance_path_holds() {
         mint_cap: None,
     }];
 
-    let first = ValidatedStateDiff::from_public_transaction(
-        &update(bridge_source.clone()),
-        &state,
-        1,
-        0,
-    )
-    .expect("the governance path changes sources");
+    let first =
+        ValidatedStateDiff::from_public_transaction(&update(bridge_source.clone()), &state, 1, 0)
+            .expect("the governance path changes sources");
     let _ = state.apply_state_diff(first);
 
     let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
@@ -1842,12 +1842,7 @@ fn the_governance_path_holds() {
     .expect("config decodes");
     assert_eq!(renounced_cfg.authority, None, "the authority is gone");
 
-    rejects_at(
-        &state,
-        &update(bridge_source),
-        4,
-        "fixed at genesis",
-    );
+    rejects_at(&state, &update(bridge_source), 4, "fixed at genesis");
     rejects_at(&state, &renounce(), 4, "already renounced");
 }
 

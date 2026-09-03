@@ -13,10 +13,9 @@ mod inner {
         AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, BRIDGE_ELF, BRIDGE_ID,
         BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
         CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID,
-        PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID,
-        PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF,
-        SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID, WRAPPED_TOKEN_ELF,
-        WRAPPED_TOKEN_ID,
+        PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID, PING_RECEIVER_ELF,
+        PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID,
+        TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
     use lee::program::Program;
 
@@ -144,7 +143,10 @@ mod inner {
                 bridge().deployed_account_id(),
                 vec![
                     bridge_core::compute_bridge_account_id(bridge().deployed_account_id()),
-                    vault_core::compute_vault_account_id(vault().deployed_account_id(), recipient_id),
+                    vault_core::compute_vault_account_id(
+                        vault().deployed_account_id(),
+                        recipient_id,
+                    ),
                     bridge_core::deposit_receipt_account_id(bridge().deployed_account_id(), op_id),
                 ],
                 vec![],
@@ -183,7 +185,10 @@ mod inner {
                         },
                     ),
                     (
-                        vault_core::compute_vault_account_id(vault().deployed_account_id(), recipient_id),
+                        vault_core::compute_vault_account_id(
+                            vault().deployed_account_id(),
+                            recipient_id,
+                        ),
                         auth_transfer_owned,
                     ),
                 ])

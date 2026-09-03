@@ -547,8 +547,9 @@ impl ZoneTestContextBuilder {
         self
     }
 
-    /// Seed extra test-only programs into genesis (see `SequencerSetup::with_extra_genesis_programs`).
-    /// Implies [`Self::from_scratch`] — the prebuilt dump can't contain an ad hoc test program.
+    /// Seed extra test-only programs into genesis (see
+    /// `SequencerSetup::with_extra_genesis_programs`). Implies [`Self::from_scratch`] — the
+    /// prebuilt dump can't contain an ad hoc test program.
     #[must_use]
     pub fn with_extra_genesis_programs(
         mut self,

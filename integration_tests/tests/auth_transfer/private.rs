@@ -22,8 +22,7 @@ use lee_core::{
 };
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
-    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
-    config::MultiNodeTestContextConfig,
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
 };
 use tokio::test;
 use wallet::{

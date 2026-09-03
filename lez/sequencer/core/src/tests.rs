@@ -379,7 +379,8 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
 
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-    let (genesis_state, genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key), &[]);
+    let (genesis_state, genesis_txs) =
+        build_genesis_state(&config, Some(bootstrap_sequencer_key), &[]);
     let genesis_hashable_data = HashableBlockData {
         block_id: 1,
         transactions: genesis_txs,
@@ -4224,7 +4225,8 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
 fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let (mut state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key), &[]);
+    let (mut state, _genesis_txs) =
+        build_genesis_state(&config, Some(bootstrap_sequencer_key), &[]);
 
     let stake_id = bootstrap_stake_account_id(&config);
     let destination = AccountId::from(&PublicKey::new_from_private_key(
@@ -4558,7 +4560,9 @@ fn upload_program_segments(
             },
             block_id,
         )
-        .unwrap_or_else(|e| panic!("NewSegment {i} should succeed against an unclaimed target: {e:?}"));
+        .unwrap_or_else(|e| {
+            panic!("NewSegment {i} should succeed against an unclaimed target: {e:?}")
+        });
     }
 
     segment_ids
@@ -4864,7 +4868,9 @@ fn loader_update_header_repoints_to_a_new_segment_chain() {
     let original_image_id = state.get_program_image_id(header).unwrap();
 
     let new_bytecode = test_programs::chain_caller().elf().to_vec();
-    let new_image_id: ProgramId = risc0_binfmt::compute_image_id(&new_bytecode).unwrap().into();
+    let new_image_id: ProgramId = risc0_binfmt::compute_image_id(&new_bytecode)
+        .unwrap()
+        .into();
     let new_segment_ids = upload_program_segments(&mut state, &new_bytecode, 120, 2);
 
     // The same key that created the header re-authorizes rewriting it — no separate update key,
@@ -4905,8 +4911,12 @@ fn loader_rejects_update_header_when_immutable() {
     );
     let original_image_id = state.get_program_image_id(header).unwrap();
 
-    let new_segment_ids =
-        upload_program_segments(&mut state, &test_programs::chain_caller().elf().to_vec(), 220, 2);
+    let new_segment_ids = upload_program_segments(
+        &mut state,
+        &test_programs::chain_caller().elf().to_vec(),
+        220,
+        2,
+    );
 
     let result = submit_loader_instruction(
         &mut state,
@@ -4945,8 +4955,12 @@ fn loader_rejects_update_header_without_authorization() {
         false,
     );
 
-    let new_segment_ids =
-        upload_program_segments(&mut state, &test_programs::chain_caller().elf().to_vec(), 150, 2);
+    let new_segment_ids = upload_program_segments(
+        &mut state,
+        &test_programs::chain_caller().elf().to_vec(),
+        150,
+        2,
+    );
     let new_first_segment = new_segment_ids[0];
 
     // Signed by a key with no relationship to `header` at all — not even the original deployer's.

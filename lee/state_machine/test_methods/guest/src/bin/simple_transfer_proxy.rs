@@ -87,8 +87,9 @@ fn main() {
         // to authorize the PDA. simple_transfer will claim it with Claim::Authorized.
         let mut auth_pda_pre = pda_pre;
         auth_pda_pre.is_authorized = true;
-        let auth_call = ChainedCall::new(simple_transfer_id, vec![auth_pda_pre.account_id], &amount)
-            .with_pda_seeds(vec![pda_seed]);
+        let auth_call =
+            ChainedCall::new(simple_transfer_id, vec![auth_pda_pre.account_id], &amount)
+                .with_pda_seeds(vec![pda_seed]);
 
         ProgramOutput::new(
             self_account_id,

@@ -176,8 +176,9 @@ pub fn update_header(
         !pre_states.is_empty(),
         "UpdateHeader requires at least the header target account"
     );
-    let old_header = ProgramHeader::try_from(&pre_states[0].account.data)
-        .expect("UpdateHeader target must already hold a valid header — use UploadHeader to create one");
+    let old_header = ProgramHeader::try_from(&pre_states[0].account.data).expect(
+        "UpdateHeader target must already hold a valid header — use UploadHeader to create one",
+    );
     assert!(
         !old_header.immutable,
         "UpdateHeader target is immutable and cannot be updated"

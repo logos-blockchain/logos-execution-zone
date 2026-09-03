@@ -387,8 +387,7 @@ fn slash(
             .expect("Slash requires the ownership account, the slash sink, and the config account");
 
     assert_eq!(
-        ownership_account.account.program_owner,
-        self_account_id,
+        ownership_account.account.program_owner, self_account_id,
         "not a sequencer_stake ownership account"
     );
     assert_eq!(

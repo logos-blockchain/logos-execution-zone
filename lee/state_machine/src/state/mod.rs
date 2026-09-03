@@ -9,6 +9,7 @@ use lee_core::{
         PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment, TransactionEvent,
     },
 };
+pub use program_loader_core::MAX_PROGRAM_SEGMENTS;
 
 use crate::{
     error::LeeError,
@@ -18,8 +19,6 @@ use crate::{
     public_transaction::PublicTransaction,
     validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
-
-pub use program_loader_core::MAX_PROGRAM_SEGMENTS;
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
@@ -227,7 +226,8 @@ impl V03State {
                 }),
                 ..Account::default()
             };
-            self.public_state.insert(segment_account_id, segment_account);
+            self.public_state
+                .insert(segment_account_id, segment_account);
             next_segment = Some(segment_account_id);
         }
         let first_segment = next_segment.expect("at least one chunk was inserted above");

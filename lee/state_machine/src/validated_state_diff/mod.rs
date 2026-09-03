@@ -10,8 +10,8 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
     program::{
         ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, PROGRAM_LOADER_ACCOUNT_ID, ProgramId,
-        ProgramOutput, TransactionEvent, compute_public_authorized_pdas,
-        pre_states_match_accounts, validate_execution,
+        ProgramOutput, TransactionEvent, compute_public_authorized_pdas, pre_states_match_accounts,
+        validate_execution,
     },
 };
 use log::debug;
@@ -592,15 +592,13 @@ fn execute_chained_call(
         // The real `image_id`, sourced from the program's own account rather than guessed from
         // its address: an update can leave a program's address pointing at different bytecode,
         // so the address alone no longer determines it.
-        let Some((program_id, elf)) = crate::state::get_program_via(
-            chained_call.program_account_id,
-            |id| {
+        let Some((program_id, elf)) =
+            crate::state::get_program_via(chained_call.program_account_id, |id| {
                 state_diff
                     .get(&id)
                     .cloned()
                     .unwrap_or_else(|| state.get_account_by_id(id))
-            },
-        )?
+            })?
         else {
             return Err(LeeError::InvalidInput("Unknown program".into()));
         };

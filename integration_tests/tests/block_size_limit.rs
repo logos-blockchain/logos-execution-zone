@@ -133,14 +133,14 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     let claimer_key = PrivateKey::try_new([3; 32]).unwrap();
     let (_claimer_header, claimer_txs) =
         deploy_program_transactions(claimer.elf(), 10, &claimer_key);
-    let claimer_txs: Vec<LeeTransaction> = claimer_txs.into_iter().map(LeeTransaction::Public).collect();
+    let claimer_txs: Vec<LeeTransaction> = claimer_txs
+        .into_iter()
+        .map(LeeTransaction::Public)
+        .collect();
 
     let chain_caller_key = PrivateKey::try_new([4; 32]).unwrap();
-    let (_chain_caller_header, chain_caller_txs) = deploy_program_transactions(
-        chain_caller.elf(),
-        40,
-        &chain_caller_key,
-    );
+    let (_chain_caller_header, chain_caller_txs) =
+        deploy_program_transactions(chain_caller.elf(), 40, &chain_caller_key);
     let chain_caller_txs: Vec<LeeTransaction> = chain_caller_txs
         .into_iter()
         .map(LeeTransaction::Public)

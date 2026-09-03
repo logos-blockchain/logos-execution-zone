@@ -268,8 +268,10 @@ fn sources_for_target(
     // would split one source's policy across entries an auditor reads as two.
     for (index, (zone, src_account_id, _)) in sources.iter().enumerate() {
         assert!(
-            !sources[..index].iter().any(|(other_zone, other_account_id, _)| other_zone == zone
-                && other_account_id == src_account_id),
+            !sources[..index]
+                .iter()
+                .any(|(other_zone, other_account_id, _)| other_zone == zone
+                    && other_account_id == src_account_id),
             "cross-zone routes list the same source twice for one target"
         );
     }
@@ -313,7 +315,9 @@ pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
                 minter: program_loader_core::immutable_deploy_account_id(
                     programs::cross_zone_inbox().id(),
                 ),
-                governance: cross_zone.source_governance.map(program_loader_core::immutable_deploy_account_id),
+                governance: cross_zone
+                    .source_governance
+                    .map(program_loader_core::immutable_deploy_account_id),
                 authority: cross_zone.source_authority,
                 sources,
             },
@@ -375,7 +379,9 @@ pub fn build_ping_receiver_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
                 deliverer: program_loader_core::immutable_deploy_account_id(
                     programs::cross_zone_inbox().id(),
                 ),
-                governance: cross_zone.source_governance.map(program_loader_core::immutable_deploy_account_id),
+                governance: cross_zone
+                    .source_governance
+                    .map(program_loader_core::immutable_deploy_account_id),
                 authority: cross_zone.source_authority,
                 sources,
             },

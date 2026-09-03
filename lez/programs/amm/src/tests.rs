@@ -205,7 +205,10 @@ impl ChainedCallForTests {
 
         ChainedCall::new(
             TOKEN_PROGRAM_ID.into(),
-            vec![vault_b_auth.account_id, AccountWithMetadataForTests::user_holding_b().account_id],
+            vec![
+                vault_b_auth.account_id,
+                AccountWithMetadataForTests::user_holding_b().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
             },
@@ -224,7 +227,10 @@ impl ChainedCallForTests {
 
         ChainedCall::new(
             TOKEN_PROGRAM_ID.into(),
-            vec![vault_a_auth.account_id, AccountWithMetadataForTests::user_holding_a().account_id],
+            vec![
+                vault_a_auth.account_id,
+                AccountWithMetadataForTests::user_holding_a().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
             },
@@ -271,7 +277,10 @@ impl ChainedCallForTests {
 
         ChainedCall::new(
             TOKEN_PROGRAM_ID.into(),
-            vec![vault_b_auth.account_id, AccountWithMetadataForTests::user_holding_b().account_id],
+            vec![
+                vault_b_auth.account_id,
+                AccountWithMetadataForTests::user_holding_b().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
             },
@@ -290,7 +299,10 @@ impl ChainedCallForTests {
 
         ChainedCall::new(
             TOKEN_PROGRAM_ID.into(),
-            vec![vault_a_auth.account_id, AccountWithMetadataForTests::user_holding_a().account_id],
+            vec![
+                vault_a_auth.account_id,
+                AccountWithMetadataForTests::user_holding_a().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: swap_amount,
             },
@@ -367,7 +379,10 @@ impl ChainedCallForTests {
 
         ChainedCall::new(
             TOKEN_PROGRAM_ID.into(),
-            vec![vault_a_auth.account_id, AccountWithMetadataForTests::user_holding_a().account_id],
+            vec![
+                vault_a_auth.account_id,
+                AccountWithMetadataForTests::user_holding_a().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::remove_actual_a_successful(),
             },
@@ -384,7 +399,10 @@ impl ChainedCallForTests {
 
         ChainedCall::new(
             TOKEN_PROGRAM_ID.into(),
-            vec![vault_b_auth.account_id, AccountWithMetadataForTests::user_holding_b().account_id],
+            vec![
+                vault_b_auth.account_id,
+                AccountWithMetadataForTests::user_holding_b().account_id,
+            ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: 70,
             },

@@ -644,8 +644,7 @@ impl WalletSubcommand for ImportSubcommand {
 fn format_account_details(account: &Account) -> (String, String) {
     let auth_tr_account_id =
         program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id());
-    let token_account_id =
-        program_loader_core::immutable_deploy_account_id(programs::token().id());
+    let token_account_id = program_loader_core::immutable_deploy_account_id(programs::token().id());
 
     match &account.program_owner {
         o if *o == auth_tr_account_id => {

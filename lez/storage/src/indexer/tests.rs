@@ -99,7 +99,8 @@ fn one_block_insertion() {
         common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
-    dbio.put_block(&block, [1; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [1; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let first_id = dbio.get_meta_first_block_id_in_db().unwrap();
@@ -182,7 +183,8 @@ fn put_block_stores_breakpoint_in_same_batch() {
         );
         let block = produce_dummy_block(i.into(), prev_hash, vec![transfer_tx]);
 
-        dbio.put_block(&block, [i; 32], 0, &initial_state, &[]).unwrap();
+        dbio.put_block(&block, [i; 32], 0, &initial_state, &[])
+            .unwrap();
     }
 
     let bp1 = dbio.get_breakpoint(1).unwrap();
@@ -221,7 +223,8 @@ fn state_replay_falls_back_over_missing_breakpoints() {
             &sign_key,
         );
         let block = produce_dummy_block(i, prev_hash, vec![transfer_tx]);
-        dbio.put_block(&block, [0; 32], 0, &initial_state, &[]).unwrap();
+        dbio.put_block(&block, [0; 32], 0, &initial_state, &[])
+            .unwrap();
     }
 
     // Simulate a store whose boundary snapshot was lost (#605).
@@ -256,7 +259,8 @@ fn simple_maps() {
 
     let control_hash1 = block.header.hash;
 
-    dbio.put_block(&block, [1; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [1; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -268,7 +272,8 @@ fn simple_maps() {
 
     let control_hash2 = block.header.hash;
 
-    dbio.put_block(&block, [2; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [2; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -280,7 +285,8 @@ fn simple_maps() {
     let control_tx_hash1 = transfer_tx.hash();
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
-    dbio.put_block(&block, [3; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [3; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -292,7 +298,8 @@ fn simple_maps() {
     let control_tx_hash2 = transfer_tx.hash();
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
-    dbio.put_block(&block, [4; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [4; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let control_block_id1 = dbio.get_block_id_by_hash(control_hash1.0).unwrap().unwrap();
     let control_block_id2 = dbio.get_block_id_by_hash(control_hash2.0).unwrap().unwrap();
@@ -330,7 +337,8 @@ fn block_batch() {
     let block = produce_dummy_block(1, None, vec![transfer_tx]);
 
     block_res.push(block.clone());
-    dbio.put_block(&block, [1; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [1; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -341,7 +349,8 @@ fn block_batch() {
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
     block_res.push(block.clone());
-    dbio.put_block(&block, [2; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [2; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -352,7 +361,8 @@ fn block_batch() {
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
     block_res.push(block.clone());
-    dbio.put_block(&block, [3; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [3; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -363,7 +373,8 @@ fn block_batch() {
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
     block_res.push(block.clone());
-    dbio.put_block(&block, [4; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [4; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let block_hashes_mem: Vec<[u8; 32]> =
         block_res.into_iter().map(|bl| bl.header.hash.0).collect();
@@ -423,7 +434,8 @@ fn account_map() {
 
     let block = produce_dummy_block(1, None, vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [1; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [1; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -438,7 +450,8 @@ fn account_map() {
 
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [2; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [2; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -453,7 +466,8 @@ fn account_map() {
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [3; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [3; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -465,7 +479,8 @@ fn account_map() {
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
 
-    dbio.put_block(&block, [4; 32], 0, &initial_state, &[]).unwrap();
+    dbio.put_block(&block, [4; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let acc1_tx = dbio.get_acc_transactions(*acc1().value(), 0, 7).unwrap();
     let acc1_tx_hashes: Vec<[u8; 32]> = acc1_tx.into_iter().map(|tx| tx.hash().0).collect();

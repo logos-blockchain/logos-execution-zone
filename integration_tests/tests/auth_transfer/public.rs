@@ -8,7 +8,9 @@ use integration_tests::{
 };
 use lee::{PublicKey, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::{MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 use wallet::{
     account::Label,

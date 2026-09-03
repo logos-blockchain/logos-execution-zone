@@ -49,8 +49,7 @@ async fn fresh_store_and_chain(
         .expect("read state")
         .expect("seeded store holds a state");
     let chain = Mutex::new(
-        SequencerCore::<MockBlockPublisher>::restore_chain_state(config, &store, &state, &[])
-            .await,
+        SequencerCore::<MockBlockPublisher>::restore_chain_state(config, &store, &state, &[]).await,
     );
     (store, chain)
 }

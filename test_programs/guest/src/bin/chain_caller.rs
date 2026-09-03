@@ -43,7 +43,10 @@ fn main() {
         let new_chained_call = ChainedCall {
             program_account_id: auth_transfer_account_id,
             instruction_data: call_instruction_data.clone(),
-            pre_state_ids: vec![running_sender_pre.account_id, running_recipient_pre.account_id], /* <- Account order permutation here */
+            pre_state_ids: vec![
+                running_sender_pre.account_id,
+                running_recipient_pre.account_id,
+            ], // <- Account order permutation here
             pda_seeds: pda_seed.iter().copied().collect(),
         };
         chained_calls.push(new_chained_call);

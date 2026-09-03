@@ -514,7 +514,8 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
+    let program_with_deps =
+        ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -551,7 +552,8 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
+    let program_with_deps =
+        ProgramWithDependencies::new(delegator, [(callee_id.into(), callee)].into());
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -579,7 +581,8 @@ fn caller_seeds_bind_a_private_pda_first_seen_in_the_callee() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
+    let program_with_deps =
+        ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     execute_and_prove(
         vec![pre_state],
@@ -612,7 +615,8 @@ fn delegated_private_pda_first_seen_in_callee_is_authorized() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
+    let program_with_deps =
+        ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     execute_and_prove(
         vec![pre_state],
@@ -641,7 +645,8 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
+    let program_with_deps =
+        ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     let (output, _proof) = execute_and_prove(
         vec![pre_state],
@@ -678,7 +683,8 @@ fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
     let pre_state = AccountWithMetadata::new(Account::default(), true, account_id);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
+    let program_with_deps =
+        ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     let (output, _proof) = execute_and_prove(
         vec![pre_state],
@@ -708,7 +714,8 @@ fn delegated_pda_is_not_authorized_in_sibling_call() {
     let npk = keys.npk();
     let seed = PdaSeed::new([77; 32]);
 
-    let account_id = AccountId::for_private_pda(&delegator.id().into(), &seed, &npk, &keys.vpk(), 0);
+    let account_id =
+        AccountId::for_private_pda(&delegator.id().into(), &seed, &npk, &keys.vpk(), 0);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
@@ -1000,7 +1007,8 @@ fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
     let pre_state =
         AccountWithMetadata::new(Account::default(), true, (&keys.npk(), &keys.vpk(), 0));
 
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
+    let program_with_deps =
+        ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     let (output, proof) = execute_and_prove(
         vec![pre_state],
@@ -1056,7 +1064,8 @@ fn top_level_reordering_through_a_passthrough_is_still_provable() {
     let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
 
     let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
+    let program_with_deps =
+        ProgramWithDependencies::new(forwarder, [(callee_id.into(), callee)].into());
 
     // Delegate seed_b to the callee — the callee should be authorized for `account_b` alone,
     // and only asserts on `account_b`, ignoring `account_a` (which is genuinely unauthorized).

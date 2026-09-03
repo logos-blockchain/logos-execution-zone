@@ -74,7 +74,11 @@ mod tests {
         );
         assert_ne!(
             base,
-            inbox_source_marker_account_id(AccountId::new([2; 32]), &[7; 32], AccountId::new([9; 32]))
+            inbox_source_marker_account_id(
+                AccountId::new([2; 32]),
+                &[7; 32],
+                AccountId::new([9; 32])
+            )
         );
     }
 }

@@ -88,8 +88,7 @@ impl TryFrom<&crate::account::Data> for ProgramSegment {
 impl From<&ProgramSegment> for crate::account::Data {
     fn from(segment: &ProgramSegment) -> Self {
         let mut data = Vec::new();
-        BorshSerialize::serialize(segment, &mut data)
-            .expect("borsh serialization should not fail");
+        BorshSerialize::serialize(segment, &mut data).expect("borsh serialization should not fail");
         Self::try_from(data).expect("program segment must fit under DATA_MAX_LENGTH")
     }
 }

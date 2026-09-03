@@ -136,7 +136,10 @@ fn main() {
             // arbitrary logic (arbitrage, etc.) and is expected to return funds to the vault.
             let call_2 = ChainedCall {
                 program_account_id: callback_account_id,
-                pre_state_ids: vec![vault_after_transfer.account_id, receiver_after_transfer.account_id],
+                pre_state_ids: vec![
+                    vault_after_transfer.account_id,
+                    receiver_after_transfer.account_id,
+                ],
                 instruction_data: callback_instruction_data,
                 pda_seeds: vec![],
             };
