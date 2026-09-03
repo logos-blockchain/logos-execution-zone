@@ -6,10 +6,10 @@ Cryptographic primitives used by client/wallet code. Measures the per-call cost 
 
 | Field | Value |
 |---|---|
-| Chip | AMD Ryzen 7 PRO 7840U |
-| vCPUs | 6 |
-| RAM | 16 GB |
-| OS | Ubuntu 24.04.4 LTS |
+| Chip | AMD Ryzen 7 PRO 7840U w/ Radeon 780M Graphics |
+| Threads (`nproc`) | 16 |
+| RAM (`free -g`) | 61 GiB |
+| OS | Linux Mint 21.3 |
 | Rust | 1.94.0 |
 | Profile | release |
 
@@ -19,18 +19,18 @@ Criterion sample_size = 50, warm_up_time = 2 s, measurement_time = 10 s. Slope-r
 
 | Operation | low | point | high | outliers (mild + severe) |
 |---|---:|---:|---:|---:|
-| keychain/new_os_random | 3.694 ms | 3.749 ms | 3.804 ms | 3 + 1 |
-| keychain/new_mnemonic | 3.740 ms | 3.872 ms | 4.045 ms | 2 + 1 |
-| shared_secret_key/sender_encapsulate | 48.17 µs | 49.13 µs | 50.46 µs | 0 + 2 |
-| encryption/encrypt | 660.0 ns | 670.9 ns | 681.9 ns | 2 + 1 |
-| encryption/decrypt | 516.9 ns | 536.2 ns | 559.0 ns | 4 + 2 |
+| keychain/new_os_random | 2.761 ms | 2.774 ms | 2.793 ms | 0 + 5 |
+| keychain/new_mnemonic | 2.778 ms | 2.787 ms | 2.796 ms | 2 + 3 |
+| shared_secret_key/sender_encapsulate | 34.21 µs | 34.32 µs | 34.43 µs | 0 + 3 |
+| encryption/encrypt | 467.3 ns | 468.7 ns | 470.4 ns | 1 + 3 |
+| encryption/decrypt | 373.1 ns | 374.3 ns | 375.8 ns | 1 + 4 |
 
 Numbers from a single dev box (see Machine above). For full estimates (slope, mean, median, MAD, std-dev) and the noise model, see `target/criterion/<group>/<bench>/estimates.json` after running locally.
 
 ## Findings
 
-- Keychain creation is ≈ 3.7 ms, dominated by the 2048-round HMAC-SHA512 PBKDF in the mnemonic-to-SSK path. `new_os_random` and `new_mnemonic` are equal within noise, as expected: they run the same derivation.
-- Per-recipient ML-KEM-768 encapsulation is ≈ 49 µs on the host (pure-Rust `ml-kem`). Outbound shielded transfers to N recipients cost ≈ 49·N µs of crypto on top of proving. The in-guest cost of the same encapsulation is a different regime and is not this number; it is measured by cycle_bench's private-init circuit case.
+- Keychain creation is ≈ 2.8 ms, dominated by the 2048-round HMAC-SHA512 PBKDF in the mnemonic-to-SSK path. `new_os_random` and `new_mnemonic` are equal within noise, as expected: they run the same derivation.
+- Per-recipient ML-KEM-768 encapsulation is ≈ 34 µs on the host (pure-Rust `ml-kem`). Outbound shielded transfers to N recipients cost ≈ 34·N µs of crypto on top of proving. The in-guest cost of the same encapsulation is a different regime and is not this number; it is measured by cycle_bench's private-init circuit case.
 - Symmetric encrypt/decrypt over an Account note is sub-µs. Bulk encryption is not the bottleneck.
 
 ## Reproduce

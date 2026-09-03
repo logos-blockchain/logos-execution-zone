@@ -8,6 +8,6 @@ Bench tools live under `tools/` with READMEs for how to run each one. This direc
 | crypto_primitives_bench | [crypto_primitives_bench.md](crypto_primitives_bench.md) |
 | integration_bench | [integration_bench.md](integration_bench.md) |
 
-Each doc names the machine its numbers came from. User-cycle counts are deterministic and
-machine-independent; wall-time and prover-side numbers are not, and the prover-side tables are
-currently pending re-measurement.
+cycle_bench.md and crypto_primitives_bench.md are from the machine named in each, one invocation
+per doc; integration_bench.md is older and from an Apple M2 Pro. User-cycle counts are
+machine-independent.
