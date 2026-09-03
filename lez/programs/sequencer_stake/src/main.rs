@@ -16,11 +16,6 @@ use sequencer_stake_core::{
     stake_funds_account_id, stake_funds_seed,
 };
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/authenticated_transfer_image_id.rs"
-));
-
 fn main() {
     let (
         ProgramInput {
@@ -460,7 +455,6 @@ fn slash(
 
     // The burn happens in a chained authenticated_transfer call.
     let burn_call = custody_transfer(
-        AUTHENTICATED_TRANSFER_IMAGE_ID,
         funds_account,
         stake_funds_seed(&ownership_account.account_id),
         sink_account,
@@ -544,7 +538,6 @@ fn finalize_unstake(
     let destination_post = destination_account.account.clone();
 
     let release_call = custody_transfer(
-        AUTHENTICATED_TRANSFER_IMAGE_ID,
         funds_account,
         stake_funds_seed(&ownership_account.account_id),
         destination_account,

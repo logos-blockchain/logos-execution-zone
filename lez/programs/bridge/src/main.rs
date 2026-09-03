@@ -2,11 +2,6 @@ use authenticated_transfer_core::custody_transfer;
 use bridge_core::Instruction;
 use lee_core::program::{ProgramEvent, ProgramInput, ProgramOutput, read_lee_inputs};
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/authenticated_transfer_image_id.rs"
-));
-
 fn main() {
     let (
         ProgramInput {
@@ -92,7 +87,6 @@ fn main() {
                 ];
 
                 let chained_calls = vec![custody_transfer(
-                    AUTHENTICATED_TRANSFER_IMAGE_ID,
                     bridge,
                     bridge_core::compute_bridge_seed(),
                     recipient,

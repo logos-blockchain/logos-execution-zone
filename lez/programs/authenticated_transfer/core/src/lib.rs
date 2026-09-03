@@ -1,10 +1,17 @@
 //! Core data structures for the Authenticated Transfer Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+#[cfg(feature = "image_id")]
 use lee_core::{
     account::AccountWithMetadata,
-    program::{ChainedCall, PdaSeed, ProgramId},
+    program::{ChainedCall, PdaSeed},
 };
+
+#[cfg(feature = "image_id")]
+include!(concat!(
+    env!("OUT_DIR"),
+    "/authenticated_transfer_image_id.rs"
+));
 
 /// Instruction type for the Authenticated Transfer program.
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -16,9 +23,9 @@ pub enum Instruction {
 }
 
 /// A chained transfer out of an account the caller holds under `seed`.
+#[cfg(feature = "image_id")]
 #[must_use]
 pub fn custody_transfer(
-    program_id: ProgramId,
     mut from: AccountWithMetadata,
     seed: PdaSeed,
     to: AccountWithMetadata,
@@ -26,7 +33,7 @@ pub fn custody_transfer(
 ) -> ChainedCall {
     from.is_authorized = true;
     ChainedCall::new(
-        program_id,
+        AUTHENTICATED_TRANSFER_IMAGE_ID,
         vec![from, to],
         &Instruction::Transfer { amount },
     )

@@ -786,6 +786,7 @@ name = "authenticated_transfer_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "build_utils",
  "lee_core",
 ]
 
@@ -1271,7 +1272,6 @@ dependencies = [
  "authenticated_transfer_core",
  "borsh",
  "bridge_lock_core",
- "build_utils",
  "cross_zone_outbox_core",
  "lee_core",
  "risc0-zkvm",
@@ -1284,7 +1284,6 @@ version = "0.1.0"
 dependencies = [
  "authenticated_transfer_core",
  "bridge_core",
- "build_utils",
  "lee_core",
 ]
 
@@ -3261,7 +3260,6 @@ name = "faucet_program"
 version = "0.1.0"
 dependencies = [
  "authenticated_transfer_core",
- "build_utils",
  "faucet_core",
  "lee_core",
 ]
@@ -11211,7 +11209,6 @@ name = "sequencer_stake_program"
 version = "0.1.0"
 dependencies = [
  "authenticated_transfer_core",
- "build_utils",
  "lee_core",
  "sequencer_stake_core",
 ]

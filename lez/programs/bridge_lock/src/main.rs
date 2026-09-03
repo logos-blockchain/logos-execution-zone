@@ -10,11 +10,6 @@ use lee_core::{
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/authenticated_transfer_image_id.rs"
-));
-
 fn main() {
     let (
         ProgramInput {
@@ -149,7 +144,6 @@ fn lock(
 
     // The balance moves in a chained authenticated_transfer call.
     let move_call = custody_transfer(
-        AUTHENTICATED_TRANSFER_IMAGE_ID,
         holding.clone(),
         holding_seed(&holder.account_id.into_value()),
         escrow.clone(),

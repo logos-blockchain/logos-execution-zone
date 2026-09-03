@@ -2,11 +2,6 @@ use authenticated_transfer_core::custody_transfer;
 use faucet_core::Instruction;
 use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/authenticated_transfer_image_id.rs"
-));
-
 fn main() {
     let (
         ProgramInput {
@@ -34,7 +29,6 @@ fn main() {
     );
 
     let transfer = custody_transfer(
-        AUTHENTICATED_TRANSFER_IMAGE_ID,
         faucet,
         faucet_core::compute_faucet_seed(),
         recipient,
