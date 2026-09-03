@@ -26,12 +26,17 @@ fn main() {
         return;
     };
 
-    ProgramOutput::new(self_program_id, caller_program_id, instruction_data, Vec::new())
-        .with_chained_calls(vec![ChainedCall {
-            program_id: callee_program_id,
-            instruction_data: callee_instruction,
-            pre_state_ids: vec![second.account_id, first.account_id],
-            pda_seeds,
-        }])
-        .write();
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_data,
+        Vec::new(),
+    )
+    .with_chained_calls(vec![ChainedCall {
+        program_id: callee_program_id,
+        instruction_data: callee_instruction,
+        pre_state_ids: vec![second.account_id, first.account_id],
+        pda_seeds,
+    }])
+    .write();
 }

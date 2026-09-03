@@ -46,7 +46,13 @@ fn main() {
         Instruction::Refund { amount } => refund(self_program_id, pre_states, amount),
     };
 
-    ProgramOutput::new(self_program_id, caller_program_id, instruction_words, state_diffs).write();
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_words,
+        state_diffs,
+    )
+    .write();
 }
 
 /// Block-tail distribution over `[state, escrow, inbox, producer]`.
@@ -132,8 +138,11 @@ fn distribute(
         .checked_add(summary.revenue_tip)
         .expect("producer credit fits u128");
     let producer_data = pre_producer.account.data.clone();
-    let producer_diff =
-        AccountStateDiff::new(pre_producer, BalanceDiff::Add(producer_credit), producer_data);
+    let producer_diff = AccountStateDiff::new(
+        pre_producer,
+        BalanceDiff::Add(producer_credit),
+        producer_data,
+    );
 
     vec![state_diff, escrow_diff, inbox_diff, producer_diff]
 }
