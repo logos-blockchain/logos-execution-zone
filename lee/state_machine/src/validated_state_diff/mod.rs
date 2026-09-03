@@ -32,7 +32,6 @@ pub struct StateDiff {
     pub public_diff: HashMap<AccountId, Account>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<Nullifier>,
-    pub program: Option<Program>,
     pub events: Vec<TransactionEvent>,
 }
 
@@ -662,7 +661,6 @@ impl ValidatedStateDiff {
             public_diff: state_diff,
             new_commitments: vec![],
             new_nullifiers: vec![],
-            program: None,
             events,
         }))
     }
@@ -775,7 +773,6 @@ impl ValidatedStateDiff {
             public_diff,
             new_commitments: commitments,
             new_nullifiers,
-            program: None,
             events: vec![],
         }))
     }

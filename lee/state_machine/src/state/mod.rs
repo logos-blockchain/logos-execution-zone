@@ -251,7 +251,6 @@ impl V03State {
             public_diff,
             new_commitments,
             new_nullifiers,
-            program,
             events,
         } = diff.into_state_diff();
         #[expect(
@@ -268,9 +267,6 @@ impl V03State {
         }
         self.private_state.0.extend(&new_commitments);
         self.private_state.1.extend(&new_nullifiers);
-        if let Some(program) = program {
-            self.insert_program(&program);
-        }
         events
     }
 
