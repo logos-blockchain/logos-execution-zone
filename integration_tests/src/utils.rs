@@ -323,6 +323,7 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
 }
 
 /// Builds the transaction that uploads `bytecode` as a single new segment, signed by `key`.
+///
 /// Returns the segment's `AccountId` and the transaction. Useful on its own for tests that only
 /// care about transaction size/shape, not about invoking the deployed program afterward.
 #[must_use]
@@ -346,7 +347,9 @@ pub fn new_segment_transaction(
 }
 
 /// Uploads `bytecode` as a chunked, tail-to-head segment chain, one signed `NewSegment` tx per
-/// chunk, in submission order. Segment keys are `[key_seed + i; 32]`; pick seeds with enough
+/// chunk, in submission order.
+///
+/// Segment keys are `[key_seed + i; 32]`; pick seeds with enough
 /// headroom to avoid collisions. Returns segment `AccountId`s (first to last) and their txs.
 #[must_use]
 pub fn segment_upload_transactions(
@@ -373,7 +376,7 @@ pub fn segment_upload_transactions(
 
     let mut txs = Vec::with_capacity(chunks.len());
     for (i, chunk) in chunks.iter().enumerate().rev() {
-        let next_segment = segment_ids.get(i + 1).copied();
+        let next_segment = segment_ids.get(i.saturating_add(1)).copied();
         let mut account_ids = vec![segment_ids[i]];
         account_ids.extend(next_segment);
         let message = lee::public_transaction::Message::try_new(
@@ -418,8 +421,10 @@ pub fn upload_header_transaction(
 }
 
 /// Every transaction needed to deploy `bytecode` for real: its full segment chain (see
-/// [`segment_upload_transactions`]) followed by the `UploadHeader`, in submission order. All must
-/// land in a block, in order, before the program is invocable at the returned header `AccountId`.
+/// [`segment_upload_transactions`]) followed by the `UploadHeader`, in submission order.
+///
+/// All must land in a block, in order, before the program is invocable at the returned header
+/// `AccountId`.
 #[must_use]
 pub fn deploy_program_transactions(
     bytecode: &[u8],

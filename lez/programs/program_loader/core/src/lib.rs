@@ -42,6 +42,7 @@ pub enum Instruction {
 }
 
 /// The `AccountId` a genesis-seeded builtin's header lives at: the bijection of its `image_id`.
+///
 /// A live `Deploy`'d program has no such deterministic address — its deployer chooses the header
 /// account directly. Kept under this name for the many call sites needing "builtin X's address."
 #[must_use]
@@ -49,9 +50,10 @@ pub fn immutable_deploy_account_id(image_id: ProgramId) -> AccountId {
     AccountId::from(image_id)
 }
 
-/// The deterministic `AccountId` a genesis builtin's `segment_number`'th segment lives at. Only
-/// genesis uses this — a live `Deploy` claims arbitrary, deployer-chosen accounts instead, since
-/// it has a real signer; genesis doesn't, so `V03State::insert_program` needs a way to
+/// The deterministic `AccountId` a genesis builtin's `segment_number`'th segment lives at.
+///
+/// Only genesis uses this — a live `Deploy` claims arbitrary, deployer-chosen accounts instead,
+/// since it has a real signer; genesis doesn't, so `V03State::insert_program` needs a way to
 /// precompute segment addresses before inserting them directly.
 #[must_use]
 pub fn genesis_segment_account_id(header_account_id: AccountId, segment_number: u32) -> AccountId {
@@ -73,11 +75,14 @@ pub fn genesis_segment_account_id(header_account_id: AccountId, segment_number: 
 /// Executes `NewSegment`.
 #[must_use]
 pub fn write_segment(
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: &[AccountWithMetadata],
     bytecode: Vec<u8>,
     next_segment: Option<AccountId>,
 ) -> Vec<AccountPostState> {
     let expected_len = if next_segment.is_some() { 2 } else { 1 };
+    let (target, rest) = pre_states
+        .split_first()
+        .unwrap_or_else(|| panic!("NewSegment requires exactly {expected_len} account(s)"));
     assert_eq!(
         pre_states.len(),
         expected_len,
@@ -85,7 +90,7 @@ pub fn write_segment(
     );
 
     assert_eq!(
-        pre_states[0].account,
+        target.account,
         Account::default(),
         "segment target already deployed"
     );
@@ -102,8 +107,7 @@ pub fn write_segment(
         Claim::Authorized,
     ));
 
-    if let Some(next) = next_segment {
-        let referenced = &pre_states[1];
+    if let (Some(next), [referenced]) = (next_segment, rest) {
         assert_eq!(
             referenced.account_id, next,
             "second account must be the segment `next_segment` points to"
@@ -114,7 +118,7 @@ pub fn write_segment(
         );
         assert!(
             ProgramSegment::try_from(&referenced.account.data).is_ok(),
-            "`next_segment` must already hold a valid segment — segments are linked tail-to-head"
+            "`next_segment` must already hold a valid segment \u{2014} segments are linked tail-to-head"
         );
         post_states.push(AccountPostState::new(referenced.account.clone()));
     }
@@ -125,7 +129,7 @@ pub fn write_segment(
 /// Executes `UploadHeader`.
 #[must_use]
 pub fn create_header(
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: &[AccountWithMetadata],
     first_segment: AccountId,
     immutable: bool,
 ) -> Vec<AccountPostState> {
@@ -144,7 +148,7 @@ pub fn create_header(
         "first_segment must match the first supplied segment account"
     );
 
-    let image_id = compute_image_id(&pre_states);
+    let image_id = compute_image_id(pre_states);
 
     let mut post_states = vec![AccountPostState::new_claimed(
         Account {
@@ -168,7 +172,7 @@ pub fn create_header(
 /// Executes `UpdateHeader`.
 #[must_use]
 pub fn update_header(
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: &[AccountWithMetadata],
     first_segment: AccountId,
     immutable: bool,
 ) -> Vec<AccountPostState> {
@@ -177,7 +181,7 @@ pub fn update_header(
         "UpdateHeader requires at least the header target account"
     );
     let old_header = ProgramHeader::try_from(&pre_states[0].account.data).expect(
-        "UpdateHeader target must already hold a valid header — use UploadHeader to create one",
+        "UpdateHeader target must already hold a valid header \u{2014} use UploadHeader to create one",
     );
     assert!(
         !old_header.immutable,
@@ -193,7 +197,7 @@ pub fn update_header(
         "first_segment must match the first supplied segment account"
     );
 
-    let image_id = compute_image_id(&pre_states);
+    let image_id = compute_image_id(pre_states);
 
     let mut post_states = vec![AccountPostState::new(Account {
         data: Data::from(&ProgramHeader {

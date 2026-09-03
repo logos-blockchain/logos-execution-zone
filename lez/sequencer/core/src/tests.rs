@@ -1718,7 +1718,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let clock_chain_caller_header = AccountId::from(&PublicKey::new_from_private_key(&header_key));
 
     for (i, chunk) in chunks.iter().enumerate().rev() {
-        let next_segment = segment_ids.get(i + 1).copied();
+        let next_segment = segment_ids.get(i.saturating_add(1)).copied();
         let mut account_ids = vec![segment_ids[i]];
         account_ids.extend(next_segment);
         let segment_message = lee::public_transaction::Message::try_new(
@@ -4549,7 +4549,7 @@ fn upload_program_segments(
         .collect();
 
     for (i, chunk) in chunks.iter().enumerate().rev() {
-        let next_segment = segment_ids.get(i + 1).copied();
+        let next_segment = segment_ids.get(i.saturating_add(1)).copied();
         submit_loader_instruction(
             state,
             &segment_keys[i],
@@ -4572,13 +4572,13 @@ fn upload_program_segments(
 /// at it, signed by `header_key`. Returns the header's `AccountId`.
 fn deploy_program(
     state: &mut V03State,
-    bytecode: Vec<u8>,
+    bytecode: &[u8],
     key_seed: u8,
     header_key: &PrivateKey,
     block_id: BlockId,
     immutable: bool,
 ) -> AccountId {
-    let segment_ids = upload_program_segments(state, &bytecode, key_seed, block_id);
+    let segment_ids = upload_program_segments(state, bytecode, key_seed, block_id);
     let header_id = AccountId::from(&PublicKey::new_from_private_key(header_key));
 
     submit_loader_instruction(
@@ -4634,7 +4634,7 @@ fn loader_deploys_program() {
         .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
         .count();
 
-    let header = deploy_program(&mut state, bytecode.clone(), 20, &header_key, 1, true);
+    let header = deploy_program(&mut state, &bytecode, 20, &header_key, 1, true);
 
     let deployed_header = state.get_account_by_id(header);
     assert_eq!(deployed_header.program_owner, PROGRAM_LOADER_ACCOUNT_ID);
@@ -4664,7 +4664,7 @@ fn loader_deployed_program_is_found_by_get_program() {
     let bytecode = test_programs::claimer().elf().to_vec();
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
 
-    let header = deploy_program(&mut state, bytecode.clone(), 40, &header_key, 1, true);
+    let header = deploy_program(&mut state, &bytecode, 40, &header_key, 1, true);
 
     let (found_image_id, found_bytecode) = state
         .get_program(header)
@@ -4689,7 +4689,7 @@ fn loader_deployed_program_is_invocable_via_dispatch() {
     let header_key = PrivateKey::try_new([79; 32]).unwrap();
 
     let bytecode = test_programs::claimer().elf().to_vec();
-    let header = deploy_program(&mut state, bytecode, 60, &header_key, 1, true);
+    let header = deploy_program(&mut state, &bytecode, 60, &header_key, 1, true);
 
     // `claimer` claims its one pre_state account with `Claim::Authorized`, which requires the
     // account to be signed for and to start out default-owned.
@@ -4859,7 +4859,7 @@ fn loader_update_header_repoints_to_a_new_segment_chain() {
 
     let header = deploy_program(
         &mut state,
-        test_programs::claimer().elf().to_vec(),
+        test_programs::claimer().elf(),
         100,
         &header_key,
         1,
@@ -4903,7 +4903,7 @@ fn loader_rejects_update_header_when_immutable() {
 
     let header = deploy_program(
         &mut state,
-        test_programs::claimer().elf().to_vec(),
+        test_programs::claimer().elf(),
         180,
         &header_key,
         1,
@@ -4913,7 +4913,7 @@ fn loader_rejects_update_header_when_immutable() {
 
     let new_segment_ids = upload_program_segments(
         &mut state,
-        &test_programs::chain_caller().elf().to_vec(),
+        test_programs::chain_caller().elf(),
         220,
         2,
     );
@@ -4948,7 +4948,7 @@ fn loader_rejects_update_header_without_authorization() {
 
     let header = deploy_program(
         &mut state,
-        test_programs::claimer().elf().to_vec(),
+        test_programs::claimer().elf(),
         130,
         &header_key,
         1,
@@ -4957,7 +4957,7 @@ fn loader_rejects_update_header_without_authorization() {
 
     let new_segment_ids = upload_program_segments(
         &mut state,
-        &test_programs::chain_caller().elf().to_vec(),
+        test_programs::chain_caller().elf(),
         150,
         2,
     );

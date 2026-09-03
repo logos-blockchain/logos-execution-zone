@@ -39,7 +39,7 @@ fn main() {
     let chained_call = ChainedCall {
         program_account_id: chained_program_id,
         instruction_data: chained_instruction,
-        pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
+        pre_state_ids: pre_states.iter().map(|state| state.account_id).collect(),
         pda_seeds: vec![],
     };
 

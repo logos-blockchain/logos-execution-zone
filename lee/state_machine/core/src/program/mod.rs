@@ -66,11 +66,12 @@ impl From<&ProgramHeader> for crate::account::Data {
     }
 }
 
-/// One node of a deployed program's bytecode, linked rather than formula-addressed:
+/// One node of a deployed program's bytecode, linked rather than formula-addressed.
+///
 /// `next_segment` is `None` for the chain's last node, or the next chunk's `AccountId` otherwise.
 /// Segment addresses carry no derivation requirement — a deployer claims any default account it
 /// likes, as long as the chain from [`ProgramHeader::program_first_segment`] reaches each one in
-/// order. Write-once: no instruction edits a segment after `NewSegment` creates it.
+/// order. Write-once: no instruction edits a segment after `WriteSegment` creates it.
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramSegment {
     pub bytecode: Vec<u8>,

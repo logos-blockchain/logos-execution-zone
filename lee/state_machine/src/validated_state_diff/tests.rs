@@ -146,7 +146,7 @@ fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) ->
                 program_owner: PROGRAM_LOADER_ACCOUNT_ID,
                 data: Data::from(&ProgramSegment {
                     bytecode: chunks[i].to_vec(),
-                    next_segment: segment_ids.get(i + 1).copied(),
+                    next_segment: segment_ids.get(i.saturating_add(1)).copied(),
                 }),
                 ..Account::default()
             },

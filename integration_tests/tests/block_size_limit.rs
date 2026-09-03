@@ -123,7 +123,7 @@ async fn accept_transaction_within_limit() -> Result<()> {
 
 /// A deploy is several transactions now (one `NewSegment` per chunk, plus `UploadHeader`), so
 /// deferral has to be exercised — and checked — at that granularity: the block size below fits
-/// every transaction of `claimer`'s deploy but not chain_caller's first, so the whole first
+/// every transaction of `claimer`'s deploy but not `chain_caller`'s first, so the whole first
 /// deploy lands in block 1 and the whole second is deferred to block 2 intact.
 #[test]
 async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
@@ -207,7 +207,7 @@ fn program_loader_txs(block: &common::block::Block) -> Vec<Vec<u8>> {
     }))
 }
 
-fn as_sorted_bytes<'a>(txs: impl IntoIterator<Item = &'a LeeTransaction>) -> Vec<Vec<u8>> {
+fn as_sorted_bytes<'tx>(txs: impl IntoIterator<Item = &'tx LeeTransaction>) -> Vec<Vec<u8>> {
     let mut bytes: Vec<Vec<u8>> = txs
         .into_iter()
         .map(|tx| borsh::to_vec(tx).expect("transaction should serialize"))

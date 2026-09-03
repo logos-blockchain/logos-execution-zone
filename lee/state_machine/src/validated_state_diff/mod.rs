@@ -555,22 +555,21 @@ fn execute_chained_call(
             borsh::from_slice(&chained_call.instruction_data).map_err(|e| {
                 LeeError::InvalidInput(format!("invalid program_loader instruction: {e}"))
             })?;
-        let loader_pre_states = real_pre_states.to_vec();
         // FIXME: catch_unwind won't catch aborts; remove once lez programs have better
         // error handling than panicking on invalid input.
         let post_states = std::panic::catch_unwind(|| match instruction {
             program_loader_core::Instruction::WriteSegment {
                 bytecode,
                 next_segment,
-            } => program_loader_core::write_segment(loader_pre_states, bytecode, next_segment),
+            } => program_loader_core::write_segment(real_pre_states, bytecode, next_segment),
             program_loader_core::Instruction::CreateHeader {
                 first_segment,
                 immutable,
-            } => program_loader_core::create_header(loader_pre_states, first_segment, immutable),
+            } => program_loader_core::create_header(real_pre_states, first_segment, immutable),
             program_loader_core::Instruction::UpdateHeader {
                 first_segment,
                 immutable,
-            } => program_loader_core::update_header(loader_pre_states, first_segment, immutable),
+            } => program_loader_core::update_header(real_pre_states, first_segment, immutable),
         })
         .map_err(|panic_payload| {
             LeeError::ProgramExecutionFailed(format!(

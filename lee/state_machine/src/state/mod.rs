@@ -422,6 +422,11 @@ impl V03State {
         }
         Ok(())
     }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
+        self.public_state.insert(account_id, account);
+    }
 }
 
 /// [`V03State::get_program`]'s core, parameterized over an account `lookup` closure.
@@ -475,13 +480,6 @@ pub fn get_program_via(
     }
 
     Ok(Some((header.image_id, elf)))
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-impl V03State {
-    pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
-        self.public_state.insert(account_id, account);
-    }
 }
 
 #[cfg(test)]

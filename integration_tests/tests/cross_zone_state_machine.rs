@@ -2,6 +2,10 @@
     clippy::tests_outside_test_module,
     reason = "top-level test functions are conventional for integration tests"
 )]
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "tests intentionally discard TransactionEvent output they don't assert on"
+)]
 
 //! Single-zone state-machine tests for cross-zone delivery (ping demo) and the
 //! wrapped-token bridge (Demo 2). They drive the guests in isolation, no watcher
