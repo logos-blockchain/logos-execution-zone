@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 
 use kameo::actor::ActorRef;
-use sequencer_core::block_publisher::ZoneSdkPublisher;
+use sequencer_core::{block_publisher::ZoneSdkPublisher, gossip::GossipNetwork};
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_storage_actor::StorageActor;
 
@@ -11,12 +11,14 @@ use crate::Runtime;
 ///
 /// - A [`StorageActor`] used to get acess to db.
 /// - An [`ExecutorActor`] used to query the node.
+/// - A [`GossipNetwork`] right now is unused and exists only to pin gossip.
 /// - The [`Runtime`] used to run async queries against the store (either owned or borrowed),
 ///   already FFI-safe.
 #[repr(C)]
 pub struct SequencerServiceFFI {
     storage_actor: *mut c_void,
     executor_actor: *mut c_void,
+    gossip: *mut c_void,
     runtime: Runtime,
 }
 
@@ -25,11 +27,13 @@ impl SequencerServiceFFI {
     pub fn new(
         storage_actor: ActorRef<StorageActor>,
         executor_actor: ActorRef<ExecutorActor<ZoneSdkPublisher, StorageActor>>,
+        gossip: Option<GossipNetwork>,
         runtime: Runtime,
     ) -> Self {
         Self {
             storage_actor: Box::into_raw(Box::new(storage_actor)).cast::<c_void>(),
             executor_actor: Box::into_raw(Box::new(executor_actor)).cast::<c_void>(),
+            gossip: Box::into_raw(Box::new(gossip)).cast::<c_void>(),
             runtime,
         }
     }
@@ -65,6 +69,12 @@ impl SequencerServiceFFI {
 
 impl Drop for SequencerServiceFFI {
     fn drop(&mut self) {
+        if self.gossip.is_null() {
+            let gossip = unsafe { Box::from_raw(self.gossip.cast::<Option<GossipNetwork>>()) };
+            // stop the gossip before executor actor.
+            drop(gossip);
+        }
+
         if !self.executor_actor.is_null() {
             let executor_actor = unsafe {
                 Box::from_raw(

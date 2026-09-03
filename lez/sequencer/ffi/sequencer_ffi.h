@@ -46,12 +46,14 @@ typedef struct Runtime {
  *
  * - A [`StorageActor`] used to get acess to db.
  * - An [`ExecutorActor`] used to query the node.
+ * - A [`GossipNetwork`] right now is unused and exists only to pin gossip.
  * - The [`Runtime`] used to run async queries against the store (either owned or borrowed),
  *   already FFI-safe.
  */
 typedef struct SequencerServiceFFI {
   void *storage_actor;
   void *executor_actor;
+  void *gossip;
   struct Runtime runtime;
 } SequencerServiceFFI;
 

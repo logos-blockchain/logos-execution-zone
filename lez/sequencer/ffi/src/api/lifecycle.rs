@@ -2,7 +2,7 @@ use std::{ffi::c_char, path::PathBuf};
 
 use anyhow::Context;
 use kameo::actor::Spawn;
-use sequencer_core::config::SequencerConfig;
+use sequencer_core::{config::SequencerConfig, load_or_create_signing_key};
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_storage_actor::StorageActor;
 
@@ -74,6 +74,11 @@ unsafe fn setup_sequencer(
         OperationStatus::InitializationError
     })?;
 
+    let gossip_config = config.gossip.clone();
+    let bedrock_config = config.bedrock_config.clone();
+    let sequencer_home = config.home.clone();
+    let max_block_size = config.max_block_size;
+
     // Use the caller's runtime if one was supplied, otherwise create (and own)
     // our own. The `Runtime` wrapper drops the underlying tokio runtime only
     // when we own it; a borrowed one is left to its external owner.
@@ -99,11 +104,49 @@ unsafe fn setup_sequencer(
 
     let executor = runtime.block_on(ExecutorActor::new(config, storage_ref.clone()));
 
-    // let mempool_handle = executor.mempool_handle();
+    let mempool_handle = executor.mempool_handle();
+
     let executor_ref = ExecutorActor::spawn(executor);
     log::info!("Executor Actor spawned");
 
-    Ok(SequencerServiceFFI::new(storage_ref, executor_ref, runtime))
+    // TODO: Should be a separate actor
+    let gossip_network = match gossip_config {
+        None => None,
+        Some(gossip_config) => {
+            // The node's L1 bedrock signing key is deliberately reused as the
+            // libp2p identity; `GossipNetwork::start` derives the keypair.
+            let signing_key = load_or_create_signing_key(
+                &sequencer_home.join("bedrock_signing_key"),
+            )
+            .map_err(|e| {
+                log::error!("Could not load signing key: {e}");
+                OperationStatus::InitializationError
+            })?;
+            let channel_id = *bedrock_config.channel_id.as_ref();
+            let network = runtime
+                .block_on(sequencer_core::gossip::GossipNetwork::start(
+                    gossip_config,
+                    channel_id,
+                    signing_key,
+                    mempool_handle,
+                    max_block_size.as_u64(),
+                ))
+                .context("Failed to start sequencer gossip network")
+                .map_err(|e| {
+                    log::error!("Could not start gossip network: {e}");
+                    OperationStatus::InitializationError
+                })?;
+            log::info!("Gossip network started as {}", network.local_peer_id());
+            Some(network)
+        }
+    };
+
+    Ok(SequencerServiceFFI::new(
+        storage_ref,
+        executor_ref,
+        gossip_network,
+        runtime,
+    ))
 }
 
 /// Stops and frees the resources associated with the given sequencer service.
