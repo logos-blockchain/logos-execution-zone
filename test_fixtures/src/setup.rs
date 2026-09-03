@@ -7,7 +7,6 @@ use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
-use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use sequencer_core::{
     block_publisher::ED25519_SECRET_KEY_SIZE,
     block_store::{DbDump, SequencerStore},
@@ -36,7 +35,6 @@ pub struct SequencerSetup {
     genesis_transactions: Option<Vec<GenesisAction>>,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
     bedrock_signing_key: Option<[u8; ED25519_SECRET_KEY_SIZE]>,
-    funding_key: Option<ZkPublicKey>,
 }
 
 impl SequencerSetup {
@@ -49,17 +47,7 @@ impl SequencerSetup {
             genesis_transactions: None,
             cross_zone: None,
             bedrock_signing_key: None,
-            funding_key: None,
         }
-    }
-
-    /// Override the Bedrock funding key (the node-custodied key the node funds
-    /// block-publish transactions from). Defaults to [`config::bedrock_funding_key`],
-    /// the local test node's key; the testnet demo sets the faucet key instead.
-    #[must_use]
-    pub const fn with_funding_key(mut self, funding_key: ZkPublicKey) -> Self {
-        self.funding_key = Some(funding_key);
-        self
     }
 
     /// Set the Bedrock channel ID to use for the sequencer.
@@ -117,7 +105,6 @@ impl SequencerSetup {
             genesis_transactions,
             cross_zone,
             bedrock_signing_key,
-            funding_key,
         } = self;
 
         debug!("Using sequencer home at {}", home.display());
@@ -149,7 +136,7 @@ impl SequencerSetup {
             home.to_owned(),
             bedrock_addr,
             channel_id,
-            funding_key.unwrap_or_else(config::bedrock_funding_key),
+            config::bedrock_funding_key(),
             genesis_transactions,
             cross_zone,
         )

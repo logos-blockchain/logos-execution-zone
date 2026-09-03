@@ -144,20 +144,6 @@ demo-cross-zone-bridge:
     @echo "🌉 Cross-zone bridge demo (lock on A, mint on B)"
     {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo test -p integration_tests --release --test cross_zone_bridge -- --nocapture
 
-# Demo: same cross-zone bridge, but both zones settle on the LIVE shared testnet
-# Bedrock node (testnet.blockchain.logos.co) instead of a local one. Real
-# channels, real L1 settlement, dev-mode proving. See docs runbook.
-demo-cross-zone-bridge-testnet:
-    @echo "🌉 Cross-zone bridge demo on the LIVE testnet Bedrock (lock on A, mint on B)"
-    {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo test -p integration_tests --release --test cross_zone_bridge_testnet lock_on_zone_a_mints_wrapped_token_on_zone_b_testnet -- --ignored --nocapture
-
-# Negative demo: the same lock, but zone B does not authorize the
-# bridge_lock -> wrapped_token route, so its watcher drops the message and
-# nothing is minted on B while zone A still escrows the lock.
-demo-cross-zone-bridge-testnet-unauthorized:
-    @echo "🚫 Cross-zone bridge demo, unauthorized route (lock on A, refused on B)"
-    {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo test -p integration_tests --release --test cross_zone_bridge_testnet lock_without_route_is_refused_on_zone_b_testnet -- --ignored --nocapture
-
 # Demo: interactive cross-zone chat. Boots two zones on one Bedrock and serves a
 # local two-column web UI; type in one zone and watch the message cross into the
 # other. Two people can chat across the zones. Dev mode, no proving.

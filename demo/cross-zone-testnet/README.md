@@ -124,6 +124,3 @@ Zone A still shows the lock (holder 70, escrow 30); zone B mints nothing.
 - Each run stamps a fresh channel pair (a fresh process regenerates its Bedrock
   signing key, so channels cannot be reused). Always run through run-native.sh,
   which calls prepare.sh; do not reuse channels across clean runs.
-- The Docker scripts (start-bedrock.sh, docker-compose.yml) are kept for reference
-  but do not work on Apple Silicon (the amd64 Bedrock image hangs under emulation).
-  Use the native path above.
