@@ -4,7 +4,7 @@ use common::HashType;
 use lee::{AccountId, program::Program};
 use lee_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 
-use super::{NativeTokenTransfer, auth_transfer_preparation};
+use super::{NativeTokenTransfer, auth_transfer_preparation, auth_transfer_program_with_deps};
 use crate::{AccountIdentity, ExecutionFailureKind};
 
 impl NativeTokenTransfer<'_> {
@@ -23,7 +23,7 @@ impl NativeTokenTransfer<'_> {
             .send_privacy_preserving_tx(
                 vec![account],
                 Program::serialize_instruction(instruction).unwrap(),
-                &programs::authenticated_transfer().into(),
+                &auth_transfer_program_with_deps(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -41,7 +41,7 @@ impl NativeTokenTransfer<'_> {
         to_identifier: Identifier,
         balance_to_move: u128,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
-        let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
+        let (instruction_data, _program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
 
         self.0
             .send_privacy_preserving_tx_with_pre_check(
@@ -56,7 +56,7 @@ impl NativeTokenTransfer<'_> {
                     },
                 ],
                 instruction_data,
-                &program.into(),
+                &auth_transfer_program_with_deps(),
                 tx_pre_check,
             )
             .await
@@ -74,7 +74,7 @@ impl NativeTokenTransfer<'_> {
         to: AccountId,
         balance_to_move: u128,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
-        let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
+        let (instruction_data, _program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
 
         let from_account = self
             .0
@@ -89,7 +89,7 @@ impl NativeTokenTransfer<'_> {
             .send_privacy_preserving_tx_with_pre_check(
                 vec![from_account, to_account],
                 instruction_data,
-                &program.into(),
+                &auth_transfer_program_with_deps(),
                 tx_pre_check,
             )
             .await

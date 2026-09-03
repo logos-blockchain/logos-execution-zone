@@ -1,13 +1,11 @@
 use borsh::to_vec;
 use lee_core::{
     account::AccountId,
-    program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+    program::{AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
-type Instruction = (ProgramId, ProgramId, AccountId, u128);
-// (faucet_program_id, vault_program_id, recipient_id, amount)
+type Instruction = (AccountId, AccountId, AccountId, u128);
+// (faucet_account_id, vault_account_id, recipient_id, amount)
 
 fn main() {
     let (
@@ -15,7 +13,7 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (faucet_program_id, vault_program_id, recipient_id, amount),
+            instruction: (faucet_account_id, vault_account_id, recipient_id, amount),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -26,16 +24,17 @@ fn main() {
         .collect();
 
     assert_eq!(pre_states.len(), 2);
+    let [faucet_pre, vault_pda_pre] = [pre_states[0].clone(), pre_states[1].clone()];
 
     let chained_calls = vec![ChainedCall {
-        program_account_id: faucet_program_id.into(),
+        program_account_id: faucet_account_id,
         instruction_data: to_vec(&faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
+            vault_account_id,
             recipient_id,
             amount,
         })
         .unwrap(),
-        pre_state_ids: vec![pre_states[0].account_id, pre_states[1].account_id],
+        pre_state_ids: vec![faucet_pre.account_id, vault_pda_pre.account_id],
         pda_seeds: vec![],
     }];
 

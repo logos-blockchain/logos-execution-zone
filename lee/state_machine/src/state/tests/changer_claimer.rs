@@ -7,7 +7,7 @@ fn public_changer_claimer_no_data_change_no_claim_succeeds() {
         .with_public_accounts(public_state_from_balances(&initial_data))
         .with_test_programs();
     let account_id = AccountId::new([1; 32]);
-    let account_id_for_message: AccountId = crate::test_methods::changer_claimer().id().into();
+    let account_id_for_message = crate::test_methods::changer_claimer().deployed_account_id();
     // Don't change data (None) and don't claim (false)
     let instruction: (Option<Vec<u8>>, bool) = (None, false);
 
@@ -36,7 +36,7 @@ fn public_changer_claimer_data_change_no_claim_fails() {
         .with_public_accounts(public_state_from_balances(&initial_data))
         .with_test_programs();
     let account_id = AccountId::new([1; 32]);
-    let account_id_for_message: AccountId = crate::test_methods::changer_claimer().id().into();
+    let account_id_for_message = crate::test_methods::changer_claimer().deployed_account_id();
     // Change data but don't claim (false) - should fail
     let new_data = vec![1, 2, 3, 4, 5];
     let instruction: (Option<Vec<u8>>, bool) = (Some(new_data), false);

@@ -13,4 +13,5 @@ faucet_core.workspace = true
 bridge_core.workspace = true
 clock_core.workspace = true
 sequencer_stake_core.workspace = true
+program_loader_core.workspace = true
 programs.workspace = true

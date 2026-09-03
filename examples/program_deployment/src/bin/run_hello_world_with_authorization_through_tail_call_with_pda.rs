@@ -46,13 +46,14 @@ async fn main() {
     let program = Program::new(bytecode.into()).unwrap();
 
     // Compute the PDA to pass it as input account to the public execution
-    let pda = AccountId::for_public_pda(&program.id(), &PDA_SEED);
+    let program_account_id = program.deployed_account_id();
+    let pda = AccountId::for_public_pda(&program_account_id, &PDA_SEED);
     let account_ids = vec![pda];
     let instruction_data = ();
     let nonces = vec![];
     let signing_keys = [];
     let message =
-        Message::try_new(program.id().into(), account_ids, nonces, instruction_data).unwrap();
+        Message::try_new(program_account_id, account_ids, nonces, instruction_data).unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 

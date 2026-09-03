@@ -79,13 +79,14 @@ impl TpsTestManager {
         sequencer_client: &sequencer_service_rpc::SequencerClient,
     ) -> Result<()> {
         let vault_program_id = programs::vault().id();
+        let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
 
         let mut tx_hashes = Vec::with_capacity(self.public_keypairs.len());
         for (private_key, account_id) in &self.public_keypairs {
             let owner_vault_id =
-                vault_core::compute_vault_account_id(vault_program_id, *account_id);
+                vault_core::compute_vault_account_id(vault_account_id, *account_id);
             let message = putx::Message::try_new(
-                vault_program_id.into(),
+                program_loader_core::immutable_deploy_account_id(vault_program_id),
                 vec![*account_id, owner_vault_id],
                 vec![Nonce(0_u128)],
                 vault_core::Instruction::Claim { amount: 10 },
@@ -135,7 +136,7 @@ impl TpsTestManager {
             .map(|pair| {
                 let amount: u128 = 1;
                 let message = putx::Message::try_new(
-                    program.id().into(),
+                    program_loader_core::immutable_deploy_account_id(program.id()),
                     [pair[0].1, pair[1].1].to_vec(),
                     [Nonce(1_u128)].to_vec(),
                     authenticated_transfer_core::Instruction::Transfer { amount },
@@ -270,7 +271,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         Account {
             balance: 100,
             nonce: Nonce(0xdead_beef),
-            program_owner: program.id().into(),
+            program_owner: program_loader_core::immutable_deploy_account_id(program.id()),
             data: Data::default(),
         },
         true,

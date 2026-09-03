@@ -5,15 +5,17 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
     account::{Account, AccountId, Data},
-    program::{PROGRAM_STORAGE_OWNER, TransactionEvent},
+    program::{
+        PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment, TransactionEvent,
+    },
 };
+pub use program_loader_core::MAX_PROGRAM_SEGMENTS;
 
 use crate::{
     error::LeeError,
     merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
     program::Program,
-    program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
     validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
@@ -112,6 +114,9 @@ impl BorshDeserialize for NullifierSet {
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
 pub struct V03State {
+    /// Deployed programs live here too, findable via [`Self::get_program`]: a header account
+    /// (`Account.data` decodes as [`ProgramHeader`]) plus a segment chain holding the bytecode,
+    /// linked via [`ProgramSegment::next_segment`], all owned by [`PROGRAM_LOADER_ACCOUNT_ID`].
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
 }
@@ -193,15 +198,50 @@ impl V03State {
         self
     }
 
+    /// Seeds a program directly into state as a header plus a tail-to-head segment chain (see
+    /// [`Self::get_program`]). The header lives at the bijection of `image_id`
+    /// ([`program_loader_core::immutable_deploy_account_id`]); segments live at a
+    /// genesis-only deterministic address ([`program_loader_core::genesis_segment_account_id`]),
+    /// since genesis has no signer to claim arbitrary accounts with.
     pub(crate) fn insert_program(&mut self, program: &Program) {
-        let account_id = AccountId::from(program.id());
-        let account = Account {
-            program_owner: PROGRAM_STORAGE_OWNER,
-            data: Data::try_from(program.elf().to_vec())
-                .expect("elf must fit under DATA_MAX_LENGTH"),
+        let image_id = program.id();
+        let header_account_id = program_loader_core::immutable_deploy_account_id(image_id);
+
+        let chunks: Vec<&[u8]> = program
+            .elf()
+            .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+            .collect();
+        assert!(!chunks.is_empty(), "a program's bytecode cannot be empty");
+
+        let mut next_segment = None;
+        for (index, chunk) in chunks.iter().enumerate().rev() {
+            let segment_number = u32::try_from(index).expect("segment count fits in a u32");
+            let segment_account_id =
+                program_loader_core::genesis_segment_account_id(header_account_id, segment_number);
+            let segment_account = Account {
+                program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+                data: Data::from(&ProgramSegment {
+                    bytecode: (*chunk).to_vec(),
+                    next_segment,
+                }),
+                ..Account::default()
+            };
+            self.public_state
+                .insert(segment_account_id, segment_account);
+            next_segment = Some(segment_account_id);
+        }
+        let first_segment = next_segment.expect("at least one chunk was inserted above");
+
+        let header_account = Account {
+            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+            data: Data::from(&ProgramHeader {
+                image_id,
+                program_first_segment: first_segment,
+                immutable: true,
+            }),
             ..Account::default()
         };
-        self.public_state.insert(account_id, account);
+        self.public_state.insert(header_account_id, header_account);
     }
 
     #[must_use]
@@ -256,15 +296,6 @@ impl V03State {
         Ok(())
     }
 
-    pub fn transition_from_program_deployment_transaction(
-        &mut self,
-        tx: &ProgramDeploymentTransaction,
-    ) -> Result<(), LeeError> {
-        let diff = ValidatedStateDiff::from_program_deployment_transaction(tx, self)?;
-        drop(self.apply_state_diff(diff));
-        Ok(())
-    }
-
     fn get_account_by_id_mut(&mut self, account_id: AccountId) -> &mut Account {
         self.public_state.entry(account_id).or_default()
     }
@@ -283,16 +314,33 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
-    /// Looks up a deployed program's storage account by its `AccountId`, verifying it is
-    /// actually owned by [`PROGRAM_STORAGE_OWNER`].
+    /// Looks up a deployed program's real `image_id` and bytecode by its `AccountId`.
     ///
-    /// An account that lacks this ownership isn't a deployed program, whatever its contents —
-    /// this is the single place that distinction is enforced, so callers never have to remember
-    /// to re-check it themselves.
+    /// Recognizes only accounts owned by [`PROGRAM_LOADER_ACCOUNT_ID`] whose data decodes as a
+    /// [`ProgramHeader`]; bytecode is reconstructed by walking the segment chain from
+    /// `header.program_first_segment` via [`ProgramSegment::next_segment`] and concatenating.
+    ///
+    /// `Ok(None)` means no such program exists, including a chain still missing a segment.
+    /// `Err(LeeError::InvalidProgramBytecode(_))` means either the chain exceeds
+    /// [`MAX_PROGRAM_SEGMENTS`] or every segment exists but the reconstructed bytecode doesn't
+    /// hash to the `image_id` the header declares.
+    pub fn get_program(
+        &self,
+        program_account_id: AccountId,
+    ) -> Result<Option<(ProgramId, Vec<u8>)>, LeeError> {
+        get_program_via(program_account_id, |id| self.get_account_by_id(id))
+    }
+
+    /// The `image_id` a deployed program's header declares, without reading its bytecode.
     #[must_use]
-    pub fn get_program(&self, program_account_id: AccountId) -> Option<&Account> {
+    pub fn get_program_image_id(&self, program_account_id: AccountId) -> Option<ProgramId> {
         let account = self.get_account_by_id_ref(program_account_id)?;
-        (account.program_owner == PROGRAM_STORAGE_OWNER).then_some(account)
+        if account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
+            return None;
+        }
+        ProgramHeader::try_from(&account.data)
+            .ok()
+            .map(|header| header.image_id)
     }
 
     #[must_use]
@@ -374,13 +422,64 @@ impl V03State {
         }
         Ok(())
     }
-}
 
-#[cfg(any(test, feature = "test-utils"))]
-impl V03State {
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert(account_id, account);
     }
+}
+
+/// [`V03State::get_program`]'s core, parameterized over an account `lookup` closure.
+///
+/// `Ok(None)` means no such program exists, including a chain still missing a segment.
+/// `Err(LeeError::InvalidProgramBytecode(_))` means either the chain exceeds
+/// [`MAX_PROGRAM_SEGMENTS`] or every segment exists but the reconstructed bytecode doesn't
+/// hash to the `image_id` the header declares.
+pub fn get_program_via(
+    program_account_id: AccountId,
+    lookup: impl Fn(AccountId) -> Account,
+) -> Result<Option<(ProgramId, Vec<u8>)>, LeeError> {
+    let account = lookup(program_account_id);
+    if account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
+        return Ok(None);
+    }
+    let Ok(header) = ProgramHeader::try_from(&account.data) else {
+        return Ok(None);
+    };
+
+    let mut elf = Vec::new();
+    let mut next = Some(header.program_first_segment);
+    let mut segment_count = 0_usize;
+    while let Some(segment_account_id) = next {
+        segment_count = segment_count.saturating_add(1);
+        if segment_count > MAX_PROGRAM_SEGMENTS {
+            return Err(LeeError::InvalidProgramBytecode(anyhow::anyhow!(
+                "segment chain for {program_account_id} exceeds the {MAX_PROGRAM_SEGMENTS}-segment cap"
+            )));
+        }
+        let segment_account = lookup(segment_account_id);
+        if segment_account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
+            return Ok(None);
+        }
+        let Ok(segment) = ProgramSegment::try_from(&segment_account.data) else {
+            return Ok(None);
+        };
+        elf.extend_from_slice(&segment.bytecode);
+        next = segment.next_segment;
+    }
+
+    let real_image_id: ProgramId = risc0_binfmt::compute_image_id(&elf)
+        .map_err(LeeError::InvalidProgramBytecode)?
+        .into();
+    if real_image_id != header.image_id {
+        return Err(LeeError::InvalidProgramBytecode(anyhow::anyhow!(
+            "reconstructed elf for {program_account_id} has image_id {real_image_id:?}, \
+             header declares {:?}",
+            header.image_id
+        )));
+    }
+
+    Ok(Some((header.image_id, elf)))
 }
 
 #[cfg(test)]

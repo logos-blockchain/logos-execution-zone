@@ -154,7 +154,9 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
 
             let mut acc = init_comm_data.account.clone();
 
-            acc.program_owner = programs::authenticated_transfer().id().into();
+            acc.program_owner = program_loader_core::immutable_deploy_account_id(
+                programs::authenticated_transfer().id(),
+            );
 
             (
                 lee_core::Commitment::new(&account_id, &acc),
@@ -190,7 +192,9 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             (
                 acc_data.account_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
+                    program_owner: program_loader_core::immutable_deploy_account_id(
+                        programs::authenticated_transfer().id(),
+                    ),
                     balance: acc_data.balance,
                     ..Default::default()
                 },
@@ -451,29 +455,31 @@ mod tests {
     #[test]
     fn cross_zone_builtins_register_only_when_declared() {
         let cross_zone_ids = [
-            programs::cross_zone_inbox().id(),
-            programs::cross_zone_outbox().id(),
-            programs::ping_sender().id(),
-            programs::ping_receiver().id(),
-            programs::bridge_lock().id(),
-            programs::wrapped_token().id(),
+            programs::cross_zone_inbox().deployed_account_id(),
+            programs::cross_zone_outbox().deployed_account_id(),
+            programs::ping_sender().deployed_account_id(),
+            programs::ping_receiver().deployed_account_id(),
+            programs::bridge_lock().deployed_account_id(),
+            programs::wrapped_token().deployed_account_id(),
         ];
         let with = initial_state(true);
         let without = initial_state(false);
         for id in cross_zone_ids {
             assert!(
-                with.get_program(id.into()).is_some(),
+                with.get_program(id).unwrap().is_some(),
                 "registered when declared"
             );
             assert!(
-                without.get_program(id.into()).is_none(),
+                without.get_program(id).unwrap().is_none(),
                 "absent when not declared"
             );
         }
         assert!(
             without
-                .get_program(programs::faucet().id().into())
-                .is_some()
+                .get_program(programs::faucet().deployed_account_id())
+                .unwrap()
+                .is_some(),
+            "non-cross-zone builtins are unaffected by the gate"
         );
     }
 }

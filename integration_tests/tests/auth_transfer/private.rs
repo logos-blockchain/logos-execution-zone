@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
     public_mention,
@@ -22,6 +21,9 @@ use lee_core::{
     encryption::ViewingPublicKey,
 };
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 use wallet::{
     account::Label,
@@ -386,7 +388,7 @@ async fn initialize_private_account() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
     assert_eq!(account.balance, 0);
     assert!(account.data.is_empty());
@@ -465,7 +467,7 @@ async fn initialize_private_account_using_label() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
 
     log::info!("Successfully initialized private account using label");
@@ -579,21 +581,24 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
 
 #[test]
 async fn ppt_cant_chain_call_faucet() -> Result<()> {
-    let ctx = TestContext::new().await?;
-
     let faucet_chain_caller = test_programs::faucet_chain_caller();
-    let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-        lee::program_deployment_transaction::Message::new(faucet_chain_caller.elf().to_owned()),
-    ));
-    ctx.sequencer_client().send_transaction(deploy_tx).await?;
+    // Seeded into genesis: a live Deploy has no predictable dispatch address anymore.
+    let faucet_chain_caller_header =
+        program_loader_core::immutable_deploy_account_id(faucet_chain_caller.id());
 
-    log::info!("Waiting for deploy block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_extra_genesis_programs(vec![faucet_chain_caller.clone()]),
+        )
+        .build()
+        .await?;
 
     let faucet_account_id = system_accounts::faucet_account_id();
     let attacker_id = ctx.existing_public_accounts()[0];
     let faucet_program_id = programs::faucet().id();
     let vault_program_id = programs::vault().id();
+    let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
     let auth_transfer_program_id = programs::authenticated_transfer().id();
     let ask = lee_core::AuthorizationSecretKey([3; 32]);
     let nsk = lee_core::NullifierSecretKey::from(&ask);
@@ -601,7 +606,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let attacker_vault_id = {
         let seed = vault_core::compute_vault_seed(attacker_id);
-        AccountId::for_private_pda(&vault_program_id, &seed, &npk, &vpk, 1337)
+        AccountId::for_private_pda(&vault_account_id, &seed, &npk, &vpk, 1337)
     };
     let amount: u128 = 1;
 
@@ -619,15 +624,26 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let program_with_deps = ProgramWithDependencies::new(
         faucet_chain_caller,
         [
-            (faucet_program_id, programs::faucet()),
-            (vault_program_id, programs::vault()),
-            (auth_transfer_program_id, programs::authenticated_transfer()),
+            (
+                program_loader_core::immutable_deploy_account_id(faucet_program_id),
+                programs::faucet(),
+            ),
+            (vault_account_id, programs::vault()),
+            (
+                program_loader_core::immutable_deploy_account_id(auth_transfer_program_id),
+                programs::authenticated_transfer(),
+            ),
         ]
         .into(),
-    );
+    )
+    .with_program_account_id(faucet_chain_caller_header);
 
-    let instruction =
-        Program::serialize_instruction((faucet_program_id, vault_program_id, attacker_id, amount))?;
+    let instruction = Program::serialize_instruction((
+        program_loader_core::immutable_deploy_account_id(faucet_program_id),
+        vault_account_id,
+        attacker_id,
+        amount,
+    ))?;
 
     let res = execute_and_prove(
         vec![faucet_pre, vault_pda_pre],
@@ -672,6 +688,7 @@ async fn prove_init_with_commitment_root(
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
     let recipient = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
 
+    let program_id = program.id();
     let (output, _) = execute_and_prove(
         vec![sender_pre, recipient],
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
@@ -690,7 +707,8 @@ async fn prove_init_with_commitment_root(
                 },
             }),
         ],
-        &program.into(),
+        &ProgramWithDependencies::new(program, [].into())
+            .with_program_account_id(program_loader_core::immutable_deploy_account_id(program_id)),
     )?;
 
     Ok(output)

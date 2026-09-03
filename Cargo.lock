@@ -153,6 +153,7 @@ dependencies = [
  "amm_core",
  "lee",
  "lee_core",
+ "program_loader_core",
  "programs",
  "token_core",
 ]
@@ -1271,6 +1272,7 @@ dependencies = [
  "bridge_lock_core",
  "cross_zone_outbox_core",
  "lee_core",
+ "program_loader_core",
  "risc0-zkvm",
  "wrapped_token_core",
 ]
@@ -1807,6 +1809,7 @@ dependencies = [
  "lee_core",
  "log",
  "logos-blockchain-common-http-client",
+ "program_loader_core",
  "programs",
  "serde",
  "serde_with",
@@ -2110,6 +2113,7 @@ dependencies = [
  "lee",
  "lee_core",
  "ping_core",
+ "program_loader_core",
  "programs",
  "wrapped_token_core",
 ]
@@ -2128,6 +2132,7 @@ dependencies = [
  "lee",
  "log",
  "ping_core",
+ "program_loader_core",
  "programs",
  "rand 0.8.6",
  "sequencer_service_rpc",
@@ -2151,7 +2156,6 @@ name = "cross_zone_inbox_program"
 version = "0.1.0"
 dependencies = [
  "cross_zone_inbox_core",
- "cross_zone_marker_core",
  "lee_core",
 ]
 
@@ -3179,6 +3183,7 @@ dependencies = [
  "bytemuck",
  "hex",
  "lee_core",
+ "program_loader_core",
  "risc0-zkvm",
 ]
 
@@ -4608,6 +4613,7 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-zone-sdk",
  "ping_core",
+ "program_loader_core",
  "programs",
  "serde",
  "serde_json",
@@ -4795,7 +4801,9 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
  "ping_core",
+ "program_loader_core",
  "programs",
+ "risc0-binfmt",
  "sequencer_core",
  "sequencer_service",
  "sequencer_service_rpc",
@@ -9140,9 +9148,10 @@ dependencies = [
 name = "ping_receiver_program"
 version = "0.1.0"
 dependencies = [
- "cross_zone_marker_core",
+ "cross_zone_inbox_core",
  "lee_core",
  "ping_core",
+ "program_loader_core",
 ]
 
 [[package]]
@@ -9501,6 +9510,7 @@ dependencies = [
  "lee",
  "lee_core",
  "ping_core",
+ "program_loader_core",
  "risc0-zkvm",
  "sequencer_stake_core",
  "token_core",
@@ -11196,6 +11206,7 @@ dependencies = [
  "lee",
  "log",
  "metrics-exporter-prometheus",
+ "program_loader_core",
  "programs",
  "sequencer_core",
  "sequencer_executor_actor",
@@ -12106,6 +12117,7 @@ dependencies = [
  "clock_core",
  "faucet_core",
  "lee_core",
+ "program_loader_core",
  "programs",
  "sequencer_stake_core",
 ]
@@ -12311,6 +12323,7 @@ dependencies = [
  "clock_core",
  "faucet_core",
  "lee_core",
+ "program_loader_core",
  "risc0-zkvm",
 ]
 
@@ -12513,6 +12526,7 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
+ "program_loader_core",
  "programs",
  "serde",
  "system_accounts",
@@ -13641,6 +13655,7 @@ dependencies = [
  "lee_core",
  "log",
  "optfield",
+ "program_loader_core",
  "programs",
  "rand 0.8.6",
  "rpassword",
@@ -13669,6 +13684,7 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
+ "program_loader_core",
  "programs",
  "serde_json",
  "tokio",
@@ -14443,8 +14459,9 @@ dependencies = [
 name = "wrapped_token_program"
 version = "0.1.0"
 dependencies = [
- "cross_zone_marker_core",
+ "cross_zone_inbox_core",
  "lee_core",
+ "program_loader_core",
  "wrapped_token_core",
 ]
 

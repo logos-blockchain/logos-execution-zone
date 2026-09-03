@@ -1,13 +1,16 @@
 use borsh::to_vec;
-use lee_core::program::{
-    AccountPostState, ChainedCall, Claim, InstructionData, PdaSeed, ProgramId, ProgramInput,
-    ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountPostState, ChainedCall, Claim, InstructionData, PdaSeed, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_inputs,
+    },
 };
 
 type Instruction = (
     PdaSeed,
     PdaSeed,
-    ProgramId,
+    AccountId,
     InstructionData,
     Option<(ProgramId, bool)>,
 );
@@ -19,7 +22,7 @@ fn main() {
             caller_account_id,
             pre_states,
             instruction:
-                (claim_seed, delegated_seed, callee_program_id, callee_instruction, sibling),
+                (claim_seed, delegated_seed, callee_account_id, callee_instruction, sibling),
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
@@ -31,7 +34,7 @@ fn main() {
     // Delegate the PDA to the callee via `pda_seeds` — the protocol resolves its
     // authorization there from the seed match, not from anything supplied here.
     let mut chained_calls = vec![ChainedCall {
-        program_account_id: callee_program_id.into(),
+        program_account_id: callee_account_id,
         instruction_data: callee_instruction,
         pre_state_ids: std::iter::once(pda.account_id)
             .chain(rest.iter().map(|r| r.account_id))

@@ -1,9 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee_core::account::{AccountId, AccountWithMetadata};
 pub use lee_core::program::PdaSeed;
-use lee_core::{
-    account::{AccountId, AccountWithMetadata},
-    program::ProgramId,
-};
 
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
@@ -15,8 +12,9 @@ pub enum Instruction {
     /// - Token definition account
     /// - Associated token account (default/uninitialized, or already initialized)
     ///
-    /// `token_program_id` is derived from `token_definition.account.program_owner`.
-    Create { ata_program_id: ProgramId },
+    /// The token program's dispatch address is read from
+    /// `token_definition.account.program_owner`.
+    Create,
 
     /// Transfer tokens FROM owner's ATA to a recipient holding account.
     /// Uses PDA seeds to authorize the ATA in the chained Token::Transfer call.
@@ -26,11 +24,9 @@ pub enum Instruction {
     /// - Sender ATA (owner's token holding)
     /// - Recipient token holding (any account; auto-created if default)
     ///
-    /// `token_program_id` is derived from `sender_ata.account.program_owner`.
-    Transfer {
-        ata_program_id: ProgramId,
-        amount: u128,
-    },
+    /// The token program's dispatch address is read from
+    /// `sender_ata.account.program_owner`.
+    Transfer { amount: u128 },
 
     /// Burn tokens FROM owner's ATA.
     /// Uses PDA seeds to authorize the ATA in the chained Token::Burn call.
@@ -40,11 +36,8 @@ pub enum Instruction {
     /// - Owner's ATA (the holding to burn from)
     /// - Token definition account
     ///
-    /// `token_program_id` is derived from `holder_ata.account.program_owner`.
-    Burn {
-        ata_program_id: ProgramId,
-        amount: u128,
-    },
+    /// The token program's dispatch address is read from `holder_ata.account.program_owner`.
+    Burn { amount: u128 },
 }
 
 pub fn compute_ata_seed(owner_id: AccountId, definition_id: AccountId) -> PdaSeed {
@@ -60,7 +53,7 @@ pub fn compute_ata_seed(owner_id: AccountId, definition_id: AccountId) -> PdaSee
     )
 }
 
-pub fn get_associated_token_account_id(ata_program_id: &ProgramId, seed: &PdaSeed) -> AccountId {
+pub fn get_associated_token_account_id(ata_program_id: &AccountId, seed: &PdaSeed) -> AccountId {
     AccountId::for_public_pda(ata_program_id, seed)
 }
 
@@ -70,7 +63,7 @@ pub fn verify_ata_and_get_seed(
     ata_account: &AccountWithMetadata,
     owner: &AccountWithMetadata,
     definition_id: AccountId,
-    ata_program_id: ProgramId,
+    ata_program_id: AccountId,
 ) -> PdaSeed {
     let seed = compute_ata_seed(owner.account_id, definition_id);
     let expected_id = get_associated_token_account_id(&ata_program_id, &seed);

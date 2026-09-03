@@ -15,44 +15,41 @@ fn main() {
     let pre_states_clone = pre_states.clone();
 
     let (post_states, chained_calls) = match instruction {
-        Instruction::Create { ata_program_id } => {
+        Instruction::Create => {
             let [owner, token_definition, ata_account] = pre_states
                 .try_into()
                 .expect("Create instruction requires exactly three accounts");
+            let ata_account_id = self_account_id;
             associated_token_account_program::create::create_associated_token_account(
                 owner,
                 token_definition,
                 ata_account,
-                ata_program_id,
+                ata_account_id,
             )
         }
-        Instruction::Transfer {
-            ata_program_id,
-            amount,
-        } => {
+        Instruction::Transfer { amount } => {
             let [owner, sender_ata, recipient] = pre_states
                 .try_into()
                 .expect("Transfer instruction requires exactly three accounts");
+            let ata_account_id = self_account_id;
             associated_token_account_program::transfer::transfer_from_associated_token_account(
                 owner,
                 sender_ata,
                 recipient,
-                ata_program_id,
+                ata_account_id,
                 amount,
             )
         }
-        Instruction::Burn {
-            ata_program_id,
-            amount,
-        } => {
+        Instruction::Burn { amount } => {
             let [owner, holder_ata, token_definition] = pre_states
                 .try_into()
                 .expect("Burn instruction requires exactly three accounts");
+            let ata_account_id = self_account_id;
             associated_token_account_program::burn::burn_from_associated_token_account(
                 owner,
                 holder_ata,
                 token_definition,
-                ata_program_id,
+                ata_account_id,
                 amount,
             )
         }

@@ -47,6 +47,13 @@ impl Program {
         &self.elf
     }
 
+    /// The address this program dispatches at once seeded via [`crate::V03State::with_programs`]
+    /// — the bijection of `self.id()` (see `program_loader_core::immutable_deploy_account_id`).
+    #[must_use]
+    pub fn deployed_account_id(&self) -> AccountId {
+        program_loader_core::immutable_deploy_account_id(self.id)
+    }
+
     pub fn serialize_instruction<T: BorshSerialize>(
         instruction: T,
     ) -> Result<InstructionData, LeeError> {
@@ -56,6 +63,7 @@ impl Program {
 
     pub(crate) fn execute(
         &self,
+        self_account_id: AccountId,
         caller_account_id: Option<AccountId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &InstructionData,
@@ -64,7 +72,7 @@ impl Program {
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
         Self::write_inputs(
-            AccountId::from(self.id),
+            self_account_id,
             caller_account_id,
             pre_states,
             instruction_data,

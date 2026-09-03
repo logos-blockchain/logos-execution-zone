@@ -910,20 +910,20 @@ enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
  * Produce account id for public PDA.
  *
  * # Parameters
- * - `program_id`: Id of the owner program
+ * - `program_account_id`: dispatch address of the owner program
  * - `pda_seed`: 32 byte seed
  *
  * # Returns
  * - `FfiBytes32` representing account id bytes
  */
-struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId program_id,
+struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiBytes32 program_account_id,
                                                        FfiPdaSeed pda_seed);
 
 /**
  * Produce account id for private PDA.
  *
  * # Parameters
- * - `program_id`: Id of the owner program
+ * - `program_account_id`: dispatch address of the owner program
  * - `pda_seed`: 32 byte seed
  * - `npk`: 32 byte nullifier public key (can be obtained from
  *   `wallet_ffi_get_private_account_keys`)
@@ -942,7 +942,7 @@ struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId progr
  * - `viewing_public_key` must be a valid pointer to a `u8`
  * - `account_id` must be a valid pointer to a `FfiBytes32` struct
  */
-enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiProgramId program_id,
+enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiBytes32 program_account_id,
                                                           FfiPdaSeed pda_seed,
                                                           FfiNullifierPublicKey npk,
                                                           const uint8_t *viewing_public_key,
@@ -1057,32 +1057,103 @@ enum WalletFfiError wallet_ffi_claim_pinata_private_owned_not_initialized(struct
                                                                           struct FfiTransferResult *out_result);
 
 /**
- * Send a program deployment transaction.
- *
- * Publishes program for future use.
- *
- * # Parameters
- * - `handle`: Valid wallet handle
- * - `elf_data`: Valid pointer to elf data in bytes
- * - `elf_size`: Size of elf data
- * - `out_result`: Output pointer for transfer result
- *
- * # Returns
- * - `Success` if deployment was submitted successfully
- * - Error code on other failures
- *
- * # Memory
- * The result must be freed with `wallet_ffi_free_transaction_result()`.
+ * Writes one `program_loader` bytecode segment.
  *
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `elf_data` must be a valid pointer to elf data
- * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
+ * - `target` must be a valid pointer to a `FfiBytes32`; the wallet must hold its signing key
+ * - `bytecode_data` must be a valid pointer to `bytecode_size` bytes
+ * - `next_segment` may be null (meaning this is the chain's last segment), otherwise a valid
+ *   pointer to a `FfiBytes32` for an already-uploaded segment
+ * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
  */
-enum WalletFfiError wallet_ffi_program_deployment(struct WalletHandle *handle,
-                                                  const uint8_t *elf_data,
-                                                  uintptr_t elf_size,
-                                                  struct FfiTransactionResult *out_result);
+enum WalletFfiError wallet_ffi_program_loader_new_segment(struct WalletHandle *handle,
+                                                          const struct FfiBytes32 *target,
+                                                          const uint8_t *bytecode_data,
+                                                          uintptr_t bytecode_size,
+                                                          const struct FfiBytes32 *next_segment,
+                                                          struct FfiTransactionResult *out_result);
+
+/**
+ * Creates a new `program_loader` header pointing at an already-uploaded segment chain.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `target` must be a valid pointer to a `FfiBytes32`; the wallet must hold its signing key
+ * - `first_segment` must be a valid pointer to a `FfiBytes32` for an already-uploaded segment
+ * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
+ */
+enum WalletFfiError wallet_ffi_program_loader_upload_header(struct WalletHandle *handle,
+                                                            const struct FfiBytes32 *target,
+                                                            const struct FfiBytes32 *first_segment,
+                                                            bool immutable,
+                                                            struct FfiTransactionResult *out_result);
+
+/**
+ * Rewrites an existing `program_loader` header to point at a different (already-uploaded)
+ * segment chain.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `header` must be a valid pointer to a `FfiBytes32` for an existing header the wallet is still
+ *   authorized over
+ * - `first_segment` must be a valid pointer to a `FfiBytes32` for an already-uploaded segment
+ * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
+ */
+enum WalletFfiError wallet_ffi_program_loader_update_header(struct WalletHandle *handle,
+                                                            const struct FfiBytes32 *header,
+                                                            const struct FfiBytes32 *first_segment,
+                                                            bool immutable,
+                                                            struct FfiTransactionResult *out_result);
+
+/**
+ * Deploys a new program from `elf_data`.
+ *
+ * Chunks `elf_data`, uploads one segment per account in `segments`, then creates `header`
+ * pointing at the resulting chain. `segments_len` must exactly match the number of chunks
+ * `elf_data` splits into.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `header` must be a valid pointer to a `FfiBytes32`; the wallet must hold its signing key
+ * - `segments` must be a valid pointer to `segments_len` contiguous `FfiBytes32`s, in chain order
+ *   (first chunk first); the wallet must hold every segment's signing key
+ * - `elf_data` must be a valid pointer to `elf_size` bytes
+ * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
+ */
+enum WalletFfiError wallet_ffi_program_loader_deploy(struct WalletHandle *handle,
+                                                     const struct FfiBytes32 *header,
+                                                     const struct FfiBytes32 *segments,
+                                                     uintptr_t segments_len,
+                                                     const uint8_t *elf_data,
+                                                     uintptr_t elf_size,
+                                                     bool immutable,
+                                                     struct FfiTransactionResult *out_result);
+
+/**
+ * Updates an existing program in place with `elf_data`.
+ *
+ * Chunks `elf_data`, uploads a fresh set of segments (segments are write-once), then rewrites
+ * `header` to point at them. `segments_len` must exactly match the number of chunks `elf_data`
+ * splits into.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `header` must be a valid pointer to a `FfiBytes32` for an existing header the wallet is still
+ *   authorized over
+ * - `segments` must be a valid pointer to `segments_len` contiguous `FfiBytes32`s, in chain order;
+ *   the wallet must hold every segment's signing key
+ * - `elf_data` must be a valid pointer to `elf_size` bytes
+ * - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
+ */
+enum WalletFfiError wallet_ffi_program_loader_update(struct WalletHandle *handle,
+                                                     const struct FfiBytes32 *header,
+                                                     const struct FfiBytes32 *segments,
+                                                     uintptr_t segments_len,
+                                                     const uint8_t *elf_data,
+                                                     uintptr_t elf_size,
+                                                     bool immutable,
+                                                     struct FfiTransactionResult *out_result);
 
 /**
  * Writes elf data of authenticated transfer program into buffer.

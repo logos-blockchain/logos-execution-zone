@@ -7,7 +7,7 @@ fn transition_from_authenticated_transfer_program_invocation_default_account_des
     let initial_data = [(
         account_id,
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+            program_owner: crate::test_methods::simple_balance_transfer().deployed_account_id(),
             balance: 100,
             ..Account::default()
         },
@@ -64,7 +64,7 @@ fn transition_from_authenticated_transfer_program_invocation_non_default_account
         (
             account_id1,
             Account {
-                program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+                program_owner: crate::test_methods::simple_balance_transfer().deployed_account_id(),
                 balance: 100,
                 ..Account::default()
             },
@@ -72,7 +72,7 @@ fn transition_from_authenticated_transfer_program_invocation_non_default_account
         (
             account_id2,
             Account {
-                program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+                program_owner: crate::test_methods::simple_balance_transfer().deployed_account_id(),
                 balance: 200,
                 ..Account::default()
             },
@@ -106,7 +106,7 @@ fn transition_from_sequence_of_authenticated_transfer_program_invocations() {
     let initial_data = [(
         account_id1,
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+            program_owner: crate::test_methods::simple_balance_transfer().deployed_account_id(),
             balance: 100,
             ..Account::default()
         },

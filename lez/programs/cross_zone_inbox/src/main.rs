@@ -1,14 +1,11 @@
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, SeenShard, inbox_config_account_id,
     inbox_config_seed, inbox_seen_shard_account_id, inbox_seen_shard_seed,
+    inbox_source_marker_account_id,
 };
-use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
-    program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
-    },
+    program::{AccountPostState, ChainedCall, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 fn unchanged(pre: &AccountWithMetadata) -> AccountPostState {
@@ -32,14 +29,14 @@ fn main() {
     );
 
     match instruction {
-        Instruction::Dispatch(msg) => dispatch(
+        Instruction::Dispatch { message } => dispatch(
             self_account_id,
             caller_account_id,
             pre_states,
             instruction_data,
-            &msg,
+            &message,
         ),
-        Instruction::InitConfig(config) => init_config(
+        Instruction::InitConfig { config } => init_config(
             self_account_id,
             caller_account_id,
             pre_states,
@@ -76,11 +73,6 @@ fn dispatch(
         "l1_inclusion_witness must be None in v1"
     );
 
-    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
-    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
-    // for the PDA-derivation helpers below, which are pinned to the actual image id.
-    let self_program_id = ProgramId::from(self_account_id);
-
     // pre_states layout: [config, seen_shard, source marker, then the target accounts].
     let mut accounts = pre_states.into_iter();
     let config = accounts.next().expect("config account required");
@@ -90,12 +82,12 @@ fn dispatch(
 
     assert_eq!(
         config.account_id,
-        inbox_config_account_id(self_program_id),
+        inbox_config_account_id(self_account_id),
         "First account must be the inbox config PDA"
     );
     assert_eq!(
         seen.account_id,
-        inbox_seen_shard_account_id(self_program_id, &msg.src_zone, msg.src_block_id),
+        inbox_seen_shard_account_id(self_account_id, &msg.src_zone, msg.src_block_id),
         "Second account must be the seen-shard PDA"
     );
     // The one value the chained call carries about where the message came from.
@@ -103,7 +95,7 @@ fn dispatch(
     // here is what makes a target's own check meaningful.
     assert_eq!(
         marker.account_id,
-        inbox_source_marker_account_id(self_program_id, &msg.src_zone, msg.src_program_id),
+        inbox_source_marker_account_id(self_account_id, &msg.src_zone, msg.src_account_id),
         "Third account must be the source marker PDA for this message"
     );
 
@@ -149,11 +141,11 @@ fn dispatch(
 
         // The marker leads, so a target reads its source at a fixed position
         // without knowing anything about the accounts that follow it.
-        let mut call_accounts = vec![marker.account_id];
-        call_accounts.extend(target_accounts.iter().map(|a| a.account_id));
+        let mut call_pre_states = vec![marker.clone()];
+        call_pre_states.extend(target_accounts.clone());
         let call = ChainedCall {
-            program_account_id: msg.target_program_id.into(),
-            pre_state_ids: call_accounts,
+            program_account_id: msg.target_account_id,
+            pre_state_ids: call_pre_states.iter().map(|p| p.account_id).collect(),
             instruction_data: call_instruction_data,
             pda_seeds: vec![],
         };
@@ -190,7 +182,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config_meta.account_id,
-        inbox_config_account_id(self_account_id.into()),
+        inbox_config_account_id(self_account_id),
         "account must be the inbox config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first

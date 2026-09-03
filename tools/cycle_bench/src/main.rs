@@ -318,7 +318,7 @@ fn token_holding(
 ) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::token().id().into(),
+            program_owner: programs::token().deployed_account_id(),
             balance: 0,
             data: Data::from(&TokenHolding::Fungible {
                 definition_id,
@@ -338,7 +338,7 @@ fn token_definition(
 ) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::token().id().into(),
+            program_owner: programs::token().deployed_account_id(),
             balance: 0,
             data: Data::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
@@ -376,7 +376,7 @@ fn token_burn_pre_states() -> Vec<AccountWithMetadata> {
 fn clock_account(account_id: AccountId, block_id: u64) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::clock().id().into(),
+            program_owner: programs::clock().deployed_account_id(),
             balance: 0,
             data: ClockAccountData {
                 block_id,
@@ -408,19 +408,27 @@ fn amm_token_b_def_id() -> AccountId {
 }
 fn amm_pool_id() -> AccountId {
     compute_pool_pda(
-        programs::amm().id(),
+        programs::amm().deployed_account_id(),
         amm_token_a_def_id(),
         amm_token_b_def_id(),
     )
 }
 fn amm_vault_a_id() -> AccountId {
-    compute_vault_pda(programs::amm().id(), amm_pool_id(), amm_token_a_def_id())
+    compute_vault_pda(
+        programs::amm().deployed_account_id(),
+        amm_pool_id(),
+        amm_token_a_def_id(),
+    )
 }
 fn amm_vault_b_id() -> AccountId {
-    compute_vault_pda(programs::amm().id(), amm_pool_id(), amm_token_b_def_id())
+    compute_vault_pda(
+        programs::amm().deployed_account_id(),
+        amm_pool_id(),
+        amm_token_b_def_id(),
+    )
 }
 fn amm_lp_def_id() -> AccountId {
-    compute_liquidity_token_pda(programs::amm().id(), amm_pool_id())
+    compute_liquidity_token_pda(programs::amm().deployed_account_id(), amm_pool_id())
 }
 
 /// Pool seeded with reserves `1_000` / `500`, lp supply `sqrt(1000*500) = 707`.
@@ -430,7 +438,7 @@ fn amm_pool_account() -> AccountWithMetadata {
     let lp_supply = (reserve_a * reserve_b).isqrt();
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::amm().id().into(),
+            program_owner: programs::amm().deployed_account_id(),
             balance: 0,
             data: Data::from(&PoolDefinition {
                 definition_token_a_id: amm_token_a_def_id(),
@@ -482,7 +490,7 @@ fn ata_create_pre_states() -> Vec<AccountWithMetadata> {
     };
     let token_def = token_definition(definition_id, 100_000, false);
     let seed = compute_ata_seed(owner_id, definition_id);
-    let ata_id = get_associated_token_account_id(&programs::ata().id(), &seed);
+    let ata_id = get_associated_token_account_id(&programs::ata().deployed_account_id(), &seed);
     let ata_account = AccountWithMetadata {
         account: Account::default(),
         is_authorized: false,
@@ -575,9 +583,7 @@ fn main() -> Result<()> {
             "Create",
             programs::ata(),
             ata_create_pre_states(),
-            &associated_token_account_core::Instruction::Create {
-                ata_program_id: programs::ata().id(),
-            },
+            &associated_token_account_core::Instruction::Create,
         )?,
     ];
 

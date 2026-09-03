@@ -1,6 +1,6 @@
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ChainedCall, ProgramId},
+    account::{AccountId, AccountWithMetadata},
+    program::{AccountPostState, ChainedCall},
 };
 use token_core::TokenHolding;
 
@@ -8,10 +8,10 @@ pub fn transfer_from_associated_token_account(
     owner: AccountWithMetadata,
     sender_ata: AccountWithMetadata,
     recipient: AccountWithMetadata,
-    ata_program_id: ProgramId,
+    ata_account_id: AccountId,
     amount: u128,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
-    let token_program_id: lee_core::program::ProgramId = sender_ata.account.program_owner.into();
+    let token_account_id = sender_ata.account.program_owner;
     assert!(owner.is_authorized, "Owner authorization is missing");
     let definition_id = TokenHolding::try_from(&sender_ata.account.data)
         .expect("Sender ATA must hold a valid token")
@@ -20,7 +20,7 @@ pub fn transfer_from_associated_token_account(
         &sender_ata,
         &owner,
         definition_id,
-        ata_program_id,
+        ata_account_id,
     );
 
     let post_states = vec![
@@ -28,9 +28,12 @@ pub fn transfer_from_associated_token_account(
         AccountPostState::new(sender_ata.account.clone()),
         AccountPostState::new(recipient.account.clone()),
     ];
+    let mut sender_ata_auth = sender_ata.clone();
+    sender_ata_auth.is_authorized = true;
+
     let chained_call = ChainedCall::new(
-        token_program_id.into(),
-        vec![sender_ata.account_id, recipient.account_id],
+        token_account_id,
+        vec![sender_ata_auth.account_id, recipient.account_id],
         &token_core::Instruction::Transfer {
             amount_to_transfer: amount,
         },

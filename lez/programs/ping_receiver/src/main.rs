@@ -1,8 +1,8 @@
-use cross_zone_marker_core::inbox_source_marker_account_id;
+use cross_zone_inbox_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput, ProgramOutput,
+        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramInput, ProgramOutput,
         read_lee_inputs,
     },
 };
@@ -30,7 +30,7 @@ fn main() {
             instruction_data,
             payload,
         ),
-        ReceiverInstruction::InitConfig(config) => init_config(
+        ReceiverInstruction::InitConfig { config } => init_config(
             self_account_id,
             caller_account_id,
             pre_states,
@@ -60,40 +60,35 @@ fn record(
     instruction_data: Vec<u8>,
     payload: Vec<u8>,
 ) {
-    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
-    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
-    // for the PDA-derivation helpers below, which are pinned to the actual image id.
-    let self_program_id = ProgramId::from(self_account_id);
-
     // pre_states: [source marker, config PDA, record PDA].
     let [marker, config, record] = <[AccountWithMetadata; 3]>::try_from(pre_states)
         .expect("Record requires the source marker, config, and record accounts");
 
     assert_eq!(
         config.account_id,
-        receiver_config_account_id(self_program_id),
+        receiver_config_account_id(self_account_id),
         "second account must be the receiver config PDA"
     );
     let cfg = ReceiverConfig::from_bytes(&config.account.data)
         .expect("config account holds a receiver config");
     assert_eq!(
         caller_account_id,
-        Some(cfg.deliverer.into()),
+        Some(cfg.deliverer),
         "Record is only callable by the authorized deliverer (the cross-zone inbox)"
     );
     // Which peer sent it is this program's own business. Without this the record
     // says only that some program on some configured peer wrote it.
     assert!(
-        cfg.sources.iter().any(|(src_zone, src_program_id)| {
+        cfg.sources.iter().any(|(src_zone, src_account_id)| {
             marker.account_id
-                == inbox_source_marker_account_id(cfg.deliverer, src_zone, *src_program_id)
+                == inbox_source_marker_account_id(cfg.deliverer, src_zone, *src_account_id)
         }),
         "Record is only callable for a peer source this receiver authorizes"
     );
 
     assert_eq!(
         record.account_id,
-        ping_record_pda(self_program_id),
+        ping_record_pda(self_account_id),
         "third account must be the ping record PDA"
     );
 
@@ -123,10 +118,6 @@ fn renounce_authority(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
 ) {
-    // See `record`'s doc comment: exact round-trip to the actual image id, needed by the
-    // PDA-derivation helpers below.
-    let self_program_id = ProgramId::from(self_account_id);
-
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
     let config_meta = pre_states
@@ -134,7 +125,7 @@ fn renounce_authority(
         .expect("RenounceAuthority requires the config account");
     assert_eq!(
         config_meta.account_id,
-        receiver_config_account_id(self_program_id),
+        receiver_config_account_id(self_account_id),
         "first account must be the receiver config PDA"
     );
     let mut cfg = ReceiverConfig::from_bytes(&config_meta.account.data)
@@ -142,7 +133,7 @@ fn renounce_authority(
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
     assert!(
-        caller_account_id.is_none() || caller_account_id == cfg.governance.map(Into::into),
+        caller_account_id.is_none() || caller_account_id == cfg.governance,
         "the authority acts at top level, or through the configured governance program"
     );
 
@@ -197,12 +188,8 @@ fn update_sources(
     caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
-    sources: Vec<([u8; 32], ProgramId)>,
+    sources: Vec<([u8; 32], AccountId)>,
 ) {
-    // See `record`'s doc comment: exact round-trip to the actual image id, needed by the
-    // PDA-derivation helpers below.
-    let self_program_id = ProgramId::from(self_account_id);
-
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
     let config_meta = pre_states
@@ -210,7 +197,7 @@ fn update_sources(
         .expect("UpdateSources requires the config account");
     assert_eq!(
         config_meta.account_id,
-        receiver_config_account_id(self_program_id),
+        receiver_config_account_id(self_account_id),
         "first account must be the receiver config PDA"
     );
     let mut cfg = ReceiverConfig::from_bytes(&config_meta.account.data)
@@ -218,7 +205,7 @@ fn update_sources(
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
     assert!(
-        caller_account_id.is_none() || caller_account_id == cfg.governance.map(Into::into),
+        caller_account_id.is_none() || caller_account_id == cfg.governance,
         "the authority acts at top level, or through the configured governance program"
     );
 
@@ -285,7 +272,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        receiver_config_account_id(self_account_id.into()),
+        receiver_config_account_id(self_account_id),
         "account must be the receiver config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first

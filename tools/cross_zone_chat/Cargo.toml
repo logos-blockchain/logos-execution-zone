@@ -12,6 +12,7 @@ borsh.workspace = true
 test_fixtures.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 programs.workspace = true
+program_loader_core.workspace = true
 ping_core.workspace = true
 cross_zone_outbox_core.workspace = true
 cross_zone_inbox_core.workspace = true

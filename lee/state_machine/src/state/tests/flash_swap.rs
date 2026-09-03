@@ -6,19 +6,21 @@ fn flash_swap_successful() {
     let callback = crate::test_methods::flash_swap_callback();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
-    let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
+    let vault_id =
+        AccountId::for_public_pda(&initiator.deployed_account_id(), &PdaSeed::new([0_u8; 32]));
+    let receiver_id =
+        AccountId::for_public_pda(&callback.deployed_account_id(), &PdaSeed::new([1_u8; 32]));
 
     let initial_balance: u128 = 1000;
     let amount_out: u128 = 100;
 
     let vault_account = Account {
-        program_owner: token.id().into(),
+        program_owner: token.deployed_account_id(),
         balance: initial_balance,
         ..Account::default()
     };
     let receiver_account = Account {
-        program_owner: token.id().into(),
+        program_owner: token.deployed_account_id(),
         balance: 0,
         ..Account::default()
     };
@@ -30,14 +32,14 @@ fn flash_swap_successful() {
     // Callback instruction: return funds
     let cb_instruction = CallbackInstruction {
         return_funds: true,
-        token_program_id: token.id(),
+        token_account_id: token.deployed_account_id(),
         amount: amount_out,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id(),
-        callback_program_id: callback.id(),
+        token_account_id: token.deployed_account_id(),
+        callback_account_id: callback.deployed_account_id(),
         amount_out,
         callback_instruction_data: cb_data,
     };
@@ -57,19 +59,21 @@ fn flash_swap_callback_keeps_funds_rollback() {
     let callback = crate::test_methods::flash_swap_callback();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
-    let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
+    let vault_id =
+        AccountId::for_public_pda(&initiator.deployed_account_id(), &PdaSeed::new([0_u8; 32]));
+    let receiver_id =
+        AccountId::for_public_pda(&callback.deployed_account_id(), &PdaSeed::new([1_u8; 32]));
 
     let initial_balance: u128 = 1000;
     let amount_out: u128 = 100;
 
     let vault_account = Account {
-        program_owner: token.id().into(),
+        program_owner: token.deployed_account_id(),
         balance: initial_balance,
         ..Account::default()
     };
     let receiver_account = Account {
-        program_owner: token.id().into(),
+        program_owner: token.deployed_account_id(),
         balance: 0,
         ..Account::default()
     };
@@ -81,14 +85,14 @@ fn flash_swap_callback_keeps_funds_rollback() {
     // Callback instruction: do NOT return funds
     let cb_instruction = CallbackInstruction {
         return_funds: false,
-        token_program_id: token.id(),
+        token_account_id: token.deployed_account_id(),
         amount: amount_out,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id(),
-        callback_program_id: callback.id(),
+        token_account_id: token.deployed_account_id(),
+        callback_account_id: callback.deployed_account_id(),
         amount_out,
         callback_instruction_data: cb_data,
     };
@@ -115,18 +119,20 @@ fn flash_swap_self_call_targets_correct_program() {
     let callback = crate::test_methods::flash_swap_callback();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
-    let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
+    let vault_id =
+        AccountId::for_public_pda(&initiator.deployed_account_id(), &PdaSeed::new([0_u8; 32]));
+    let receiver_id =
+        AccountId::for_public_pda(&callback.deployed_account_id(), &PdaSeed::new([1_u8; 32]));
 
     let initial_balance: u128 = 1000;
 
     let vault_account = Account {
-        program_owner: token.id().into(),
+        program_owner: token.deployed_account_id(),
         balance: initial_balance,
         ..Account::default()
     };
     let receiver_account = Account {
-        program_owner: token.id().into(),
+        program_owner: token.deployed_account_id(),
         balance: 0,
         ..Account::default()
     };
@@ -137,14 +143,14 @@ fn flash_swap_self_call_targets_correct_program() {
 
     let cb_instruction = CallbackInstruction {
         return_funds: true,
-        token_program_id: token.id(),
+        token_account_id: token.deployed_account_id(),
         amount: 0,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id(),
-        callback_program_id: callback.id(),
+        token_account_id: token.deployed_account_id(),
+        callback_account_id: callback.deployed_account_id(),
         amount_out: 0,
         callback_instruction_data: cb_data,
     };
@@ -164,10 +170,11 @@ fn flash_swap_standalone_invariant_check_rejected() {
     let initiator = crate::test_methods::flash_swap_initiator();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+    let vault_id =
+        AccountId::for_public_pda(&initiator.deployed_account_id(), &PdaSeed::new([0_u8; 32]));
 
     let vault_account = Account {
-        program_owner: token.id().into(),
+        program_owner: token.deployed_account_id(),
         balance: 1000,
         ..Account::default()
     };
@@ -180,7 +187,7 @@ fn flash_swap_standalone_invariant_check_rejected() {
     };
 
     let message = public_transaction::Message::try_new(
-        initiator.id().into(),
+        initiator.deployed_account_id(),
         vec![vault_id],
         vec![],
         instruction,
@@ -205,9 +212,13 @@ fn malicious_self_program_id_rejected_in_public_execution() {
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(acc_id, account);
 
-    let message =
-        public_transaction::Message::try_new(program.id().into(), vec![acc_id], vec![], ())
-            .unwrap();
+    let message = public_transaction::Message::try_new(
+        program.deployed_account_id(),
+        vec![acc_id],
+        vec![],
+        (),
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -227,9 +238,13 @@ fn malicious_caller_program_id_rejected_in_public_execution() {
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(acc_id, account);
 
-    let message =
-        public_transaction::Message::try_new(program.id().into(), vec![acc_id], vec![], ())
-            .unwrap();
+    let message = public_transaction::Message::try_new(
+        program.deployed_account_id(),
+        vec![acc_id],
+        vec![],
+        (),
+    )
+    .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 

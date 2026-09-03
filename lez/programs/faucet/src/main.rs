@@ -33,7 +33,7 @@ fn main() {
 
     let chained_calls = match instruction {
         Instruction::GenesisTransferVault {
-            vault_program_id,
+            vault_account_id,
             recipient_id,
             amount,
         } => {
@@ -43,14 +43,17 @@ fn main() {
 
             assert_eq!(
                 faucet.account_id,
-                faucet_core::compute_faucet_account_id(self_account_id.into()),
+                faucet_core::compute_faucet_account_id(self_account_id),
                 "First account must be faucet PDA"
             );
 
+            let mut faucet_for_vault = faucet;
+            faucet_for_vault.is_authorized = true;
+
             vec![
                 ChainedCall::new(
-                    vault_program_id.into(),
-                    vec![faucet.account_id, recipient_vault.account_id],
+                    vault_account_id,
+                    vec![faucet_for_vault.account_id, recipient_vault.account_id],
                     &vault_core::Instruction::Transfer {
                         recipient_id,
                         amount,
@@ -66,14 +69,17 @@ fn main() {
 
             assert_eq!(
                 faucet.account_id,
-                faucet_core::compute_faucet_account_id(self_account_id.into()),
+                faucet_core::compute_faucet_account_id(self_account_id),
                 "First account must be faucet PDA"
             );
 
+            let mut faucet_for_transfer = faucet;
+            faucet_for_transfer.is_authorized = true;
+
             vec![
                 ChainedCall::new(
-                    faucet.account.program_owner,
-                    vec![faucet.account_id, recipient.account_id],
+                    faucet_for_transfer.account.program_owner,
+                    vec![faucet_for_transfer.account_id, recipient.account_id],
                     &authenticated_transfer_core::Instruction::Transfer { amount },
                 )
                 .with_pda_seeds(vec![faucet_core::compute_faucet_seed()]),

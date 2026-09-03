@@ -17,9 +17,9 @@ impl Vault<'_> {
         recipient_id: AccountId,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let vault_program_id = programs::vault().id();
+        let vault_account_id = programs::vault().deployed_account_id();
         let recipient_vault_id =
-            vault_core::compute_vault_account_id(vault_program_id, recipient_id);
+            vault_core::compute_vault_account_id(vault_account_id, recipient_id);
 
         let instruction = vault_core::Instruction::Transfer {
             recipient_id,
@@ -35,7 +35,7 @@ impl Vault<'_> {
                     AccountIdentity::PublicNoSign(recipient_vault_id),
                 ],
                 instruction_data,
-                vault_program_id,
+                vault_account_id,
             )
             .await
     }
@@ -46,9 +46,10 @@ impl Vault<'_> {
         recipient_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let vault_program_id = programs::vault().id();
-        let recipient_vault_id =
-            vault_core::compute_vault_account_id(vault_program_id, recipient_id);
+        let recipient_vault_id = vault_core::compute_vault_account_id(
+            programs::vault().deployed_account_id(),
+            recipient_id,
+        );
         let instruction = vault_core::Instruction::Transfer {
             recipient_id,
             amount,
@@ -79,8 +80,8 @@ impl Vault<'_> {
         owner_id: AccountId,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let vault_program_id = programs::vault().id();
-        let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner_id);
+        let vault_account_id = programs::vault().deployed_account_id();
+        let owner_vault_id = vault_core::compute_vault_account_id(vault_account_id, owner_id);
 
         let instruction = vault_core::Instruction::Claim { amount };
         let instruction_data =
@@ -93,7 +94,7 @@ impl Vault<'_> {
                     AccountIdentity::PublicNoSign(owner_vault_id),
                 ],
                 instruction_data,
-                vault_program_id,
+                vault_account_id,
             )
             .await
     }
@@ -103,8 +104,8 @@ impl Vault<'_> {
         owner_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let vault_program_id = programs::vault().id();
-        let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner_id);
+        let owner_vault_id =
+            vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), owner_id);
 
         let instruction = vault_core::Instruction::Claim { amount };
         let instruction_data =
@@ -132,6 +133,11 @@ impl Vault<'_> {
 fn vault_with_auth_dependency() -> ProgramWithDependencies {
     let auth_transfer = programs::authenticated_transfer();
     let mut deps = HashMap::new();
-    deps.insert(auth_transfer.id(), auth_transfer);
-    ProgramWithDependencies::new(programs::vault(), deps)
+    deps.insert(
+        program_loader_core::immutable_deploy_account_id(auth_transfer.id()),
+        auth_transfer,
+    );
+    ProgramWithDependencies::new(programs::vault(), deps).with_program_account_id(
+        program_loader_core::immutable_deploy_account_id(programs::vault().id()),
+    )
 }
