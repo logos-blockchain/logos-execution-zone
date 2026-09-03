@@ -121,3 +121,13 @@ pub const fn clock_chain_caller() -> Program {
 
     Program::new_unchecked(CLOCK_CHAIN_CALLER_ID, Cow::Borrowed(CLOCK_CHAIN_CALLER_ELF))
 }
+
+#[must_use]
+#[inline]
+pub const fn noop() -> Program {
+    use guests::{NOOP_ELF, NOOP_ID, NOOP_PATH};
+
+    let _unused = NOOP_PATH;
+
+    Program::new_unchecked(NOOP_ID, Cow::Borrowed(NOOP_ELF))
+}
