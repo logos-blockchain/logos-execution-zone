@@ -8,7 +8,7 @@ use indexer_service_protocol::{
 
 use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature,
-    FfiVec,
+    FfiU128, FfiVec,
     account::FfiAccount,
     vectors::{
         FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList,
@@ -582,42 +582,6 @@ pub unsafe extern "C" fn free_ffi_transaction_vec(val: *mut FfiVec<FfiTransactio
     free_transaction_vec_value(*boxed);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn public_transaction_fee_roundtrips_over_the_ffi() {
-        let tx = |fee| PublicTransaction {
-            hash: HashType([1; 32]),
-            message: PublicMessage {
-                program_id: ProgramId([2; 8]),
-                account_ids: vec![AccountId { value: [3; 32] }],
-                nonces: vec![],
-                instruction_data: vec![9, 9],
-                fee,
-            },
-            witness_set: WitnessSet {
-                signatures_and_public_keys: vec![],
-                proof: None,
-            },
-        };
-
-        let fee = FeeDeclaration {
-            payer: AccountId { value: [3; 32] },
-            gas_limit: 5,
-            tip: 1,
-            max_fee: 42,
-        };
-        for fee in [None, Some(fee)] {
-            let original = tx(fee);
-            let ffi: FfiPublicTransactionBody = original.clone().into();
-            let back: PublicTransaction = Box::new(ffi).into();
-            assert_eq!(back.message.fee, original.message.fee);
-        }
-    }
-}
-
 fn cast_validity_window(window: ValidityWindow) -> [u64; 2] {
     [
         window.0.0.unwrap_or_default(),
@@ -639,4 +603,42 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
     };
 
     ValidityWindow((left, right))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_transaction_fee_roundtrips_over_the_ffi() {
+        let tx = |fee| PublicTransaction {
+            hash: HashType([1; 32]),
+            message: PublicMessage {
+                program_id: ProgramId([2; 8]),
+                account_ids: vec![AccountId { value: [3; 32] }],
+                nonces: vec![],
+                instruction_data: vec![9, 9],
+                fee,
+            },
+            witness_set: WitnessSet {
+                signatures_and_public_keys: vec![],
+                proof: None,
+            },
+        };
+
+        for fee in [
+            None,
+            Some(FeeDeclaration {
+                payer: AccountId { value: [3; 32] },
+                gas_limit: 5,
+                tip: 1,
+                max_fee: 42,
+            }),
+        ] {
+            let original = tx(fee);
+            let ffi: FfiPublicTransactionBody = original.clone().into();
+            let back: PublicTransaction = Box::new(ffi).into();
+            assert_eq!(back.message.fee, original.message.fee);
+        }
+    }
 }

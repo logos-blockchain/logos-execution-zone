@@ -122,8 +122,8 @@ impl ExecutionFailureKind {
         let Self::SequencerClientError(sequencer_service_rpc::ClientError::Call(err)) = self else {
             return None;
         };
-        err.data()
-            .and_then(|data| serde_json::from_str(data.get()).ok())
+        let data = err.data()?;
+        serde_json::from_str(data.get()).ok()
     }
 }
 
