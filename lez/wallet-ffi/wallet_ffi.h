@@ -108,6 +108,10 @@ typedef enum WalletFfiError {
    */
   INVALID_BYTECODE = 17,
   /**
+   * Fee payer cannot fund the fee reserve.
+   */
+  PAYER_CANNOT_FUND = 18,
+  /**
    * Internal error (catch-all).
    */
   INTERNAL_ERROR = 99,
@@ -225,12 +229,6 @@ typedef struct FfiTransferResult {
    */
   bool success;
 } FfiTransferResult;
-
-typedef struct FfiInstructionWords {
-  uint32_t *instruction_words;
-  uintptr_t instruction_words_size;
-  enum WalletFfiError error;
-} FfiInstructionWords;
 
 /**
  * Struct representing an account identity, given to `AccountManager` at intialization.
@@ -599,29 +597,12 @@ enum WalletFfiError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
                                                struct FfiTransferResult *out_result);
 
 /**
- * Serialize sequence of bytes into RISC0 readable words.
- *
- * # Parameters
- * - `input_instruction_data`: Valid pointer to a sequence of bytes
- * - `input_instruction_data_size`: Size of `input_instruction_data`
- *
- * # Returns
- * - `Success` on successful creation
- * - Error code on failure
- *
- * # Safety
- * - `input_instruction_data` must be a valid pointer
- */
-struct FfiInstructionWords wallet_ffi_serialization_helper(const uint8_t *input_instruction_data,
-                                                           uintptr_t input_instruction_data_size);
-
-/**
  * Send generic public transaction.
  *
  * # Parameters
  * - `handle`: Valid pointer to wallet handle
  * - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
- * - `instruction_words`: Valid pointer to instruction words
+ * - `instruction_data`: Valid pointer to instruction data bytes
  * - `out_result`: Valid pointer to `FfiTransactionResult`
  *
  * # Returns
@@ -631,14 +612,14 @@ struct FfiInstructionWords wallet_ffi_serialization_helper(const uint8_t *input_
  * # Safety
  * - `handle` must be a valid pointer
  * - `account_identities` must be a valid pointer
- * - `instruction_words` must be a valid pointer
+ * - `instruction_data` must be a valid pointer
  * - `out_result` must be a valid pointer
  */
 enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHandle *handle,
                                                                const struct FfiAccountIdentity *account_identities,
                                                                uintptr_t account_identities_size,
-                                                               const uint32_t *instruction_words,
-                                                               uintptr_t instruction_words_size,
+                                                               const uint8_t *instruction_data,
+                                                               uintptr_t instruction_data_size,
                                                                struct FfiProgramId program_id,
                                                                struct FfiTransactionResult *out_result);
 
@@ -648,7 +629,7 @@ enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHand
  * # Parameters
  * - `handle`: Valid pointer to wallet handle
  * - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
- * - `instruction_words`: Valid pointer to instruction words
+ * - `instruction_data`: Valid pointer to instruction data bytes
  * - `out_result`: Valid pointer to `FfiTransactionResult`
  *
  * # Returns
@@ -658,14 +639,14 @@ enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHand
  * # Safety
  * - `handle` must be a valid pointer
  * - `account_identities` must be a valid pointer
- * - `instruction_words` must be a valid pointer
+ * - `instruction_data` must be a valid pointer
  * - `out_result` must be a valid pointer
  */
 enum WalletFfiError wallet_ffi_send_generic_private_transaction(struct WalletHandle *handle,
                                                                 const struct FfiAccountIdentity *account_identities,
                                                                 uintptr_t account_identities_size,
-                                                                const uint32_t *instruction_words,
-                                                                uintptr_t instruction_words_size,
+                                                                const uint8_t *instruction_data,
+                                                                uintptr_t instruction_data_size,
                                                                 const struct FfiProgramWithDependencies *program_with_dependencies,
                                                                 struct FfiTransactionResult *out_result);
 
@@ -695,14 +676,6 @@ enum WalletFfiError wallet_ffi_poll_transaction_status(struct WalletHandle *hand
  * The result must be either null or a valid result from a transaction function.
  */
 void wallet_ffi_free_transaction_result(struct FfiTransactionResult *result);
-
-/**
- * Free a instruction words returned by `wallet_ffi_serialization_helper`.
- *
- * # Safety
- * The result must be either null or a valid result from a serialization helper function.
- */
-void wallet_ffi_free_instruction_words(struct FfiInstructionWords *words);
 
 /**
  * Get the public key for a public account.
@@ -1269,6 +1242,9 @@ enum WalletFfiError wallet_ffi_get_current_block_height(struct WalletHandle *han
  *
  * Transfers tokens from one public account to another on the network.
  *
+ * If `to` is a fresh, unclaimed account whose key this wallet holds, the
+ * transfer also signs with that key and claims the account.
+ *
  * # Parameters
  * - `handle`: Valid wallet handle
  * - `from`: Source account ID (must be owned by this wallet)
@@ -1481,33 +1457,6 @@ enum WalletFfiError wallet_ffi_transfer_private_owned(struct WalletHandle *handl
                                                       struct FfiTransferResult *out_result);
 
 /**
- * Register a public account on the network.
- *
- * This initializes a public account on the blockchain. The account must be
- * owned by this wallet.
- *
- * # Parameters
- * - `handle`: Valid wallet handle
- * - `account_id`: Account ID to register
- * - `out_result`: Output pointer for registration result
- *
- * # Returns
- * - `Success` if the registration was submitted successfully
- * - Error code on failure
- *
- * # Memory
- * The result must be freed with `wallet_ffi_free_transfer_result()`.
- *
- * # Safety
- * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `account_id` must be a valid pointer to a `FfiBytes32` struct
- * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
- */
-enum WalletFfiError wallet_ffi_register_public_account(struct WalletHandle *handle,
-                                                       const struct FfiBytes32 *account_id,
-                                                       struct FfiTransferResult *out_result);
-
-/**
  * Register a private account on the network.
  *
  * This initializes a private account. The account must be
@@ -1536,7 +1485,7 @@ enum WalletFfiError wallet_ffi_register_private_account(struct WalletHandle *han
 
 /**
  * Free a transfer result returned by `wallet_ffi_transfer_public` or
- * `wallet_ffi_register_public_account`.
+ * `wallet_ffi_register_private_account`.
  *
  * # Safety
  * The result must be either null or a valid result from a transfer function.

@@ -12,7 +12,7 @@ fn main() {
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     // The emitter, and the only identity here the state machine verifies: it
@@ -88,7 +88,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![outbox],
         vec![post],
     )

@@ -1,13 +1,13 @@
 use bridge_lock_core::{
     Instruction, config_account_id, config_bytes, config_seed, escrow_account_id, escrow_seed,
-    read_config,
+    holding_account_id, holding_seed, read_config,
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
     account::{Account, AccountWithMetadata},
     program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountPostState, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_inputs,
     },
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
@@ -20,7 +20,7 @@ fn main() {
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     assert!(
@@ -40,7 +40,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             amount,
             target_zone,
             target_program_id,
@@ -55,11 +55,57 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction_words,
+            instruction_data,
             outbox_program_id,
             target_program_id,
         ),
+        Instruction::InitHolding { holder } => init_holding(
+            self_program_id,
+            caller_program_id,
+            pre_states,
+            instruction_data,
+            &holder,
+        ),
     }
+}
+
+/// Idempotent claim: a re-run on a funded holding must be a byte-identical
+/// echo, or a stranger's `InitHolding` could reset a balance.
+fn init_holding(
+    self_program_id: ProgramId,
+    caller_program_id: Option<ProgramId>,
+    pre_states: Vec<AccountWithMetadata>,
+    instruction_data: Vec<u8>,
+    holder: &[u8; 32],
+) {
+    // pre_states: [holding PDA].
+    let [holding] = <[AccountWithMetadata; 1]>::try_from(pre_states)
+        .expect("InitHolding requires the holding account");
+    assert_eq!(
+        holding.account_id,
+        holding_account_id(self_program_id, holder),
+        "account must be the holder's bridge-lock holding PDA"
+    );
+    if holding.account.program_owner != DEFAULT_PROGRAM_OWNER {
+        assert_eq!(
+            holding.account.program_owner,
+            self_program_id.into(),
+            "bridge-lock holding PDA is owned by another program"
+        );
+    }
+    let holding_post = AccountPostState::new_claimed_if_default(
+        holding.account.clone(),
+        Claim::Pda(holding_seed(holder)),
+    );
+
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_data,
+        vec![holding],
+        vec![holding_post],
+    )
+    .write();
 }
 
 #[expect(
@@ -70,7 +116,7 @@ fn lock(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_data: Vec<u8>,
     amount: u128,
     target_zone: [u8; 32],
     target_program_id: ProgramId,
@@ -78,9 +124,11 @@ fn lock(
     payload: Vec<u8>,
     ordinal: u32,
 ) {
-    // pre_states: [config PDA, holder holding (authorized), escrow PDA, outbox PDA].
-    let [config, holder, escrow, outbox] = <[AccountWithMetadata; 4]>::try_from(pre_states)
-        .expect("Lock requires config, holder, escrow, and outbox accounts");
+    // pre_states: [config PDA, holder (authorized, echoed), holding PDA,
+    // escrow PDA, outbox PDA].
+    let [config, holder, holding, escrow, outbox] =
+        <[AccountWithMetadata; 5]>::try_from(pre_states)
+            .expect("Lock requires config, holder, holding, escrow, and outbox accounts");
 
     // Pinned rather than caller-named: chaining elsewhere would debit the escrow
     // and leave no record of what it was for.
@@ -124,40 +172,44 @@ fn lock(
         amount <= MAX_MINT_AMOUNT,
         "locked amount exceeds what the wrapped token will mint"
     );
+    // A zero lock would emit a real dispatch and zero-mint into any
+    // recipient's wrapped holding.
+    assert!(amount > 0, "locked amount must be positive");
 
     assert!(holder.is_authorized, "holder must authorize the lock");
-    // The holder holding is bridge_lock-owned, so bridge_lock may debit its native
-    // balance directly (state-machine rule 5). This also pins the transfer to a
-    // genuine holding: a caller cannot substitute an account owned by some other
-    // program to emit the mint without an actual lock.
+    // The signature gates the debit; the derivation pins the debit target to a
+    // genuine bridge-lock holding.
     assert_eq!(
-        holder.account.program_owner,
-        self_program_id.into(),
-        "holder account must be a bridge_lock holding"
+        holding.account_id,
+        holding_account_id(self_program_id, &holder.account_id.into_value()),
+        "third account must be the holder's bridge-lock holding PDA"
     );
     assert_eq!(
         escrow.account_id,
         escrow_account_id(self_program_id),
-        "third account must be the escrow PDA"
+        "fourth account must be the escrow PDA"
     );
 
-    // Move the real native balance holder -> escrow. bridge_lock owns both accounts,
-    // so it debits the holder and credits the escrow directly; conservation holds
-    // because the same amount moves between them.
-    let holder_new = holder
+    // bridge_lock owns holding and escrow, so the same amount moves between
+    // them and conservation holds. An unclaimed holding reads as balance 0, so
+    // a positive lock against one fails here.
+    let holding_new = holding
         .account
         .balance
         .checked_sub(amount)
-        .expect("insufficient balance to lock");
+        .expect("insufficient holding balance to lock");
     let escrow_new = escrow
         .account
         .balance
         .checked_add(amount)
         .expect("escrow balance overflow");
 
-    let mut holder_account = holder.account.clone();
-    holder_account.balance = holder_new;
-    let holder_post = AccountPostState::new(holder_account);
+    let mut holding_account = holding.account.clone();
+    holding_account.balance = holding_new;
+    let holding_post = AccountPostState::new_claimed_if_default(
+        holding_account,
+        Claim::Pda(holding_seed(&holder.account_id.into_value())),
+    );
 
     let mut escrow_account = escrow.account.clone();
     escrow_account.balance = escrow_new;
@@ -166,7 +218,7 @@ fn lock(
 
     let call = ChainedCall::new(
         outbox_program_id,
-        vec![outbox.clone()],
+        vec![outbox.account_id],
         &OutboxInstruction::Emit {
             target_zone,
             target_program_id,
@@ -181,11 +233,13 @@ fn lock(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
-        vec![config, holder, escrow, outbox.clone()],
+        instruction_data,
+        vec![config, holder.clone(), holding, escrow, outbox.clone()],
         vec![
             config_post,
-            holder_post,
+            // The holder only signs; its account is echoed untouched.
+            AccountPostState::new(holder.account),
+            holding_post,
             escrow_post,
             AccountPostState::new(outbox.account),
         ],
@@ -200,7 +254,7 @@ fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
-    instruction_words: Vec<u32>,
+    instruction_data: Vec<u8>,
     outbox_program_id: ProgramId,
     target_program_id: ProgramId,
 ) {
@@ -240,23 +294,14 @@ fn init_config(
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![config],
         vec![config_post],
     )
     .write();
 }
 
-/// Decodes the cross-zone payload (risc0 words, little-endian bytes) into the
-/// wrapped-token instruction it carries.
+/// Decodes the cross-zone payload (borsh bytes) into the wrapped-token instruction it carries.
 fn decode_mint(payload: &[u8]) -> WrappedInstruction {
-    assert!(
-        payload.len().is_multiple_of(4),
-        "payload must be u32-aligned instruction words"
-    );
-    let words: Vec<u32> = payload
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap_or_else(|_| unreachable!())))
-        .collect();
-    risc0_zkvm::serde::from_slice(&words).expect("payload decodes to a wrapped-token instruction")
+    borsh::from_slice(payload).expect("payload decodes to a wrapped-token instruction")
 }

@@ -30,12 +30,15 @@ use lee::{
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
-    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{MultiNodeTestContextConfig, source_only_cross_zone},
 };
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
-const INITIAL_BALANCE: u128 = 100;
+// LGO-scale: the holder's balance also pays the lock's fee (reserve ≈ 16M+ at
+// wallet-like gas limits), so the bridgeable seed must dwarf it.
+const INITIAL_BALANCE: u128 = 10_000_000_000;
 const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
 
@@ -56,8 +59,10 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
             allowed_routes: vec![CrossZoneRoute {
                 src_program_id: programs::bridge_lock().id(),
                 target_program_id: wrapped_token_id,
+                mint_cap: None,
             }],
             expected_block_signing_pubkeys: Vec::new(),
+            min_committee_size: 0,
         }],
         source_authority: None,
         source_governance: None,
@@ -77,9 +82,9 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
                 bedrock_channel: channel_a,
             })
             .disable_wallet()
-            .disable_indexer()
             .with_sequencer_partial_config(partial)
-            .with_genesis(genesis_a),
+            .with_genesis(genesis_a)
+            .with_cross_zone(Some(source_only_cross_zone())),
         )
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
@@ -125,12 +130,33 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         escrowed, LOCK_AMOUNT,
         "zone A escrow must hold the locked amount"
     );
-    let remaining = seq_client_a.get_account(holder_id).await?.balance;
+    let remaining = seq_client_a
+        .get_account(bridge_lock_core::holding_account_id(
+            programs::bridge_lock().id(),
+            &holder_id.into_value(),
+        ))
+        .await?
+        .balance;
     assert_eq!(
         remaining,
         INITIAL_BALANCE - LOCK_AMOUNT,
-        "zone A holder must be debited by the locked amount"
+        "zone A holding must be debited by the locked amount"
     );
+
+    // The indexer carries no holdings config: agreeing with the sequencer
+    // requires replaying genesis. `wait_for_balance` returns only on the exact
+    // value, so reaching it is the assertion.
+    let ind_client_a = ctx.indexer_client_zone(channel_a).unwrap();
+    wait_for_balance(
+        ind_client_a,
+        bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder_id.into_value()),
+        INITIAL_BALANCE - LOCK_AMOUNT,
+    )
+    .await
+    .context("zone A's indexer must reconstruct the holding from the genesis block")?;
+    wait_for_balance(ind_client_a, escrow_id, LOCK_AMOUNT)
+        .await
+        .context("zone A's indexer must track the escrow too")?;
     Ok(())
 }
 
@@ -150,8 +176,7 @@ fn build_lock_tx(
         recipient: RECIPIENT,
         amount: LOCK_AMOUNT,
     };
-    let words = risc0_zkvm::serde::to_vec(&mint).expect("serialize mint");
-    let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    let payload = borsh::to_vec(&mint).expect("serialize mint");
 
     let target_accounts = vec![
         wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
@@ -169,14 +194,41 @@ fn build_lock_tx(
     let accounts = vec![
         bridge_lock_core::config_account_id(bridge_lock_id),
         holder_id,
+        bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder_id.into_value()),
         bridge_lock_core::escrow_account_id(bridge_lock_id),
         outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
     ];
-    // One nonce per signature: the holder signs, at its genesis nonce 0.
+    // One nonce per signature: the holder signs, at its genesis nonce 0. The
+    // lock is fee-exempt (cross-zone outbound traffic), so it carries no fee
+    // declaration.
     let message = Message::try_new(bridge_lock_id, accounts, vec![0_u128.into()], lock)
         .expect("build lock message");
     let witness = WitnessSet::for_message(&message, &[holder_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness))
+}
+
+/// Polls until the account's native balance equals `expected`; the indexer
+/// ingests on its own cadence.
+async fn wait_for_balance(
+    indexer: &IndexerClient,
+    account: AccountId,
+    expected: u128,
+) -> Result<u128> {
+    let account_id = indexer_service_protocol::AccountId {
+        value: account.into_value(),
+    };
+    let wait = async {
+        loop {
+            let held = indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
+            if held.balance == expected {
+                return Ok::<u128, anyhow::Error>(held.balance);
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+    };
+    tokio::time::timeout(DELIVERY_TIMEOUT, wait)
+        .await
+        .context("the indexer did not reach the expected balance in time")?
 }
 
 /// Polls zone B's indexer until the recipient's wrapped holding is non-zero.

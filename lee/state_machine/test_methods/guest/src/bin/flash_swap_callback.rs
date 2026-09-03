@@ -27,9 +27,8 @@
 use lee_core::program::{
     AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
-use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct CallbackInstruction {
     /// If true, return the borrowed funds to the vault (happy path).
     /// If false, keep the funds (simulates a malicious callback, triggers rollback).
@@ -46,7 +45,7 @@ fn main() {
             pre_states,
             instruction,
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<CallbackInstruction>();
 
     // pre_states[0] = vault (after transfer out), pre_states[1] = receiver (after transfer out)
@@ -59,15 +58,12 @@ fn main() {
     if instruction.return_funds {
         // Happy path: return the borrowed funds via a token transfer (receiver → vault).
         // The receiver is a PDA of this callback program (seed = [1_u8; 32]).
-        // Mark the receiver as authorized since it will be PDA-authorized in this chained call.
-        let mut receiver_authorized = receiver_pre.clone();
-        receiver_authorized.is_authorized = true;
-        let transfer_instruction = risc0_zkvm::serde::to_vec(&instruction.amount)
-            .expect("transfer instruction serialization");
+        let transfer_instruction =
+            borsh::to_vec(&instruction.amount).expect("transfer instruction serialization");
 
         chained_calls.push(ChainedCall {
             program_id: instruction.token_program_id,
-            pre_states: vec![receiver_authorized, vault_pre.clone()],
+            pre_state_ids: vec![receiver_pre.account_id, vault_pre.account_id],
             instruction_data: transfer_instruction,
             pda_seeds: vec![PdaSeed::new([1_u8; 32])],
         });
@@ -81,7 +77,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![vault_pre.clone(), receiver_pre.clone()],
         vec![
             AccountPostState::new(vault_pre.account),

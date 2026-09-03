@@ -87,6 +87,13 @@ impl BorshDeserialize for Nonce {
 }
 
 pub type Balance = u128;
+/// A base-fee price or tip, in atomic units; fits `u64` by the per-block gas caps
+/// (balances and totals are [`Balance`], `u128`).
+pub type Fee = u64;
+/// A gas amount (execution or storage work), bounded per block.
+pub type Gas = u64;
+/// A raw zkVM execution cycle count or budget, before it is priced into [`Gas`].
+pub type Cycles = u64;
 
 /// Account to be used both in public and private contexts.
 #[derive(
@@ -99,7 +106,7 @@ pub struct Account {
     pub nonce: Nonce,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AccountWithMetadata {
     pub account: Account,
     pub is_authorized: bool,

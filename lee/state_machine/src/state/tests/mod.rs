@@ -10,11 +10,12 @@ use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
     InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
     PrivateWitness, Timestamp, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+    account::{Account, AccountId, AccountWithMetadata, Balance, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
-        BlockValidityWindow, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
-        ProgramId, TimestampValidityWindow, WrappedBalanceSum,
+        BlockValidityWindow, ExecutionValidationError, InstructionData, MAX_NUMBER_CHAINED_CALLS,
+        PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow, TransactionEvent,
+        WrappedBalanceSum,
     },
 };
 
@@ -35,6 +36,7 @@ mod authenticated_transfer;
 mod changer_claimer;
 mod circuit;
 mod claiming;
+mod events;
 mod flash_swap;
 mod genesis;
 mod privacy_preserving;
@@ -60,8 +62,10 @@ impl V03State {
         self.insert_program(&crate::test_methods::two_pda_claimer());
         self.insert_program(&crate::test_methods::noop());
         self.insert_program(&crate::test_methods::chain_caller());
+        self.insert_program(&crate::test_methods::non_delegating_forwarder());
+        self.insert_program(&crate::test_methods::event_emitter());
         self.insert_program(&crate::test_methods::modified_transfer_program());
-        self.insert_program(&crate::test_methods::malicious_authorization_changer());
+        self.insert_program(&crate::test_methods::initialize_then_fund());
         self.insert_program(&crate::test_methods::validity_window());
         self.insert_program(&crate::test_methods::flash_swap_initiator());
         self.insert_program(&crate::test_methods::flash_swap_callback());
@@ -72,9 +76,9 @@ impl V03State {
         self.insert_program(&crate::test_methods::changer_claimer());
         self.insert_program(&crate::test_methods::validity_window_chain_caller());
         self.insert_program(&crate::test_methods::simple_transfer_proxy());
-        self.insert_program(&crate::test_methods::malicious_injector());
-        self.insert_program(&crate::test_methods::malicious_launderer());
         self.insert_program(&crate::test_methods::modified_transfer_program());
+        self.insert_program(&crate::test_methods::references_undeclared_account());
+        self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
         self
     }
 
@@ -159,24 +163,30 @@ impl TestPrivateKeys {
 
 // ── Flash Swap types (mirrors of guest types for host-side serialisation) ──
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct CallbackInstruction {
     return_funds: bool,
     token_program_id: ProgramId,
     amount: u128,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 enum FlashSwapInstruction {
     Initiate {
         token_program_id: ProgramId,
         callback_program_id: ProgramId,
         amount_out: u128,
-        callback_instruction_data: Vec<u32>,
+        callback_instruction_data: Vec<u8>,
     },
     InvariantCheck {
         min_vault_balance: u128,
     },
+}
+
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct EmitterInstruction {
+    events: Vec<ProgramEvent>,
+    chain: Vec<(ProgramId, InstructionData)>,
 }
 
 fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<AccountId, Account> {

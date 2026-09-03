@@ -21,17 +21,18 @@ use crate::{
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     error::DbError,
     sequencer::sequencer_cells::{
-        DeadLetterCrossZoneDispatchCountCell, DeadLetterCrossZoneDispatchesCellOwned,
-        DeadLetterCrossZoneDispatchesCellRef, DeadLetterDispatchRecord, DispatchOrigin,
-        FinalBlockMetaCellOwned, FinalBlockMetaCellRef, FinalLeeStateCellOwned,
-        FinalLeeStateCellRef, LEEStateCellOwned, LEEStateCellRef, LatestBlockMetaCellOwned,
-        LatestBlockMetaCellRef, LegacyPendingCrossZoneDispatchesCellOwned, PeerChainTip,
-        PeerFloorCellOwned, PeerFloorCellRef, PeerTipCell, PeerZoneKey,
-        PendingCrossZoneDispatchCellOwned, PendingCrossZoneDispatchCellRef,
-        PendingCrossZoneDispatchCountCell, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, PendingDepositEventsCellOwned, PendingDepositEventsCellRef,
-        PublishedHighWaterCell, UnseenWithdrawCountCell, WithdrawalReconciliationKey,
-        ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
+        ChannelCursorCell, DeadLetterCrossZoneDispatchCountCell,
+        DeadLetterCrossZoneDispatchesCellOwned, DeadLetterCrossZoneDispatchesCellRef,
+        DeadLetterDispatchRecord, DispatchOrigin, FinalBlockMetaCellOwned, FinalBlockMetaCellRef,
+        FinalLeeStateCellOwned, FinalLeeStateCellRef, LEEStateCellOwned, LEEStateCellRef,
+        LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
+        LegacyPendingCrossZoneDispatchesCellOwned, PeerChainTip, PeerFloorCellOwned,
+        PeerFloorCellRef, PeerTipCell, PeerZoneKey, PendingCrossZoneDispatchCellOwned,
+        PendingCrossZoneDispatchCellRef, PendingCrossZoneDispatchCountCell,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PendingDepositEventsCellOwned,
+        PendingDepositEventsCellRef, PublishedHighWaterCell, SlashRecordCellOwned,
+        SlashRecordCellRef, UnseenWithdrawCountCell, WithdrawalReconciliationKey, ZoneAnchorCell,
+        ZoneAnchorRecord, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -43,6 +44,8 @@ pub const DB_META_LAST_FINALIZED_BLOCK_ID: &str = "last_finalized_block_id";
 pub const DB_META_LATEST_BLOCK_META_KEY: &str = "latest_block_meta";
 /// Key base for storing the zone-sdk sequencer checkpoint (opaque bytes).
 pub const DB_META_ZONE_SDK_CHECKPOINT_KEY: &str = "zone_sdk_checkpoint";
+/// Key base for storing the slashing record (opaque bytes).
+pub const DB_META_SLASH_RECORD_KEY: &str = "slash_record";
 /// Key base for storing the last channel block read back and verified from
 /// Bedrock (its L1 slot + `id`/`hash`) — the anchor for the startup
 /// consistency check and the resume point for reconstruction.
@@ -78,6 +81,8 @@ pub const DB_META_UNSEEN_WITHDRAW_COUNT_KEY: &str = "unseen_withdraw_count";
 /// channel. Never decreases, and deliberately survives the block pruning a
 /// head rewind performs.
 pub const DB_META_PUBLISHED_HIGH_WATER_KEY: &str = "published_high_water";
+/// The `MsgId` of the newest channel inscription processed, block or not.
+pub const DB_META_CHANNEL_CURSOR_KEY: &str = "channel_cursor";
 
 /// How many cross-zone deliveries may be pending at once.
 ///
@@ -93,10 +98,20 @@ pub const MAX_PENDING_CROSS_ZONE_DISPATCHES: usize = 4096;
 /// oldest evicts at the cap, and nothing is concealed by that: retirements are
 /// counted separately and the count does not evict.
 ///
-/// An entry count bounds bytes only because a record identifies a delivery
-/// rather than carrying it. At a fixed 84 bytes each the list is 21 KB, which
-/// matters because it is one value rewritten under the block-production lock.
+/// Entries carry their transaction so a requeue can restore it, so the entry
+/// count alone no longer bounds bytes; [`MAX_REQUEUEABLE_DISPATCH_BYTES`] does.
+/// At the caps the list is 16 MB worst case, and it is one value rewritten
+/// under the block-production lock, which is why both caps stay small.
 pub const MAX_DEAD_LETTER_CROSS_ZONE_DISPATCHES: usize = 256;
+
+/// The largest transaction a dead letter retains for requeueing.
+///
+/// The bytes are peer-chosen and can exceed a whole block, and the retained
+/// list is one blob rewritten on every retirement, so retention has to be
+/// bounded per entry. A larger delivery is retired without its bytes: still
+/// listed and counted, but a requeue reports it as not retained, and reading
+/// it back off the peer channel is the operator's remaining path.
+pub const MAX_REQUEUEABLE_DISPATCH_BYTES: usize = 64 * 1024;
 
 /// Key base for storing the LEE state.
 pub const DB_LEE_STATE_KEY: &str = "lee_state";
@@ -120,6 +135,23 @@ pub enum DispatchFailure {
     Retired(Box<DeadLetterDispatchRecord>),
     /// No pending record, so nothing was counted and nothing was given up on.
     Absent,
+}
+
+/// What restoring a dead-lettered delivery did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadLetterRequeue {
+    /// Moved back into the pending list with a clean attempt count.
+    Requeued,
+    /// The delivery was already pending again, so only the dead letter was
+    /// dropped. The watcher re-adds a pending record whenever it re-reads a
+    /// slot it has already consumed, so the two can race.
+    AlreadyPending,
+    /// No retained dead letter under that key.
+    NotFound,
+    /// The dead letter is listed but its transaction was over
+    /// [`MAX_REQUEUEABLE_DISPATCH_BYTES`] and was not retained; the record is
+    /// kept and the message must be read back off the peer channel instead.
+    NotRetained,
 }
 
 /// A single key/value entry from a column family, used inside [`DbDump`].
@@ -177,6 +209,10 @@ pub struct StoreUpdate<'update> {
     /// `(block, finalized)` payloads to write.
     pub blocks: &'update [(&'update Block, bool)],
 
+    /// The `MsgId` of the newest inscription this update processed, block or
+    /// not; `None` leaves the stored cursor untouched.
+    pub channel_cursor: Option<[u8; 32]>,
+
     /// Head tip to pin the stored chain to; `None` only for an empty chain.
     pub head_tip: Option<&'update BlockMeta>,
     /// State after the last applied block.
@@ -201,6 +237,9 @@ pub struct StoreUpdate<'update> {
 
     /// Advance the channel-read anchor.
     pub zone_anchor: Option<&'update ZoneAnchorRecord>,
+
+    /// Lower the published high water mark to this height if it is above.
+    pub lower_published_high_water: Option<u64>,
 }
 
 impl<'update> StoreUpdate<'update> {
@@ -211,6 +250,7 @@ impl<'update> StoreUpdate<'update> {
         Self {
             checkpoint: None,
             blocks: &[],
+            channel_cursor: None,
             head_tip: None,
             head_state,
             final_snapshot: None,
@@ -221,6 +261,7 @@ impl<'update> StoreUpdate<'update> {
             consumed_withdrawals: &[],
             new_withdraw_intents: &[],
             zone_anchor: None,
+            lower_published_high_water: None,
         }
     }
 }
@@ -371,7 +412,26 @@ impl RocksDBIO {
             pending_records: Mutex::new(()),
         };
         dbio.migrate_legacy_pending_dispatches()?;
+        dbio.drop_undecodable_dead_letters()?;
         Ok(dbio)
+    }
+
+    /// Drops a retained dead-letter list whose layout predates the retained
+    /// transaction bytes.
+    ///
+    /// Old records carried only the transaction size, so there is nothing to
+    /// requeue and no lossless rewrite; the lifetime give-up count lives in its
+    /// own cell and survives. Without this, the first read of the old blob
+    /// errors, and one of those sits on the follow sink's settlement path,
+    /// where a persist failure halts the node.
+    fn drop_undecodable_dead_letters(&self) -> DbResult<()> {
+        match self.get_opt::<DeadLetterCrossZoneDispatchesCellOwned>(()) {
+            Ok(_) => Ok(()),
+            Err(DbError::SerializationError { .. }) => {
+                self.del::<DeadLetterCrossZoneDispatchesCellOwned>(())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Rewrites a legacy whole-vector pending-dispatch blob into per-message
@@ -542,13 +602,21 @@ impl RocksDBIO {
         self.put(&ZoneSdkCheckpointCellRef(bytes), ())
     }
 
+    pub fn get_slash_record_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self.get_opt::<SlashRecordCellOwned>(())?.map(|cell| cell.0))
+    }
+
+    pub fn put_slash_record_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&SlashRecordCellRef(bytes), ())
+    }
+
     /// Remove the persisted zone-sdk checkpoint so the next startup is treated as a fresh start.
     pub fn delete_zone_sdk_checkpoint_bytes(&self) -> DbResult<()> {
         self.del::<ZoneSdkCheckpointCellOwned>(())
     }
 
-    /// The highest block id this sequencer has ever inscribed, or `None` if it
-    /// has never published. Read fresh: a head rewind prunes blocks, so the
+    /// The highest block id this sequencer must not inscribe again, or `None` if
+    /// it has never published. Read fresh: a head rewind prunes blocks, so the
     /// stored tip is not a safe substitute.
     pub fn published_high_water(&self) -> DbResult<Option<u64>> {
         self.get_opt::<PublishedHighWaterCell>(())
@@ -564,6 +632,13 @@ impl RocksDBIO {
             return Ok(());
         }
         self.put(&PublishedHighWaterCell(block_id), ())
+    }
+
+    /// The `MsgId` of the newest channel inscription processed, or `None` if
+    /// none was recorded.
+    pub fn channel_cursor(&self) -> DbResult<Option<[u8; 32]>> {
+        self.get_opt::<ChannelCursorCell>(())
+            .map(|val| val.map(|cell| cell.0))
     }
 
     pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
@@ -880,7 +955,11 @@ impl RocksDBIO {
             message_key,
             origin,
             failed_attempts,
-            transaction_bytes: u32::try_from(pending.transaction.len()).unwrap_or(u32::MAX),
+            transaction: if pending.transaction.len() <= MAX_REQUEUEABLE_DISPATCH_BYTES {
+                pending.transaction
+            } else {
+                Vec::new()
+            },
         };
 
         // One entry per delivery, not per retirement. A watcher rebuilding a
@@ -944,6 +1023,73 @@ impl RocksDBIO {
         Ok(self
             .get_opt::<DeadLetterCrossZoneDispatchCountCell>(())?
             .map_or(0, |cell| cell.0))
+    }
+
+    /// Restores a retained dead-lettered delivery to the pending list, with a
+    /// clean attempt count.
+    ///
+    /// The operator move for a delivery whose cause of failure has cleared: a
+    /// raised mint cap, a fixed target program. The lifetime give-up count is
+    /// left alone, since requeueing does not unmake the giving up, and a
+    /// delivery that fails again retires again.
+    pub fn requeue_dead_letter_cross_zone_dispatch(
+        &self,
+        message_key: [u8; 32],
+    ) -> DbResult<DeadLetterRequeue> {
+        let _pending = self.lock_pending_records();
+        let mut dead_letters = self.get_dead_letter_cross_zone_dispatches()?;
+        let Some(index) = dead_letters
+            .iter()
+            .position(|record| record.message_key == message_key)
+        else {
+            return Ok(DeadLetterRequeue::NotFound);
+        };
+        if dead_letters[index].transaction.is_empty() {
+            return Ok(DeadLetterRequeue::NotRetained);
+        }
+        let record = dead_letters.remove(index);
+
+        let mut batch = WriteBatch::default();
+        self.put_batch(
+            &DeadLetterCrossZoneDispatchesCellRef(&dead_letters),
+            (),
+            &mut batch,
+        )?;
+
+        if self
+            .get_opt::<PendingCrossZoneDispatchCellOwned>(message_key)?
+            .is_some()
+        {
+            self.db.write(batch).map_err(|rerr| {
+                DbError::rocksdb_cast_message(
+                    rerr,
+                    Some("Failed to drop a stale cross-zone dead letter".to_owned()),
+                )
+            })?;
+            return Ok(DeadLetterRequeue::AlreadyPending);
+        }
+
+        let before = self.get_pending_cross_zone_dispatch_count()?;
+        let after = before.saturating_add(1);
+        if after > u64::try_from(MAX_PENDING_CROSS_ZONE_DISPATCHES).expect("cap fits u64") {
+            return Err(DbError::db_interaction_error(format!(
+                "Refusing to hold more than {MAX_PENDING_CROSS_ZONE_DISPATCHES} pending cross-zone deliveries; {before} already pending"
+            )));
+        }
+        let restored = PendingCrossZoneDispatchRecord::recorded(message_key, record.transaction);
+        self.put_batch(
+            &PendingCrossZoneDispatchCellRef(&restored),
+            message_key,
+            &mut batch,
+        )?;
+        self.put_batch(&PendingCrossZoneDispatchCountCell(after), (), &mut batch)?;
+        self.db.write(batch).map_err(|rerr| {
+            DbError::rocksdb_cast_message(
+                rerr,
+                Some("Failed to requeue a cross-zone dead letter".to_owned()),
+            )
+        })?;
+        Ok(DeadLetterRequeue::Requeued)
     }
 
     /// Drops the records of deliveries that are settled for good, outside any
@@ -1385,6 +1531,7 @@ impl RocksDBIO {
         let StoreUpdate {
             checkpoint,
             blocks,
+            channel_cursor,
             head_tip,
             head_state,
             final_snapshot,
@@ -1395,6 +1542,7 @@ impl RocksDBIO {
             consumed_withdrawals,
             new_withdraw_intents,
             zone_anchor,
+            lower_published_high_water,
         } = *update;
 
         // 0 stands in for "no chain yet": nothing to sweep above the new tip,
@@ -1407,6 +1555,14 @@ impl RocksDBIO {
         }
         if let Some(anchor) = zone_anchor {
             self.put_batch(&ZoneAnchorCell(*anchor), (), &mut batch)?;
+        }
+        if let Some(cap) = lower_published_high_water
+            && self.published_high_water()?.is_some_and(|mark| mark > cap)
+        {
+            self.put_batch(&PublishedHighWaterCell(cap), (), &mut batch)?;
+        }
+        if let Some(cursor) = channel_cursor {
+            self.put_batch(&ChannelCursorCell(cursor), (), &mut batch)?;
         }
 
         // Every block payload this update writes, keyed by id so a block that
@@ -1532,6 +1688,7 @@ impl RocksDBIO {
     pub fn atomic_update(
         &self,
         block: &Block,
+        channel_cursor: Option<[u8; 32]>,
         withdrawals: &[WithdrawalReconciliationKey],
         state: &V03State,
         checkpoint: Option<&[u8]>,
@@ -1539,6 +1696,7 @@ impl RocksDBIO {
         self.store_update(&StoreUpdate {
             checkpoint,
             blocks: &[(block, false)],
+            channel_cursor,
             head_tip: Some(&BlockMeta::from(block)),
             new_withdraw_intents: withdrawals,
             ..StoreUpdate::new(state)

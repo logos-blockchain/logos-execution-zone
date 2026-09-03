@@ -1,10 +1,7 @@
 use std::{path::Path, sync::Arc};
 
-use common::{
-    block::Block,
-    transaction::{LeeTransaction, clock_invocation},
-};
-use lee::{GENESIS_BLOCK_ID, V03State};
+use common::block::Block;
+use lee::V03State;
 use log::warn;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
@@ -29,6 +26,8 @@ pub const DB_META_STALL_REASON_KEY: &str = "stall_reason";
 pub const DB_META_CROSS_ZONE_HALT_KEY: &str = "cross_zone_halt";
 /// Key base for storing the L1 inscription slot of the tip block.
 pub const DB_META_TIP_SLOT_KEY: &str = "tip_slot";
+/// Key base for storing the applied event-filter segments (opaque borsh bytes).
+pub const DB_META_EVENT_FILTER_SEGMENTS_KEY: &str = "event_filter_segments";
 
 /// Cell name for a breakpoint.
 pub const BREAKPOINT_CELL_NAME: &str = "breakpoint";
@@ -38,6 +37,8 @@ pub const BLOCK_HASH_CELL_NAME: &str = "block hash";
 pub const TX_HASH_CELL_NAME: &str = "tx hash";
 /// Cell name for a account number of transactions.
 pub const ACC_NUM_CELL_NAME: &str = "acc id";
+/// Cell name for the events emitted by a block's transactions.
+pub const BLOCK_EVENTS_CELL_NAME: &str = "block events";
 
 /// Name of breakpoint column family.
 pub const CF_BREAKPOINT_NAME: &str = "cf_breakpoint";
@@ -49,6 +50,8 @@ pub const CF_TX_TO_ID: &str = "cf_tx_to_id";
 pub const CF_ACC_META: &str = "cf_acc_meta";
 /// Name of account id to tx hash map column family.
 pub const CF_ACC_TO_TX: &str = "cf_acc_to_tx";
+/// Name of per-block events column family.
+pub const CF_EVENTS: &str = "cf_events";
 
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,
@@ -73,6 +76,7 @@ impl RocksDBIO {
         let cftti = ColumnFamilyDescriptor::new(CF_TX_TO_ID, cf_opts.clone());
         let cfameta = ColumnFamilyDescriptor::new(CF_ACC_META, cf_opts.clone());
         let cfatt = ColumnFamilyDescriptor::new(CF_ACC_TO_TX, cf_opts.clone());
+        let cfevents = ColumnFamilyDescriptor::new(CF_EVENTS, cf_opts.clone());
 
         let mut db_opts = Options::default();
         db_opts.create_missing_column_families(true);
@@ -80,7 +84,16 @@ impl RocksDBIO {
         let db = DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(
             &db_opts,
             path,
-            vec![cfb, cfmeta, cfbreakpoint, cfhti, cftti, cfameta, cfatt],
+            vec![
+                cfb,
+                cfmeta,
+                cfbreakpoint,
+                cfhti,
+                cftti,
+                cfameta,
+                cfatt,
+                cfevents,
+            ],
         )
         .map_err(|err| DbError::RocksDbError {
             error: err,
@@ -133,6 +146,12 @@ impl RocksDBIO {
         self.db
             .cf_handle(CF_TX_TO_ID)
             .expect("Tx hash to id map column should exist")
+    }
+
+    pub fn events_column(&self) -> Arc<BoundColumnFamily<'_>> {
+        self.db
+            .cf_handle(CF_EVENTS)
+            .expect("Events column should exist")
     }
 
     pub fn account_id_to_tx_hash_column(&self) -> Arc<BoundColumnFamily<'_>> {
@@ -189,7 +208,7 @@ impl RocksDBIO {
         for block in self.get_block_batch_seq(
             start.checked_add(1).expect("Will be lesser that u64::MAX")..=block_id,
         )? {
-            apply_block_transactions(block, &mut state)?;
+            apply_block_transactions(&block, &mut state)?;
         }
 
         Ok(state)
@@ -201,71 +220,12 @@ impl RocksDBIO {
     }
 }
 
-fn apply_block_transactions(mut block: Block, state: &mut V03State) -> DbResult<()> {
-    let expected_clock = LeeTransaction::Public(clock_invocation(block.header.timestamp));
-
-    let clock_tx = block.body.transactions.pop().ok_or_else(|| {
-        DbError::db_interaction_error("Block must contain clock transaction at the end".to_owned())
-    })?;
-
-    if clock_tx != expected_clock {
-        return Err(DbError::db_interaction_error(
-            "Last transaction in block must be the clock invocation for the block timestamp"
-                .to_owned(),
-        ));
-    }
-
-    for transaction in block.body.transactions {
-        if block.header.block_id == GENESIS_BLOCK_ID {
-            let genesis_tx = match transaction {
-                LeeTransaction::Public(public_tx) => public_tx,
-                LeeTransaction::PrivacyPreserving(_) | LeeTransaction::ProgramDeployment(_) => {
-                    return Err(DbError::db_interaction_error(
-                        "Genesis block should contain only public transactions".to_owned(),
-                    ));
-                }
-            };
-            state
-                .transition_from_public_transaction(
-                    &genesis_tx,
-                    block.header.block_id,
-                    block.header.timestamp,
-                )
-                .map_err(|err| {
-                    DbError::db_interaction_error(format!(
-                        "genesis transaction execution failed with err {err:?}"
-                    ))
-                })?;
-        } else {
-            transaction
-                .execute_on_state(state, block.header.block_id, block.header.timestamp)
-                .map_err(|err| {
-                    DbError::db_interaction_error(format!(
-                        "transaction execution failed with err {err:?}"
-                    ))
-                })?;
-        }
-    }
-
-    let LeeTransaction::Public(clock_public_tx) = clock_tx else {
-        return Err(DbError::db_interaction_error(
-            "Clock invocation must be a public transaction".to_owned(),
-        ));
-    };
-
-    state
-        .transition_from_public_transaction(
-            &clock_public_tx,
-            block.header.block_id,
-            block.header.timestamp,
-        )
-        .map_err(|err| {
-            DbError::db_interaction_error(format!(
-                "clock transaction execution failed with err {err:?}"
-            ))
-        })?;
-
-    Ok(())
+fn apply_block_transactions(block: &Block, state: &mut V03State) -> DbResult<()> {
+    // The indexer replays through the same transition the sequencer and
+    // validators use, so the fee settlement arithmetic exists exactly once.
+    chain_state::apply::apply_block_to_state(block, state)
+        .map(drop)
+        .map_err(|err| DbError::db_interaction_error(format!("block replay failed: {err}")))
 }
 
 fn closest_breakpoint_id(block_id: u64) -> u64 {

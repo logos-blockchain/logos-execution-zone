@@ -27,7 +27,8 @@ use ping_core::{
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
-    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{MultiNodeTestContextConfig, source_only_cross_zone},
 };
 use tokio::test;
 
@@ -49,8 +50,10 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
             allowed_routes: vec![CrossZoneRoute {
                 src_program_id: programs::ping_sender().id(),
                 target_program_id: receiver_id,
+                mint_cap: None,
             }],
             expected_block_signing_pubkeys: Vec::new(),
+            min_committee_size: 0,
         }],
         source_authority: None,
         source_governance: None,
@@ -64,7 +67,8 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
             })
             .disable_wallet()
             .with_sequencer_partial_config(partial)
-            .with_genesis(vec![]),
+            .with_genesis(vec![])
+            .with_cross_zone(Some(source_only_cross_zone())),
         )
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
@@ -110,11 +114,10 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
     let outbox_id = programs::cross_zone_outbox().id();
     let ordinal = 0;
 
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping instruction");
-    let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
     let send = SenderInstruction::Send {
         target_zone,

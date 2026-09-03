@@ -1,5 +1,4 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use serde::{Deserialize, Serialize};
 
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
@@ -9,7 +8,7 @@ use crate::{
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
 
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
     /// Outputs of the program execution.
     pub program_outputs: Vec<ProgramOutput>,
@@ -23,7 +22,7 @@ pub struct PrivacyPreservingCircuitInput {
     pub dummy_inputs: Vec<DummyInput>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[expect(
     clippy::large_enum_variant,
     reason = "Private carries the ML-KEM viewing key and dominates; boxing it would add a guest heap allocation per witness, and the footprint matches the pre-refactor enum"
@@ -35,7 +34,7 @@ pub enum InputAccountIdentity {
     Private(PrivateWitness),
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct PrivateWitness {
     pub vpk: ViewingPublicKey,
     pub random_seed: [u8; 32],
@@ -44,7 +43,7 @@ pub struct PrivateWitness {
     pub nullifier: NullifierWitness,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub enum WitnessKind {
     /// Standalone private account. The `account_id` is derived as
     /// `AccountId::for_regular_private_account(&npk, vpk, identifier)` and matched against
@@ -64,7 +63,7 @@ pub enum WitnessKind {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub enum NullifierWitness {
     /// Init of a private account: no membership proof. The `pre_state` must be
     /// `Account::default()`. `npk` is supplied directly, so the caller need not own the account
@@ -84,7 +83,7 @@ pub enum NullifierWitness {
 
 /// A struct containing necessary data for dummy nullifier and
 /// commitment generation.
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub struct DummyInput {
     /// The seed used for generating the dummy nullifier.
     pub nullifier_seed: [u8; 32],
@@ -140,7 +139,7 @@ impl NullifierWitness {
     }
 }
 
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(
     any(feature = "host", test),
     derive(Debug, Clone, Default, PartialEq, Eq)
@@ -155,14 +154,14 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedAccountData,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct PublicAction {
     pub pre: AccountWithMetadata,
     pub post: Account,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
 pub struct PrivacyPreservingCircuitOutput {
     pub public_actions: Vec<PublicAction>,
@@ -192,18 +191,16 @@ impl PrivacyPreservingCircuitOutput {
 
 #[cfg(feature = "host")]
 impl PrivacyPreservingCircuitOutput {
-    /// Serializes the circuit output to a byte vector.
+    /// Serializes the circuit output to the exact journal byte sequence the circuit guest commits.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        bytemuck::cast_slice(&risc0_zkvm::serde::to_vec(&self).unwrap()).to_vec()
+        crate::to_borsh_frame(self)
     }
 }
 
 #[cfg(feature = "host")]
 #[cfg(test)]
 mod tests {
-    use risc0_zkvm::serde::from_slice;
-
     use super::*;
     use crate::{
         Commitment, Nullifier,
@@ -212,7 +209,7 @@ mod tests {
     };
 
     #[test]
-    fn privacy_preserving_circuit_output_to_bytes_is_compatible_with_from_slice() {
+    fn privacy_preserving_circuit_output_to_bytes_round_trips_via_borsh_frame() {
         let output = PrivacyPreservingCircuitOutput {
             public_actions: vec![
                 PublicAction {
@@ -269,7 +266,10 @@ mod tests {
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         };
         let bytes = output.to_bytes();
-        let output_from_slice: PrivacyPreservingCircuitOutput = from_slice(&bytes).unwrap();
-        assert_eq!(output, output_from_slice);
+        let decoded: PrivacyPreservingCircuitOutput = borsh::from_slice(
+            crate::from_frame(&bytes).expect("self-produced frame is well-formed"),
+        )
+        .unwrap();
+        assert_eq!(output, decoded);
     }
 }

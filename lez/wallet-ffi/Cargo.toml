@@ -20,7 +20,6 @@ programs.workspace = true
 tokio.workspace = true
 key_protocol.workspace = true
 serde_json.workspace = true
-risc0-zkvm.workspace = true
 bip39.workspace = true
 vault_core.workspace = true
 

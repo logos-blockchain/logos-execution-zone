@@ -3,13 +3,13 @@
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockIngestError, Ciphertext,
-    Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData, EphemeralPublicKey,
-    HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID,
-    PublicKey, PublicMessage, PublicTransaction, Signature, StallReason, Transaction,
-    ValidityWindow, WitnessSet,
+    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, BlockIngestError,
+    Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData,
+    EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState,
+    Nullifier, PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction,
+    PrivateAction, ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof,
+    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, Signature,
+    StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -243,6 +243,35 @@ impl From<EncryptedAccountData>
 // Transaction Message conversions
 // ============================================================================
 
+impl From<lee::FeeDeclaration> for FeeDeclaration {
+    fn from(value: lee::FeeDeclaration) -> Self {
+        let lee::FeeDeclaration {
+            payer,
+            gas_limit,
+            tip,
+            max_fee,
+        } = value;
+        Self {
+            payer: payer.into(),
+            gas_limit,
+            tip,
+            max_fee,
+        }
+    }
+}
+
+impl From<FeeDeclaration> for lee::FeeDeclaration {
+    fn from(value: FeeDeclaration) -> Self {
+        let FeeDeclaration {
+            payer,
+            gas_limit,
+            tip,
+            max_fee,
+        } = value;
+        Self::new(payer.into(), gas_limit, tip, max_fee)
+    }
+}
+
 impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::public_transaction::Message {
@@ -250,12 +279,14 @@ impl From<lee::public_transaction::Message> for PublicMessage {
             account_ids,
             nonces,
             instruction_data,
+            fee,
         } = value;
         Self {
             program_id: program_id.into(),
             account_ids: account_ids.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
+            fee: fee.map(Into::into),
         }
     }
 }
@@ -267,6 +298,7 @@ impl From<PublicMessage> for lee::public_transaction::Message {
             account_ids,
             nonces,
             instruction_data,
+            fee,
         } = value;
         Self::new_preserialized(
             program_id.into(),
@@ -276,6 +308,7 @@ impl From<PublicMessage> for lee::public_transaction::Message {
                 .map(|x| lee_core::account::Nonce(*x))
                 .collect(),
             instruction_data,
+            fee.map(Into::into),
         )
     }
 }
@@ -580,6 +613,7 @@ impl From<common::block::BlockHeader> for BlockHeader {
             prev_block_hash,
             hash,
             timestamp,
+            producer,
             signature,
         } = value;
         Self {
@@ -587,6 +621,7 @@ impl From<common::block::BlockHeader> for BlockHeader {
             prev_block_hash: prev_block_hash.into(),
             hash: hash.into(),
             timestamp,
+            producer: producer.into(),
             signature: signature.into(),
         }
     }
@@ -601,6 +636,7 @@ impl TryFrom<BlockHeader> for common::block::BlockHeader {
             prev_block_hash,
             hash,
             timestamp,
+            producer,
             signature,
         } = value;
         Ok(Self {
@@ -608,6 +644,7 @@ impl TryFrom<BlockHeader> for common::block::BlockHeader {
             prev_block_hash: prev_block_hash.into(),
             hash: hash.into(),
             timestamp,
+            producer: producer.try_into()?,
             signature: signature.into(),
         })
     }
@@ -783,6 +820,7 @@ impl From<indexer_core::status::PeerHealth> for PeerHealth {
             indexer_core::status::PeerHealth::Live => Self::Live,
             indexer_core::status::PeerHealth::Lagging => Self::Lagging,
             indexer_core::status::PeerHealth::Holed => Self::Holed,
+            indexer_core::status::PeerHealth::Suspended => Self::Suspended,
             indexer_core::status::PeerHealth::Halted => Self::Halted,
         }
     }
@@ -831,6 +869,25 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::EmptyBlock => Self::EmptyBlock,
             indexer_core::BlockIngestError::InvalidClockTransaction => {
                 Self::InvalidClockTransaction
+            }
+            indexer_core::BlockIngestError::InvalidFeeTransaction => Self::InvalidFeeTransaction,
+            indexer_core::BlockIngestError::InvalidRewardTarget { reason } => {
+                Self::InvalidRewardTarget { reason }
+            }
+            indexer_core::BlockIngestError::InvalidProducerSignature => {
+                Self::InvalidProducerSignature
+            }
+            indexer_core::BlockIngestError::InvalidFeeClass { tx_index, reason } => {
+                Self::InvalidFeeClass { tx_index, reason }
+            }
+            indexer_core::BlockIngestError::MissingFeeDeclaration { tx_index } => {
+                Self::MissingFeeDeclaration { tx_index }
+            }
+            indexer_core::BlockIngestError::GasCapExceeded { tx_index, reason } => {
+                Self::GasCapExceeded { tx_index, reason }
+            }
+            indexer_core::BlockIngestError::RestrictedAccountModification { tx_index, reason } => {
+                Self::RestrictedAccountModification { tx_index, reason }
             }
             indexer_core::BlockIngestError::NonPublicGenesisTransaction => {
                 Self::NonPublicGenesisTransaction
@@ -884,5 +941,136 @@ impl From<indexer_core::status::IndexerStatus> for IndexerStatus {
             cross_zone_halt: cross_zone_halt.map(Into::into),
             cross_zone_peers: cross_zone_peers.into_iter().map(Into::into).collect(),
         }
+    }
+}
+
+// ============================================================================
+// Event-related conversions
+// ============================================================================
+
+impl From<[u8; 8]> for Selector {
+    fn from(value: [u8; 8]) -> Self {
+        Self(value)
+    }
+}
+
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "We prefer to group methods by functionality rather than by type for conversions"
+)]
+impl EventRecord {
+    // Not `From`: the orphan rule forbids implementing a foreign trait for `Vec<EventRecord>`.
+    #[must_use]
+    pub fn from_tx_events(block_id: BlockId, group: common::transaction::TxEvents) -> Vec<Self> {
+        let common::transaction::TxEvents {
+            tx_index,
+            tx_hash,
+            events,
+        } = group;
+        events
+            .into_iter()
+            .map(|event| Self {
+                block_id,
+                tx_index,
+                tx_hash: tx_hash.into(),
+                program_id: event.program_id.into(),
+                selector: event.event.selector.into(),
+                data: event.event.data,
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_tx_events_copies_block_and_tx_context_onto_every_record() {
+        let event = |selector: u8| lee_core::program::TransactionEvent {
+            program_id: [7_u32; 8],
+            event: lee_core::program::ProgramEvent {
+                selector: [selector; 8],
+                data: vec![selector; 2],
+            },
+        };
+        let group = common::transaction::TxEvents {
+            tx_index: 4,
+            tx_hash: common::HashType([9_u8; 32]),
+            events: vec![event(1), event(2), event(3)],
+        };
+
+        let records = EventRecord::from_tx_events(77, group);
+
+        assert_eq!(records.len(), 3);
+        assert!(records.iter().all(|r| r.block_id == 77 && r.tx_index == 4));
+        assert!(
+            records
+                .iter()
+                .all(|r| r.tx_hash == HashType([9_u8; 32]) && r.program_id == ProgramId([7; 8]))
+        );
+        assert_eq!(records[1].selector, Selector([2; 8]));
+        assert_eq!(records[2].data, vec![3, 3]);
+    }
+
+    /// A charged public transaction's fee declaration must survive the
+    /// lee -> protocol -> lee round trip, or the transaction read back over the
+    /// protocol recomputes to a different hash than the one on chain.
+    #[test]
+    fn public_fee_declaration_survives_roundtrip() {
+        let signer = lee::PrivateKey::try_new([1_u8; 32]).expect("valid key");
+        let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
+
+        let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
+        let message = lee::public_transaction::Message::try_new_with_fees(
+            [7_u32; 8],
+            vec![signer_id],
+            vec![0_u128.into()],
+            0_u32,
+            fee,
+        )
+        .expect("message builds");
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&signer]);
+        let tx = lee::PublicTransaction::new(message, witness_set);
+        let original_hash = tx.hash();
+        assert_eq!(tx.message().fee, Some(fee));
+
+        let protocol_tx: PublicTransaction = tx.into();
+        let restored: lee::PublicTransaction = protocol_tx.try_into().expect("converts back");
+
+        assert_eq!(
+            restored.message().fee,
+            Some(fee),
+            "the fee declaration must survive the round trip",
+        );
+        assert_eq!(
+            restored.hash(),
+            original_hash,
+            "a dropped fee declaration would change the recomputed hash",
+        );
+    }
+
+    /// A fee-exempt public transaction round-trips with `fee: None`.
+    #[test]
+    fn public_exempt_message_survives_roundtrip() {
+        let signer = lee::PrivateKey::try_new([1_u8; 32]).expect("valid key");
+        let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
+
+        let message = lee::public_transaction::Message::try_new(
+            [7_u32; 8],
+            vec![signer_id],
+            vec![0_u128.into()],
+            0_u32,
+        )
+        .expect("message builds");
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&signer]);
+        let tx = lee::PublicTransaction::new(message, witness_set);
+        let original_hash = tx.hash();
+
+        let protocol_tx: PublicTransaction = tx.into();
+        let restored: lee::PublicTransaction = protocol_tx.try_into().expect("converts back");
+
+        assert_eq!(restored.message().fee, None);
+        assert_eq!(restored.hash(), original_hash);
     }
 }

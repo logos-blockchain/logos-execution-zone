@@ -83,13 +83,13 @@ run-monitoring:
 [working-directory: 'lez/sequencer/service']
 run-sequencer *args:
     @echo "🧠 Running sequencer"
-    RUST_LOG=info cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
+    RUST_LOG=info,kameo=warn cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
 
 # Run Sequencer with mocked Bedrock clients. Takes the same args as `run-sequencer`.
 [working-directory: 'lez/sequencer/service']
 run-sequencer-standalone *args:
     @echo "🧪 Running sequencer in standalone mode"
-    RUST_LOG=info cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
+    RUST_LOG=info,kameo=warn cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
 
 # Run Indexer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [working-directory: 'lez/indexer/service']
@@ -124,10 +124,10 @@ get-sequencer-metrics:
 wallet-import-test-accounts:
     @echo "⚙️ Initializing accounts"
     just run-wallet account import public --private-key 7f273098f25b71e6c005a9519f2678da8d1c7f01f6a27778e2d9948abdf901fb
-    just run-wallet vault claim --account-id Public/CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r --amount 10000
+    just run-wallet vault claim --account-id Public/CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r --amount 10000000000000
 
     just run-wallet account import public --private-key f434f8741720014586ae43356d2aec6257da086222f604ddb75d69733b86fc4c
-    just run-wallet vault claim --account-id Public/2RHZhw9h534Zr3eq2RGhQete2Hh667foECzXPmSkGni2 --amount 20000
+    just run-wallet vault claim --account-id Public/2RHZhw9h534Zr3eq2RGhQete2Hh667foECzXPmSkGni2 --amount 20000000000000
 
     just run-wallet account list
 

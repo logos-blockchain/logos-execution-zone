@@ -6,6 +6,7 @@ pub enum OperationStatus {
     NullPointer = 0x1,
     InitializationError = 0x2,
     ClientError = 0x3,
+    InvalidArgument = 0x4,
 }
 
 impl OperationStatus {

@@ -10,10 +10,10 @@ use lee_core::{
     program::{
         AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
-        TimestampValidityWindow, validate_execution,
+        TimestampValidityWindow, pre_states_match_accounts, validate_execution,
     },
 };
-use risc0_zkvm::{guest::env, serde::to_vec};
+use risc0_zkvm::guest::env;
 
 /// State of the involved accounts before and after program execution.
 pub struct ExecutionState {
@@ -121,10 +121,16 @@ impl ExecutionState {
             panic!("No program outputs provided");
         };
 
+        // `pre_state_ids` is never read below (every check uses `program_output` instead) —
+        // this synthetic call only bootstraps the loop's first iteration.
         let initial_call = ChainedCall {
             program_id,
             instruction_data: first_output.instruction_data.clone(),
-            pre_states: first_output.pre_states.clone(),
+            pre_state_ids: first_output
+                .pre_states
+                .iter()
+                .map(|p| p.account_id)
+                .collect(),
             pda_seeds: Vec::new(),
         };
         let initial_caller_data = CallerData {
@@ -153,11 +159,22 @@ impl ExecutionState {
                 "Mismatched instruction data between chained call and program output"
             );
 
+            // Check accounts used are exactly those the call was performed with.
+            assert!(
+                // If the call is top-level, nothing to check.
+                caller_data.program_id.is_none()
+                    // Else, match.
+                    || pre_states_match_accounts(
+                        &chained_call.pre_state_ids,
+                        &program_output.pre_states
+                    ),
+                "Callee ran on accounts the chained call did not name"
+            );
+
             // Check that `program_output` is consistent with the execution of the corresponding
             // program.
-            let program_output_words =
-                &to_vec(&program_output).expect("program_output must be serializable");
-            env::verify(chained_call.program_id, program_output_words).unwrap_or_else(
+            let program_output_frame = lee_core::to_borsh_frame(&program_output);
+            env::verify(chained_call.program_id, &program_output_frame).unwrap_or_else(
                 |_: Infallible| unreachable!("Infallible error is never constructed"),
             );
 

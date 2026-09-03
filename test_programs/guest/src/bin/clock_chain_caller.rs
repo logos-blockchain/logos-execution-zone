@@ -1,10 +1,10 @@
+use borsh::to_vec;
 use lee_core::{
     Timestamp,
     program::{
         AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
-use risc0_zkvm::serde::to_vec;
 
 type Instruction = (ProgramId, Timestamp); // (clock_program_id, timestamp)
 
@@ -19,7 +19,7 @@ fn main() {
             pre_states,
             instruction: (clock_program_id, timestamp),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let post_states: Vec<_> = pre_states
@@ -30,14 +30,14 @@ fn main() {
     let chained_call = ChainedCall {
         program_id: clock_program_id,
         instruction_data: to_vec(&timestamp).unwrap(),
-        pre_states: pre_states.clone(),
+        pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
         pda_seeds: vec![],
     };
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         pre_states,
         post_states,
     )

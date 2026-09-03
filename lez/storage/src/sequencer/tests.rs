@@ -4,6 +4,16 @@ use tempfile::tempdir;
 
 use super::*;
 
+/// The dead-letter record layout that predates the retained transaction
+/// bytes, for seeding a store the migration must clean up.
+#[derive(borsh::BorshSerialize)]
+struct OldDeadLetterRecord {
+    message_key: [u8; 32],
+    origin: DispatchOrigin,
+    failed_attempts: u32,
+    transaction_bytes: u32,
+}
+
 fn marker_id() -> AccountId {
     AccountId::new([1; 32])
 }
@@ -27,7 +37,7 @@ fn dbio_with_genesis(path: &Path) -> (RocksDBIO, Block) {
     let dbio = RocksDBIO::open_or_create(path).unwrap();
     // The same write any block takes: the first one into an empty store starts
     // its chain.
-    dbio.atomic_update(&genesis, &[], &state_with_balance(100), None)
+    dbio.atomic_update(&genesis, None, &[], &state_with_balance(100), None)
         .unwrap();
     (dbio, genesis)
 }
@@ -75,6 +85,31 @@ fn stored_balance(dbio: &RocksDBIO) -> u128 {
         .expect("the store holds a chain")
         .get_account_by_id(marker_id())
         .balance
+}
+
+/// The channel cursor has to outlive the process: a restart that cannot
+/// recover it has nothing to chain the next publish onto.
+#[test]
+fn channel_cursor_survives_reopening_the_store() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, genesis) = dbio_with_genesis(temp_dir.path());
+
+    assert_eq!(
+        dbio.channel_cursor().unwrap(),
+        None,
+        "a store written without a cursor has none to report"
+    );
+    let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    dbio.atomic_update(&block2, Some([7; 32]), &[], &state_with_balance(200), None)
+        .unwrap();
+    drop(dbio);
+
+    let reopened = RocksDBIO::open_or_create(temp_dir.path()).unwrap();
+    assert_eq!(
+        reopened.channel_cursor().unwrap(),
+        Some([7; 32]),
+        "the cursor must come back after a restart"
+    );
 }
 
 #[test]
@@ -877,7 +912,7 @@ fn a_retired_dispatch_moves_into_the_dead_letter_identified_by_its_origin() {
 
     let record = dispatch_record(7);
     let key = record.message_key;
-    let encoded_len = u32::try_from(record.transaction.len()).unwrap();
+    let encoded = record.transaction.clone();
     dbio.add_pending_cross_zone_dispatches(vec![record])
         .unwrap();
 
@@ -899,7 +934,10 @@ fn a_retired_dispatch_moves_into_the_dead_letter_identified_by_its_origin() {
         dispatch_origin(7),
         "the peer coordinates are what let the message be read back off the peer channel"
     );
-    assert_eq!(dead_letters[0].transaction_bytes, encoded_len);
+    assert_eq!(
+        dead_letters[0].transaction, encoded,
+        "the record keeps the bytes a requeue restores"
+    );
     assert_eq!(dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(), 1);
 }
 
@@ -1048,6 +1086,206 @@ fn dead_letters_evict_the_oldest_at_the_cap_but_keep_counting() {
     );
 }
 
+/// Retires `record` into the dead letter, the setup every requeue test shares.
+fn retire(dbio: &RocksDBIO, record: PendingCrossZoneDispatchRecord, origin_seed: u8) {
+    let key = record.message_key;
+    dbio.add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+    for _ in 0..3 {
+        dbio.record_dispatch_failure(key, 3, dispatch_origin(origin_seed))
+            .unwrap();
+    }
+}
+
+#[test]
+fn a_requeued_dead_letter_returns_to_pending_with_a_clean_count() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+    let record = dispatch_record(7);
+    let key = record.message_key;
+    let encoded = record.transaction.clone();
+    retire(&dbio, record, 7);
+
+    assert_eq!(
+        dbio.requeue_dead_letter_cross_zone_dispatch(key).unwrap(),
+        DeadLetterRequeue::Requeued
+    );
+    assert!(
+        dbio.get_dead_letter_cross_zone_dispatches()
+            .unwrap()
+            .is_empty()
+    );
+    let pending = dbio.get_pending_cross_zone_dispatches().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message_key, key);
+    assert_eq!(
+        pending[0].transaction, encoded,
+        "the bytes survive the round trip through the dead letter"
+    );
+    assert_eq!(pending[0].failed_attempts, 0, "the attempt count restarts");
+    assert_eq!(dbio.get_pending_cross_zone_dispatch_count().unwrap(), 1);
+    assert_eq!(
+        dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(),
+        1,
+        "requeueing does not unmake the giving up"
+    );
+}
+
+#[test]
+fn requeueing_an_unknown_key_reports_not_found() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    assert_eq!(
+        dbio.requeue_dead_letter_cross_zone_dispatch([9; 32])
+            .unwrap(),
+        DeadLetterRequeue::NotFound
+    );
+    assert_eq!(dbio.get_pending_cross_zone_dispatch_count().unwrap(), 0);
+}
+
+#[test]
+fn requeueing_a_delivery_already_pending_again_only_drops_the_dead_letter() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+    let record = dispatch_record(7);
+    let key = record.message_key;
+    retire(&dbio, record, 7);
+
+    // The watcher re-reads a slot it already consumed and re-adds the record.
+    dbio.add_pending_cross_zone_dispatches(vec![dispatch_record(7)])
+        .unwrap();
+    let counted = dbio
+        .record_dispatch_failure(key, 3, dispatch_origin(7))
+        .unwrap();
+    assert_eq!(counted, DispatchFailure::Retried { failed_attempts: 1 });
+
+    assert_eq!(
+        dbio.requeue_dead_letter_cross_zone_dispatch(key).unwrap(),
+        DeadLetterRequeue::AlreadyPending
+    );
+    assert!(
+        dbio.get_dead_letter_cross_zone_dispatches()
+            .unwrap()
+            .is_empty()
+    );
+    let pending = dbio.get_pending_cross_zone_dispatches().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].failed_attempts, 1,
+        "the live record keeps its own count"
+    );
+    assert_eq!(
+        dbio.get_pending_cross_zone_dispatch_count().unwrap(),
+        1,
+        "nothing pending was added, so the capacity count must not move"
+    );
+}
+
+/// The one destructive-looking branch: a requeue refused by the pending cap
+/// must leave the dead letter retained, or the refusal destroys the operator's
+/// only handle on the message.
+#[test]
+fn a_requeue_refused_by_the_pending_cap_keeps_the_dead_letter() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+    let record = dispatch_record(7);
+    let key = record.message_key;
+    retire(&dbio, record, 7);
+
+    let full: Vec<_> = (0..MAX_PENDING_CROSS_ZONE_DISPATCHES)
+        .map(|seed| PendingCrossZoneDispatchRecord::recorded(key_from_index(seed), vec![0_u8; 4]))
+        .collect();
+    dbio.add_pending_cross_zone_dispatches(full).unwrap();
+
+    assert!(
+        dbio.requeue_dead_letter_cross_zone_dispatch(key).is_err(),
+        "a full pending list refuses the requeue"
+    );
+    let dead_letters = dbio.get_dead_letter_cross_zone_dispatches().unwrap();
+    assert_eq!(
+        dead_letters.len(),
+        1,
+        "a refused requeue must leave the dead letter retained"
+    );
+    assert_eq!(dead_letters[0].message_key, key);
+    assert_eq!(
+        dbio.get_pending_cross_zone_dispatch_count().unwrap(),
+        u64::try_from(MAX_PENDING_CROSS_ZONE_DISPATCHES).unwrap(),
+        "the refused requeue must not touch the pending count"
+    );
+}
+
+/// An oversized delivery is still listed and counted, but its bytes are not
+/// retained, and a requeue says so instead of restoring an empty transaction.
+#[test]
+fn an_oversized_dead_letter_is_listed_but_not_requeueable() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+    let record = PendingCrossZoneDispatchRecord::recorded(
+        [7; 32],
+        vec![0_u8; MAX_REQUEUEABLE_DISPATCH_BYTES + 1],
+    );
+    retire(&dbio, record, 7);
+
+    let dead_letters = dbio.get_dead_letter_cross_zone_dispatches().unwrap();
+    assert_eq!(dead_letters.len(), 1);
+    assert!(
+        dead_letters[0].transaction.is_empty(),
+        "bytes over the retention bound are not kept"
+    );
+    assert_eq!(
+        dbio.requeue_dead_letter_cross_zone_dispatch([7; 32])
+            .unwrap(),
+        DeadLetterRequeue::NotRetained
+    );
+    assert_eq!(
+        dbio.get_dead_letter_cross_zone_dispatches().unwrap().len(),
+        1,
+        "the record stays listed for the operator to trace"
+    );
+    assert_eq!(dbio.get_pending_cross_zone_dispatch_count().unwrap(), 0);
+}
+
+/// A retained list written by the pre-bytes layout must not halt the node on
+/// its first read; opening the store drops it and keeps the lifetime count.
+#[test]
+fn an_old_layout_dead_letter_blob_is_dropped_on_open() {
+    let temp_dir = tempdir().unwrap();
+    {
+        let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+        let record = dispatch_record(7);
+        retire(&dbio, record, 7);
+        let old = vec![OldDeadLetterRecord {
+            message_key: [7; 32],
+            origin: dispatch_origin(7),
+            failed_attempts: 3,
+            transaction_bytes: 4,
+        }];
+        let key = borsh::to_vec(&DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCHES_KEY).unwrap();
+        dbio.db
+            .put_cf(
+                &dbio.db.cf_handle(CF_META_NAME).unwrap(),
+                key,
+                borsh::to_vec(&old).unwrap(),
+            )
+            .unwrap();
+    }
+
+    let dbio = RocksDBIO::open_or_create(temp_dir.path()).unwrap();
+    assert!(
+        dbio.get_dead_letter_cross_zone_dispatches()
+            .unwrap()
+            .is_empty(),
+        "the undecodable blob is dropped rather than read into a halt"
+    );
+    assert_eq!(
+        dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(),
+        1,
+        "the lifetime give-up count lives in its own cell and survives"
+    );
+}
+
 #[test]
 fn repeated_withdrawal_key_in_one_update_folds_once_per_occurrence() {
     let temp_dir = tempdir().unwrap();
@@ -1121,8 +1359,14 @@ fn produced_block_persists_its_publish_checkpoint() {
     let (dbio, genesis) = dbio_with_genesis(temp_dir.path());
 
     let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    dbio.atomic_update(&block2, &[], &state_with_balance(200), Some(b"cp-produced"))
-        .unwrap();
+    dbio.atomic_update(
+        &block2,
+        None,
+        &[],
+        &state_with_balance(200),
+        Some(b"cp-produced"),
+    )
+    .unwrap();
 
     // Storing the block without the checkpoint would let a restart restore a
     // pending set that no longer holds the inscription we just published.
@@ -1152,7 +1396,7 @@ fn produced_block_below_disk_head_pins_meta_and_prunes() {
     // pins the tip meta to the produced block and drops the stale suffix in
     // the same write, mirroring the follow path.
     let block2b = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    dbio.atomic_update(&block2b, &[], &state_with_balance(400), None)
+    dbio.atomic_update(&block2b, None, &[], &state_with_balance(400), None)
         .unwrap();
 
     let stored2 = dbio.get_block(2).unwrap().expect("block 2 is stored");
@@ -1189,7 +1433,7 @@ fn the_first_block_written_starts_the_chain() {
     assert_eq!(dbio.get_meta_first_block_in_db().unwrap(), None);
 
     let genesis = produce_dummy_block(1, None, vec![]);
-    dbio.atomic_update(&genesis, &[], &state_with_balance(100), None)
+    dbio.atomic_update(&genesis, None, &[], &state_with_balance(100), None)
         .expect("seed");
 
     assert_eq!(dbio.get_meta_first_block_in_db().unwrap(), Some(1));
@@ -1202,7 +1446,7 @@ fn the_first_block_written_starts_the_chain() {
 
     // A later block extends the chain rather than restarting it.
     let second = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    dbio.atomic_update(&second, &[], &state_with_balance(100), None)
+    dbio.atomic_update(&second, None, &[], &state_with_balance(100), None)
         .expect("extend");
     assert_eq!(dbio.get_meta_first_block_in_db().unwrap(), Some(1));
     assert_eq!(dbio.get_meta_last_block_in_db().unwrap(), Some(2));

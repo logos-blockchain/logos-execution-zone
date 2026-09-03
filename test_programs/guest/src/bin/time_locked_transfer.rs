@@ -23,7 +23,7 @@ fn main() {
             pre_states,
             instruction: (amount, deadline),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Ok([sender_pre, receiver_pre, clock_pre]) = <[_; 3]>::try_from(pre_states) else {
@@ -60,7 +60,7 @@ fn main() {
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![sender_pre, receiver_pre, clock_pre],
         vec![
             AccountPostState::new(sender_post),

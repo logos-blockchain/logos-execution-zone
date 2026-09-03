@@ -1,4 +1,4 @@
-use common::transaction::LeeTransaction;
+use common::transaction::{LeeTransaction, TxEvents};
 
 use super::{Block, DbError, DbResult, RocksDBIO};
 
@@ -74,6 +74,50 @@ impl RocksDBIO {
         }
 
         Ok(block_batch)
+    }
+
+    // A block whose transactions emitted nothing has no row at all, so unlike
+    // `get_block_batch_seq` a missing key is expected here and must be skipped rather
+    // than terminate the scan.
+    //
+    // Callers bound the span: this materializes one key per block in `from..=to`, so an
+    // unbounded range allocates proportionally; the RPC layer rejects spans above
+    // `MAX_EVENT_QUERY_BLOCK_SPAN`.
+    pub fn get_block_events_range(
+        &self,
+        from: u64,
+        to: u64,
+    ) -> DbResult<Vec<(u64, Vec<TxEvents>)>> {
+        let cf_events = self.events_column();
+
+        let mut keys = Vec::new();
+        for block_id in from..=to {
+            keys.push((
+                &cf_events,
+                borsh::to_vec(&block_id).map_err(|err| {
+                    DbError::borsh_cast_message(
+                        err,
+                        Some("Failed to serialize block id".to_owned()),
+                    )
+                })?,
+            ));
+        }
+
+        let mut block_events = vec![];
+        for (block_id, res) in (from..=to).zip(self.db.multi_get_cf(keys)) {
+            let Some(data) = res.map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))? else {
+                continue;
+            };
+            let events = borsh::from_slice::<Vec<TxEvents>>(&data).map_err(|serr| {
+                DbError::borsh_cast_message(
+                    serr,
+                    Some("Failed to deserialize block events".to_owned()),
+                )
+            })?;
+            block_events.push((block_id, events));
+        }
+
+        Ok(block_events)
     }
 
     /// Get block ids by txs.

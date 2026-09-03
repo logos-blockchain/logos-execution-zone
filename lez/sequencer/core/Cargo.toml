@@ -20,6 +20,7 @@ logos-blockchain-zone-sdk.workspace = true
 testnet_initial_state.workspace = true
 faucet_core.workspace = true
 authenticated_transfer_core.workspace = true
+fee_core.workspace = true
 bridge_core.workspace = true
 vault_core.workspace = true
 programs.workspace = true
@@ -27,6 +28,7 @@ system_accounts.workspace = true
 cross_zone.workspace = true
 cross_zone_inbox_core.workspace = true
 sequencer_stake_core.workspace = true
+sequencer_service_protocol.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-core.workspace = true
@@ -48,7 +50,6 @@ bytesize.workspace = true
 hex.workspace = true
 url.workspace = true
 num-bigint.workspace = true
-risc0-zkvm.workspace = true
 futures.workspace = true
 libp2p.workspace = true
 
@@ -59,6 +60,8 @@ testnet = []
 mock = []
 # Enable mDNS-based local peer discovery for gossip.
 mdns = []
+# Expose hooks integration tests need to provoke misbehaviour. Never in a release build.
+test-utils = []
 
 [dev-dependencies]
 cross_zone = { workspace = true, features = ["test-utils"] }

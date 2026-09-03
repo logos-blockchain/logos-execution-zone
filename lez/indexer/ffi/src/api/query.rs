@@ -1,15 +1,16 @@
 use std::ffi::{CString, c_char};
 
-use indexer_service_protocol::AccountId;
+use indexer_service_protocol::{AccountId, EventRecord};
 
 use crate::{
     IndexerServiceFFI,
     api::{
         PointerResult,
         types::{
-            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiVec,
+            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiProgramId, FfiSelector, FfiVec,
             account::FfiAccount,
             block::{FfiBlock, FfiBlockOpt},
+            event::FfiEventRecord,
             transaction::FfiTransaction,
         },
     },
@@ -93,8 +94,10 @@ pub unsafe extern "C" fn query_last_block(indexer: *const IndexerServiceFFI) -> 
 /// The JSON schema is owned by `indexer_core` (`IndexerStatus`): an object with
 /// `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
 /// `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
-/// `cross_zone_peers`. Lets a client distinguish "still catching up" from
-/// "something went wrong".
+/// `cross_zone_peers`. Each peer entry's `health` is one of
+/// `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
+/// know as not known healthy. Lets a client distinguish "still catching up"
+/// from "something went wrong".
 ///
 /// # Arguments
 ///
@@ -433,4 +436,161 @@ pub unsafe extern "C" fn query_transactions_by_account(
                 )
             },
         )
+}
+
+/// Query events emitted by programs, optionally filtered.
+///
+/// Resolution mirrors the `getEvents` RPC: a non-null `tx_hash` makes this a point
+/// lookup and the block range is ignored; otherwise the range from `from_block` to
+/// `to_block` (defaulting to the current tip when none) is read, capped at
+/// `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded, as are bounds
+/// past the indexed tip and queries outside the indexer's event-filter history.
+/// `program_id` and `selector` are exact-match filters applied to the result.
+///
+/// # Arguments
+///
+/// - `indexer`: A pointer to the [`IndexerServiceFFI`] instance to be queried.
+/// - `from_block`: Inclusive range start, ignored when `tx_hash` is non-null.
+/// - `to_block`: `FfiOption<u64>` - inclusive range end; none means the current tip. Ignored when
+///   `tx_hash` is non-null.
+/// - `tx_hash`: Optional transaction hash; null means absent.
+/// - `program_id`: Optional emitting-program filter; null means absent.
+/// - `selector`: Optional event-selector filter; null means absent.
+///
+/// # Returns
+///
+/// A [`PointerResult`] holding an `FfiVec<FfiEventRecord>` that the caller MUST free
+/// with `free_ffi_event_record_vec`, or an error status.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
+/// - if `to_block.is_some`, its `value` points to a valid `u64`.
+/// - each of `tx_hash`, `program_id` and `selector` is either null or a valid pointer to its
+///   respective type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn query_events(
+    indexer: *const IndexerServiceFFI,
+    from_block: u64,
+    to_block: FfiOption<u64>,
+    tx_hash: *const FfiHashType,
+    program_id: *const FfiProgramId,
+    selector: *const FfiSelector,
+) -> PointerResult<FfiVec<FfiEventRecord>, OperationStatus> {
+    if indexer.is_null() {
+        log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        return PointerResult::from_error(OperationStatus::NullPointer);
+    }
+
+    let indexer = unsafe { &*indexer };
+    let program_id =
+        unsafe { program_id.as_ref() }.map(|id| indexer_service_protocol::ProgramId(id.data));
+    let selector = unsafe { selector.as_ref() }.map(|s| indexer_service_protocol::Selector(s.data));
+
+    let records = if let Some(tx_hash) = unsafe { tx_hash.as_ref() } {
+        // Coverage is judged at the transaction's height, resolved BEFORE the events
+        // read: a filtered-out tx has no events row, and gating on the row's presence
+        // would serve an empty result for exactly the dropped domains.
+        match indexer.core().store.block_id_by_tx_hash(tx_hash.data) {
+            Err(e) => Err(e),
+            Ok(None) => {
+                log::error!("query_events: no indexed transaction has the requested hash");
+                return PointerResult::from_error(OperationStatus::InvalidArgument);
+            }
+            Ok(Some(block_id)) => {
+                if !indexer_core::event_filter::covered_over_range(
+                    indexer.core().store.filter_segments(),
+                    block_id,
+                    block_id,
+                    program_id.map(|id| id.0),
+                    selector.map(|s| s.0),
+                ) {
+                    log::error!(
+                        "query_events: the requested events at block {block_id} are outside this \
+                         indexer's event-filter history"
+                    );
+                    return PointerResult::from_error(OperationStatus::InvalidArgument);
+                }
+                indexer
+                    .core()
+                    .store
+                    .get_events_for_block(block_id)
+                    .map(|row| {
+                        row.and_then(|groups| {
+                            groups
+                                .into_iter()
+                                .find(|group| group.tx_hash.0 == tx_hash.data)
+                        })
+                        .map(|group| EventRecord::from_tx_events(block_id, group))
+                        .unwrap_or_default()
+                    })
+            }
+        }
+    } else {
+        let tip = match indexer.core().store.get_last_block_id() {
+            Ok(tip) => tip.unwrap_or(0),
+            Err(e) => {
+                log::error!("Failed to read the indexed tip for query_events: {e:#}");
+                return PointerResult::from_error(OperationStatus::ClientError);
+            }
+        };
+        if to_block.is_some && to_block.value.is_null() {
+            log::error!("query_events to_block is flagged present but its value pointer is null");
+            return PointerResult::from_error(OperationStatus::InvalidArgument);
+        }
+        let to_block = to_block.is_some.then(|| unsafe { *to_block.value });
+        let (from_block, to_block) =
+            match indexer_service_protocol::resolve_event_block_range(from_block, to_block, tip) {
+                Ok(range) => range,
+                Err(err) => {
+                    log::error!("query_events: {err}");
+                    return PointerResult::from_error(OperationStatus::InvalidArgument);
+                }
+            };
+        if !indexer_core::event_filter::covered_over_range(
+            indexer.core().store.filter_segments(),
+            from_block,
+            to_block,
+            program_id.map(|id| id.0),
+            selector.map(|s| s.0),
+        ) {
+            log::error!(
+                "query_events: the requested events over blocks {from_block}..={to_block} are \
+                 outside this indexer's event-filter history"
+            );
+            return PointerResult::from_error(OperationStatus::InvalidArgument);
+        }
+        indexer
+            .core()
+            .store
+            .get_events_range(from_block, to_block)
+            .map(|groups| {
+                groups
+                    .into_iter()
+                    .flat_map(|(block_id, groups)| {
+                        groups
+                            .into_iter()
+                            .flat_map(move |group| EventRecord::from_tx_events(block_id, group))
+                    })
+                    .collect::<Vec<_>>()
+            })
+    };
+
+    records.map_or_else(
+        |e| {
+            log::error!("Failed to query events: {e:#}");
+            PointerResult::from_error(OperationStatus::ClientError)
+        },
+        |records| {
+            PointerResult::from_value(
+                records
+                    .into_iter()
+                    .filter(|record| record.matches_fields(program_id, selector))
+                    .map(Into::into)
+                    .collect::<Vec<FfiEventRecord>>()
+                    .into(),
+            )
+        },
+    )
 }

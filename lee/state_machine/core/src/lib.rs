@@ -15,6 +15,7 @@ pub use encryption::{
     EncryptedAccountData, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey,
     ML_KEM_768_CIPHERTEXT_LEN, SharedSecretKey, ViewTag,
 };
+pub use frame::{from_frame, to_borsh_frame, to_frame};
 pub use nullifier::{
     AuthorizationSecretKey, Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey,
 };
@@ -25,6 +26,7 @@ mod circuit_io;
 mod commitment;
 mod encoding;
 pub mod encryption;
+mod frame;
 mod nullifier;
 pub mod program;
 

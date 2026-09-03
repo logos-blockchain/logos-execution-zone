@@ -7,7 +7,9 @@ use futures::StreamExt as _;
 use lee_core::BlockId;
 use log::warn;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_zone_sdk::{Slot, ZoneMessage, adapter, indexer::ZoneIndexer};
+use logos_blockchain_zone_sdk::{Slot, ZoneMessage, adapter};
+
+use crate::zone_indexer::ZoneIndexer;
 
 /// Upper bound on the channel reads of the startup consistency check.
 const CHANNEL_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);

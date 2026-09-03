@@ -8,12 +8,13 @@ use std::{
 use anyhow::{Context as _, Result, anyhow};
 use borsh::BorshDeserialize;
 use chain_state::{
-    AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState, Tip,
+    AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState,
+    FollowOutcome, Tip,
 };
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
@@ -35,11 +36,11 @@ use num_bigint::BigUint;
 use sequencer_storage_actor::{
     StorageActor, StorageActorTrait,
     protocol::{
-        ApplyStoreUpdate, DeadLetterDispatchRecord, DispatchFailure, DispatchOrigin,
-        DropSettledCrossZoneDispatches, GetBlock, GetDeadLetterDispatches, GetFirstBlockId,
-        GetLatestBlockMeta, GetPendingCrossZoneDispatches, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, RecordNewBlock, SetZoneAnchor, WithdrawalReconciliationKey,
-        ZoneAnchorRecord,
+        ApplyStoreUpdate, DeadLetterDispatchRecord, DeadLetterRequeue, DispatchFailure,
+        DispatchOrigin, DropSettledCrossZoneDispatches, GetBlock, GetDeadLetterDispatches,
+        GetFirstBlockId, GetLatestBlockMeta, GetPendingCrossZoneDispatches,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordNewBlock, SetZoneAnchor,
+        WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
 use tokio::sync::Mutex;
@@ -56,10 +57,12 @@ pub mod block_store;
 pub mod committee_discovery;
 pub mod config;
 pub mod cross_zone_watcher;
+pub mod fees;
 pub mod gossip;
 
 #[cfg(feature = "mock")]
 pub mod mock;
+pub mod slashing;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.
@@ -96,6 +99,42 @@ type FoundingStake = (
     lee::PublicKey,
     lee::Signature,
 );
+
+/// The block's gas budget: the gas the included transactions were actually
+/// charged (read off the settlement summary).
+#[derive(Clone, Copy, Debug, Default)]
+struct DeclaredGasBudget {
+    exec: u64,
+    stor: u64,
+}
+
+impl DeclaredGasBudget {
+    /// Whether `view`'s declared gas fits the remaining budget.
+    ///
+    /// Saturating rather than checked: a sum that saturates is past its cap
+    /// by construction, so the answer is the same and nothing can panic.
+    const fn fits(self, view: &fee_core::assess::FeeTxView) -> bool {
+        self.exec.saturating_add(view.gas_limit()) <= fee_core::market::MAX_GAS_EXEC
+            && self.stor.saturating_add(view.gas_stor()) <= fee_core::market::MAX_GAS_STOR
+    }
+
+    /// Whether `view` fits an empty budget at all — i.e. its declared gas is
+    /// within the per-block caps. A charged transaction that fails this can
+    /// never be included in any block, so it must be dropped rather than
+    /// deferred (a deferral would repeat for ever).
+    const fn fits_empty(view: &fee_core::assess::FeeTxView) -> bool {
+        view.gas_limit() <= fee_core::market::MAX_GAS_EXEC
+            && view.gas_stor() <= fee_core::market::MAX_GAS_STOR
+    }
+
+    /// Snaps the budget to the gas the block's settled transactions were
+    /// actually charged. Failed-but-charged actions pay their full declared
+    /// budget, so the summary never undercounts what replay will enforce.
+    const fn sync(&mut self, summary: &fee_core::BlockFeeSummary) {
+        self.exec = summary.gas_used_exec;
+        self.stor = summary.gas_used_stor;
+    }
+}
 
 /// The origin of a transaction.
 #[derive(Clone, Copy)]
@@ -140,6 +179,10 @@ pub struct SequencerCore<
     watchers: TaskGroup,
     /// Channel tip slot as of the last committee-config submission.
     last_committee_submission_slot: Option<Slot>,
+    /// Offending inscriptions, attributed and not.
+    slash_record: slashing::SlashRecord,
+    /// Signs this node's approval of a slash.
+    bedrock_signing_key: block_publisher::Ed25519Key,
 }
 
 impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
@@ -181,15 +224,32 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         for block in head_blocks {
             let block_id = block.header.block_id;
             chain.restore_head_block(block).unwrap_or_else(|err| {
-                panic!("Stored block {block_id} does not replay while restoring chain state: {err}")
+                panic!("Stored block {block_id} does not replay while restoring chain state (does the config cross_zone presence still match the chain genesis?): {err}")
             });
+        }
+        if let Some(cursor) = store
+            .channel_cursor()
+            .await
+            .unwrap_or_else(|err| panic!("Failed to read the stored channel cursor: {err:#}"))
+        {
+            chain.restore_cursor(MsgId::from(cursor));
+        } else if let Some(checkpoint) = store
+            .get_zone_checkpoint()
+            .await
+            .unwrap_or_else(|err| panic!("Failed to read the stored zone checkpoint: {err:#}"))
+        {
+            // A store from before the cursor cell existed still pins: the sdk
+            // checkpoint carries the channel tip it was built on.
+            chain.restore_cursor(checkpoint.last_msg_id);
+        } else {
+            // Nothing followed yet; the bootstrap publishes seed the pin.
         }
 
         // The replayed head must reproduce the persisted state, else store
         // and config disagree (e.g. edited genesis actions).
         assert!(
             chain.head_state() == stored_head_state,
-            "Persisted state does not match the replayed chain; reset the store or restore the original config"
+            "Persisted state does not match the replayed chain; reset the store or restore the original config (cross_zone presence included)"
         );
 
         chain
@@ -215,6 +275,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         storage_ref
             .ask(RecordNewBlock {
                 block,
+                channel_cursor: None,
                 withdrawals: Vec::new(),
                 state: Arc::new(state),
                 checkpoint_bytes: None,
@@ -234,6 +295,15 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         storage_ref: ActorRef<S>,
     ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
         sequencer_core_metrics::init();
+
+        // A block over Bedrock's inscription cap is unpublishable; fail at
+        // startup rather than stalling at the first oversized block.
+        assert!(
+            config.max_block_size.as_u64() <= config::MAX_PUBLISHABLE_BLOCK_SIZE,
+            "max_block_size {} exceeds Bedrock's inscription limit of {} bytes",
+            config.max_block_size,
+            config::MAX_PUBLISHABLE_BLOCK_SIZE,
+        );
 
         let bedrock_signing_key =
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
@@ -284,6 +354,19 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
              one this sequencer can operate on"
         );
 
+        // print your own sequencer entry,
+        // allowing to see that fees land to your account on explorer
+        if let Some(reward_account) =
+            committee_discovery::read_config(&state).and_then(|stake_config| {
+                stake_config
+                    .entries
+                    .get(&own_sequencer_key)
+                    .map(|entry| entry.account_id)
+            })
+        {
+            log::info!("Producer reward account (stake ownership): {reward_account}");
+        }
+
         let chain = Arc::new(Mutex::new(
             Self::restore_chain_state(&config, &store, &state).await,
         ));
@@ -297,15 +380,18 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let (mempool, mempool_handle) = MemPool::new(config.mempool_max_size);
         sequencer_core_metrics::record_mempool_max_size(config.mempool_max_size);
 
+        let slash_record = slashing::SlashRecord::load(store.storage_ref()).await;
+
         let block_publisher = BP::new(
             &config.bedrock_config,
-            bedrock_signing_key,
+            bedrock_signing_key.clone(),
             config.retry_pending_blocks_timeout,
             initial_checkpoint,
             Self::on_follow(
                 store.storage_ref().clone(),
                 Arc::clone(&chain),
                 mempool_handle.clone(),
+                slash_record.clone(),
             ),
         )
         .await
@@ -391,6 +477,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                         block.header.block_id
                     )
                 });
+                // The checkpoint's tip is what this publish left the channel
+                // at (for the channel-creating bundle, its last tip-advancing
+                // op), and the next publish must pin on it.
+                chain
+                    .lock()
+                    .await
+                    .record_own_inscription(outcome.checkpoint.last_msg_id, block.header.hash);
                 last_checkpoint = Some(outcome.checkpoint);
                 store
                     .raise_published_high_water(block.header.block_id)
@@ -417,6 +510,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             block_publisher,
             watchers,
             last_committee_submission_slot: None,
+            slash_record,
+            bedrock_signing_key,
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
@@ -537,7 +632,14 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             // follow events interleave safely — both paths apply idempotently
             // and persist under this same lock.
             let mut chain = chain.lock().await;
-            Self::apply_reconstructed_block(store.storage_ref(), &mut chain, &block, slot).await?;
+            Self::apply_reconstructed_block(
+                store.storage_ref(),
+                &mut chain,
+                zone_block.id,
+                &block,
+                slot,
+            )
+            .await?;
         }
 
         // The channel exists once it has a tip; only when it has none is this
@@ -555,6 +657,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     async fn apply_reconstructed_block(
         storage_ref: &ActorRef<S>,
         chain: &mut ChainState,
+        this_msg: MsgId,
         block: &Block,
         slot: Slot,
     ) -> Result<()> {
@@ -608,10 +711,9 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             return Ok(());
         }
 
-        // Above the final tier the head is reorg-able, so finalized history
-        // wins: `apply_finalized` finalizes the matching prefix and rebases the
-        // head onto what the channel settled. Validation happens inside it.
-        match chain.apply_finalized(MsgId::from(block.header.hash.0), block, slot) {
+        // Above the final tier the head is reorg-able, so finalized history wins:
+        // the head rebases onto what the channel settled. Validation happens inside.
+        match chain.apply_reconstructed(block, slot, this_msg) {
             AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied => {}
             AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
                 return Err(anyhow!(
@@ -642,6 +744,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         storage_ref
             .ask(ApplyStoreUpdate {
                 blocks: vec![(block.clone(), true)],
+                channel_cursor: Some(this_msg.into()),
                 head_tip,
                 head_state: chain.share_head_state(),
                 final_snapshot: final_meta.map(|meta| (chain.share_final_state(), meta)),
@@ -653,6 +756,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 new_deposit_events: Vec::new(),
                 consumed_withdrawals: Vec::new(),
                 new_withdraw_intents: Vec::new(),
+                lower_published_high_water: None,
             })
             .await
             .context("Failed to persist reconstructed block")?;
@@ -665,12 +769,16 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         storage_ref: ActorRef<S>,
         chain: Arc<Mutex<ChainState>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+        slash_record: slashing::SlashRecord,
     ) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
             let storage_ref = storage_ref.clone();
             let chain = Arc::clone(&chain);
             let mempool_handle = mempool_handle.clone();
+            let slash_record = slash_record.clone();
             Box::pin(async move {
+                // Before the checkpoint moves past them.
+                slash_record.report(&storage_ref, &update.undecodable).await;
                 apply_follow_update(&storage_ref, &chain, &mempool_handle, update).await;
             })
         })
@@ -680,14 +788,15 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     /// mempool transactions, publishes it via zone-sdk, and submits any
     /// committee-config update the new state calls for.
     pub async fn run_production_turn(&mut self) -> Result<u64> {
-        let live_accredited_keys = self.live_accredited_sequencer_keys().await;
+        let live_committee = self.live_accredited_sequencer_keys().await;
 
         let BlockWithMeta {
             block,
             withdrawals,
             committee_update,
+            parent,
         } = self
-            .build_block_from_mempool(live_accredited_keys.as_deref())
+            .build_block_from_mempool(live_committee.as_ref())
             .await
             .context("Failed to build block from mempool transactions")?;
 
@@ -695,11 +804,23 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             this_msg,
             checkpoint,
             released_notes,
-        } = self
-            .block_publisher
-            .publish_block(&block, withdrawals)
-            .await
-            .context("Failed to publish block to Bedrock")?;
+        } = match parent {
+            // Chained on the channel tip the cursor sat on when the block was
+            // built, so a tip that moved since costs this turn instead of
+            // inscribing a second block at a height the channel already
+            // carries.
+            Some(parent) if withdrawals.is_empty() => {
+                self.block_publisher
+                    .publish_block_chained_on(&block, parent)
+                    .await
+            }
+            _ => {
+                self.block_publisher
+                    .publish_block(&block, withdrawals)
+                    .await
+            }
+        }
+        .context("Failed to publish block to Bedrock")?;
 
         // The inscription is on L1 from here on, whatever the head does with the
         // block below, so this height must never be published again.
@@ -725,13 +846,12 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     }
 
     /// Live committee snapshot for gating `FinalizeUnstake` inclusion and
-    /// committee updates. `None` if it could not be read.
-    async fn live_accredited_sequencer_keys(
-        &self,
-    ) -> Option<Vec<sequencer_stake_core::SequencerKey>> {
+    /// committee updates. `None` if the channel is missing or unreadable.
+    async fn live_accredited_sequencer_keys(&self) -> Option<LiveCommittee> {
         match self.block_publisher.accredited_keys().await {
-            Ok(keys) => Some(
-                keys.iter()
+            Ok(Some((keys, config_tip))) => Some(LiveCommittee {
+                keys: keys
+                    .iter()
                     .filter_map(|key| {
                         sequencer_stake_core::SequencerKey::new(key.to_bytes()).or_else(|| {
                             warn!(
@@ -742,7 +862,15 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                         })
                     })
                     .collect(),
-            ),
+                config_tip,
+            }),
+            Ok(None) => {
+                warn!(
+                    "No channel to read a live committee from; skipping FinalizeUnstake inclusion \
+                     and committee updates this round"
+                );
+                None
+            }
             Err(err) => {
                 warn!(
                     "Failed to read live committee snapshot; skipping FinalizeUnstake inclusion \
@@ -815,12 +943,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let checkpoint_bytes = block_store::checkpoint_bytes(checkpoint)?;
 
         let mut chain = self.chain.lock().await;
-        match chain.apply_produced(this_msg, &block) {
+        match chain.apply_produced(&block, this_msg) {
             AcceptOutcome::Applied => {
                 let block_id = block.header.block_id;
                 self.store
                     .record_new_block(
                         block,
+                        Some(this_msg.into()),
                         withdrawal_reconciliation_keys,
                         chain.share_head_state(),
                         Some(checkpoint_bytes),
@@ -853,6 +982,10 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     /// Validates and applies a single mempool transaction to the current state.
     /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
     /// it was skipped due to validation failure.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the settlement threads exactly the block-transition context the spec names"
+    )]
     fn apply_mempool_transaction(
         state: &mut lee::V03State,
         origin: TransactionOrigin,
@@ -860,38 +993,67 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         block_height: u64,
         timestamp: u64,
         withdrawals: &mut Vec<WithdrawArg>,
+        opening: &fee_core::state::FeeState,
+        tx_index: u64,
+        summary: &mut fee_core::BlockFeeSummary,
     ) -> bool {
         let tx_hash = tx.hash();
         match origin {
             // Gossiped transactions arrive from untrusted peers, same as
             // user-submitted ones, so they get the same full state validation.
             TransactionOrigin::User | TransactionOrigin::Gossip => {
-                let validated_diff = match tx.validate_on_state(state, block_height, timestamp) {
-                    Ok(diff) => diff,
+                // Settle on a scratch clone: settlement is the single validation
+                // and charging pass (restricted- and bridge-account guards
+                // included), so a transaction that cannot pay, breaches a cap, or
+                // touches a restricted account is dropped, never included.
+                let mut scratch = state.clone();
+                let mut scratch_summary = *summary;
+                match chain_state::apply::settle_transaction(
+                    tx,
+                    &mut scratch,
+                    opening,
+                    block_height,
+                    timestamp,
+                    tx_index,
+                    &mut scratch_summary,
+                ) {
+                    Ok(_events) => {
+                        // a user/gossip submitted transaction cannot debit the bridge escrow
+                        let bridge_id = system_accounts::bridge_account_id();
+                        if tx.affected_public_account_ids().contains(&bridge_id)
+                            && !common::transaction::bridge_balance_only_increased(
+                                &state.get_account_by_id(bridge_id),
+                                &scratch.get_account_by_id(bridge_id),
+                            )
+                        {
+                            log::warn!(
+                                "Transaction {tx_hash} illegally modifies the bridge account; dropping it",
+                            );
+                            return false;
+                        }
+                        if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
+                            withdrawals.push(withdraw_data);
+                        }
+                        *state = scratch;
+                        *summary = scratch_summary;
+                    }
                     Err(err) => {
-                        // A gossiped tx the leader already included is
-                        // expected to fail here (e.g. on nonce) for every
-                        // other node on its turn; that is steady-state noise,
-                        // not an error. User-submitted failures still warrant
-                        // `error!`.
+                        // A gossiped tx the leader already included is expected to
+                        // fail here (e.g. on nonce) for every other node on its
+                        // turn; that is steady-state noise, not an error.
+                        // User-submitted failures still warrant `error!`.
                         if matches!(origin, TransactionOrigin::Gossip) {
                             debug!(
-                                "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                                "Transaction with hash {tx_hash} failed settlement: {err:#?}, skipping it",
                             );
                         } else {
                             error!(
-                                "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                                "Transaction with hash {tx_hash} failed settlement: {err:#?}, skipping it",
                             );
                         }
                         return false;
                     }
-                };
-
-                if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
-                    withdrawals.push(withdraw_data);
                 }
-
-                state.apply_state_diff(validated_diff);
             }
             TransactionOrigin::Sequencer => {
                 let LeeTransaction::Public(public_tx) = tx else {
@@ -930,7 +1092,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     )]
     async fn build_block_from_mempool(
         &mut self,
-        live_accredited_keys: Option<&[sequencer_stake_core::SequencerKey]>,
+        live_committee: Option<&LiveCommittee>,
     ) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
@@ -975,9 +1137,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             mut working_state,
             pending_dispatches,
             finalize_unstake_txs,
+            slash_txs,
+            committee_update,
+            parent,
         ) = {
             let chain = self.chain.lock().await;
             let tip = chain.head_tip();
+            let parent = chain.pin_parent();
             let height = tip.as_ref().map_or(GENESIS_BLOCK_ID, |head| {
                 head.block_id
                     .checked_add(1)
@@ -1004,14 +1170,40 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 }
             }
 
+            // Committee membership follows finalized state only.
+            let committee_update = live_committee.and_then(|committee| {
+                committee_discovery::committee_update(chain.final_state(), &committee.keys)
+            });
+
             (
                 prev,
                 height,
                 chain.head_state().clone(),
                 pending,
                 build_finalize_unstake_txs(chain.head_state()),
+                slashing::slash_candidates(
+                    chain.head_state(),
+                    &self.slash_record,
+                    &self.bedrock_signing_key,
+                ),
+                committee_update,
+                parent,
             )
         };
+
+        // The live committee is the finalized one only while no config is in
+        // flight: its config entry is the one the checkpoint reports finalized.
+        let finalized_config = self
+            .store
+            .get_zone_checkpoint()
+            .await
+            .inspect_err(|err| warn!("Failed to read the zone checkpoint: {err:#}"))
+            .ok()
+            .flatten()
+            .map(|checkpoint| checkpoint.finalized_config);
+        let finalized_committee = live_committee
+            .filter(|committee| finalized_config == Some(committee.config_tip))
+            .map(|committee| committee.keys.as_slice());
 
         if !settled.is_empty() {
             if let Err(err) = self
@@ -1069,6 +1261,31 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
+        // The reward target is this sequencer's own stake ownership account,
+        // already claimed when it staked. Look it up by our own sequencer key
+        // (our Bedrock signing key) in the live stake config.
+        let own_sequencer_key = sequencer_stake_core::SequencerKey::new(
+            self.bedrock_signing_key.public_key().to_bytes(),
+        )
+        .expect("our own Bedrock public key is a valid Ed25519 public key");
+        let producer_account = committee_discovery::read_config(&working_state)
+            .and_then(|config| {
+                config
+                    .entries
+                    .get(&own_sequencer_key)
+                    .map(|entry| entry.account_id)
+            })
+            .context("no stake entry for our own sequencer key; aborting block production")?;
+
+        let opening = chain_state::apply::opening_fee_state(&working_state);
+        let mut summary = fee_core::BlockFeeSummary::default();
+        let mut gas_budget = DeclaredGasBudget::default();
+        // The fee tx's summary is only known after the loop; a default-summary
+        // placeholder sizes identically (the summary struct is fixed-size).
+        let placeholder_fee_lee_tx = LeeTransaction::Public(fee_invocation(
+            fee_core::BlockFeeSummary::default(),
+            producer_account,
+        ));
         let clock_tx = clock_invocation(new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
@@ -1080,6 +1297,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let mut pending_from_store = pending_deposits;
         pending_from_store.extend(pending_dispatches);
         pending_from_store.extend(finalize_unstake_txs);
+        pending_from_store.extend(slash_txs);
         while let Some((origin, tx, from_store)) = pending_from_store
             .pop_front()
             .map(|tx| (TransactionOrigin::Sequencer, tx, true))
@@ -1090,6 +1308,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
+                std::slice::from_ref(&placeholder_fee_lee_tx),
                 std::slice::from_ref(&clock_lee_tx),
             ]
             .concat();
@@ -1118,7 +1337,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 if from_store
                     && !self.fits_in_an_empty_block(
                         &tx,
-                        &clock_lee_tx,
+                        &[placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()],
                         new_block_height,
                         prev_block_hash,
                         new_block_timestamp,
@@ -1151,8 +1370,52 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             // met (mempool: whoever wants it finalized resubmits;
             // discovery-sourced: reconstructed fresh next block), so it
             // doesn't need requeuing here.
-            if !finalize_unstake_is_includable(&working_state, &tx, live_accredited_keys) {
+            if !finalize_unstake_is_includable(&working_state, &tx, finalized_committee) {
                 continue;
+            }
+
+            // Declared-gas pre-screen: a charged transaction whose signed
+            // limits do not fit this block's remaining budget is deferred with
+            // nothing executed, mirroring the size deferral above — unless they
+            // exceed the caps outright, in which case it fits no budget and is
+            // dropped rather than deferred for ever (the RPC door screens these
+            // out, but gossip ingest does not). One that does not even classify
+            // (an unserializable transaction) falls through: the settlement
+            // below rejects it and it is dropped like any other failed
+            // application.
+            let charged_view = match chain_state::classify::classify(&tx, false, &working_state) {
+                Ok(chain_state::classify::FeeClass::Charged(view)) => Some(view),
+                Ok(chain_state::classify::FeeClass::Exempt) | Err(_) => None,
+            };
+            if let Some(view) = &charged_view
+                && !gas_budget.fits(view)
+            {
+                // A transaction whose declared gas exceeds the caps fits no
+                // budget, not even an empty one, so deferring it would stall the
+                // builder behind it for ever. The RPC door screens these out,
+                // but gossip ingest does not, so drop it here instead.
+                if !DeclaredGasBudget::fits_empty(view) {
+                    error!(
+                        "Transaction with hash {tx_hash} declares gas beyond the block caps \
+                         (limit {}, bytes {}); dropping it rather than stalling production",
+                        view.gas_limit(),
+                        view.gas_stor(),
+                    );
+                    self.count_dispatch_failure(&tx).await;
+                    continue;
+                }
+                warn!(
+                    "Transaction with hash {tx_hash} deferred to next block: declared gas \
+                     (limit {}, bytes {}) would exceed the block gas caps",
+                    view.gas_limit(),
+                    view.gas_stor(),
+                );
+                // Anything drained from the store needs no requeue: its record
+                // stays there and is drained again on the next turn.
+                if !from_store {
+                    self.mempool.push_front((origin, tx));
+                }
+                break;
             }
 
             let before_tx_apply = Instant::now();
@@ -1163,8 +1426,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 new_block_height,
                 new_block_timestamp,
                 &mut withdrawals,
+                &opening,
+                valid_transactions.len().try_into().expect("fits u64"),
+                &mut summary,
             );
             if applied {
+                // track the charged gas
+                gas_budget.sync(&summary);
                 sequencer_core_metrics::record_mempool_transaction_application_time(
                     origin.into(),
                     tx.kind().into(),
@@ -1191,6 +1459,12 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             }
         }
 
+        let fee_tx = fee_invocation(summary, producer_account);
+        working_state
+            .transition_from_public_transaction(&fee_tx, new_block_height, new_block_timestamp)
+            .context("Fee transaction failed. Aborting block production.")?;
+        valid_transactions.push(LeeTransaction::Public(fee_tx));
+
         working_state
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
             .context("Clock transaction failed. Aborting block production.")?;
@@ -1216,13 +1490,11 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
 
         sequencer_core_metrics::record_block_creation_time(now.elapsed());
 
-        let committee_update = live_accredited_keys
-            .and_then(|keys| committee_discovery::committee_update(&working_state, keys));
-
         Ok(BlockWithMeta {
             block,
             withdrawals,
             committee_update,
+            parent,
         })
     }
 
@@ -1277,8 +1549,8 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         &self.block_publisher
     }
 
-    /// Whether a block carrying nothing but `tx` and the clock would be within
-    /// the size limit.
+    /// Whether a block carrying nothing but `tx` and the appended system
+    /// transactions (fee and clock) would be within the size limit.
     ///
     /// Distinguishes "does not fit in this block" from "does not fit in any
     /// block". The first is an ordinary deferral; the second, for a transaction
@@ -1287,14 +1559,14 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     fn fits_in_an_empty_block(
         &self,
         tx: &LeeTransaction,
-        clock_tx: &LeeTransaction,
+        system_txs: &[LeeTransaction],
         block_id: u64,
         prev_block_hash: HashType,
         timestamp: u64,
     ) -> Result<bool> {
         let alone = HashableBlockData {
             block_id,
-            transactions: vec![tx.clone(), clock_tx.clone()],
+            transactions: [std::slice::from_ref(tx), system_txs].concat(),
             prev_block_hash,
             timestamp,
         };
@@ -1337,12 +1609,12 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                 sequencer_core_metrics::increment_cross_zone_dispatches_retired_total();
                 record_dead_letter_gauge(self.store.storage_ref()).await;
                 error!(
-                    "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter.",
+                    "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter; requeueCrossZoneDeadLetter restores it.",
                     hex::encode(key),
                     hex::encode(origin.src_zone),
                     origin.src_block_id,
                     origin.src_tx_index,
-                    record.transaction_bytes,
+                    record.transaction.len(),
                     record.failed_attempts
                 );
             }
@@ -1372,6 +1644,15 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let retained = self.store.dead_letter_dispatches().await?;
         let total = self.store.dead_letter_dispatch_count().await?;
         Ok((total, retained))
+    }
+
+    /// Restores a retained dead-lettered delivery to the pending list, with a
+    /// clean attempt count. The next production turn attempts it again.
+    pub async fn requeue_cross_zone_dead_letter(
+        &self,
+        message_key: [u8; 32],
+    ) -> Result<DeadLetterRequeue> {
+        self.store.requeue_dead_letter_dispatch(message_key).await
     }
 
     /// Every background task that holds this sequencer's store handle.
@@ -1411,16 +1692,34 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     /// inscribed, so the next block would be a *second*, different block at a
     /// height the channel already carries. Callers must skip their turn.
     ///
-    /// The head alone cannot detect this: an orphan report for our own
-    /// still-unfinalized blocks rewinds it (`ChainState::apply_channel_update`)
-    /// and prunes those blocks from the store, so the tip reads as if they were
-    /// never produced. The mark is kept outside that pruning for exactly this.
-    ///
-    /// This is not a stall — the head recovers by itself once the inscriptions
-    /// we are protecting finalize and the final tier rebases onto them.
+    /// The follow path lowers the mark when the channel drops our inscription
+    /// for good, so this only holds while a re-adopted block of ours fails to apply.
     pub async fn rewound_below_published(&self) -> Option<u64> {
         let high_water = self.store.published_high_water().await.ok().flatten()?;
         (self.next_block_height().await <= high_water).then_some(high_water)
+    }
+
+    /// The live channel tip when it has moved past our pin, meaning the next
+    /// publish would be refused and the caller should skip its turn.
+    pub async fn pin_behind_channel_tip(&self) -> Option<MsgId> {
+        let pin = {
+            let chain = self.chain.lock().await;
+            // A read can trail a publish of ours, so it cannot judge one.
+            if chain.pin_is_ours() {
+                return None;
+            }
+            chain.pin_parent()?
+        };
+        match self.block_publisher.channel_tip_message().await {
+            Ok(Some(tip)) if tip != pin => Some(tip),
+            Ok(_) => None,
+            Err(err) => {
+                warn!(
+                    "Failed to read the channel tip, leaving the refusal to the publish: {err:#}"
+                );
+                None
+            }
+        }
     }
 
     /// Shared handle to the two-tier follow state, for tests to drive the
@@ -1435,6 +1734,28 @@ struct BlockWithMeta {
     block: Block,
     withdrawals: Vec<WithdrawArg>,
     committee_update: Option<Vec<sequencer_stake_core::SequencerKey>>,
+    /// The channel tip the cursor sat on when this block was built, read under
+    /// the same lock as its height.
+    parent: Option<MsgId>,
+}
+
+/// The channel's live accredited keys, with the config entry they come from.
+///
+/// The config entry is what decides whether these keys are the finalized ones:
+/// it matches the checkpoint's `finalized_config` exactly when no later config
+/// is in flight.
+pub struct LiveCommittee {
+    keys: Vec<sequencer_stake_core::SequencerKey>,
+    config_tip: MsgId,
+}
+
+impl LiveCommittee {
+    /// A committee reported as sitting at `config_tip`.
+    #[cfg(test)]
+    #[must_use]
+    const fn at(keys: Vec<sequencer_stake_core::SequencerKey>, config_tip: MsgId) -> Self {
+        Self { keys, config_tip }
+    }
 }
 
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — its receipt
@@ -1511,6 +1832,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         finalized,
         deposits,
         withdrawals,
+        undecodable: _,
     } = update;
 
     let checkpoint_bytes = block_store::checkpoint_bytes(&checkpoint)
@@ -1544,10 +1866,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // head. The rewind below is the part that costs something.
         let head_before = chain.head_tip().map(|tip| tip.block_id);
         if !orphaned.is_empty() {
-            let ids: Vec<u64> = orphaned
-                .iter()
-                .map(|(_, block)| block.header.block_id)
-                .collect();
+            let ids: Vec<u64> = orphaned.iter().map(|block| block.header.block_id).collect();
             debug!(
                 "Channel orphaned {} block(s) {:?}..={:?}, head tip is {head_before:?}",
                 ids.len(),
@@ -1556,12 +1875,27 @@ async fn apply_follow_update<S: StorageActorTrait>(
             );
         }
 
-        // Outcomes align with `adopted`.
-        let outcomes = chain.apply_channel_update(&orphaned, &adopted);
+        // The whole delta in one call. Outcomes align with the blocks passed in.
+        let FollowOutcome {
+            adopted: outcomes,
+            finalized: finalized_outcomes,
+            cursor_moved: _,
+        } = chain.apply_follow(
+            &orphaned,
+            &adopted,
+            &finalized,
+            // FIXME: thread the finalized inscription's L1 slot instead of
+            // `Slot::from(0)`; only used for the invalid-finalized stall.
+            // logos-blockchain PR #3147 surfaces it as `FinalizedTx.l1_slot` —
+            // wire it through `FollowUpdate::finalized` once the zone-sdk pin is
+            // bumped past that (a separate PR).
+            Slot::from(0),
+            checkpoint.last_msg_id,
+        );
 
         // An adoption that does not apply freezes the head where it is, and
         // every later one then fails the same way. Nothing else reports it.
-        for ((_, block), outcome) in adopted.iter().zip(&outcomes) {
+        for (block, outcome) in adopted.iter().zip(&outcomes) {
             if let AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) = outcome {
                 warn!(
                     "Adopted block {} did not apply, head stays at {:?}: {err}",
@@ -1581,7 +1915,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
             .iter()
             .zip(&outcomes)
             .filter(|(_, outcome)| matches!(outcome, AcceptOutcome::Applied))
-            .map(|((_, block), _)| (block, false))
+            .map(|(block, _)| (block, false))
             .collect();
 
         // Only blocks the final tier holds drive the bookkeeping below: a parked
@@ -1589,13 +1923,8 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // or dropping its deposit records would lose them for good.
         let mut irreversible: Vec<&Block> = Vec::new();
         let mut final_advanced = false;
-        for (this_msg, block) in &finalized {
-            // FIXME: thread the finalized inscription's L1 slot instead of
-            // `Slot::from(0)`; only used for the invalid-finalized stall.
-            // logos-blockchain PR #3147 surfaces it as `FinalizedTx.l1_slot` —
-            // wire it through `FollowUpdate::finalized` once the zone-sdk pin is
-            // bumped past that (a separate PR).
-            match chain.apply_finalized(*this_msg, block, Slot::from(0)) {
+        for (block, outcome) in finalized.iter().zip(&finalized_outcomes) {
+            match outcome {
                 AcceptOutcome::Applied => {
                     to_persist.push((block, true));
                     irreversible.push(block);
@@ -1605,7 +1934,15 @@ async fn apply_follow_update<S: StorageActorTrait>(
                 // payload and the tier does not move, but it is irreversible all
                 // the same, so it still settles its deposits.
                 AcceptOutcome::AlreadyApplied => irreversible.push(block),
-                AcceptOutcome::Parked(_) | AcceptOutcome::RetryableFailure(_) => {}
+                // The final tier stops here until this block applies, and
+                // nothing else reports it.
+                AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
+                    warn!(
+                        "Finalized block {} did not apply, the final tier stays at {:?}: {err}",
+                        block.header.block_id,
+                        chain.final_tip().map(|tip| tip.block_id),
+                    );
+                }
             }
         }
 
@@ -1617,11 +1954,20 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // ours is orphaned a poll or two after it finalizes. Those transactions
         // are irreversibly included, and returning them to the mempool puts
         // them back in every block we produce from then on.
+        //
+        // A block this same update re-adopted is back on the head with its
+        // transactions applied, so only the ones the channel actually dropped
+        // are resubmitted. Matched by hash, like `none_back_on_channel` below.
         let final_height = chain.final_tip().map(|tip| tip.block_id);
         let resubmit_txs: Vec<LeeTransaction> = orphaned
             .iter()
-            .filter(|(_, block)| final_height.is_none_or(|id| block.header.block_id > id))
-            .flat_map(|(_, block)| resubmittable_txs(block))
+            .filter(|block| final_height.is_none_or(|id| block.header.block_id > id))
+            .filter(|block| {
+                !adopted
+                    .iter()
+                    .any(|readopted| readopted.header.hash == block.header.hash)
+            })
+            .flat_map(resubmittable_txs)
             .collect();
 
         // Snapshot the advanced final tier so a restart re-anchors on it.
@@ -1631,6 +1977,30 @@ async fn apply_follow_update<S: StorageActorTrait>(
         });
         let head_tip = chain.head_tip().map(|tip| BlockMeta::from(&tip));
         let head_tip_id = head_tip.as_ref().map_or(0, |tip| tip.id);
+
+        // zone-sdk drops an orphan from its pending set, so a height above the new
+        // head is ours to write again once the channel holds nothing there. An
+        // in-flight publish above the head cannot land to reclaim it: it is
+        // pinned on an entry this rewind dropped.
+        let head_height = head_tip.as_ref().map(|tip| tip.id);
+        let orphans_above_head: Vec<&Block> = orphaned
+            .iter()
+            .filter(|block| head_height.is_none_or(|id| block.header.block_id > id))
+            .collect();
+        let none_back_on_channel = orphans_above_head
+            .iter()
+            .all(|block| !adopted.iter().any(|a| a.header.hash == block.header.hash));
+        // An adoption that parked sits above the head without being orphaned.
+        let all_adopted_applied = outcomes.iter().all(|outcome| {
+            matches!(
+                outcome,
+                AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied
+            )
+        });
+        let lower_published_high_water =
+            (!orphans_above_head.is_empty() && none_back_on_channel && all_adopted_applied)
+                .then_some(head_height)
+                .flatten();
 
         // Every block at or below the highest finalized one is irreversible, so
         // stored blocks there can be marked finalized.
@@ -1665,6 +2035,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
                     .into_iter()
                     .map(|(block, fin)| (block.clone(), fin))
                     .collect(),
+                channel_cursor: chain.channel_cursor().map(Into::into),
                 head_tip,
                 head_state: chain.share_head_state(),
                 final_snapshot: final_meta.map(|meta| (chain.share_final_state(), meta)),
@@ -1675,6 +2046,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
                 consumed_withdrawals,
                 new_withdraw_intents: Vec::new(),
                 zone_anchor: None,
+                lower_published_high_water,
             })
             .await
             .unwrap_or_else(|err| panic!("Failed to persist follow update: {err:#}"));
@@ -1724,7 +2096,8 @@ fn genesis_block_and_state(
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     config: &SequencerConfig,
 ) -> (Block, lee::V03State) {
-    let (genesis_state, genesis_txs) = build_genesis_state(config, bootstrap_sequencer_key);
+    let (genesis_state, genesis_txs) =
+        build_genesis_state(signing_key, config, bootstrap_sequencer_key);
     let genesis_block = HashableBlockData {
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
@@ -1736,23 +2109,23 @@ fn genesis_block_and_state(
     (genesis_block, genesis_state)
 }
 
-/// The pre-genesis state: `testnet_initial_state` plus the bridge-lock holdings,
-/// the only accounts seeded outside any transaction. Everything else, including
-/// the bootstrap sequencer's own stake, is applied as a genesis transaction in
-/// [`build_genesis_state`] so followers replay it instead of guessing it.
+/// The pre-genesis state: `testnet_initial_state`, nothing else. Everything is
+/// applied as genesis transactions in [`build_genesis_state`] so followers replay it.
 fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
+    let cross_zone = config.cross_zone.is_some();
     #[cfg(not(feature = "testnet"))]
-    let base = testnet_initial_state::initial_state();
+    let base = testnet_initial_state::initial_state(cross_zone);
 
     #[cfg(feature = "testnet")]
-    let base = testnet_initial_state::initial_state_testnet();
+    let base = testnet_initial_state::initial_state_testnet(cross_zone);
 
-    // Bridge-lock holder balances belong to the source side and are not produced by
-    // any transaction, so seed them directly. Cross-zone config is seeded by genesis
-    // InitConfig transactions in `build_genesis_state`, not here.
-    let holdings = bridge_lock_holdings(&config.genesis)
-        .map(|(holder, amount)| cross_zone::build_holding_account(holder, amount));
-    base.with_public_accounts(holdings)
+    // Stamped on fresh genesis and restore-replay: compare against the
+    // indexer's on divergence.
+    log::info!(
+        "Genesis fingerprint: {}",
+        hex::encode(base.genesis_fingerprint())
+    );
+    base
 }
 
 /// Builds the initial genesis state from [`build_initial_state`] plus configured
@@ -1760,37 +2133,50 @@ fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
 /// [`LeeTransaction`]s that should be committed to the genesis block so external
 /// observers can replay them.
 fn build_genesis_state(
+    signing_key: &lee::PrivateKey,
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> (lee::V03State, Vec<LeeTransaction>) {
     let mut state = build_initial_state(config);
 
-    // Fingerprint the directly-seeded state, before genesis txs, so it matches the indexer's.
-    log::info!(
-        "Genesis fingerprint: {}",
-        hex::encode(state.genesis_fingerprint())
-    );
-
     // Config txs seed the config accounts by transaction, so every node
-    // reconstructs them by replaying the genesis block. Every program config is
-    // initialized on every zone: each is a builtin with a user-callable InitConfig,
-    // so a config PDA left default is claimable by the first initializer, which
-    // would hijack the minter, repoint an emitter's outbox, or name its own peer
-    // source. The inbox's own config is initialized only on receiving zones; the
-    // inbox is sequencer-only, so its default config PDA is not user-claimable,
-    // merely unused until the zone receives.
-    let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx(
-        config.cross_zone.as_ref(),
-    ));
-    let ping_sender_config_tx = std::iter::once(cross_zone::build_ping_sender_init_config_tx());
-    let ping_receiver_config_tx = std::iter::once(cross_zone::build_ping_receiver_init_config_tx(
-        config.cross_zone.as_ref(),
-    ));
-    let bridge_lock_config_tx = std::iter::once(cross_zone::build_bridge_lock_init_config_tx());
-    let inbox_config_tx = config.cross_zone.as_ref().map(|_| {
+    // reconstructs them by replaying the genesis block. Every cross-zone config
+    // is initialized: each builtin has a user-callable InitConfig, so a default
+    // config PDA would be claimable by the first initializer. The inbox's is
+    // receiving-zones-only.
+    let cross_zone_declared = config.cross_zone.as_ref();
+    assert!(
+        cross_zone_declared.is_some() || bridge_lock_holdings(&config.genesis).next().is_none(),
+        "SupplyBridgeLockHolding requires cross_zone to be configured: bridge_lock is not registered on this zone"
+    );
+    let cross_zone_config_txs = cross_zone_declared
+        .map(|cross_zone| {
+            [
+                cross_zone::build_wrapped_token_init_config_tx(cross_zone),
+                cross_zone::build_ping_sender_init_config_tx(),
+                cross_zone::build_ping_receiver_init_config_tx(cross_zone),
+                cross_zone::build_bridge_lock_init_config_tx(),
+            ]
+        })
+        .into_iter()
+        .flatten();
+    let inbox_config_tx = cross_zone_declared.map(|_| {
         let self_zone = *config.bedrock_config.channel_id.as_ref();
         cross_zone::build_inbox_init_config_tx(self_zone)
     });
+    // The claim must precede the credit, or the faucet's chained transfer
+    // would find a default recipient and demand a signature no PDA has.
+    let holding_txs: Vec<_> = bridge_lock_holdings(&config.genesis)
+        .flat_map(|(holder, amount)| {
+            [
+                cross_zone::build_bridge_lock_init_holding_tx(holder),
+                build_supply_holding_genesis_transaction(
+                    cross_zone::bridge_lock_holding_account_id(holder),
+                    amount,
+                ),
+            ]
+        })
+        .collect();
     let supply_txs = config.genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyAccount {
             account_id,
@@ -1801,8 +2187,8 @@ fn build_genesis_state(
         GenesisAction::SupplyBridgeAccount { balance } => {
             Some(build_supply_bridge_account_genesis_transaction(*balance))
         }
-        // Seeded directly in `build_initial_state` (holdings via `build_holding_account`), not a
-        // genesis tx. Stakes are built separately below.
+        // Holdings are emitted above as InitHolding + credit pairs; stakes are
+        // built below.
         GenesisAction::SupplyBridgeLockHolding { .. } | GenesisAction::StakeSequencer { .. } => {
             None
         }
@@ -1821,19 +2207,42 @@ fn build_genesis_state(
     }
     let bootstrap_stake_txs = build_stake_genesis_transactions(&staked);
 
-    let genesis_txs = wrapped_token_config_tx
-        .chain(ping_sender_config_tx)
-        .chain(ping_receiver_config_tx)
-        .chain(bridge_lock_config_tx)
+    let mut genesis_txs: Vec<_> = cross_zone_config_txs
+        .chain(holding_txs)
         .chain(inbox_config_tx)
         .chain(supply_txs)
         .chain(bootstrap_stake_txs)
-        .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
             state
                 .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
                 .expect("Failed to execute genesis transaction");
         })
+        .collect();
+
+    // The genesis fee tx credits the first staked sequencer's ownership
+    // account, already claimed by its stake tx above (which ran earlier in this
+    // same genesis block), so no separate initialization is needed.
+    //
+    // A stakeless genesis (e.g. a sequencer reconstructing an existing channel
+    // it did not bootstrap) has no staked account to reward, so it falls back to
+    // the signing key's account: this genesis is a throwaway placeholder (the real
+    // one is replayed from the channel), the summary is the default, so the
+    // credit is zero and the unclaimed account is left untouched.
+    let producer = staked.first().map_or_else(
+        || lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key)),
+        |(_, ownership_public_key, _)| lee::AccountId::from(ownership_public_key),
+    );
+    for tx in [
+        fee_invocation(fee_core::BlockFeeSummary::default(), producer),
+        clock_invocation(0),
+    ] {
+        state
+            .transition_from_public_transaction(&tx, GENESIS_BLOCK_ID, 0)
+            .expect("Failed to execute genesis transaction");
+        genesis_txs.push(tx);
+    }
+    let genesis_txs = genesis_txs
+        .into_iter()
         .map(LeeTransaction::Public)
         .collect();
 
@@ -2021,15 +2430,16 @@ fn bridge_lock_holdings(
 ///
 /// The cross-zone inbox is injected solely by the watcher; a user-submitted call
 /// must be rejected at ingress, since `TransactionOrigin` is not carried in the
-/// block.
+/// block. The fee program is invoked solely by the forced per-block fee
+/// transaction.
 #[must_use]
 pub fn is_sequencer_only_program(program_id: lee::ProgramId) -> bool {
-    cross_zone::is_sequencer_only_program(program_id)
+    cross_zone::is_sequencer_only_program(program_id) || program_id == programs::fee().id()
 }
 
 fn build_supply_account_genesis_transaction(
     account_id: &AccountId,
-    balance: u128,
+    balance: lee::Balance,
 ) -> PublicTransaction {
     let faucet_program_id = programs::faucet().id();
     let vault_program_id = programs::vault().id();
@@ -2051,17 +2461,25 @@ fn build_supply_account_genesis_transaction(
     PublicTransaction::new(message, witness_set)
 }
 
-fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTransaction {
+fn build_supply_bridge_account_genesis_transaction(balance: lee::Balance) -> PublicTransaction {
+    build_supply_holding_genesis_transaction(system_accounts::bridge_account_id(), balance)
+}
+
+/// The unsigned faucet credit funding an already-claimed genesis account; the
+/// recipient must be program-owned before this runs.
+fn build_supply_holding_genesis_transaction(
+    recipient: lee::AccountId,
+    balance: lee::Balance,
+) -> PublicTransaction {
     let faucet_program_id = programs::faucet().id();
-    let bridge_account_id = system_accounts::bridge_account_id();
 
     let message = Message::try_new(
         faucet_program_id,
-        vec![system_accounts::faucet_account_id(), bridge_account_id],
+        vec![system_accounts::faucet_account_id(), recipient],
         Vec::new(),
         faucet_core::Instruction::GenesisTransferDirect { amount: balance },
     )
-    .expect("Failed to serialize bridge genesis transfer instruction");
+    .expect("Failed to serialize faucet genesis transfer instruction");
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
 
     PublicTransaction::new(message, witness_set)
@@ -2119,16 +2537,12 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
 fn finalize_unstake_is_includable(
     state: &lee::V03State,
     tx: &LeeTransaction,
-    live_accredited_keys: Option<&[sequencer_stake_core::SequencerKey]>,
+    finalized_committee: Option<&[sequencer_stake_core::SequencerKey]>,
 ) -> bool {
     let Some(ownership_id) = finalize_unstake_ownership_account(tx) else {
         return true;
     };
-    // Without a committee snapshot there is nothing to check a FinalizeUnstake
-    // against, so none is includable this block.
-    live_accredited_keys.is_some_and(|live_accredited_keys| {
-        committee_discovery::finalize_unstake_is_valid(state, ownership_id, live_accredited_keys)
-    })
+    committee_discovery::finalize_unstake_is_valid(state, ownership_id, finalized_committee)
 }
 
 /// The ownership account a `FinalizeUnstake` call targets, or `None` if `tx`
@@ -2143,9 +2557,7 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
         return None;
     }
 
-    match risc0_zkvm::serde::from_slice::<sequencer_stake_core::Instruction, u32>(
-        &message.instruction_data,
-    ) {
+    match borsh::from_slice::<sequencer_stake_core::Instruction>(&message.instruction_data) {
         Ok(sequencer_stake_core::Instruction::FinalizeUnstake) => {
             message.account_ids.first().copied()
         }
@@ -2193,8 +2605,9 @@ fn build_finalize_unstake_tx(
 
 /// User transactions of an orphaned block to return to the mempool: everything
 /// except the trailing clock tx, sequencer-generated bridge deposits (replayed
-/// from their own bedrock events) and sequencer-only cross-zone txs (replayed
-/// by the watcher; the ingress guard rejects them as `User`).
+/// from their own bedrock events) and sequencer-only txs — cross-zone dispatches
+/// (replayed by the watcher) and the fee tx (regenerated every block; the
+/// ingress guard rejects them as `User`).
 fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
     let Some((_clock, rest)) = block.body.transactions.split_last() else {
         return Vec::new();
@@ -2224,9 +2637,7 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
         return None;
     }
 
-    match risc0_zkvm::serde::from_slice::<cross_zone_inbox_core::Instruction, u32>(
-        &message.instruction_data,
-    ) {
+    match borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data) {
         Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) => Some(msg),
         Ok(cross_zone_inbox_core::Instruction::InitConfig(_)) | Err(_) => None,
     }
@@ -2333,8 +2744,7 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     }
 
     let instruction =
-        risc0_zkvm::serde::from_slice::<bridge_core::Instruction, u32>(&message.instruction_data)
-            .ok()?;
+        borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data).ok()?;
 
     match instruction {
         bridge_core::Instruction::Deposit {
@@ -2356,8 +2766,7 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     }
 
     let instruction =
-        risc0_zkvm::serde::from_slice::<bridge_core::Instruction, u32>(&message.instruction_data)
-            .ok()?;
+        borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data).ok()?;
 
     let bridge_core::Instruction::Withdraw {
         amount,

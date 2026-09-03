@@ -5,10 +5,9 @@ use lee_core::{
     account::{AccountId, Data},
     program::{PdaSeed, ProgramId},
 };
-use serde::{Deserialize, Serialize};
 
 /// AMM Program Instruction.
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Initializes a new Pool (or re-initializes an inactive Pool).
     ///
@@ -91,7 +90,7 @@ pub enum Instruction {
     },
 }
 
-#[derive(Clone, Default, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 pub struct PoolDefinition {
     pub definition_token_a_id: AccountId,
     pub definition_token_b_id: AccountId,

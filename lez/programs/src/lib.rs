@@ -13,9 +13,10 @@ mod inner {
         AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, BRIDGE_ELF, BRIDGE_ID,
         BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
         CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID,
-        PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID, PING_RECEIVER_ELF,
-        PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID,
-        TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
+        FEE_ELF, FEE_ID, PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID,
+        PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF,
+        SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID, WRAPPED_TOKEN_ELF,
+        WRAPPED_TOKEN_ID,
     };
     use lee::program::Program;
 
@@ -61,6 +62,12 @@ mod inner {
     #[inline]
     pub const fn clock() -> Program {
         Program::new_unchecked(CLOCK_ID, Cow::Borrowed(CLOCK_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn fee() -> Program {
+        Program::new_unchecked(FEE_ID, Cow::Borrowed(FEE_ELF))
     }
 
     #[must_use]
@@ -134,7 +141,83 @@ mod inner {
 
     #[cfg(test)]
     mod tests {
+        use lee::{Account, AccountId, PublicTransaction, V03State, public_transaction};
+
         use super::*;
+
+        fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
+            let message = public_transaction::Message::try_new(
+                bridge().id(),
+                vec![
+                    bridge_core::compute_bridge_account_id(bridge().id()),
+                    vault_core::compute_vault_account_id(vault().id(), recipient_id),
+                    bridge_core::deposit_receipt_account_id(bridge().id(), op_id),
+                ],
+                vec![],
+                bridge_core::Instruction::Deposit {
+                    l1_deposit_op_id: op_id,
+                    vault_program_id: vault().id(),
+                    recipient_id,
+                    amount,
+                },
+            )
+            .unwrap();
+
+            PublicTransaction::new(
+                message,
+                public_transaction::WitnessSet::from_raw_parts(vec![]),
+            )
+        }
+
+        #[test]
+        fn bridge_deposit_emits_one_event_and_its_replay_emits_none() {
+            let recipient_id = AccountId::new([5; 32]);
+            let op_id = [9; 32];
+            let amount = 1_000;
+            let auth_transfer_owned = Account {
+                program_owner: authenticated_transfer().id().into(),
+                ..Account::default()
+            };
+
+            let mut state = V03State::new()
+                .with_public_accounts([
+                    (
+                        bridge_core::compute_bridge_account_id(bridge().id()),
+                        Account {
+                            balance: u128::from(amount),
+                            ..auth_transfer_owned.clone()
+                        },
+                    ),
+                    (
+                        vault_core::compute_vault_account_id(vault().id(), recipient_id),
+                        auth_transfer_owned,
+                    ),
+                ])
+                .with_programs([bridge(), vault(), authenticated_transfer()]);
+
+            let tx = deposit_tx(op_id, recipient_id, amount);
+            let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].program_id, bridge().id());
+            assert_eq!(
+                events[0].event.selector,
+                bridge_core::event::Deposit::SELECTOR
+            );
+            assert_eq!(
+                bridge_core::event::Deposit::from_bytes(&events[0].event.data).unwrap(),
+                bridge_core::event::Deposit {
+                    l1_deposit_op_id: op_id,
+                    vault_program_id: vault().id(),
+                    recipient_id,
+                    amount,
+                }
+            );
+
+            let replayed = state.transition_from_public_transaction(&tx, 2, 0).unwrap();
+
+            assert_eq!(replayed.len(), 0);
+        }
 
         #[test]
         fn builtin_programs() {
@@ -170,6 +253,7 @@ mod inner {
                 (ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID),
                 (CLOCK_ELF, CLOCK_ID),
                 (FAUCET_ELF, FAUCET_ID),
+                (FEE_ELF, FEE_ID),
                 (BRIDGE_ELF, BRIDGE_ID),
                 (PINATA_ELF, PINATA_ID),
                 (PINATA_TOKEN_ELF, PINATA_TOKEN_ID),

@@ -3,10 +3,13 @@
 use std::{fmt::Display, str::FromStr};
 
 pub use common::{HashType, block::Block, transaction::LeeTransaction};
+pub use fees::{AdmissionRejection, FeeStateQuote};
 pub use lee::{Account, AccountId, ProgramId};
 pub use lee_core::{BlockId, Commitment, CommitmentSetDigest, MembershipProof, account::Nonce};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+
+mod fees;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]
 pub struct ChannelId(pub [u8; 32]);
@@ -33,6 +36,23 @@ pub struct CrossZoneDeadLetter {
 pub struct CrossZoneDeadLetterReport {
     pub total_retired: u64,
     pub retained: Vec<CrossZoneDeadLetter>,
+}
+
+/// What requeueing a dead-lettered delivery did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrossZoneDeadLetterRequeue {
+    /// Restored to the pending list with a clean attempt count; the next
+    /// production turn attempts it again.
+    Requeued,
+    /// The delivery was already pending again, so only the dead letter was
+    /// dropped.
+    AlreadyPending,
+    /// No retained dead letter under that key.
+    NotFound,
+    /// Listed, but its transaction exceeded the retention bound and was not
+    /// kept; read the message back off the peer channel instead.
+    NotRetained,
 }
 
 impl Display for ChannelId {

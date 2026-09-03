@@ -32,7 +32,9 @@ use crate::{
     protocol::{
         GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock, GetBlockRange,
         GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
-        GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock, Transaction,
+        GetFeeQuote, GetFeeQuoteReply, GetLastBlockId, GetProofsAndRoot, GetTransaction,
+        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitOutcome,
+        Transaction,
     },
 };
 
@@ -158,14 +160,18 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
 
         // Never inscribe a second block at a height we already published: the
         // channel would carry two chains from there and nothing resolves that.
-        // The head rewinds under us when the sdk orphans our own unfinalized
-        // blocks, and recovers once they finalize, so this is a wait.
         if let Some(high_water) = self.sequencer.rewound_below_published().await {
             warn!(
                 "Skipping turn: head rewound to {} but block {high_water} is already inscribed; \
                  waiting for the channel to restore it",
                 self.sequencer.next_block_height().await.saturating_sub(1),
             );
+            return Ok(());
+        }
+
+        // The channel moved past our pin, so every publish this turn would be refused.
+        if let Some(tip) = self.sequencer.pin_behind_channel_tip().await {
+            info!("Skipping turn: channel tip {tip:?} moved past our pin; catching up first");
             return Ok(());
         }
 
@@ -190,16 +196,28 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
 impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<Transaction>
     for ExecutorActor<BP, S>
 {
-    type Reply = Result<()>;
+    type Reply = Result<SubmitOutcome>;
 
     async fn handle(
         &mut self,
         Transaction { transaction }: Transaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        // Fee admission against the head state, before the mempool sees it.
+        // Advisory (base fees and balances move), but everything it turns
+        // away would have been refused by the block builder anyway.
+        if let Err(rejection) = self
+            .sequencer
+            .with_state(|state| sequencer_core::fees::screen(&transaction, state))
+            .await
+        {
+            return Ok(SubmitOutcome::Rejected(rejection));
+        }
+
         self.mempool_handle
             .try_push((TransactionOrigin::User, transaction))
-            .map_err(|_err| Error::MempoolIsFull)
+            .map_err(|_err| Error::MempoolIsFull)?;
+        Ok(SubmitOutcome::Admitted)
     }
 }
 
@@ -276,6 +294,25 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
         self.sequencer
             .with_state(|state| state.get_account_by_id(account_id).balance)
             .await
+    }
+}
+
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetFeeQuote>
+    for ExecutorActor<BP, S>
+{
+    type Reply = GetFeeQuoteReply;
+
+    async fn handle(
+        &mut self,
+        GetFeeQuote: GetFeeQuote,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        GetFeeQuoteReply {
+            quote: self
+                .sequencer
+                .with_state(sequencer_core::fees::fee_quote)
+                .await,
+        }
     }
 }
 
@@ -396,5 +433,24 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
             total_retired,
             retained: retained.into_iter().collect(),
         })
+    }
+}
+
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
+    Message<RequeueCrossZoneDeadLetter> for ExecutorActor<BP, S>
+{
+    type Reply = Result<RequeueCrossZoneDeadLetterReply>;
+
+    async fn handle(
+        &mut self,
+        RequeueCrossZoneDeadLetter { message_key }: RequeueCrossZoneDeadLetter,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let outcome = self
+            .sequencer
+            .requeue_cross_zone_dead_letter(message_key)
+            .await
+            .map_err(Error::CrossZoneDeadLetterRequeueFailed)?;
+        Ok(RequeueCrossZoneDeadLetterReply { outcome })
     }
 }

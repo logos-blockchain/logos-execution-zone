@@ -426,6 +426,33 @@
       ],
       "title": "Cross-zone deliveries given up on (per minute)",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
+      "id": 14,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "cross_zone_peer_committee_suspended",
+          "legendFormat": "peer {{peer}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Peer watchers suspended on the committee floor",
+      "type": "timeseries"
     }
   ],
   "refresh": "5s",

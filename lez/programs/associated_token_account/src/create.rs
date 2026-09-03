@@ -36,13 +36,9 @@ pub fn create_associated_token_account(
         AccountPostState::new(token_definition.account.clone()),
         AccountPostState::new(ata_account.account.clone()),
     ];
-    let ata_account_auth = AccountWithMetadata {
-        is_authorized: true,
-        ..ata_account.clone()
-    };
     let chained_call = ChainedCall::new(
         token_program_id,
-        vec![token_definition.clone(), ata_account_auth],
+        vec![token_definition.account_id, ata_account.account_id],
         &token_core::Instruction::InitializeAccount,
     )
     .with_pda_seeds(vec![ata_seed]);

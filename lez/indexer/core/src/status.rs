@@ -68,6 +68,9 @@ pub enum PeerHealth {
     Lagging,
     /// Stuck on a slot it cannot read.
     Holed,
+    /// The peer's live committee is below the configured floor; reading is
+    /// suspended until it recovers.
+    Suspended,
     /// A verified-absence verdict was issued against this peer's chain.
     Halted,
 }
@@ -233,6 +236,20 @@ mod tests {
             value["cross_zone_peers"][0]["health"],
             serde_json::json!("Live")
         );
+    }
+
+    /// The status string a suspended peer shows, the one clients key on.
+    #[test]
+    fn a_suspended_peer_serializes_as_suspended() {
+        let status = PeerStatus {
+            zone: hex::encode([2_u8; 32]),
+            verified_tip_block_id: Some(4),
+            cursor_slot: Some(70),
+            stuck_slot_attempts: 0,
+            health: PeerHealth::Suspended,
+        };
+        let value = serde_json::to_value(&status).expect("serialize");
+        assert_eq!(value["health"], serde_json::json!("Suspended"));
     }
 
     #[test]

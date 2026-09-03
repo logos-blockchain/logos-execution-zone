@@ -1,7 +1,7 @@
+use borsh::to_vec;
 use lee_core::program::{
     AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
-use risc0_zkvm::serde::to_vec;
 
 /// Proxy for spending from a private PDA via `simple_transfer`.
 ///
@@ -17,7 +17,7 @@ fn main() {
             pre_states,
             instruction: (seed, amount, simple_transfer_id),
         },
-        instruction_words,
+        instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
     let Ok([first, second]) = <[_; 2]>::try_from(pre_states) else {
@@ -27,20 +27,17 @@ fn main() {
     let first_post = AccountPostState::new(first.account.clone());
     let second_post = AccountPostState::new(second.account.clone());
 
-    let mut first_for_callee = first.clone();
-    first_for_callee.is_authorized = true;
-
     let chained_call = ChainedCall {
         program_id: simple_transfer_id,
         instruction_data: to_vec(&amount).unwrap(),
-        pre_states: vec![first_for_callee, second.clone()],
+        pre_state_ids: vec![first.account_id, second.account_id],
         pda_seeds: vec![seed],
     };
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
-        instruction_words,
+        instruction_data,
         vec![first, second],
         vec![first_post, second_post],
     )

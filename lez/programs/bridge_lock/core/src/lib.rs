@@ -2,18 +2,19 @@
 //! token bridge. A holder locks part of their balance into an escrow and emits a
 //! cross-zone message minting the wrapped token on the target zone.
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::AccountId,
     program::{PdaSeed, ProgramId},
 };
-use serde::{Deserialize, Serialize};
 
 const ESCROW_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeLockEscrow/0000/";
 const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeLockCfg/0000000/";
+const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeLockHold/000000/";
 
-/// Variants are append-only. risc0 serde encodes the variant as a bare leading
-/// tag word, so inserting one ahead of `Lock` shifts every existing encoding.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Variants are append-only. Borsh encodes the variant as a leading tag byte,
+/// so inserting one ahead of `Lock` shifts every existing encoding.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Lock `amount` of the holder's balance and emit a cross-zone message
     /// minting the wrapped token on `target_zone`.
@@ -25,8 +26,8 @@ pub enum Instruction {
     /// `target_zone` is the caller's, so a lock to a zone that will not route it
     /// escrows and never mints. TODO: bound it source-side.
     ///
-    /// Required accounts (4): config PDA, holder holding (authorized), escrow
-    /// PDA, outbox PDA.
+    /// Required accounts (5): config PDA, holder (authorized, echoed), holder
+    /// holding PDA, escrow PDA, outbox PDA.
     Lock {
         amount: u128,
         target_zone: [u8; 32],
@@ -44,6 +45,11 @@ pub enum Instruction {
         outbox_program_id: ProgramId,
         target_program_id: ProgramId,
     },
+    /// Claims the holder's holding PDA, idempotently; anyone may run it, and a
+    /// re-run on a funded holding leaves it untouched.
+    ///
+    /// Required accounts (1): the holder's holding PDA.
+    InitHolding { holder: [u8; 32] },
 }
 
 /// PDA accumulating all locked balance on this zone.
@@ -55,6 +61,26 @@ pub fn escrow_account_id(bridge_lock_id: ProgramId) -> AccountId {
 #[must_use]
 pub const fn escrow_seed() -> PdaSeed {
     PdaSeed::new(ESCROW_SEED_DOMAIN)
+}
+
+/// PDA holding one holder's bridgeable balance, debited by `Lock`.
+#[must_use]
+pub fn holding_account_id(bridge_lock_id: ProgramId, holder: &[u8; 32]) -> AccountId {
+    AccountId::for_public_pda(&bridge_lock_id, &holding_seed(holder))
+}
+
+#[must_use]
+pub fn holding_seed(holder: &[u8; 32]) -> PdaSeed {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+
+    let mut bytes = [0_u8; 64];
+    bytes[..32].copy_from_slice(&HOLDING_SEED_DOMAIN);
+    bytes[32..].copy_from_slice(holder);
+    let seed: [u8; 32] = Impl::hash_bytes(&bytes)
+        .as_bytes()
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+    PdaSeed::new(seed)
 }
 
 /// PDA holding the outbox program id and the mint target, seeded at genesis so
@@ -120,7 +146,28 @@ mod tests {
         );
     }
 
-    /// `extract_emission` decodes `Lock` off peer transactions, so its tag word is
+    #[test]
+    fn holding_is_unique_per_holder() {
+        let id: ProgramId = [4; 8];
+        assert_ne!(
+            holding_account_id(id, &[1; 32]),
+            holding_account_id(id, &[2; 32])
+        );
+        assert_eq!(
+            holding_account_id(id, &[1; 32]),
+            holding_account_id(id, &[1; 32])
+        );
+    }
+
+    /// Genesis blocks already carry `InitHolding` at this tag: wire format.
+    #[test]
+    fn init_holding_is_the_third_variant() {
+        let init = Instruction::InitHolding { holder: [7; 32] };
+        let bytes = borsh::to_vec(&init).expect("InitHolding serializes");
+        assert_eq!(bytes[0], 2);
+    }
+
+    /// `extract_emission` decodes `Lock` off peer transactions, so its tag byte is
     /// wire format: a variant inserted ahead of it would silently shift every
     /// existing encoding.
     #[test]
@@ -133,7 +180,7 @@ mod tests {
             payload: vec![],
             ordinal: 0,
         };
-        let words = risc0_zkvm::serde::to_vec(&lock).expect("Lock serializes");
-        assert_eq!(words[0], 0);
+        let bytes = borsh::to_vec(&lock).expect("Lock serializes");
+        assert_eq!(bytes[0], 0);
     }
 }
