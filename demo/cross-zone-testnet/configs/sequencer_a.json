@@ -11,8 +11,8 @@
       "max_retries": 5
     },
     "channel_id": "aa480ae9c4ed46e477d10944587b5227047cf79e590a51d7f278c3790f2dd2c5",
-    "node_url": "http://65.109.51.37:18080",
-    "funding_key": "c2a6a4a0981d5bdcf8ddeb8d7934fd8c5510efeb1053f613b45871670b6f7b19"
+    "node_url": "http://localhost:18080",
+    "funding_key": "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
   },
   "genesis": [
     {

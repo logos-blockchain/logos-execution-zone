@@ -1,7 +1,7 @@
 {
   "consensus_info_polling_interval": "1s",
   "bedrock_config": {
-    "addr": "http://65.109.51.37:18080"
+    "addr": "http://localhost:18080"
   },
   "channel_id": "e6b2b94787168d300b20c49fa169b002d6bb0cb0d3b7aeab6c24ae59ce888abf",
   "allow_chain_reset": true,

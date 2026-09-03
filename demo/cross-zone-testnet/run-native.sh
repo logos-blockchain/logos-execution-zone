@@ -23,6 +23,13 @@ for b in sequencer_service indexer_service explorer_service cross_zone_lock; do
   fi
 done
 
+# The zones settle on the local Bedrock; it must be online first.
+if ! curl -s -m 5 http://localhost:18080/cryptarchia/info | grep -q '"state":"Online"'; then
+  echo "Local Bedrock is not online at http://localhost:18080." >&2
+  echo "Start it first with ./start-bedrock.sh and wait for \"state\":\"Online\"." >&2
+  exit 1
+fi
+
 ZB_CONFIG="configs/sequencer_b.json"
 if [ "${1:-}" = "unauthorized" ]; then
   ZB_CONFIG="configs/sequencer_b_unauthorized.json"
