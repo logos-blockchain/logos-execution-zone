@@ -71,9 +71,9 @@ pub struct FollowUpdate {
     /// Blocks dropped from the branch by an L1 reorg: reverted from the
     /// `head`, their user txs resubmitted to the mempool.
     pub orphaned: Vec<Block>,
-    /// Blocks whose containing L1 block reached finality: they move into the
-    /// irreversible `final` tier.
-    pub finalized: Vec<Block>,
+    /// Blocks whose containing L1 block reached finality, each with that L1
+    /// block's slot: they move into the irreversible `final` tier.
+    pub finalized: Vec<(Block, Slot)>,
     /// Finalized Bedrock deposit events, to record and mint on L2.
     pub deposits: Vec<DepositInfo>,
     /// Finalized Bedrock withdraw events, to reconcile against local intents.
@@ -447,14 +447,19 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     let mut deposits = Vec::new();
                                     let mut withdrawals = Vec::new();
                                     let mut undecodable = Vec::new();
-                                    for op in finalized
+                                    for (l1_slot, op) in finalized
                                         .into_iter()
-                                        .flat_map(|item| item.ops.into_iter())
+                                        .flat_map(|item| {
+                                            let l1_slot = item.l1_slot;
+                                            item.ops.into_iter().map(move |op| (l1_slot, op))
+                                        })
                                     {
                                         match op {
                                             FinalizedOp::Inscription(inscription) => {
                                                 match block_from_inscription(&inscription) {
-                                                    Some(block) => finalized_blocks.push(block),
+                                                    Some(block) => {
+                                                        finalized_blocks.push((block, l1_slot));
+                                                    }
                                                     // An empty payload is not a
                                                     // block, but we don't slash
                                                     // for it.
