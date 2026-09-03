@@ -103,10 +103,7 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
             .context("The offender's Bedrock key is not a valid Ed25519 point")?;
     let offender_owner = config::founding_stake_owner_key(OFFENDER_SEED)?;
     let offender_account = AccountId::from(&lee::PublicKey::new_from_private_key(&offender_owner));
-    let offender_funds = sequencer_stake_core::stake_funds_account_id(
-        programs::sequencer_stake().id(),
-        &offender_account,
-    );
+    let offender_funds = system_accounts::stake_funds_account_id(&offender_account);
     let sink = sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake().id());
 
     let bedrock_config = BedrockConfig {

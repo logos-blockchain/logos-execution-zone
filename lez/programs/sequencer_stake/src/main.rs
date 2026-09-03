@@ -1,6 +1,6 @@
 use std::collections::btree_map::Entry;
 
-use authenticated_transfer_core::Instruction as TransferInstruction;
+use authenticated_transfer_core::custody_transfer;
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
     program::{
@@ -13,7 +13,7 @@ use sequencer_stake_core::{
     SequencerStakeConfig, SlashApproval, StakeRecord,
     ed25519_dalek::{Signature, VerifyingKey},
     sequencer_stake_config_account_id, slash_approval_message, slash_sink_account_id,
-    stake_funds_seed,
+    stake_funds_account_id, stake_funds_seed,
 };
 
 include!("../../authenticated_transfer/image_id.rs");
@@ -128,6 +128,18 @@ fn decode_config(
         .expect("config account data should decode as SequencerStakeConfig")
 }
 
+fn assert_funds_account(
+    self_program_id: ProgramId,
+    ownership: &AccountWithMetadata,
+    funds: &AccountWithMetadata,
+) {
+    assert_eq!(
+        funds.account_id,
+        stake_funds_account_id(self_program_id, &ownership.account_id),
+        "not the stake funds account of this ownership account"
+    );
+}
+
 fn stake(
     self_program_id: ProgramId,
     pre_states: Vec<AccountWithMetadata>,
@@ -146,12 +158,7 @@ fn stake(
         "must sign for the ownership account"
     );
 
-    let funds_seed = stake_funds_seed(&ownership_account.account_id);
-    assert_eq!(
-        funds_account.account_id,
-        AccountId::for_public_pda(&self_program_id, &funds_seed),
-        "not the stake funds account of this ownership account"
-    );
+    assert_funds_account(self_program_id, &ownership_account, &funds_account);
 
     let mut config = decode_config(&config_account, self_program_id);
     let minimum_sequencer_stake = config.minimum_sequencer_stake;
@@ -404,12 +411,7 @@ fn slash(
         self_program_id.into(),
         "not a sequencer_stake ownership account"
     );
-    let funds_seed = stake_funds_seed(&ownership_account.account_id);
-    assert_eq!(
-        funds_account.account_id,
-        AccountId::for_public_pda(&self_program_id, &funds_seed),
-        "not the stake funds account of this ownership account"
-    );
+    assert_funds_account(self_program_id, &ownership_account, &funds_account);
     assert_eq!(
         sink_account.account_id,
         slash_sink_account_id(self_program_id),
@@ -453,18 +455,14 @@ fn slash(
     let funds_account_post = funds_account.account.clone();
     let sink_account_post = sink_account.account.clone();
 
-    let mut funds_account_authorized = funds_account;
-    funds_account_authorized.is_authorized = true;
-
     // The burn happens in a chained authenticated_transfer call.
-    let burn_call = ChainedCall::new(
+    let burn_call = custody_transfer(
         AUTHENTICATED_TRANSFER_IMAGE_ID,
-        vec![funds_account_authorized, sink_account],
-        &TransferInstruction::Transfer {
-            amount: entry.total_staked,
-        },
-    )
-    .with_pda_seeds(vec![funds_seed]);
+        funds_account,
+        stake_funds_seed(&ownership_account.account_id),
+        sink_account,
+        entry.total_staked,
+    );
 
     (
         vec![
@@ -491,12 +489,7 @@ fn finalize_unstake(
         self_program_id.into(),
         "not a sequencer_stake ownership account"
     );
-    let funds_seed = stake_funds_seed(&ownership_account.account_id);
-    assert_eq!(
-        funds_account.account_id,
-        AccountId::for_public_pda(&self_program_id, &funds_seed),
-        "not the stake funds account of this ownership account"
-    );
+    assert_funds_account(self_program_id, &ownership_account, &funds_account);
 
     let mut record = StakeRecord::from_bytes(ownership_account.account.data.as_ref())
         .expect("ownership account should decode as StakeRecord");
@@ -547,19 +540,13 @@ fn finalize_unstake(
     let funds_account_post = funds_account.account.clone();
     let destination_post = destination_account.account.clone();
 
-    let mut funds_account_authorized = funds_account;
-    funds_account_authorized.is_authorized = true;
-
-    // Same shape as the slash burn: the payout runs one call down in
-    // authenticated_transfer, authorized by the seed granted here.
-    let release_call = ChainedCall::new(
+    let release_call = custody_transfer(
         AUTHENTICATED_TRANSFER_IMAGE_ID,
-        vec![funds_account_authorized, destination_account],
-        &TransferInstruction::Transfer {
-            amount: pending.amount,
-        },
-    )
-    .with_pda_seeds(vec![funds_seed]);
+        funds_account,
+        stake_funds_seed(&ownership_account.account_id),
+        destination_account,
+        pending.amount,
+    );
 
     (
         vec![

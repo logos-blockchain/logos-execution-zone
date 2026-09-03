@@ -411,10 +411,12 @@ pub async fn setup_wallet_at(
 /// Funds each of the wallet's private accounts from one of its public accounts.
 pub async fn fund_private_accounts(
     wallet: &mut WalletCore,
-    funder: &PrivateKey,
+    initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
 ) -> Result<()> {
-    let funder_id = AccountId::from(&PublicKey::new_from_private_key(funder));
+    let funder_id = AccountId::from(&PublicKey::new_from_private_key(
+        &initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0,
+    ));
 
     for private_account in initial_private_accounts {
         wallet::cli::execute_subcommand(

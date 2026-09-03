@@ -4,10 +4,7 @@ use super::*;
 
 #[test]
 fn public_echo_of_a_default_account_leaves_it_unowned() {
-    let initial_data = [];
-    let mut state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&initial_data))
-        .with_test_programs();
+    let mut state = V03State::new().with_test_programs();
     let account_id = AccountId::new([1; 32]);
     let program_id = crate::test_methods::noop().id();
 
@@ -25,10 +22,7 @@ fn public_echo_of_a_default_account_leaves_it_unowned() {
 
 #[test]
 fn public_data_write_to_a_default_account_claims_it() {
-    let initial_data = [];
-    let mut state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&initial_data))
-        .with_test_programs();
+    let mut state = V03State::new().with_test_programs();
     let account_id = AccountId::new([1; 32]);
     let program_id = crate::test_methods::data_changer().id();
     let new_data: Vec<u8> = vec![1, 2, 3, 4, 5];
@@ -436,10 +430,7 @@ fn private_credit_to_a_public_unowned_recipient_leaves_it_unowned() {
 
 #[test]
 fn a_callee_cannot_write_an_account_the_caller_acquired_in_the_same_transaction() {
-    let initial_data = [];
-    let mut state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&initial_data))
-        .with_test_programs();
+    let mut state = V03State::new().with_test_programs();
     let caller_id = crate::test_methods::acquire_and_forward().id();
     let callee_id = crate::test_methods::data_changer().id();
     let account_id = AccountId::new([1; 32]);
@@ -470,10 +461,7 @@ fn a_callee_cannot_write_an_account_the_caller_acquired_in_the_same_transaction(
 
 #[test]
 fn a_callee_acquires_an_account_the_caller_merely_echoed() {
-    let initial_data = [];
-    let mut state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&initial_data))
-        .with_test_programs();
+    let mut state = V03State::new().with_test_programs();
     let caller_id = crate::test_methods::acquire_and_forward().id();
     let callee_id = crate::test_methods::data_changer().id();
     let account_id = AccountId::new([1; 32]);

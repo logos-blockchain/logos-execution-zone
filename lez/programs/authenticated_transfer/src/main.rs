@@ -49,20 +49,17 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction,
+            instruction:
+                Instruction::Transfer {
+                    amount: balance_to_move,
+                },
         },
         instruction_data,
     ) = read_lee_inputs::<Instruction>();
 
-    let post_states = match instruction {
-        Instruction::Transfer {
-            amount: balance_to_move,
-        } => {
-            let [sender, recipient] = <[_; 2]>::try_from(pre_states.clone())
-                .expect("Transfer requires exactly 2 accounts");
-            transfer(sender, recipient, balance_to_move)
-        }
-    };
+    let [sender, recipient] =
+        <[_; 2]>::try_from(pre_states.clone()).expect("Transfer requires exactly 2 accounts");
+    let post_states = transfer(sender, recipient, balance_to_move);
 
     ProgramOutput::new(
         self_program_id,

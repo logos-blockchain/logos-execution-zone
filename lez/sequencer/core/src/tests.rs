@@ -3578,7 +3578,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
         vec![
             funding_id,
             ownership_id,
-            stake_funds_id(ownership_id),
+            system_accounts::stake_funds_account_id(&ownership_id),
             config_id,
         ],
         vec![Nonce(0), Nonce(0)],
@@ -3609,18 +3609,14 @@ fn diag_sequencer_stake_claims_ownership_account() {
         "the ownership account never custodies the stake"
     );
 
-    let funds_account = state.get_account_by_id(stake_funds_id(ownership_id));
+    let funds_account =
+        state.get_account_by_id(system_accounts::stake_funds_account_id(&ownership_id));
     assert_eq!(
         funds_account.program_owner,
         lee::AccountId::default(),
         "the funds PDA is balance-only, so nothing owns it; rule 5 guards the balance"
     );
     assert_eq!(funds_account.balance, amount);
-}
-
-/// The PDA custodying whatever `ownership_id` has staked.
-fn stake_funds_id(ownership_id: AccountId) -> AccountId {
-    sequencer_stake_core::stake_funds_account_id(programs::sequencer_stake().id(), &ownership_id)
 }
 
 /// Builds a `Stake` moving `amount` from `funding` into `ownership`'s stake
@@ -3646,7 +3642,7 @@ fn stake_transaction(
         vec![
             funding_id,
             ownership_id,
-            stake_funds_id(ownership_id),
+            system_accounts::stake_funds_account_id(&ownership_id),
             system_accounts::sequencer_stake_config_account_id(),
         ],
         vec![
@@ -3757,7 +3753,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
 
     // Donate into the claimed funds PDA, which is where the stake actually
     // sits: a balance increase needs no ownership of the target.
-    let funds_id = stake_funds_id(ownership_id);
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     let message = lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id(),
         vec![funding_id, funds_id],
@@ -3989,7 +3985,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         .expect("FinalizeUnstake should succeed");
 
     assert_eq!(stake_entry(&state, sequencer_key), None, "key fully exited");
-    let funds_id = stake_funds_id(ownership_id);
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     assert_eq!(
         state.get_account_by_id(funds_id).balance,
         0,
@@ -4041,7 +4037,9 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     );
     assert_eq!(
         state
-            .get_account_by_id(stake_funds_id(bootstrap_stake_account_id(&config)))
+            .get_account_by_id(system_accounts::stake_funds_account_id(
+                &bootstrap_stake_account_id(&config)
+            ))
             .balance,
         system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE
     );
@@ -4118,7 +4116,7 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
         stake_test_state(funding_id, amount).with_programs([test_programs::reverse_transfer()]);
 
     // Seed the custody account so there is something worth taking.
-    let funds_id = stake_funds_id(ownership_id);
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     state.force_insert_account(
         funds_id,
         lee::Account {
@@ -4243,7 +4241,7 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
 
     assert_eq!(
         state
-            .get_account_by_id(stake_funds_id(ownership_id))
+            .get_account_by_id(system_accounts::stake_funds_account_id(&ownership_id))
             .balance,
         0
     );
@@ -4260,7 +4258,7 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
 
 /// Squats `ownership_id`'s funds PDA: a stranger's data write takes the address.
 fn squat_stake_funds(state: &mut V03State, ownership_id: AccountId) -> AccountId {
-    let funds_id = stake_funds_id(ownership_id);
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     let mut funds = state.get_account_by_id(funds_id);
     funds.program_owner = AccountId::new([66; 32]);
     funds.data = vec![1].try_into().expect("1 byte fits in account data");
@@ -4359,7 +4357,7 @@ fn a_slash_claws_back_a_pending_unstake() {
     assert_eq!(state.get_account_by_id(slash_sink_id()).balance, amount);
     assert_eq!(
         state
-            .get_account_by_id(stake_funds_id(ownership_id))
+            .get_account_by_id(system_accounts::stake_funds_account_id(&ownership_id))
             .balance,
         0
     );
@@ -4421,7 +4419,7 @@ fn a_slash_without_enough_approvals_is_rejected() {
 
     assert_eq!(
         state
-            .get_account_by_id(stake_funds_id(ownership_id))
+            .get_account_by_id(system_accounts::stake_funds_account_id(&ownership_id))
             .balance,
         amount
     );

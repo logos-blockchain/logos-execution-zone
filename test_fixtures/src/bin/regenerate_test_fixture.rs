@@ -72,7 +72,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
 
     fund_private_accounts(
         &mut wallet,
-        &initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0,
+        &initial_public_accounts,
         &initial_private_accounts,
     )
     .await

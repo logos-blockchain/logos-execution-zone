@@ -1,4 +1,4 @@
-use authenticated_transfer_core::Instruction as TransferInstruction;
+use authenticated_transfer_core::custody_transfer;
 use bridge_lock_core::{
     Instruction, config_account_id, config_bytes, escrow_account_id, holding_account_id,
     holding_seed, read_config,
@@ -145,14 +145,13 @@ fn lock(
     );
 
     // The balance moves in a chained authenticated_transfer call.
-    let mut holding_authorized = holding.clone();
-    holding_authorized.is_authorized = true;
-    let move_call = ChainedCall::new(
+    let move_call = custody_transfer(
         AUTHENTICATED_TRANSFER_IMAGE_ID,
-        vec![holding_authorized, escrow.clone()],
-        &TransferInstruction::Transfer { amount },
-    )
-    .with_pda_seeds(vec![holding_seed(&holder.account_id.into_value())]);
+        holding.clone(),
+        holding_seed(&holder.account_id.into_value()),
+        escrow.clone(),
+        amount,
+    );
 
     let emit_call = ChainedCall::new(
         outbox_program_id,

@@ -1,17 +1,8 @@
+use authenticated_transfer_core::custody_transfer;
 use bridge_core::Instruction;
-use lee_core::{
-    account::Account,
-    program::{ChainedCall, ProgramEvent, ProgramInput, ProgramOutput, read_lee_inputs},
-};
+use lee_core::program::{ProgramEvent, ProgramInput, ProgramOutput, read_lee_inputs};
 
 include!("../../authenticated_transfer/image_id.rs");
-
-fn unchanged_post_states(pre_states: &[lee_core::account::AccountWithMetadata]) -> Vec<Account> {
-    pre_states
-        .iter()
-        .map(|pre_state| pre_state.account.clone())
-        .collect()
-}
 
 fn main() {
     let (
@@ -77,7 +68,14 @@ fn main() {
             // sequencer keeps re-driving the mint every block (see the deposit
             // drain). Accepted: there is no reclaim path today.
             if receipt.account.program_owner == self_program_id.into() {
-                (unchanged_post_states(&pre_states_clone), vec![], vec![])
+                (
+                    pre_states_clone
+                        .iter()
+                        .map(|pre| pre.account.clone())
+                        .collect(),
+                    vec![],
+                    vec![],
+                )
             } else {
                 // First mint: write the marker byte into the receipt. The write
                 // is what records the mint.
@@ -90,18 +88,13 @@ fn main() {
                     receipt_post,
                 ];
 
-                let mut bridge_for_transfer = bridge;
-                bridge_for_transfer.is_authorized = true;
-                let chained_calls = vec![
-                    ChainedCall::new(
-                        AUTHENTICATED_TRANSFER_IMAGE_ID,
-                        vec![bridge_for_transfer, recipient],
-                        &authenticated_transfer_core::Instruction::Transfer {
-                            amount: u128::from(amount),
-                        },
-                    )
-                    .with_pda_seeds(vec![bridge_core::compute_bridge_seed()]),
-                ];
+                let chained_calls = vec![custody_transfer(
+                    AUTHENTICATED_TRANSFER_IMAGE_ID,
+                    bridge,
+                    bridge_core::compute_bridge_seed(),
+                    recipient,
+                    u128::from(amount),
+                )];
 
                 let events = vec![ProgramEvent {
                     selector: bridge_core::event::Deposit::SELECTOR,
@@ -155,7 +148,11 @@ fn main() {
             //         amount: u128::from(amount),
             //     },
             // )];
-            // (unchanged_post_states(&pre_states_clone), chained_calls, events)
+            // (
+            //     pre_states_clone.iter().map(|pre| pre.account.clone()).collect(),
+            //     chained_calls,
+            //     events,
+            // )
         }
     };
 

@@ -26,7 +26,7 @@ use wallet::{
 
 use super::LezSequencerClient;
 use crate::{
-    config::{self, InitialPrivateAccountForWallet},
+    config::InitialPrivateAccountForWallet,
     setup::{fund_private_accounts, setup_wallet},
 };
 
@@ -695,13 +695,9 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                     }?;
                     let mut wallet = wallet;
                     if initialize_private_account_funding {
-                        fund_private_accounts(
-                            &mut wallet,
-                            &public_accounts[config::PRIVATE_FUNDER_INDEX].0,
-                            &private_accounts,
-                        )
-                        .await
-                        .context("failed to fund LEZ private wallet accounts")?;
+                        fund_private_accounts(&mut wallet, &public_accounts, &private_accounts)
+                            .await
+                            .context("failed to fund LEZ private wallet accounts")?;
                     }
                     Ok((wallet, initialized_state_dir, password))
                 })

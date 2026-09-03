@@ -20,7 +20,7 @@ pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 
 /// The public account for funding the private accounts' balances at genesis.
-pub const PRIVATE_FUNDER_INDEX: usize = 0;
+pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
 
 /// Fixed sequencer signing key; exposed so the fixture generator can reopen the produced store.
 pub const SEQUENCER_SIGNING_KEY: [u8; 32] = [37; 32];

@@ -59,6 +59,11 @@ pub fn sequencer_stake_config_account_id() -> AccountId {
     sequencer_stake_core::sequencer_stake_config_account_id(programs::sequencer_stake().id())
 }
 
+#[must_use]
+pub fn stake_funds_account_id(ownership_id: &AccountId) -> AccountId {
+    sequencer_stake_core::stake_funds_account_id(programs::sequencer_stake().id(), ownership_id)
+}
+
 /// Starts with no entries; every stake, including the bootstrap sequencer's
 /// own, is added by replaying a `Stake` transaction, not seeded here.
 #[must_use]

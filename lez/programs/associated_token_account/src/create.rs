@@ -19,33 +19,27 @@ pub fn create_associated_token_account(
         ata_program_id,
     );
 
+    let post_states = vec![
+        owner.account,
+        token_definition.account.clone(),
+        ata_account.account.clone(),
+    ];
+
     // Idempotent: already initialized → no-op
     // TODO(squatting): the ATA address is derivable from (owner, mint) alone, so a
     // program that writes data there first owns it and turns this into a silent
     // no-op for ever. Accepted: there is no reclaim path today.
     if !ata_account.account.data.is_empty() {
-        return (
-            vec![
-                owner.account.clone(),
-                token_definition.account.clone(),
-                ata_account.account.clone(),
-            ],
-            vec![],
-        );
+        return (post_states, vec![]);
     }
 
-    let post_states = vec![
-        owner.account.clone(),
-        token_definition.account.clone(),
-        ata_account.account.clone(),
-    ];
     let ata_account_auth = AccountWithMetadata {
         is_authorized: true,
-        ..ata_account.clone()
+        ..ata_account
     };
     let chained_call = ChainedCall::new(
         token_program_id,
-        vec![token_definition.clone(), ata_account_auth],
+        vec![token_definition, ata_account_auth],
         &token_core::Instruction::InitializeAccount,
     )
     .with_pda_seeds(vec![ata_seed]);

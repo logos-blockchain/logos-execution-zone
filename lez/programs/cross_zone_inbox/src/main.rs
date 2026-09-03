@@ -4,13 +4,9 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::AccountWithMetadata,
     program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
 };
-
-fn unchanged(pre: &AccountWithMetadata) -> Account {
-    pre.account.clone()
-}
 
 fn main() {
     let (
@@ -131,7 +127,7 @@ fn dispatch(
 
     // On replay this is a no-op: the seen shard is untouched and no call is made.
     let (seen_post, chained_calls) = if already_seen {
-        (unchanged(&seen), vec![])
+        (seen.account.clone(), vec![])
     } else {
         shard.insert(msg.src_block_hash, msg.src_tx_index);
         let mut seen_post = seen.account.clone();
@@ -156,8 +152,8 @@ fn dispatch(
         (seen_post, vec![call])
     };
 
-    let mut post_states = vec![unchanged(&config), seen_post, unchanged(&marker)];
-    post_states.extend(target_accounts.iter().map(unchanged));
+    let mut post_states = vec![config.account.clone(), seen_post, marker.account.clone()];
+    post_states.extend(target_accounts.iter().map(|target| target.account.clone()));
 
     let mut output_pre_states = vec![config, seen, marker];
     output_pre_states.extend(target_accounts);

@@ -84,10 +84,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .context("Failed to create a fresh stake ownership account")?;
     info!("Fresh stake ownership account: {ownership_id}");
 
-    let funds_id = sequencer_stake_core::stake_funds_account_id(
-        programs::sequencer_stake().id(),
-        &ownership_id,
-    );
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
     let mover_instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {

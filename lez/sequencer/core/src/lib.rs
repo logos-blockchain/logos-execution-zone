@@ -1995,14 +1995,6 @@ fn build_genesis_state(
         let self_zone = *config.bedrock_config.channel_id.as_ref();
         cross_zone::build_inbox_init_config_tx(self_zone)
     });
-    let holding_txs: Vec<_> = bridge_lock_holdings(&config.genesis)
-        .map(|(holder, amount)| {
-            build_supply_account_genesis_transaction(
-                &cross_zone::bridge_lock_holding_account_id(holder),
-                amount,
-            )
-        })
-        .collect();
     let supply_txs = config.genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyAccount {
             account_id,
@@ -2011,13 +2003,19 @@ fn build_genesis_state(
             account_id, *balance,
         )),
         GenesisAction::SupplyBridgeAccount { balance } => {
-            Some(build_supply_bridge_account_genesis_transaction(*balance))
+            Some(build_supply_account_genesis_transaction(
+                &system_accounts::bridge_account_id(),
+                *balance,
+            ))
         }
-        // Holdings are emitted above as single credits by
-        // `build_supply_account_genesis_transaction`; stakes are built below.
-        GenesisAction::SupplyBridgeLockHolding { .. } | GenesisAction::StakeSequencer { .. } => {
-            None
+        GenesisAction::SupplyBridgeLockHolding { holder, amount } => {
+            Some(build_supply_account_genesis_transaction(
+                &cross_zone::bridge_lock_holding_account_id(*holder),
+                *amount,
+            ))
         }
+        // Stakes are built below.
+        GenesisAction::StakeSequencer { .. } => None,
     });
 
     // The creator falls back to staking itself, signing with the key it owns.
@@ -2034,7 +2032,6 @@ fn build_genesis_state(
     let bootstrap_stake_txs = build_stake_genesis_transactions(&staked);
 
     let genesis_txs = cross_zone_config_txs
-        .chain(holding_txs)
         .chain(inbox_config_tx)
         .chain(supply_txs)
         .chain(bootstrap_stake_txs)
@@ -2129,10 +2126,7 @@ fn genesis_stake_message(
         vec![
             genesis_stake_funding_account(),
             ownership_id,
-            sequencer_stake_core::stake_funds_account_id(
-                programs::sequencer_stake().id(),
-                &ownership_id,
-            ),
+            system_accounts::stake_funds_account_id(&ownership_id),
             system_accounts::sequencer_stake_config_account_id(),
         ],
         vec![
@@ -2258,10 +2252,6 @@ fn build_supply_account_genesis_transaction(
     PublicTransaction::new(message, witness_set)
 }
 
-fn build_supply_bridge_account_genesis_transaction(balance: lee::Balance) -> PublicTransaction {
-    build_supply_account_genesis_transaction(&system_accounts::bridge_account_id(), balance)
-}
-
 fn pending_deposit_event_record(deposit: &DepositInfo) -> PendingDepositEventRecord {
     PendingDepositEventRecord {
         deposit_op_id: HashType(deposit.op_id),
@@ -2361,10 +2351,7 @@ fn build_finalize_unstake_tx(
         programs::sequencer_stake().id(),
         vec![
             ownership_id,
-            sequencer_stake_core::stake_funds_account_id(
-                programs::sequencer_stake().id(),
-                &ownership_id,
-            ),
+            system_accounts::stake_funds_account_id(&ownership_id),
             pending.destination,
             system_accounts::sequencer_stake_config_account_id(),
         ],

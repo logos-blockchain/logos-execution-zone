@@ -63,10 +63,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     // B's genesis stake sits on an account only this key can sign for.
     let owner_b = config::founding_stake_owner_key(1)?;
     let ownership_b = AccountId::from(&PublicKey::new_from_private_key(&owner_b));
-    let funds_b = sequencer_stake_core::stake_funds_account_id(
-        programs::sequencer_stake().id(),
-        &ownership_b,
-    );
+    let funds_b = system_accounts::stake_funds_account_id(&ownership_b);
     ctx.wallet_mut()
         .storage_mut()
         .key_chain_mut()
