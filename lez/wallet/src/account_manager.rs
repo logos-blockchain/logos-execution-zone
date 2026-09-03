@@ -447,6 +447,34 @@ impl AccountManager {
             .collect()
     }
 
+    /// The account that pays this transaction's fee: the first public signing
+    /// account that holds a balance. Its ordinary signature covers the message,
+    /// so it is fee-authorized without a separate fee witness. Non-signing
+    /// public accounts (`sk: None`) are skipped.
+    ///
+    /// If no signing account is funded, falls back to the first signing account.
+    /// A fee-exempt transaction — notably a bootstrap vault claim, where the
+    /// account's funds still sit in its vault so its balance is zero — carries a
+    /// vestigial fee declaration the sequencer never charges, so it still needs a
+    /// payer id to fill. Only a wallet with no signing account at all yields
+    /// `None`.
+    pub fn fee_payer_account_id(&self) -> Option<AccountId> {
+        let signing = || {
+            self.states.iter().filter_map(|state| match state {
+                State::Public {
+                    account,
+                    sk: Some(_),
+                }
+                | State::PublicKeycard { account, .. } => Some(account),
+                State::Public { sk: None, .. } | State::Private(_) => None,
+            })
+        };
+        signing()
+            .find(|account| account.account.balance > 0)
+            .or_else(|| signing().next())
+            .map(|account| account.account_id)
+    }
+
     pub fn public_account_ids(&self) -> Vec<AccountId> {
         self.states
             .iter()
@@ -739,12 +767,93 @@ mod tests {
         State::Public { account, sk: None }
     }
 
+    /// A public account the wallet can sign for, holding `balance`.
+    fn public_signing_state(seed: u8, balance: u128) -> State {
+        let sk = lee::PrivateKey::try_new([seed; 32]).expect("valid key");
+        let account_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&sk));
+        let account = AccountWithMetadata::new(
+            Account {
+                balance,
+                ..Account::default()
+            },
+            false,
+            account_id,
+        );
+        State::Public {
+            account,
+            sk: Some(sk),
+        }
+    }
+
     fn manager(states: Vec<State>) -> AccountManager {
         AccountManager {
             states,
             pin: None,
             dummy_commitment_root: [0; 32],
         }
+    }
+
+    #[test]
+    fn fee_payer_is_the_first_funded_public_signing_account() {
+        let manager = manager(vec![
+            private_state(),
+            public_signing_state(1, 1_000),
+            public_signing_state(2, 1_000),
+        ]);
+        let expected = manager.public_account_ids()[0];
+        assert_eq!(manager.fee_payer_account_id(), Some(expected));
+    }
+
+    #[test]
+    fn fee_payer_skips_a_non_signing_public_account() {
+        // A tracked but unsignable public account (sk: None, e.g. an AMM pool
+        // or definition PDA passed as a non-signing input) must not be
+        // designated payer — the first funded signing account is chosen instead.
+        let signing = public_signing_state(3, 1_000);
+        let State::Public { account, .. } = &signing else {
+            unreachable!("public_signing_state builds a public account");
+        };
+        let signing_id = account.account_id;
+        let manager = manager(vec![public_state(), signing]);
+        assert_eq!(manager.fee_payer_account_id(), Some(signing_id));
+    }
+
+    #[test]
+    fn fee_payer_skips_an_unfunded_signing_account_for_a_funded_one() {
+        // An empty first signing account must not shadow a funded later one.
+        let funded = public_signing_state(6, 1_000);
+        let State::Public { account, .. } = &funded else {
+            unreachable!("public_signing_state builds a public account");
+        };
+        let funded_id = account.account_id;
+        let manager = manager(vec![public_signing_state(5, 0), funded]);
+        assert_eq!(manager.fee_payer_account_id(), Some(funded_id));
+    }
+
+    #[test]
+    fn no_public_account_means_no_fee_payer() {
+        let manager = manager(vec![private_state()]);
+        assert_eq!(manager.fee_payer_account_id(), None);
+    }
+
+    #[test]
+    fn an_all_unfunded_wallet_falls_back_to_the_first_signing_account() {
+        // No signing account is funded, but a fee-exempt transaction (e.g. a
+        // bootstrap vault claim) still needs a payer id to fill: fall back to the
+        // first signing account rather than refuse to build.
+        let first = public_signing_state(7, 0);
+        let State::Public { account, .. } = &first else {
+            unreachable!("public_signing_state builds a public account");
+        };
+        let first_id = account.account_id;
+        let manager = manager(vec![first, public_signing_state(8, 0)]);
+        assert_eq!(manager.fee_payer_account_id(), Some(first_id));
+    }
+
+    #[test]
+    fn a_non_signing_public_account_alone_has_no_fee_payer() {
+        let manager = manager(vec![public_state()]);
+        assert_eq!(manager.fee_payer_account_id(), None);
     }
 
     #[test]

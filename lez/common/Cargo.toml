@@ -12,6 +12,12 @@ lee.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 authenticated_transfer_core.workspace = true
 clock_core.workspace = true
+fee_core.workspace = true
+vault_core.workspace = true
+bridge_core.workspace = true
+bridge_lock_core.workspace = true
+cross_zone_inbox_core.workspace = true
+ping_core.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
 

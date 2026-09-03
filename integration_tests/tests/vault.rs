@@ -50,9 +50,12 @@ async fn public_transfer_and_public_claim() -> Result<()> {
         .get_account_balance(recipient_vault_id)
         .await?;
 
-    assert_eq!(
-        sender_balance_after_transfer,
-        sender_balance_before - amount
+    // The vault transfer is a charged public transaction: the sender pays the
+    // amount plus a positive fee.
+    let transfer_fee = sender_balance_before - amount - sender_balance_after_transfer;
+    assert!(
+        transfer_fee > 0 && transfer_fee <= wallet::DEFAULT_MAX_FEE,
+        "a charged vault transfer must pay a fee within the default ceiling"
     );
     assert_eq!(recipient_balance_after_transfer, recipient_balance_before);
     assert_eq!(
@@ -79,7 +82,9 @@ async fn public_transfer_and_public_claim() -> Result<()> {
         .get_account_balance(recipient_vault_id)
         .await?;
 
-    assert_eq!(sender_balance_after_claim, sender_balance_before - amount);
+    // The recipient's claim empties the vault, and a full-sweep claim is
+    // fee-exempt, so both sides of it move exactly; the sender is untouched.
+    assert_eq!(sender_balance_after_claim, sender_balance_after_transfer);
     assert_eq!(
         recipient_balance_after_claim,
         recipient_balance_before + amount

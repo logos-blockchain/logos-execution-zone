@@ -51,22 +51,28 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
 }
 
 fn test_transaction() -> LeeTransaction {
-    let key1 = PrivateKey::new_os_random();
     let key2 = PrivateKey::new_os_random();
-    let acc1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
     let acc2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+
+    // Fees are self-pay: the payer must be a funded initial-state account that
+    // signs the transaction in the ordinary witness set, so it leads the
+    // account list and signs alongside the other party.
+    let accounts = testnet_initial_state::initial_pub_accounts_private_keys();
+    let payer = accounts[0].account_id;
+    let payer_key = accounts[0].pub_sign_key.clone();
 
     let nonces = vec![0_u128.into(), 0_u128.into()];
     let instruction = 1337;
-    let message = Message::try_new(
+    let message = Message::try_new_with_fees(
         test_programs::simple_balance_transfer().id(),
-        vec![acc1, acc2],
+        vec![payer, acc2],
         nonces,
         instruction,
+        common::test_utils::test_fee_declaration(payer),
     )
     .unwrap();
 
-    let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
+    let witness_set = WitnessSet::for_message(&message, &[&payer_key, &key2]);
     PublicTransaction::new(message, witness_set).into()
 }
 
@@ -81,6 +87,9 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
             prev_block_hash: HashType::default(),
             hash: genesis_block_meta.hash,
             timestamp: 0,
+            producer: PublicKey::new_from_private_key(
+                &PrivateKey::try_new([1_u8; 32]).expect("valid key"),
+            ),
             signature: Signature { value: [0; 64] },
         },
         body: BlockBody {
@@ -88,19 +97,43 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
         },
         bedrock_status: BedrockStatus::Pending,
     };
-    let state = V03State::new().with_public_accounts([(
-        system_accounts::sequencer_stake_config_account_id(),
-        Account {
-            data: sequencer_stake_core::SequencerStakeConfig {
-                minimum_sequencer_stake: 0,
-                entries: BTreeMap::new(),
-            }
-            .to_bytes()
-            .try_into()
-            .expect("Sequencer stake config must fit into Data"),
-            ..Account::default()
-        },
-    )]);
+    let state = V03State::new().with_public_accounts(
+        [
+            (
+                system_accounts::sequencer_stake_config_account_id(),
+                Account {
+                    data: sequencer_stake_core::SequencerStakeConfig {
+                        minimum_sequencer_stake: 0,
+                        entries: BTreeMap::new(),
+                    }
+                    .to_bytes()
+                    .try_into()
+                    .expect("Sequencer stake config must fit into Data"),
+                    ..Account::default()
+                },
+            ),
+            (
+                system_accounts::fee_state_account_id(),
+                system_accounts::fee_state_account(),
+            ),
+        ]
+        .into_iter()
+        // Fund the initial user accounts so a self-pay fee reserve clears
+        // admission (only the balance is read here; no action executes).
+        .chain(
+            testnet_initial_state::initial_public_user_accounts()
+                .into_iter()
+                .map(|acc| {
+                    (
+                        acc.account_id,
+                        Account {
+                            balance: acc.balance,
+                            ..Account::default()
+                        },
+                    )
+                }),
+        ),
+    );
 
     let mut mock_storage = MockStorageActor::new();
 
@@ -187,9 +220,13 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
     // Fill mempool
     for _ in 0..mempool_max_size {
         let tx = test_transaction();
-        executor
+        let outcome = executor
             .ask(protocol::Transaction { transaction: tx })
             .await?;
+        assert!(
+            matches!(outcome, protocol::SubmitOutcome::Admitted),
+            "a funded, authorized submission must pass admission, got: {outcome:?}",
+        );
     }
 
     // Now the mempool is full, the next transaction should fail
@@ -273,6 +310,59 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
     storage_ref
         .tell(sequencer_storage_actor::mock::Checkpoint)
         .await?;
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
+    let _res = env_logger::try_init();
+
+    let (config, _home) = sequencer_config();
+    let mock_storage = prepare_mock_storage_with_empty_genesis();
+    let storage_ref = MockStorageActor::spawn(mock_storage);
+    let executor = ExecutorActor::spawn(
+        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone()).await,
+    );
+    storage_ref
+        .tell(sequencer_storage_actor::mock::Checkpoint)
+        .await?;
+
+    // A charged transaction whose max_fee is 0 can never cover its reserve
+    // (which prices at least the serialized bytes), so admission's static check
+    // rejects it before it reaches the mempool. The fee is declared (so it
+    // classifies as charged, not `MissingFeeDeclaration`) but set to 0.
+    let key2 = PrivateKey::new_os_random();
+    let acc2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let accounts = testnet_initial_state::initial_pub_accounts_private_keys();
+    let payer = accounts[0].account_id;
+    let payer_key = accounts[0].pub_sign_key.clone();
+    let message = Message::try_new_with_fees(
+        test_programs::simple_balance_transfer().id(),
+        vec![payer, acc2],
+        vec![0_u128.into(), 0_u128.into()],
+        1337,
+        lee::FeeDeclaration::new(payer, 2_000_000, 0, 0),
+    )
+    .unwrap();
+    let witness_set = WitnessSet::for_message(&message, &[&payer_key, &key2]);
+    let tx: LeeTransaction = PublicTransaction::new(message, witness_set).into();
+
+    let outcome = executor
+        .ask(protocol::Transaction { transaction: tx })
+        .await?;
+    assert!(
+        matches!(
+            outcome,
+            protocol::SubmitOutcome::Rejected(
+                sequencer_service_protocol::AdmissionRejection::MaxFeeBelowReserve {
+                    max_fee: 0,
+                    ..
+                }
+            )
+        ),
+        "expected the max-fee rejection, got: {outcome:?}",
+    );
 
     Ok(())
 }

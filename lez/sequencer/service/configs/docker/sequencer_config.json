@@ -23,25 +23,25 @@
         {
             "supply_account": {
                 "account_id": "CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r",
-                "balance": 10000
+                "balance": 10000000000000
             }
         },
         {
             "supply_account": {
                 "account_id": "2RHZhw9h534Zr3eq2RGhQete2Hh667foECzXPmSkGni2",
-                "balance": 20000
+                "balance": 20000000000000
             }
         },
         {
             "supply_account": {
                 "account_id": "5T7EJX45Vi8rYgVjeiiQbdgM2Eun4Hq5S8uMiupiwWY1",
-                "balance": 10000
+                "balance": 10000000000000
             }
         },
         {
             "supply_account": {
                 "account_id": "2ByFEVzfMKC13jvk1nZuFVGYoDVW1iAxvvFnqboV1aAg",
-                "balance": 20000
+                "balance": 20000000000000
             }
         }
     ],
