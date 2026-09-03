@@ -839,7 +839,7 @@ fn wallet_ffi_base58_to_account_id() -> Result<()> {
 }
 
 #[test]
-fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
+fn wallet_ffi_registering_an_unfunded_public_account_is_refused() -> Result<()> {
     let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -866,21 +866,24 @@ fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
     };
     assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
 
-    // Call the init funciton
+    // A bare Initialize is a charged transaction whose only account — and thus
+    // fee payer — is the fresh, unfunded one, so admission must refuse it: a
+    // public account is claimed by its first funded transfer instead.
     let mut transfer_result = FfiTransferResult::default();
-    unsafe {
+    let result = unsafe {
         wallet_ffi_register_public_account(
             wallet_ffi_handle,
             &raw const out_account_id,
             &raw mut transfer_result,
         )
-        .unwrap();
-    }
+    };
+    assert!(
+        !matches!(result, error::WalletFfiError::Success),
+        "registering an unfunded public account must be refused at fee admission"
+    );
+    assert!(!transfer_result.success);
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
-
-    // Check that the program owner is now the authenticated transfer program
+    // Nothing landed: the account stays unclaimed.
     let account: Account = unsafe {
         let mut out_account = FfiAccount::default();
         wallet_ffi_get_account_public(
@@ -891,10 +894,7 @@ fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
         .unwrap();
         (&out_account).try_into().unwrap()
     };
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);
