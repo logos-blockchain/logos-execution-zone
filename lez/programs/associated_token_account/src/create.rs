@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{ChainedCall, ProgramId},
+    account::AccountWithMetadata,
+    program::{AccountStateDiff, ChainedCall, ProgramId},
 };
 
 pub fn create_associated_token_account(
@@ -8,7 +8,7 @@ pub fn create_associated_token_account(
     token_definition: AccountWithMetadata,
     ata_account: AccountWithMetadata,
     ata_program_id: ProgramId,
-) -> (Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     // No authorization check needed: create is idempotent, so anyone can call it safely.
     let token_program_id: lee_core::program::ProgramId =
         token_definition.account.program_owner.into();
@@ -19,10 +19,10 @@ pub fn create_associated_token_account(
         ata_program_id,
     );
 
-    let post_states = vec![
-        owner.account,
-        token_definition.account.clone(),
-        ata_account.account.clone(),
+    let post_diffs = vec![
+        AccountStateDiff::unchanged(owner),
+        AccountStateDiff::unchanged(token_definition.clone()),
+        AccountStateDiff::unchanged(ata_account.clone()),
     ];
 
     // Idempotent: already initialized → no-op
@@ -30,9 +30,8 @@ pub fn create_associated_token_account(
     // program that writes data there first owns it and turns this into a silent
     // no-op for ever. Accepted: there is no reclaim path today.
     if !ata_account.account.data.is_empty() {
-        return (post_states, vec![]);
+        return (post_diffs, vec![]);
     }
-
     let chained_call = ChainedCall::new(
         token_program_id,
         vec![token_definition.account_id, ata_account.account_id],
@@ -40,5 +39,5 @@ pub fn create_associated_token_account(
     )
     .with_pda_seeds(vec![ata_seed]);
 
-    (post_states, vec![chained_call])
+    (post_diffs, vec![chained_call])
 }

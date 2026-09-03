@@ -1,6 +1,7 @@
 use borsh::to_vec;
 use lee_core::program::{
-    ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
 };
 
 /// Echoes the sole `pre_state` and chains to `callee_program_id`, delegating authorization with
@@ -8,7 +9,8 @@ use lee_core::program::{
 type Instruction = (PdaSeed, ProgramId);
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -16,13 +18,14 @@ fn main() {
             instruction: (delegated_seed, callee_program_id),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
-
-    let post = pre.account.clone();
 
     let chained_call = ChainedCall {
         program_id: callee_program_id,
@@ -35,8 +38,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![pre],
-        vec![post],
+        vec![AccountStateDiff::unchanged(pre)],
     )
     .with_chained_calls(vec![chained_call])
     .write();

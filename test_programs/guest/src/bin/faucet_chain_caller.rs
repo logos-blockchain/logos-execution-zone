@@ -1,11 +1,15 @@
 use borsh::to_vec;
-use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{
+    AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
+};
 
 type Instruction = (ProgramId, u128);
 // (faucet_program_id, amount)
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -13,9 +17,15 @@ fn main() {
             instruction: (faucet_program_id, amount),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
-    let post_states: Vec<_> = pre_states.iter().map(|pre| pre.account.clone()).collect();
+    let state_diffs: Vec<_> = pre_states
+        .iter()
+        .map(|pre| AccountStateDiff::unchanged(pre.clone()))
+        .collect();
 
     assert_eq!(pre_states.len(), 2);
 
@@ -30,8 +40,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        pre_states,
-        post_states,
+        state_diffs,
     )
     .with_chained_calls(chained_calls)
     .write();

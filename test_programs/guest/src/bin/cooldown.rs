@@ -11,7 +11,13 @@
 //!   [`cooldown_ms`: u64 LE | `last_run_timestamp`: u64 LE].
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
 
 type Instruction = ();
 
@@ -40,7 +46,8 @@ impl CooldownState {
 }
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -48,7 +55,10 @@ fn main() {
             instruction: (),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([state, clock_pre]) = <[_; 2]>::try_from(pre_states) else {
         panic!("Expected exactly 2 input accounts: state, clock");
@@ -75,21 +85,23 @@ fn main() {
         last_run_timestamp: current_timestamp,
         ..cooldown_state
     };
-    let mut state_post = state.account.clone();
-    state_post.data = updated_state
-        .to_bytes()
-        .try_into()
-        .expect("Cooldown state should fit in account data");
+    let state_diff = AccountStateDiff::new(
+        state,
+        BalanceDiff::Add(0),
+        updated_state
+            .to_bytes()
+            .try_into()
+            .expect("Cooldown state should fit in account data"),
+    );
 
     // Clock account is read-only.
-    let clock_post = clock_pre.account.clone();
+    let clock_diff = AccountStateDiff::unchanged(clock_pre);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![state, clock_pre],
-        vec![state_post, clock_post],
+        vec![state_diff, clock_diff],
     )
     .write();
 }

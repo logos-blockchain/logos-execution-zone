@@ -1,7 +1,7 @@
 pub use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data},
-    program::ChainedCall,
+    account::{AccountId, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountStateDiff, ChainedCall},
 };
 
 /// Validates swap setup: checks pool is active, vaults match, and reserves are sufficient.
@@ -62,7 +62,7 @@ fn validate_swap_setup(
     clippy::needless_pass_by_value,
     reason = "consistent with codebase style"
 )]
-fn create_swap_post_states(
+fn create_swap_post_diffs(
     pool: AccountWithMetadata,
     pool_def_data: PoolDefinition,
     vault_a: AccountWithMetadata,
@@ -73,22 +73,19 @@ fn create_swap_post_states(
     withdraw_a: u128,
     deposit_b: u128,
     withdraw_b: u128,
-) -> Vec<Account> {
-    let mut pool_post = pool.account;
+) -> Vec<AccountStateDiff> {
     let pool_post_definition = PoolDefinition {
         reserve_a: pool_def_data.reserve_a + deposit_a - withdraw_a,
         reserve_b: pool_def_data.reserve_b + deposit_b - withdraw_b,
         ..pool_def_data
     };
 
-    pool_post.data = Data::from(&pool_post_definition);
-
     vec![
-        pool_post,
-        vault_a.account,
-        vault_b.account,
-        user_holding_a.account,
-        user_holding_b.account,
+        AccountStateDiff::new(pool, BalanceDiff::Add(0), Data::from(&pool_post_definition)),
+        AccountStateDiff::unchanged(vault_a),
+        AccountStateDiff::unchanged(vault_b),
+        AccountStateDiff::unchanged(user_holding_a),
+        AccountStateDiff::unchanged(user_holding_b),
     ]
 }
 
@@ -103,7 +100,7 @@ pub fn swap_exact_input(
     swap_amount_in: u128,
     min_amount_out: u128,
     token_in_id: AccountId,
-) -> (Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
@@ -139,7 +136,7 @@ pub fn swap_exact_input(
             panic!("AccountId is not a token type for the pool");
         };
 
-    let post_states = create_swap_post_states(
+    let post_diffs = create_swap_post_diffs(
         pool,
         pool_def_data,
         vault_a,
@@ -152,7 +149,7 @@ pub fn swap_exact_input(
         withdraw_b,
     );
 
-    (post_states, chained_calls)
+    (post_diffs, chained_calls)
 }
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -225,7 +222,7 @@ pub fn swap_exact_output(
     exact_amount_out: u128,
     max_amount_in: u128,
     token_in_id: AccountId,
-) -> (Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
@@ -261,7 +258,7 @@ pub fn swap_exact_output(
             panic!("AccountId is not a token type for the pool");
         };
 
-    let post_states = create_swap_post_states(
+    let post_diffs = create_swap_post_diffs(
         pool,
         pool_def_data,
         vault_a,
@@ -274,7 +271,7 @@ pub fn swap_exact_output(
         withdraw_b,
     );
 
-    (post_states, chained_calls)
+    (post_diffs, chained_calls)
 }
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]

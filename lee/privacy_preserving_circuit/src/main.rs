@@ -10,12 +10,14 @@ fn main() {
         account_identities,
         program_id,
         dummy_inputs,
+        initial_pre_states,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
 
     let execution_state = execution_state::ExecutionState::derive_from_outputs(
         &account_identities,
         program_id,
         program_outputs,
+        &initial_pre_states,
     );
 
     let output = output::compute_circuit_output(execution_state, &account_identities, dummy_inputs);

@@ -1,7 +1,7 @@
 use std::io;
 
 use lee_core::{
-    account::{Account, AccountId, Cycles},
+    account::{Account, AccountId, BalanceDiffError, Cycles},
     program::ProgramId,
 };
 use thiserror::Error;
@@ -140,6 +140,9 @@ pub enum InvalidProgramBehaviorError {
         actual: Option<ProgramId>,
     },
 
+    #[error("Chained call to {program_id:?} did not execute")]
+    ChainedCallDidNotExecute { program_id: ProgramId },
+
     #[error(transparent)]
     ExecutionValidationFailed(#[from] lee_core::program::ExecutionValidationError),
 
@@ -174,6 +177,9 @@ pub enum InvalidProgramBehaviorError {
         program_id: ProgramId,
         account_id: AccountId,
     },
+
+    #[error(transparent)]
+    BalanceDiffFailed(#[from] BalanceDiffError),
 }
 
 #[cfg(test)]

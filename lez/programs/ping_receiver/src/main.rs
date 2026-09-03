@@ -1,12 +1,16 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountWithMetadata, BalanceDiff},
+    program::{
+        AccountStateDiff, ProgramCall, ProgramId, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 use ping_core::{ReceiverConfig, ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 
 fn main() {
-    let (
+    let call = read_lee_call::<ReceiverInstruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -14,7 +18,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<ReceiverInstruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     match instruction {
         ReceiverInstruction::Record { payload } => record(
@@ -86,15 +93,18 @@ fn record(
         "third account must be the ping record PDA"
     );
 
-    let mut post = record.account.clone();
-    post.data = payload.try_into().expect("payload fits in account data");
+    let record_data = payload.try_into().expect("payload fits in account data");
+    let post = AccountStateDiff::new(record, BalanceDiff::Add(0), record_data);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![marker.clone(), config.clone(), record],
-        vec![marker.account, config.account, post],
+        vec![
+            AccountStateDiff::unchanged(marker),
+            AccountStateDiff::unchanged(config),
+            post,
+        ],
     )
     .write();
 }
@@ -141,8 +151,7 @@ fn renounce_authority(
     );
 
     cfg.authority = None;
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
+    let config_data = cfg
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
@@ -151,8 +160,10 @@ fn renounce_authority(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config, authority.clone()],
-        vec![config_account, authority.account],
+        vec![
+            AccountStateDiff::new(config, BalanceDiff::Add(0), config_data),
+            AccountStateDiff::unchanged(authority),
+        ],
     )
     .write();
 }
@@ -201,8 +212,7 @@ fn update_sources(
     );
 
     cfg.sources = sources;
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
+    let config_data = cfg
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
@@ -211,8 +221,10 @@ fn update_sources(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config, authority.clone()],
-        vec![config_account, authority.account],
+        vec![
+            AccountStateDiff::new(config, BalanceDiff::Add(0), config_data),
+            AccountStateDiff::unchanged(authority),
+        ],
     )
     .write();
 }
@@ -256,17 +268,16 @@ fn init_config(
         );
     }
 
-    let mut config_post = config.account.clone();
-    config_post.data = config_value
+    let config_data = config_value
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
+    let config_post = AccountStateDiff::new(config, BalanceDiff::Add(0), config_data);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config],
         vec![config_post],
     )
     .write();

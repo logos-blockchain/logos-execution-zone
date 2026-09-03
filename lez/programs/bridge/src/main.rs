@@ -1,9 +1,23 @@
 use authenticated_transfer_core::custody_transfer;
 use bridge_core::Instruction;
-use lee_core::program::{ProgramEvent, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, ProgramCall, ProgramEvent, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
+
+fn unchanged_diffs(pre_states: &[lee_core::account::AccountWithMetadata]) -> Vec<AccountStateDiff> {
+    pre_states
+        .iter()
+        .map(|pre_state| AccountStateDiff::unchanged(pre_state.clone()))
+        .collect()
+}
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -11,7 +25,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     assert!(
         caller_program_id.is_none(),
@@ -20,7 +37,7 @@ fn main() {
 
     let pre_states_clone = pre_states.clone();
 
-    let (post_states, chained_calls, events) = match instruction {
+    let (post_diffs, chained_calls, events) = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
             recipient_id,
@@ -66,23 +83,19 @@ fn main() {
             // sequencer keeps re-driving the mint every block (see the deposit
             // drain). Accepted: there is no reclaim path today.
             if receipt.account.program_owner == self_program_id.into() {
-                (
-                    pre_states_clone
-                        .iter()
-                        .map(|pre| pre.account.clone())
-                        .collect(),
-                    vec![],
-                    vec![],
-                )
+                (unchanged_diffs(&pre_states_clone), vec![], vec![])
             } else {
                 // First mint: write the marker byte into the receipt. The write
                 // is what records the mint.
-                let mut receipt_post = receipt.account;
-                receipt_post.data = vec![1].try_into().expect("1 byte fits in account data");
+                let receipt_post = AccountStateDiff::new(
+                    receipt,
+                    BalanceDiff::Add(0),
+                    vec![1].try_into().expect("1 byte fits in account data"),
+                );
 
-                let post_states = vec![
-                    bridge.account.clone(),
-                    recipient.account.clone(),
+                let post_diffs = vec![
+                    AccountStateDiff::unchanged(bridge.clone()),
+                    AccountStateDiff::unchanged(recipient.clone()),
                     receipt_post,
                 ];
 
@@ -103,7 +116,7 @@ fn main() {
                     .to_bytes(),
                 }];
 
-                (post_states, chained_calls, events)
+                (post_diffs, chained_calls, events)
             }
         }
         Instruction::Withdraw {
@@ -145,11 +158,7 @@ fn main() {
             //         amount: u128::from(amount),
             //     },
             // )];
-            // (
-            //     pre_states_clone.iter().map(|pre| pre.account.clone()).collect(),
-            //     chained_calls,
-            //     events,
-            // )
+            // (unchanged_diffs(&pre_states_clone), chained_calls, events)
         }
     };
 
@@ -157,8 +166,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        pre_states_clone,
-        post_states,
+        post_diffs,
     )
     .with_chained_calls(chained_calls)
     .with_events(events)

@@ -1,5 +1,9 @@
-use lee_core::program::{
-    ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call, respond_unsupported_call,
+    },
 };
 
 /// Data to write into the account (`None` echoes it instead), the callee to forward it
@@ -8,7 +12,8 @@ type Instruction = (Option<Vec<u8>>, ProgramId, InstructionData);
 
 /// Acquires the account by writing data to it or echoes, then forwards it to the callee.
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -16,18 +21,14 @@ fn main() {
             instruction: (data, callee, callee_instruction),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([target]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
-
-    let mut target_post = target.account.clone();
-    if let Some(data) = data {
-        target_post.data = data
-            .try_into()
-            .expect("provided data should fit into data limit");
-    }
 
     let chained_call = ChainedCall {
         program_id: callee,
@@ -36,12 +37,21 @@ fn main() {
         pda_seeds: vec![],
     };
 
+    let target_diff = match data {
+        Some(data) => AccountStateDiff::new(
+            target,
+            BalanceDiff::Add(0),
+            data.try_into()
+                .expect("provided data should fit into data limit"),
+        ),
+        None => AccountStateDiff::unchanged(target),
+    };
+
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![target],
-        vec![target_post],
+        vec![target_diff],
     )
     .with_chained_calls(vec![chained_call])
     .write();

@@ -6,6 +6,9 @@ use lee_core::{
     },
 };
 
+/// Same transfer as `simple_balance_transfer`, but reports its two diffs in the opposite order
+/// from `pre_states` — proves order is irrelevant now that each diff embeds its own pre-state,
+/// unlike the old two-array `pre_states`/`post_diffs` shape where a reordered report was rejected.
 type Instruction = u128;
 
 fn main() {
@@ -23,39 +26,27 @@ fn main() {
         respond_unsupported_call(call);
     };
 
-    if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
-        let account_post = AccountStateDiff::unchanged(account_pre);
-
-        ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
-            instruction_data,
-            vec![account_post],
-        )
-        .write();
-        return;
-    }
-
     let Ok([sender_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {
         return;
     };
+
+    let sender_diff = AccountStateDiff::new(
+        sender_pre.clone(),
+        BalanceDiff::Sub(balance),
+        sender_pre.account.data,
+    );
+    let receiver_diff = AccountStateDiff::new(
+        receiver_pre.clone(),
+        BalanceDiff::Add(balance),
+        receiver_pre.account.data,
+    );
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![
-            AccountStateDiff::new(
-                sender_pre.clone(),
-                BalanceDiff::Sub(balance),
-                sender_pre.account.data,
-            ),
-            AccountStateDiff::new(
-                receiver_pre.clone(),
-                BalanceDiff::Add(balance),
-                receiver_pre.account.data,
-            ),
-        ],
+        // Swapped: receiver's diff first, sender's second.
+        vec![receiver_diff, sender_diff],
     )
     .write();
 }

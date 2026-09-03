@@ -1,7 +1,10 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountWithMetadata, BalanceDiff},
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 use wrapped_token_core::{
     Instruction, MAX_MINT_AMOUNT, SourceEntry, SourcePolicy, WrappedTokenConfig, balance_bytes,
@@ -9,7 +12,8 @@ use wrapped_token_core::{
 };
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -17,7 +21,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     match instruction {
         Instruction::Mint { recipient, amount } => mint(
@@ -123,25 +130,33 @@ fn mint(
     let new_balance = read_balance(&holding.account.data)
         .checked_add(amount)
         .expect("wrapped-token balance overflow");
-    let mut holding_post = holding.account.clone();
-    holding_post.data = balance_bytes(new_balance)
-        .to_vec()
-        .try_into()
-        .expect("balance fits in account data");
+    let holding_post = AccountStateDiff::new(
+        holding,
+        BalanceDiff::Add(0),
+        balance_bytes(new_balance)
+            .to_vec()
+            .try_into()
+            .expect("balance fits in account data"),
+    );
     // The advanced counter is written back, so the cap survives restarts and
     // re-derivation alike: it is state, not host memory.
-    let mut config_post = config.account.clone();
-    config_post.data = cfg
-        .to_bytes()
-        .try_into()
-        .expect("wrapped-token config fits in account data");
+    let config_post = AccountStateDiff::new(
+        config,
+        BalanceDiff::Add(0),
+        cfg.to_bytes()
+            .try_into()
+            .expect("wrapped-token config fits in account data"),
+    );
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![marker.clone(), config, holding],
-        vec![marker.account, config_post, holding_post],
+        vec![
+            AccountStateDiff::unchanged(marker),
+            config_post,
+            holding_post,
+        ],
     )
     .write();
 }
@@ -188,18 +203,19 @@ fn renounce_authority(
     );
 
     cfg.authority = None;
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
-        .to_bytes()
-        .try_into()
-        .expect("wrapped-token config fits in account data");
+    let config_post = AccountStateDiff::new(
+        config,
+        BalanceDiff::Add(0),
+        cfg.to_bytes()
+            .try_into()
+            .expect("wrapped-token config fits in account data"),
+    );
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config, authority.clone()],
-        vec![config_account, authority.account],
+        vec![config_post, AccountStateDiff::unchanged(authority)],
     )
     .write();
 }
@@ -274,18 +290,19 @@ fn update_sources(
             policy,
         })
         .collect();
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
-        .to_bytes()
-        .try_into()
-        .expect("wrapped-token config fits in account data");
+    let config_post = AccountStateDiff::new(
+        config,
+        BalanceDiff::Add(0),
+        cfg.to_bytes()
+            .try_into()
+            .expect("wrapped-token config fits in account data"),
+    );
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config, authority.clone()],
-        vec![config_account, authority.account],
+        vec![config_post, AccountStateDiff::unchanged(authority)],
     )
     .write();
 }
@@ -331,17 +348,19 @@ fn init_config(
         );
     }
 
-    let mut config_post = config.account.clone();
-    config_post.data = config_value
-        .to_bytes()
-        .try_into()
-        .expect("wrapped-token config fits in account data");
+    let config_post = AccountStateDiff::new(
+        config,
+        BalanceDiff::Add(0),
+        config_value
+            .to_bytes()
+            .try_into()
+            .expect("wrapped-token config fits in account data"),
+    );
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config],
         vec![config_post],
     )
     .write();

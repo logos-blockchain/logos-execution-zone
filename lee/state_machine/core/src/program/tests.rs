@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn unsupported_call_kind_selector_matches_its_derivation() {
+    use sha2::Digest as _;
+
+    assert_eq!(
+        UnsupportedCallKind::SELECTOR[..],
+        sha2::Sha256::digest(UnsupportedCallKind::SELECTOR_NAME.as_bytes())[..8]
+    );
+}
+
+#[test]
+fn call_kind_round_trips_execute_and_preserves_unknown_discriminants() {
+    let execute = borsh::to_vec(&CallKind::Execute).unwrap();
+    assert_eq!(
+        borsh::from_slice::<CallKind>(&execute).unwrap(),
+        CallKind::Execute
+    );
+
+    // Any nonzero discriminant must decode as `Unknown`, not fail.
+    for byte in 1..=u8::MAX {
+        assert_eq!(
+            borsh::from_slice::<CallKind>(&[byte]).unwrap(),
+            CallKind::Unknown(byte)
+        );
+    }
+}
+
+#[test]
 fn validity_window_unbounded_accepts_any_value() {
     let w: ValidityWindow<u64> = ValidityWindow::new_unbounded();
     assert!(w.is_valid_for(0));
@@ -99,7 +126,7 @@ fn validity_window_from_range_full() {
 
 #[test]
 fn program_output_try_with_block_validity_window_range() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
         .try_with_block_validity_window(10_u64..100)
         .unwrap();
     assert_eq!(output.block_validity_window.start(), Some(10));
@@ -108,7 +135,7 @@ fn program_output_try_with_block_validity_window_range() {
 
 #[test]
 fn program_output_with_block_validity_window_range_from() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
         .with_block_validity_window(10_u64..);
     assert_eq!(output.block_validity_window.start(), Some(10));
     assert_eq!(output.block_validity_window.end(), None);
@@ -116,7 +143,7 @@ fn program_output_with_block_validity_window_range_from() {
 
 #[test]
 fn program_output_with_block_validity_window_range_to() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
         .with_block_validity_window(..100_u64);
     assert_eq!(output.block_validity_window.start(), None);
     assert_eq!(output.block_validity_window.end(), Some(100));
@@ -124,9 +151,78 @@ fn program_output_with_block_validity_window_range_to() {
 
 #[test]
 fn program_output_try_with_block_validity_window_empty_range_fails() {
-    let result = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let result = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
         .try_with_block_validity_window(5_u64..5);
     assert!(result.is_err());
+}
+
+#[test]
+fn account_state_diff_new_constructor() {
+    let pre_state = AccountWithMetadata::new(Account::default(), true, AccountId::new([7; 32]));
+    let post_balance_diff = BalanceDiff::Add(1337);
+    let post_data: Data = vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap();
+
+    let diff = AccountStateDiff::new(pre_state.clone(), post_balance_diff, post_data.clone());
+
+    assert_eq!(diff.pre_state, pre_state);
+    assert_eq!(diff.post_balance_diff, post_balance_diff);
+    assert_eq!(diff.post_data, Some(post_data));
+}
+
+// ---- validate_execution tests ----
+
+#[test]
+fn validate_execution_rejects_insufficient_balance_even_if_globally_conserved() {
+    let executing_program_id: ProgramId = [1; 8];
+    let account_id = AccountId::new([7; 32]);
+    let pre_state = AccountWithMetadata::new(
+        Account {
+            program_owner: executing_program_id.into(),
+            balance: 5,
+            ..Account::default()
+        },
+        true,
+        account_id,
+    );
+    let state_diffs = [AccountStateDiff::new(
+        pre_state.clone(),
+        BalanceDiff::Sub(10),
+        pre_state.account.data,
+    )];
+
+    let result = validate_execution(&state_diffs, executing_program_id);
+
+    assert!(matches!(
+        result,
+        Err(ExecutionValidationError::InvalidBalanceDiff { account_id: id, .. }) if id == account_id
+    ));
+}
+
+#[test]
+fn validate_execution_rejects_add_overflow() {
+    let executing_program_id: ProgramId = [1; 8];
+    let account_id = AccountId::new([7; 32]);
+    let pre_state = AccountWithMetadata::new(
+        Account {
+            program_owner: executing_program_id.into(),
+            balance: u128::MAX,
+            ..Account::default()
+        },
+        false,
+        account_id,
+    );
+    let state_diffs = [AccountStateDiff::new(
+        pre_state.clone(),
+        BalanceDiff::Add(1),
+        pre_state.account.data,
+    )];
+
+    let result = validate_execution(&state_diffs, executing_program_id);
+
+    assert!(matches!(
+        result,
+        Err(ExecutionValidationError::InvalidBalanceDiff { account_id: id, .. }) if id == account_id
+    ));
 }
 
 // ---- AccountId::for_private_pda tests ----
@@ -356,11 +452,26 @@ fn program_id_account_id_conversion_round_trips() {
 /// A byte-identical echo of an unowned account with history must validate.
 #[test]
 fn an_unowned_account_with_history_may_be_echoed_byte_identically() {
+    let account_id = AccountId::new([7; 32]);
     let account = Account {
         nonce: 1_u128.into(),
         balance: 55,
         ..Account::default()
     };
-    let pre = AccountWithMetadata::new(account.clone(), true, AccountId::new([7; 32]));
-    assert!(validate_execution(&[pre], &[account], [9; 8]).is_ok());
+    let pre = AccountWithMetadata::new(account, true, account_id);
+    let diff = AccountStateDiff::unchanged(pre);
+    assert!(validate_execution(&[diff], [9; 8]).is_ok());
+}
+
+#[test]
+fn an_unowned_account_echoed_with_sub_zero_may_still_validate() {
+    let account_id = AccountId::new([7; 32]);
+    let account = Account {
+        nonce: 1_u128.into(),
+        balance: 55,
+        ..Account::default()
+    };
+    let pre = AccountWithMetadata::new(account, true, account_id);
+    let diff = AccountStateDiff::new(pre.clone(), BalanceDiff::Sub(0), pre.account.data);
+    assert!(validate_execution(&[diff], [9; 8]).is_ok());
 }

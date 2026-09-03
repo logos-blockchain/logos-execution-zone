@@ -1,4 +1,10 @@
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
 
 // Hello-world example program.
 //
@@ -17,7 +23,8 @@ type Instruction = Vec<u8>;
 
 fn main() {
     // Read inputs
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -25,23 +32,27 @@ fn main() {
             instruction: greeting,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     // Unpack the input account pre state
     let [pre_state] = pre_states
         .try_into()
         .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
 
-    // Construct the post state account values
-    let post_state = {
-        let mut this = pre_state.account.clone();
-        let mut bytes = this.data.into_inner();
+    // Construct the new data value: the existing data with the greeting appended.
+    let new_data = {
+        let mut bytes = pre_state.account.data.clone().into_inner();
         bytes.extend_from_slice(&greeting);
-        this.data = bytes
+        bytes
             .try_into()
-            .expect("Data should fit within the allowed limits");
-        this
+            .expect("Data should fit within the allowed limits")
     };
+
+    // Wrap the diff inside an `AccountStateDiff` instance.
+    let post_state = AccountStateDiff::new(pre_state, BalanceDiff::Add(0), new_data);
 
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms
@@ -52,7 +63,6 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![pre_state],
         vec![post_state],
     )
     .write();

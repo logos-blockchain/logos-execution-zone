@@ -1,12 +1,16 @@
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountWithMetadata, BalanceDiff},
+    program::{
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 use ping_core::{SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id};
 
 fn main() {
-    let (
+    let call = read_lee_call::<SenderInstruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -14,7 +18,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<SenderInstruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     assert!(
         caller_program_id.is_none(),
@@ -64,7 +71,7 @@ fn send(
     payload: Vec<u8>,
     ordinal: u32,
 ) {
-    // pre_states: [config PDA, outbox PDA]. The outbox claims its own slot, so
+    // pre_states: [config PDA, outbox PDA]. The outbox acquires its own slot, so
     // ping_sender forwards it unchanged.
     let [config, outbox] = <[AccountWithMetadata; 2]>::try_from(pre_states)
         .expect("Send requires the config and outbox accounts");
@@ -91,14 +98,13 @@ fn send(
         },
     );
 
-    let config_post = config.account.clone();
+    let config_post = AccountStateDiff::unchanged(config);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config, outbox.clone()],
-        vec![config_post, outbox.account],
+        vec![config_post, AccountStateDiff::unchanged(outbox)],
     )
     .with_chained_calls(vec![call])
     .write();
@@ -137,17 +143,16 @@ fn init_config(
         );
     }
 
-    let mut config_post = config.account.clone();
-    config_post.data = outbox_bytes(outbox_program_id)
+    let config_data = outbox_bytes(outbox_program_id)
         .to_vec()
         .try_into()
         .expect("outbox id fits in account data");
+    let config_post = AccountStateDiff::new(config, BalanceDiff::Add(0), config_data);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config],
         vec![config_post],
     )
     .write();

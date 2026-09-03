@@ -1,7 +1,8 @@
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use borsh::to_vec;
 use lee_core::program::{
-    ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
 };
 
 type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
@@ -11,7 +12,8 @@ type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
 /// The `ProgramId` in the instruction must be the `program_id` of the authenticated transfers
 /// program.
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -19,7 +21,10 @@ fn main() {
             instruction: (balance, auth_transfer_id, num_chain_calls, pda_seed),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([recipient_pre, sender_pre]) = <[_; 2]>::try_from(pre_states) else {
         return;
@@ -44,8 +49,10 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![sender_pre.clone(), recipient_pre.clone()],
-        vec![sender_pre.account, recipient_pre.account],
+        vec![
+            AccountStateDiff::unchanged(sender_pre),
+            AccountStateDiff::unchanged(recipient_pre),
+        ],
     )
     .with_chained_calls(chained_calls)
     .write();

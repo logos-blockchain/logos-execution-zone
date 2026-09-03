@@ -1,11 +1,15 @@
 use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda};
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountWithMetadata, BalanceDiff},
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -13,7 +17,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     // The emitter, and the only identity here the state machine verifies: it
     // checks a guest's claimed caller against the real one. Note this is the
@@ -67,8 +74,7 @@ fn main() {
         "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
     );
 
-    let mut post = outbox.account.clone();
-    post.data = OutboxRecord {
+    let new_data = OutboxRecord {
         emitter,
         target_zone,
         ordinal,
@@ -80,11 +86,12 @@ fn main() {
     .try_into()
     .expect("OutboxRecord fits in account data");
 
+    let post = AccountStateDiff::new(outbox, BalanceDiff::Add(0), new_data);
+
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![outbox],
         vec![post],
     )
     .write();

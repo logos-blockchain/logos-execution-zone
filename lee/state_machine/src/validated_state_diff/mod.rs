@@ -8,8 +8,8 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Cycles},
     program::{
-        CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER, ProgramId, TransactionEvent,
-        acquire_ownership_on_data_write, compute_public_authorized_pdas, is_ownership_settled,
+        CallKind, CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER, ProgramId, TransactionEvent,
+        compute_public_authorized_pdas, is_ownership_settled, post_state,
         pre_states_match_accounts, validate_execution,
     },
 };
@@ -343,7 +343,7 @@ impl ValidatedStateDiff {
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_id, real_pre_states, chained_call.instruction_data
             );
-            let (mut program_output, call_cycles) = program.execute(
+            let (program_output, call_cycles) = program.execute(
                 caller_data.program_id,
                 &real_pre_states,
                 &chained_call.instruction_data,
@@ -363,7 +363,11 @@ impl ValidatedStateDiff {
                 caller_data.program_id.is_none()
                     || pre_states_match_accounts(
                         &chained_call.pre_state_ids,
-                        &program_output.pre_states
+                        &program_output
+                            .state_diffs
+                            .iter()
+                            .map(|diff| diff.pre_state.clone())
+                            .collect::<Vec<_>>()
                     ),
                 InvalidProgramBehaviorError::ChainedCallAccountsMismatch {
                     program_id: chained_call.program_id
@@ -373,7 +377,11 @@ impl ValidatedStateDiff {
             let named_accounts: HashSet<AccountId> =
                 chained_call.pre_state_ids.iter().copied().collect();
 
-            for pre in &program_output.pre_states {
+            for pre in program_output
+                .state_diffs
+                .iter()
+                .map(|diff| &diff.pre_state)
+            {
                 let account_id = pre.account_id;
                 ensure!(
                     named_accounts.contains(&account_id),
@@ -431,14 +439,20 @@ impl ValidatedStateDiff {
                 }
             );
 
+            // Only a top-level call may legitimately be a no-op; a chained call must execute.
+            if caller_data.program_id.is_some() {
+                ensure!(
+                    program_output.call_kind == CallKind::Execute,
+                    InvalidProgramBehaviorError::ChainedCallDidNotExecute {
+                        program_id: chained_call.program_id
+                    }
+                );
+            }
+
             // Verify execution corresponds to a well-behaved program.
             // See the # Programs section for the definition of the `validate_execution` method.
-            validate_execution(
-                &program_output.pre_states,
-                &program_output.post_states,
-                chained_call.program_id,
-            )
-            .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
+            validate_execution(&program_output.state_diffs, chained_call.program_id)
+                .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
 
             // Verify validity window
             ensure!(
@@ -451,13 +465,10 @@ impl ValidatedStateDiff {
 
             // Update the state diff, acquiring ownership of every unowned account this call
             // wrote data to.
-            for (pre, post) in program_output
-                .pre_states
-                .iter()
-                .zip(program_output.post_states.iter_mut())
-            {
-                acquire_ownership_on_data_write(&pre.account, post, chained_call.program_id);
-                state_diff.insert(pre.account_id, post.clone());
+            for diff in &program_output.state_diffs {
+                let post = post_state(diff, chained_call.program_id)
+                    .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
+                state_diff.insert(diff.pre_state.account_id, post);
             }
 
             // Write all the output event data into a proper event struct,
@@ -472,10 +483,11 @@ impl ValidatedStateDiff {
                     }),
             );
 
-            // Source from `program_output.pre_states` (the callee's own checked echo), not
+            // Source from `program_output.state_diffs` (the callee's own checked echo), not
             // `chained_call.pre_state_ids` (bare ids the caller supplied, carrying no
-            // authorization claim at all) — the loop above already gates program_output's
-            // `is_authorized` via the `!pre.is_authorized || is_indeed_authorized` check.
+            // authorization claim at all and forgeable, audit-issue 91) — the loop above
+            // already gates program_output's `is_authorized` via the `!pre.is_authorized ||
+            // is_indeed_authorized` check.
             //
             // Union with the caller's authorized set so that authorization is monotonically
             // growing: once an account is authorized at any point in the chain it remains
@@ -483,8 +495,9 @@ impl ValidatedStateDiff {
             let mut authorized_accounts = caller_data.authorized_accounts;
             authorized_accounts.extend(
                 program_output
-                    .pre_states
+                    .state_diffs
                     .iter()
+                    .map(|diff| &diff.pre_state)
                     .filter(|pre| pre.is_authorized)
                     .map(|pre| pre.account_id),
             );

@@ -1,9 +1,16 @@
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
 
 type Instruction = u128;
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -11,22 +18,25 @@ fn main() {
             instruction: balance_to_burn,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let account_pre = &pre.account;
-    let mut account_post = account_pre.clone();
-    account_post.balance = account_post.balance.saturating_sub(balance_to_burn);
+    // Clamp to preserve the old saturating_sub semantics (burn at most what's there).
+    let burned = balance_to_burn.min(pre.account.balance);
+    let post_data = pre.account.data.clone();
+    let diff = AccountStateDiff::new(pre, BalanceDiff::Sub(burned), post_data);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![pre],
-        vec![account_post],
+        vec![diff],
     )
     .write();
 }

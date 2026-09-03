@@ -5,13 +5,17 @@ use bridge_lock_core::{
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountWithMetadata, BalanceDiff},
+    program::{
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -19,7 +23,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     assert!(
         caller_program_id.is_none(),
@@ -162,27 +169,20 @@ fn lock(
         },
     );
 
-    let config_post = config.account.clone();
+    let config_post = AccountStateDiff::unchanged(config);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
         vec![
-            config,
-            holder.clone(),
-            holding.clone(),
-            escrow.clone(),
-            outbox.clone(),
-        ],
-        vec![
             config_post,
             // The holder only signs, its account is echoed untouched, as are
             // the holding and escrow.
-            holder.account,
-            holding.account,
-            escrow.account,
-            outbox.account,
+            AccountStateDiff::unchanged(holder),
+            AccountStateDiff::unchanged(holding),
+            AccountStateDiff::unchanged(escrow),
+            AccountStateDiff::unchanged(outbox),
         ],
     )
     .with_chained_calls(vec![move_call, emit_call])
@@ -224,18 +224,19 @@ fn init_config(
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = config_bytes(outbox_program_id, target_program_id)
-        .to_vec()
-        .try_into()
-        .expect("pinned ids fit in account data");
-    let config_post = config_account;
+    let config_post = AccountStateDiff::new(
+        config,
+        BalanceDiff::Add(0),
+        config_bytes(outbox_program_id, target_program_id)
+            .to_vec()
+            .try_into()
+            .expect("pinned ids fit in account data"),
+    );
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config],
         vec![config_post],
     )
     .write();

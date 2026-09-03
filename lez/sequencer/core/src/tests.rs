@@ -1522,9 +1522,14 @@ async fn transaction_pre_check_native_transfer_sent_too_much() {
         0,
         0,
     );
+    // Balance-sufficiency is checked centrally, by validate_execution, not in-guest.
     let is_failed_at_balance_mismatch = matches!(
         result.err().unwrap(),
-        lee::error::LeeError::ProgramExecutionFailed(_)
+        lee::error::LeeError::InvalidProgramBehavior(
+            lee::error::InvalidProgramBehaviorError::ExecutionValidationFailed(
+                lee_core::program::ExecutionValidationError::InvalidBalanceDiff { .. }
+            )
+        )
     );
 
     assert!(is_failed_at_balance_mismatch);

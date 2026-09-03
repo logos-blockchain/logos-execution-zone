@@ -1,7 +1,10 @@
 use authenticated_transfer_core::Instruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountWithMetadata, BalanceDiff},
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 /// Transfers `balance_to_move` native balance from `sender` to `recipient`.
@@ -9,42 +12,34 @@ fn transfer(
     sender: AccountWithMetadata,
     recipient: AccountWithMetadata,
     balance_to_move: u128,
-) -> Vec<Account> {
+) -> Vec<AccountStateDiff> {
     // Continue only if the sender has authorized this operation.
     assert!(sender.is_authorized, "Sender must be authorized");
 
-    // Create accounts post states, with updated balances
-    let sender_post = {
-        // Modify sender's balance
-        let mut sender_post_account = sender.account;
-        sender_post_account.balance = sender_post_account
-            .balance
-            .checked_sub(balance_to_move)
-            .expect("Sender has insufficient balance");
-        sender_post_account
-    };
+    let sender_diff_output = AccountStateDiff::new(
+        sender.clone(),
+        BalanceDiff::Sub(balance_to_move),
+        sender.account.data.clone(),
+    );
 
     // TODO(squatting): the credit leaves the recipient unowned, and unowned is takeable — the first
     // program to write data there owns it, on a plain key account as much as on a derivable PDA.
     // Accepted: no reclaim path today.
-    let recipient_post = {
-        // Modify recipient's balance.
-        let mut recipient_post_account = recipient.account;
-        recipient_post_account.balance = recipient_post_account
-            .balance
-            .checked_add(balance_to_move)
-            .expect("Recipient balance overflow");
-        recipient_post_account
-    };
+    let recipient_diff_output = AccountStateDiff::new(
+        recipient.clone(),
+        BalanceDiff::Add(balance_to_move),
+        recipient.account.data.clone(),
+    );
 
-    vec![sender_post, recipient_post]
+    vec![sender_diff_output, recipient_diff_output]
 }
 
 /// A transfer of balance program.
 /// To be used both in public and private contexts.
 fn main() {
     // Read input accounts.
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -55,18 +50,20 @@ fn main() {
                 },
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let [sender, recipient] =
-        <[_; 2]>::try_from(pre_states.clone()).expect("Transfer requires exactly 2 accounts");
-    let post_states = transfer(sender, recipient, balance_to_move);
+        <[_; 2]>::try_from(pre_states).expect("Transfer requires exactly 2 accounts");
+    let post_diffs = transfer(sender, recipient, balance_to_move);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        pre_states,
-        post_states,
+        post_diffs,
     )
     .write();
 }

@@ -1,4 +1,10 @@
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
 
 /// The data to write into the first account, and the balance to move out of it.
 type Instruction = (Vec<u8>, u128);
@@ -6,7 +12,8 @@ type Instruction = (Vec<u8>, u128);
 /// Writes data to an account it does not own - acquiring it - and moves balance
 /// out of it in the same breath.
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -14,33 +21,33 @@ fn main() {
             instruction: (data, amount),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([target, recipient]) = <[_; 2]>::try_from(pre_states) else {
         return;
     };
 
-    let mut target_post = target.account.clone();
-    target_post.data = data
-        .try_into()
-        .expect("provided data should fit into data limit");
-    target_post.balance = target_post
-        .balance
-        .checked_sub(amount)
-        .expect("Not enough balance to move");
+    let target_diff = AccountStateDiff::new(
+        target,
+        BalanceDiff::Sub(amount),
+        data.try_into()
+            .expect("provided data should fit into data limit"),
+    );
 
-    let mut recipient_post = recipient.account.clone();
-    recipient_post.balance = recipient_post
-        .balance
-        .checked_add(amount)
-        .expect("Overflow when adding balance");
+    let recipient_diff = AccountStateDiff::new(
+        recipient.clone(),
+        BalanceDiff::Add(amount),
+        recipient.account.data,
+    );
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![target, recipient],
-        vec![target_post, recipient_post],
+        vec![target_diff, recipient_diff],
     )
     .write();
 }

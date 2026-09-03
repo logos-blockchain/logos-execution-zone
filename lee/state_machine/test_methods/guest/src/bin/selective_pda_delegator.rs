@@ -1,6 +1,7 @@
 use borsh::to_vec;
 use lee_core::program::{
-    ChainedCall, InstructionData, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+    ProgramOutput, read_lee_call, respond_unsupported_call,
 };
 
 type Instruction = (
@@ -11,7 +12,8 @@ type Instruction = (
 );
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -19,7 +21,10 @@ fn main() {
             instruction: (delegated_seed, callee_program_id, callee_instruction, sibling),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Some((pda, rest)) = pre_states.split_first() else {
         return;
@@ -57,8 +62,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![pda.clone()],
-        vec![pda.account.clone()],
+        vec![AccountStateDiff::unchanged(pda.clone())],
     )
     .with_chained_calls(chained_calls)
     .write();

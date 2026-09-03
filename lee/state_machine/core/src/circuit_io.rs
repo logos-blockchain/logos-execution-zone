@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
@@ -20,6 +20,10 @@ pub struct PrivacyPreservingCircuitInput {
     /// Program ID.
     pub program_id: ProgramId,
     pub dummy_inputs: Vec<DummyInput>,
+    /// `account_id`s the top-level call was invoked with. Every one must still appear somewhere
+    /// in the final accumulated pre-states, or the guest rejects — catches a chained call
+    /// silently dropping an account from its own output.
+    pub initial_pre_states: Vec<AccountId>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]

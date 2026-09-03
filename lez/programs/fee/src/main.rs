@@ -3,12 +3,16 @@ use fee_core::{
     BlockFeeSummary, Instruction, fee_escrow_seed, fee_inbox_seed, market, state::FeeState,
 };
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountWithMetadata, BalanceDiff},
+    program::{
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -16,14 +20,17 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     assert!(
         caller_program_id.is_none(),
         "Fee program is only invoked as a top-level system transaction"
     );
 
-    let (pre_states, post_states, chained_calls) = match instruction {
+    let (state_diffs, chained_calls) = match instruction {
         Instruction::Distribute(summary) => distribute(self_program_id, pre_states, summary),
         Instruction::Refund { amount } => refund(self_program_id, pre_states, amount),
     };
@@ -32,8 +39,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_words,
-        pre_states,
-        post_states,
+        state_diffs,
     )
     .with_chained_calls(chained_calls)
     .write();
@@ -45,7 +51,7 @@ fn distribute(
     self_program_id: ProgramId,
     pre_states: Vec<AccountWithMetadata>,
     summary: BlockFeeSummary,
-) -> (Vec<AccountWithMetadata>, Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let Ok([pre_state, pre_escrow, pre_inbox, pre_producer]) = <[_; 4]>::try_from(pre_states)
     else {
         panic!("Distribute requires exactly 4 accounts");
@@ -77,8 +83,7 @@ fn distribute(
 
     let mut fee_state = FeeState::from_bytes(&pre_state.account.data);
     let payout = fee_state.apply_block(&summary);
-    let mut post_state_account = pre_state.account.clone();
-    post_state_account.data = fee_state
+    let post_state_data = fee_state
         .to_bytes()
         .try_into()
         .expect("FeeState data should fit in account data");
@@ -97,24 +102,20 @@ fn distribute(
     .map(|(from, seed, to, amount)| custody_transfer(from, seed, to, amount))
     .collect();
 
-    let post_states = vec![
-        post_state_account,
-        pre_escrow.account.clone(),
-        pre_inbox.account.clone(),
-        pre_producer.account.clone(),
+    let state_diffs = vec![
+        AccountStateDiff::new(pre_state, BalanceDiff::Add(0), post_state_data),
+        AccountStateDiff::unchanged(pre_escrow),
+        AccountStateDiff::unchanged(pre_inbox),
+        AccountStateDiff::unchanged(pre_producer),
     ];
-    (
-        vec![pre_state, pre_escrow, pre_inbox, pre_producer],
-        post_states,
-        chained_calls,
-    )
+    (state_diffs, chained_calls)
 }
 
 fn refund(
     self_program_id: ProgramId,
     pre_states: Vec<AccountWithMetadata>,
     amount: u128,
-) -> (Vec<AccountWithMetadata>, Vec<Account>, Vec<ChainedCall>) {
+) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let Ok([pre_inbox, pre_payer]) = <[_; 2]>::try_from(pre_states) else {
         panic!("Refund requires exactly 2 accounts");
     };
@@ -132,6 +133,9 @@ fn refund(
         pre_payer.account_id,
         amount,
     )];
-    let post_states = vec![pre_inbox.account.clone(), pre_payer.account.clone()];
-    (vec![pre_inbox, pre_payer], post_states, chained_calls)
+    let state_diffs = vec![
+        AccountStateDiff::unchanged(pre_inbox),
+        AccountStateDiff::unchanged(pre_payer),
+    ];
+    (state_diffs, chained_calls)
 }

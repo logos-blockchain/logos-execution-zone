@@ -1,9 +1,13 @@
 use authenticated_transfer_core::custody_transfer;
 use faucet_core::Instruction;
-use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{
+    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    respond_unsupported_call,
+};
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -11,16 +15,22 @@ fn main() {
             instruction: Instruction::GenesisTransfer { amount },
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     assert!(
         caller_program_id.is_none(),
         "Faucet cannot be invoked through chain calls"
     );
 
-    let post_states = pre_states.iter().map(|pre| pre.account.clone()).collect();
-    let [faucet, recipient] = <[_; 2]>::try_from(pre_states.clone())
-        .expect("GenesisTransfer requires exactly 2 accounts");
+    let post_diffs = pre_states
+        .iter()
+        .map(|pre_state| AccountStateDiff::unchanged(pre_state.clone()))
+        .collect();
+    let [faucet, recipient] =
+        <[_; 2]>::try_from(pre_states).expect("GenesisTransfer requires exactly 2 accounts");
 
     assert_eq!(
         faucet.account_id,
@@ -39,8 +49,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        pre_states,
-        post_states,
+        post_diffs,
     )
     .with_chained_calls(vec![transfer])
     .write();
