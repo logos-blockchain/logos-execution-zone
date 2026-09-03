@@ -24,12 +24,20 @@ CHANNEL_INSCRIBE_OPCODE = 17
 # A header is u64 + two 32-byte hashes + timestamp + signature, so anything
 # shorter is not a block. Without this a short payload's first 8 bytes read as
 # a nonsense height.
+# A long enough garbage payload clears MIN_BLOCK_LEN, so bound the height too:
+# real block ids count up from genesis one per block, and anything past this is
+# a payload being misread rather than a chain that ran this long.
 MIN_BLOCK_LEN = 144
+MAX_PLAUSIBLE_BLOCK_ID = 1 << 40
 SLOTS_PER_REQUEST = 500
 # lee/state_machine/core/src/lib.rs
 GENESIS_BLOCK_ID = 1
 # Slots to walk back per step when looking for genesis.
 LOOKBACK_STEP = 6000
+
+
+TICK = "\u2714"
+CROSS = "\u2718"
 
 
 def paint(text: str, code: str) -> str:
@@ -38,7 +46,7 @@ def paint(text: str, code: str) -> str:
 
 
 def mark(ok: bool) -> str:
-    return paint("\u2714", "32") if ok else paint("\u2718", "31")
+    return paint(TICK, "32") if ok else paint(CROSS, "31")
 
 
 def http_get(url: str):
@@ -62,10 +70,13 @@ def inscriptions(node: str, channel: str, slot_from: int, slot_to: int):
                         continue
                     raw = bytes.fromhex(payload["inscription"])
                     signer = (payload.get("signer") or "?")[:8]
-                    if len(raw) < MIN_BLOCK_LEN:
+                    block_id = (
+                        struct.unpack("<Q", raw[:8])[0] if len(raw) >= MIN_BLOCK_LEN else None
+                    )
+                    if block_id is None or block_id > MAX_PLAUSIBLE_BLOCK_ID:
                         others.append((slot, signer, len(raw), raw[:16].hex()))
                     else:
-                        blocks.append((slot, struct.unpack("<Q", raw[:8])[0], signer))
+                        blocks.append((slot, block_id, signer))
     return sorted(blocks), others
 
 
@@ -78,7 +89,7 @@ def report(blocks, others, scanned) -> bool:
         print(f"  non-block at slot {slot} by {signer} ({size} bytes, {prefix})")
 
     if not blocks:
-        print(f"\n{paint('\u2718  no inscriptions in that range', '1;31')}")
+        print("\n" + paint(f"{CROSS}  no inscriptions in that range", "1;31"))
         return False
 
     ids = [block_id for _, block_id, _ in blocks]
@@ -117,7 +128,7 @@ def report(blocks, others, scanned) -> bool:
     ok = from_genesis and not (missing or dupes or steps)
     print()
     if ok:
-        print(paint(f"\u2714  {len(blocks)} blocks, {ids[0]}..{ids[-1]}, "
+        print(paint(f"{TICK}  {len(blocks)} blocks, {ids[0]}..{ids[-1]}, "
                     "gapless from genesis", "1;32"))
     else:
         broken = []
@@ -129,7 +140,7 @@ def report(blocks, others, scanned) -> bool:
             broken.append(f"{len(dupes)} duplicated")
         if steps:
             broken.append(f"{len(steps)} out of order")
-        print(paint("\u2718  " + ", ".join(broken), "1;31"))
+        print(paint(f"{CROSS}  " + ", ".join(broken), "1;31"))
     return ok
 
 

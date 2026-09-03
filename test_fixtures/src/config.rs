@@ -9,12 +9,24 @@ use lee_core::Identifier;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
 use sequencer_core::{
-    config::{BedrockConfig, CrossZoneConfig, GenesisAction, GossipConfig, SequencerConfig},
+    config::{
+        BedrockConfig, ChannelParams, CrossZoneConfig, GenesisAction, GossipConfig, SequencerConfig,
+    },
     sign_genesis_stake,
 };
 use sequencer_stake_core::SequencerKey;
 use url::Url;
 use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
+
+/// Turn length the integration-test channels are created with.
+///
+/// Deliberately below the production default, whose 300-slot turn outlasts the
+/// committee-removal waits these tests are built around; the minimum stake
+/// stays at the production value.
+pub const TEST_POSTING_TIMEFRAME: u32 = 20;
+
+/// Idle slots before the turn passes on; the production 25 outlasts the shortened timeframe.
+pub const TEST_POSTING_TIMEOUT: u32 = TEST_POSTING_TIMEFRAME;
 
 // Public balances are LGO-scale (`testnet_initial_state` precedent): charged
 // transactions reserve `gas_limit x base_fee` up front (~16M at wallet
@@ -69,6 +81,7 @@ pub struct SequencerPartialConfig {
     pub mempool_max_size: usize,
     pub block_create_timeout: Duration,
     pub priority_fee_percent: u64,
+    pub channel_params: ChannelParams,
 }
 
 impl Default for SequencerPartialConfig {
@@ -79,6 +92,11 @@ impl Default for SequencerPartialConfig {
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(10),
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+            channel_params: ChannelParams {
+                posting_timeframe: TEST_POSTING_TIMEFRAME,
+                posting_timeout: TEST_POSTING_TIMEOUT,
+                ..sequencer_core::config::default_channel_params()
+            },
         }
     }
 }
@@ -135,6 +153,7 @@ pub fn sequencer_config(
         mempool_max_size,
         block_create_timeout,
         priority_fee_percent,
+        channel_params,
     } = partial;
 
     Ok(SequencerConfig {
@@ -153,6 +172,7 @@ pub fn sequencer_config(
             funding_key,
             auth: None,
             priority_fee_percent,
+            channel_params,
         },
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
@@ -357,7 +377,14 @@ pub fn founding_stake_owner_key(index: usize) -> Result<PrivateKey> {
 
 /// Genesis entries staking every sequencer in `sequencer_signing_keys`, so the
 /// creator opens the channel already accrediting all of them.
-pub fn genesis_sequencer_stakes(sequencer_signing_keys: &[[u8; 32]]) -> Result<Vec<GenesisAction>> {
+///
+/// `channel_params` must be the ones the channel is created with, or these
+/// founding stakes land below the minimum and accredit nobody.
+pub fn genesis_sequencer_stakes(
+    sequencer_signing_keys: &[[u8; 32]],
+    channel_params: ChannelParams,
+) -> Result<Vec<GenesisAction>> {
+    let minimum_stake = channel_params.minimum_sequencer_stake;
     sequencer_signing_keys
         .iter()
         .enumerate()
@@ -369,7 +396,7 @@ pub fn genesis_sequencer_stakes(sequencer_signing_keys: &[[u8; 32]]) -> Result<V
             Ok(GenesisAction::StakeSequencer {
                 sequencer_key,
                 ownership_public_key: PublicKey::new_from_private_key(&owner),
-                stake_signature: sign_genesis_stake(index, sequencer_key, &owner),
+                stake_signature: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
             })
         })
         .collect()

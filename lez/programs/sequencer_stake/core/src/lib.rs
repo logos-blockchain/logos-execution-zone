@@ -94,6 +94,10 @@ pub enum Instruction {
     /// Block-inclusion validity is enforced outside this program.
     FinalizeUnstake,
 
+    /// Sets the channel params once, at genesis. Rejected once they are set,
+    /// so nothing can move them afterwards.
+    InitChannelParams(ChannelParams),
+
     /// Burns the key's whole stake to the sink and removes its entry.
     ///
     /// Only `approvals` authorize this. The reason for the offence is not checked.
@@ -141,11 +145,38 @@ pub struct PendingUnstake {
     pub destination: AccountId,
 }
 
+/// The values genesis fixes for the chain's life.
+///
+/// The program refuses a second write, so once set these never move.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    borsh::BorshSerialize,
+    borsh::BorshDeserialize,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct ChannelParams {
+    /// Minimum summed stake for a key to be a committee candidate.
+    pub minimum_sequencer_stake: u128,
+    /// How long one sequencer's posting turn lasts, in slots.
+    pub posting_timeframe: u32,
+    /// Idle slots after which a turn nobody posted in passes on. Must stay
+    /// above `block_create_timeout`, or a healthy sequencer loses its turn
+    /// between its own blocks.
+    pub posting_timeout: u32,
+}
+
 /// The single program-owned config account: minimum stake plus per-key standing, kept current
 /// incrementally.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct SequencerStakeConfig {
-    pub minimum_sequencer_stake: u128,
+    /// `None` until genesis runs [`Instruction::InitChannelParams`], which is
+    /// the only state that instruction accepts.
+    pub channel_params: Option<ChannelParams>,
     pub entries: BTreeMap<SequencerKey, SequencerEntry>,
 }
 
@@ -298,7 +329,11 @@ mod tests {
             },
         );
         SequencerStakeConfig {
-            minimum_sequencer_stake: 1_000_000,
+            channel_params: Some(ChannelParams {
+                minimum_sequencer_stake: 1_000_000,
+                posting_timeframe: 300,
+                posting_timeout: 25,
+            }),
             entries,
         }
     }

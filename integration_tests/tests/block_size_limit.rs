@@ -30,6 +30,8 @@ async fn reject_oversized_transaction() -> Result<()> {
                     mempool_max_size: 1000,
                     block_create_timeout: Duration::from_secs(10),
                     priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+                    channel_params: test_fixtures::config::SequencerPartialConfig::default()
+                        .channel_params,
                 }),
         )
         .build()
@@ -89,6 +91,8 @@ async fn accept_transaction_within_limit() -> Result<()> {
                     mempool_max_size: 1000,
                     block_create_timeout: Duration::from_secs(10),
                     priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+                    channel_params: test_fixtures::config::SequencerPartialConfig::default()
+                        .channel_params,
                 }),
         )
         .build()
@@ -155,6 +159,8 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
                     mempool_max_size: 1000,
                     block_create_timeout: Duration::from_secs(10),
                     priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+                    channel_params: test_fixtures::config::SequencerPartialConfig::default()
+                        .channel_params,
                 }),
         )
         .build()

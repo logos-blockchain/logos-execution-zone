@@ -59,6 +59,9 @@ pub struct ExecutorActor<BP: BlockPublisherTrait, S: StorageActorTrait = Storage
     /// nothing to wait on: aborting the main loop only starts the teardown.
     background_tasks: Vec<TaskGroup>,
     blocked_attempts: BlockedAttempts,
+    /// Consecutive production turns that failed outright. A run of these looks
+    /// exactly like an idle node in every other signal, so it gets its own.
+    failed_attempts: u32,
 }
 
 /// Consecutive production attempts skipped because the pin trailed the tip.
@@ -115,6 +118,7 @@ impl<BP: BlockPublisherTrait + Send + 'static, S: StorageActorTrait> ExecutorAct
                 driver_cancellation,
                 background_tasks,
                 blocked_attempts: BlockedAttempts::default(),
+                failed_attempts: 0,
             }
         }
     }
@@ -176,6 +180,15 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Acto
     }
 }
 
+impl<BP: BlockPublisherTrait, S: StorageActorTrait> ExecutorActor<BP, S> {
+    /// Ends a blocked run, reporting the drop to zero only if there was one.
+    fn clear_blocked_attempts(&mut self) {
+        if self.blocked_attempts.clear() {
+            sequencer_core_metrics::record_publish_blocked_attempts(0);
+        }
+    }
+}
+
 impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<ProduceBlock>
     for ExecutorActor<BP, S>
 {
@@ -186,9 +199,12 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
         ProduceBlock: ProduceBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        // Only produce on our turn.
+        // Only produce on our turn. Losing the seat ends any blocked run: a node
+        // dropped from the committee is not wedged, and would otherwise hold the
+        // gauge non-zero forever.
         if !self.sequencer.is_our_turn() {
             info!("Not our turn to produce a block, skipping");
+            self.clear_blocked_attempts();
             return Ok(());
         }
 
@@ -200,6 +216,9 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
                  waiting for the channel to restore it",
                 self.sequencer.next_block_height().await.saturating_sub(1),
             );
+            // The count is only for skips behind a frozen pin, so keeping it
+            // here would warn about the wrong problem.
+            self.clear_blocked_attempts();
             return Ok(());
         }
 
@@ -220,9 +239,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
             }
             return Ok(());
         }
-        if self.blocked_attempts.clear() {
-            sequencer_core_metrics::record_publish_blocked_attempts(0);
-        }
+        self.clear_blocked_attempts();
 
         info!("Our turn: producing a block and any committee update");
         // A failed turn costs this block only. Returning the error would stop
@@ -230,11 +247,26 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
         // first time it finds us not running — the node then looks healthy and
         // never produces again.
         match self.sequencer.run_production_turn().await {
-            Ok(id) => log::info!(
-                "Block with id {id} created by {}",
-                self.sequencer.bedrock_public_key_hex()
-            ),
-            Err(err) => warn!("Skipping turn: block production failed: {err:#}"),
+            Ok(id) => {
+                // The count is how many turns failed in a row, so a success
+                // clears it and the gauge drops to zero, unless it was zero
+                // already.
+                if std::mem::take(&mut self.failed_attempts) != 0 {
+                    sequencer_core_metrics::record_production_failed_attempts(0);
+                }
+                log::info!(
+                    "Block with id {id} created by {}",
+                    self.sequencer.bedrock_public_key_hex()
+                );
+            }
+            Err(err) => {
+                self.failed_attempts = self.failed_attempts.saturating_add(1);
+                sequencer_core_metrics::record_production_failed_attempts(self.failed_attempts);
+                warn!(
+                    "Skipping turn: block production failed ({} in a row): {err:#}",
+                    self.failed_attempts
+                );
+            }
         }
 
         Ok(())

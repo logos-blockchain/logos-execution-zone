@@ -11141,7 +11141,6 @@ dependencies = [
  "common",
  "env_logger",
  "futures",
- "hex",
  "kameo",
  "lee",
  "lee_core",

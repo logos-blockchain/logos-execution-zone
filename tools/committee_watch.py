@@ -10,6 +10,8 @@ finality, and a removal stays accredited for a while after the stake goes.
     tools/committee_watch.py --sequencer http://127.0.0.1:3041
 """
 
+from __future__ import annotations
+
 import argparse
 import glob
 import hashlib
@@ -105,7 +107,12 @@ class Reader:
 
 def decode_stake_config(data: bytes) -> dict:
     r = Reader(data)
-    minimum = r.u128()
+    # `channel_params: Option<ChannelParams>` — one borsh tag byte, then the
+    # three values when present.
+    if r.take(1)[0]:
+        minimum, timeframe, timeout = r.u128(), r.u32(), r.u32()
+    else:
+        minimum = timeframe = timeout = None
     entries = {}
     for _ in range(r.u32()):
         key = r.take(32).hex()
@@ -116,7 +123,12 @@ def decode_stake_config(data: bytes) -> dict:
         }
     for e in entries.values():
         e["net"] = max(e["staked"] - e["pending"], 0)
-    return {"minimum": minimum, "entries": entries}
+    return {
+        "minimum": minimum,
+        "posting_timeframe": timeframe,
+        "posting_timeout": timeout,
+        "entries": entries,
+    }
 
 
 def seat_label(
@@ -212,7 +224,13 @@ def snapshot(args) -> str:
     stale = slot - live["tip_slot"]
 
     out = []
-    out.append(f"minimum stake {stake['minimum']}    burned in sink {sink}")
+    params = (
+        "channel params unset"
+        if stake["minimum"] is None
+        else f"minimum stake {stake['minimum']}    "
+        f"turn {stake['posting_timeframe']}s / timeout {stake['posting_timeout']}s"
+    )
+    out.append(f"{params}    burned in sink {sink}")
     # How much of the turn is left, so a reading near a boundary looks like one.
     window = live["posting_timeout"] if stale >= live["posting_timeout"] > 0 else 0
     window = window or live["posting_timeframe"]
@@ -243,7 +261,10 @@ def snapshot(args) -> str:
         else:
             last, ago = "-", "-"
 
-        seat = seat_label(key, e, accredited, turn, stake["minimum"])
+        # Before genesis sets the params nothing can meet a minimum, so no
+        # entry is a candidate.
+        minimum = stake["minimum"]
+        seat = seat_label(key, e, accredited, turn, float("inf") if minimum is None else minimum)
         out.append(
             f"{key[:20]} {staked:>8} {net:>8} {last:>11} {ago:>7}  {seat}"
         )

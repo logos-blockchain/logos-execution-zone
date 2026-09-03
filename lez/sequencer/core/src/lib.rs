@@ -460,13 +460,19 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             // founding set is applied by the same tx that writes genesis; the
             // committee is never observable without it.
             let founding_committee = founding_committee(&config, own_sequencer_key);
+            // The account, not the config: the genesis tx above already wrote
+            // the configured values there, and the account is what every later
+            // update reads, so creation must not have a second source.
+            let channel_params =
+                committee_discovery::channel_params(chain.lock().await.head_state())
+                    .expect("genesis sets the channel posting params in the stake config account");
 
             let mut last_checkpoint = None;
             for block in &pending_blocks {
                 let publish = match &founding_committee {
                     Some(keys) if block.header.block_id == GENESIS_BLOCK_ID => {
                         block_publisher
-                            .publish_genesis_creating_channel(block, keys.clone())
+                            .publish_genesis_creating_channel(block, keys.clone(), channel_params)
                             .await
                     }
                     _ => block_publisher.publish_block(block, vec![]).await,
@@ -924,8 +930,24 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                     .expect("sequencer key was decoded from a valid Ed25519 public key")
             })
             .collect();
+        // Same state the committee decision itself was read from, and the params
+        // have not moved since genesis set them.
+        let channel_params = {
+            let chain = self.chain.lock().await;
+            committee_discovery::channel_params(chain.final_state())
+        };
+        let Some(channel_params) = channel_params else {
+            warn!(
+                "sequencer_stake config carries no channel posting params; skipping committee update"
+            );
+            return;
+        };
         self.last_committee_submission_slot = tip_slot;
-        if let Err(err) = self.block_publisher.submit_channel_config(new_keys).await {
+        if let Err(err) = self
+            .block_publisher
+            .submit_channel_config(new_keys, channel_params)
+            .await
+        {
             warn!("Failed to submit committee channel-config update: {err:#}");
         }
     }
@@ -2221,22 +2243,33 @@ fn build_genesis_state(
             let key_path = config.home.join("sequencer_stake_signing_key");
             let owner = load_or_create_stake_signing_key(&key_path)
                 .expect("Failed to load or create the stake signing key");
-            let signature = sign_genesis_stake(0, key, &owner);
+            let signature = sign_genesis_stake(
+                0,
+                key,
+                &owner,
+                config.bedrock_config.channel_params.minimum_sequencer_stake,
+            );
             (key, lee::PublicKey::new_from_private_key(&owner), signature)
         }));
     }
-    let bootstrap_stake_txs = build_stake_genesis_transactions(&staked);
+    let bootstrap_stake_txs = build_stake_genesis_transactions(
+        &staked,
+        config.bedrock_config.channel_params.minimum_sequencer_stake,
+    );
 
-    let mut genesis_txs: Vec<_> = cross_zone_config_txs
-        .chain(inbox_config_tx)
-        .chain(supply_txs)
-        .chain(bootstrap_stake_txs)
-        .inspect(|tx| {
-            state
-                .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
-                .expect("Failed to execute genesis transaction");
-        })
-        .collect();
+    let mut genesis_txs: Vec<_> = std::iter::once(build_init_channel_params_transaction(
+        config.bedrock_config.channel_params,
+    ))
+    .chain(cross_zone_config_txs)
+    .chain(inbox_config_tx)
+    .chain(supply_txs)
+    .chain(bootstrap_stake_txs)
+    .inspect(|tx| {
+        state
+            .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
+            .expect("Failed to execute genesis transaction");
+    })
+    .collect();
 
     // The genesis fee tx credits the first staked sequencer's ownership
     // account, already claimed by its stake tx above (which ran earlier in this
@@ -2329,8 +2362,9 @@ fn genesis_stake_message(
     index: usize,
     sequencer_key: sequencer_stake_core::SequencerKey,
     ownership_id: AccountId,
+    minimum_stake: u128,
 ) -> Message {
-    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let amount = minimum_stake;
     let mover_instruction_data = lee::program::Program::serialize_instruction(
         authenticated_transfer_core::Instruction::Transfer { amount },
     )
@@ -2371,22 +2405,45 @@ pub fn sign_genesis_stake(
     index: usize,
     sequencer_key: sequencer_stake_core::SequencerKey,
     ownership_key: &lee::PrivateKey,
+    minimum_stake: u128,
 ) -> lee::Signature {
     let ownership_id = AccountId::from(&lee::PublicKey::new_from_private_key(ownership_key));
-    let message = genesis_stake_message(index, sequencer_key, ownership_id);
+    let message = genesis_stake_message(index, sequencer_key, ownership_id, minimum_stake);
     lee::Signature::new(ownership_key, &message.hash())
+}
+
+/// Sets the channel posting params in the `sequencer_stake` config account.
+/// Unsigned and replayable, so an indexer reconstructs it from the genesis
+/// block rather than needing the sequencer's config.
+fn build_init_channel_params_transaction(
+    channel_params: config::ChannelParams,
+) -> PublicTransaction {
+    let message = Message::try_new(
+        programs::sequencer_stake().id().into(),
+        vec![system_accounts::sequencer_stake_config_account_id()],
+        vec![],
+        sequencer_stake_core::Instruction::InitChannelParams(channel_params),
+    )
+    .expect("Failed to build the InitChannelParams genesis message");
+    PublicTransaction::new(
+        message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    )
 }
 
 /// The founding sequencers' `Stake`s, funded via the faucet. Real transactions,
 /// not raw state, so followers replay them instead of missing them.
-fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTransaction> {
+fn build_stake_genesis_transactions(
+    staked: &[FoundingStake],
+    minimum_stake: u128,
+) -> Vec<PublicTransaction> {
     if staked.is_empty() {
         return Vec::new();
     }
 
     let funding_key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY).unwrap();
     let funding_public_key = lee::PublicKey::new_from_private_key(&funding_key);
-    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let amount = minimum_stake;
     let total = u128::try_from(staked.len())
         .ok()
         .and_then(|count| amount.checked_mul(count))
@@ -2411,7 +2468,8 @@ fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTrans
 
     for (index, (sequencer_key, ownership_public_key, signature)) in staked.iter().enumerate() {
         let ownership_id = AccountId::from(ownership_public_key);
-        let stake_message = genesis_stake_message(index, *sequencer_key, ownership_id);
+        let stake_message =
+            genesis_stake_message(index, *sequencer_key, ownership_id, minimum_stake);
         let stake_witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![
             (
                 lee::Signature::new(&funding_key, &stake_message.hash()),

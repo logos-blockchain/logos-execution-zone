@@ -41,6 +41,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
             auth: None,
             funding_key: BigUint::default().into(),
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+            channel_params: sequencer_core::config::default_channel_params(),
         },
         genesis: Vec::new(),
         cross_zone: None,
@@ -104,7 +105,12 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
                 system_accounts::sequencer_stake_config_account_id(),
                 Account {
                     data: sequencer_stake_core::SequencerStakeConfig {
-                        minimum_sequencer_stake: 0,
+                        channel_params: Some(sequencer_stake_core::ChannelParams {
+                            minimum_sequencer_stake: 0,
+                            posting_timeframe:
+                                system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+                            posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+                        }),
                         entries: BTreeMap::new(),
                     }
                     .to_bytes()

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Stake a new sequencer into the committee and start it producing.
 
-Given a wallet and a funded, authenticated_transfer-owned account, this mints a
-fresh ownership account, stakes the new node's key, waits for Bedrock to
-accredit it, and then runs the sequencer.
+Given a wallet and a funded account whose key it holds, this mints a fresh
+ownership account, stakes the new node's key, waits for Bedrock to accredit it,
+and then runs the sequencer.
 
     tools/join_sequencer.py --home ~/lez-nodes/seq-1 \\
         --wallet lez/wallet/configs/debug \\
@@ -13,14 +13,14 @@ The home holds the node's db, both signing keys and its log, matching what
 `just run-sequencer` lays down.
 """
 
+from __future__ import annotations
+
 import argparse
-import hashlib
 import json
 import os
 import re
 import shlex
 import socket
-import struct
 import subprocess
 import sys
 import time
@@ -28,7 +28,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from committee_watch import b58decode, decode_stake_config, pda, program_id  # noqa: E402
+from committee_watch import decode_stake_config, pda, program_id  # noqa: E402
 
 DEFAULT_CONFIG = "lez/sequencer/service/configs/debug/sequencer_config.json"
 # The debug genesis funds this account, and the debug wallet holds its key.
@@ -38,15 +38,9 @@ DEFAULT_FUNDING = "CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r"
 DEFAULT_NODE = os.environ.get("LEZ_NODE")
 DEFAULT_SEQUENCER = os.environ.get("LEZ_SEQUENCER", "http://127.0.0.1:3040")
 CONFIG_SEED = b"/LEZ/v0.3/MinSequencerStake/0000"
-# An account no program owns yet; `auth-transfer init` is what claims it.
-UNOWNED_PROGRAM = "11111111111111111111111111111111"
-# lez/programs/vault/core/src/lib.rs
-VAULT_SEED_DOMAIN = b"/LEZ/v0.3/VaultSeed/00000000000/"
 # Written once staked: names the account holding the stake, and its presence
 # is what stops a later run from staking again.
 OWNERSHIP_ACCOUNT_FILE = "stake-ownership-account"
-PDA_PREFIX = b"/LEE/v0.2/AccountId/PDA/" + b"\0" * 8
-B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 
 def step(msg: str) -> None:
@@ -62,15 +56,6 @@ def run(cmd: list[str], env: dict | None = None, cwd: str | None = None) -> str:
         sys.stderr.write(done.stdout + done.stderr)
         raise SystemExit(f"command failed: {' '.join(cmd)}")
     return done.stdout
-
-
-def b58encode(raw: bytes) -> str:
-    n = int.from_bytes(raw, "big")
-    out = ""
-    while n:
-        n, rem = divmod(n, 58)
-        out = B58[rem] + out
-    return "1" * (len(raw) - len(raw.lstrip(b"\0"))) + out
 
 
 def http_get(url: str):
@@ -110,7 +95,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--home", required=True, help="home dir for the joining sequencer")
     ap.add_argument("--wallet", default=DEFAULT_WALLET, help="wallet home (holds wallet_config.json)")
-    ap.add_argument("--funding-account", default=DEFAULT_FUNDING, help="funded, auth-transfer-owned")
+    ap.add_argument("--funding-account", default=DEFAULT_FUNDING, help="funded; the wallet holds its key")
     ap.add_argument("--amount", type=int, help="defaults to the live minimum")
     ap.add_argument("--port", type=int, default=3041)
     ap.add_argument("--metrics-address", default="0.0.0.0:9091")
@@ -200,31 +185,15 @@ def main() -> None:
                 ownership = match.group(1)
                 print(f"    ownership account {ownership}")
 
-            # A new account cannot be paid directly: crediting it claims it,
-            # and only its own signature authorizes that. Funders send to its
-            # vault instead, and sweeping one is free even at a zero balance.
-            vault = pda(
-                program_id(repo, "VAULT_ID"),
-                hashlib.sha256(VAULT_SEED_DOMAIN + b58decode(funding)).digest(),
-            )
-            held = rpc(args.sequencer, "getAccount", [vault])["balance"]
-            if held:
-                step(f"Claiming {held} from the vault of {funding}")
-                print(run(
-                    ["cargo", "run", "--release", "-q", "-p", "wallet", "--", "vault", "claim",
-                     "--account-id", f"Public/{funding}", "--amount", str(held)],
-                    env={"LEE_WALLET_HOME_DIR": wallet}, cwd=repo,
-                ).strip())
-
-            # Registration moves funds, so it waits until the account has some.
-            owner = rpc(args.sequencer, "getAccount", [funding])["program_owner"]
-            if owner == UNOWNED_PROGRAM:
-                step(f"Registering {funding} under authenticated-transfer")
-                print(run(
-                    ["cargo", "run", "--release", "-q", "-p", "wallet", "--",
-                     "auth-transfer", "init", "--account-id", f"Public/{funding}"],
-                    env={"LEE_WALLET_HOME_DIR": wallet}, cwd=repo,
-                ).strip())
+            # The stake fails inside the guest if the funds are short, so say
+            # so here, where the fix is obvious.
+            balance = rpc(args.sequencer, "getAccount", [funding])["balance"]
+            if balance < amount:
+                raise SystemExit(
+                    f"{funding} holds {balance}, short of the {amount} to stake. Fund it "
+                    f"from a funded wallet:\n\n    wallet auth-transfer send "
+                    f"--from Public/<funded> --to Public/{funding} --amount <n>"
+                )
 
             step("Submitting the stake")
             print(run(

@@ -5,7 +5,7 @@ Creates the home, its own config, its own wallet, the Bedrock identity, and the
 account the stake will be paid from (the ownership account that holds the stake
 is minted later, when the node stakes). Submits nothing, so it needs no funds:
 prints the account for whoever runs this to fund, and `just run-sequencer <home>`
-then registers it, stakes from it, and starts producing.
+then stakes from it and starts producing.
 
     tools/setup_sequencer.py ~/lez-nodes/seq-7
     tools/setup_sequencer.py ~/lez-nodes/seq-7 --sequencer http://127.0.0.1:3042
@@ -16,7 +16,6 @@ import json
 import os
 import re
 import secrets
-import shutil
 import subprocess
 import sys
 
@@ -106,7 +105,7 @@ def main() -> None:
             handle.write(f"mnemonic: {mnemonic.group(1).strip()}\n")
     os.chmod(seed_path, 0o600)
     print(f"    account {account}")
-    print(f"    seed and password in {seed_path}")
+    print(f"    seed and password in {seed_path} (cleartext, mode 600)")
 
     step("Creating the Bedrock identity")
     key = subprocess.run(
@@ -126,19 +125,20 @@ def main() -> None:
   bedrock key     {key}
   config          {config_path}
   wallet          {wallet_home}
-  seed            {seed_path}
+  seed            {seed_path}  <- wallet password and recovery phrase, in
+                  the clear. Do not copy this home anywhere you would not put
+                  the keys themselves.
 
-Fund that account through its vault, from a funded wallet:
+Fund that account from a funded wallet:
 
-    wallet vault transfer --from Public/<funded> --to Public/{account} --amount <n>
+    wallet auth-transfer send --from Public/<funded> --to Public/{account} --amount <n>
 
 then start the node:
 
     just run-sequencer {home}
 
-It reads the account from {FUNDING_ACCOUNT_FILE}, registers it under the
-authenticated-transfer program, stakes from it, and produces once the
-committee accredits it.""")
+It reads the account from {FUNDING_ACCOUNT_FILE}, stakes from it, and produces
+once the committee accredits it.""")
 
 
 if __name__ == "__main__":

@@ -44,7 +44,10 @@ use logos_blockchain_zone_sdk::{
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::{config::BedrockConfig, task_group::TaskGroup};
+use crate::{
+    config::{BedrockConfig, ChannelParams},
+    task_group::TaskGroup,
+};
 
 /// Channel capacity for the publish inbox. One publish per produced block, drained
 /// in microseconds by the drive task — 32 is huge headroom and just provides
@@ -114,6 +117,7 @@ enum Command {
     /// — not bundled with any block publish.
     SubmitChannelConfig {
         new_keys: Keys,
+        channel_params: ChannelParams,
         resp: oneshot::Sender<Result<()>>,
     },
     /// Hand zone-sdk a pre-built tx to track and post, keyed by the channel tip
@@ -170,6 +174,7 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
         &self,
         block: &Block,
         keys: Vec<Ed25519PublicKey>,
+        channel_params: ChannelParams,
     ) -> Result<PublishOutcome>;
 
     /// Live (adopted, possibly not yet finalized) accredited-key snapshot for
@@ -182,9 +187,13 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
 
     /// Submit a committee `ChannelConfigOp` as its own, independent Mantle
     /// tx (not bundled with any block publish). `new_keys` is the full
-    /// replacement accredited-keys list; the channel administration
-    /// parameters posted alongside it are the `system_accounts` defaults.
-    async fn submit_channel_config(&self, new_keys: Vec<Ed25519PublicKey>) -> Result<()>;
+    /// replacement accredited-keys list; `channel_params` is what the config
+    /// account has carried since genesis, repeated unchanged.
+    async fn submit_channel_config(
+        &self,
+        new_keys: Vec<Ed25519PublicKey>,
+        channel_params: ChannelParams,
+    ) -> Result<()>;
 
     fn channel_id(&self) -> ChannelId;
 
@@ -375,8 +384,13 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                 }
                                 Command::SubmitChannelConfig {
                                     new_keys,
+                                    channel_params,
                                     resp: resp_tx,
                                 } => {
+                                    // A committee update changes the key list and
+                                    // nothing else: `channel_params` is what the stake
+                                    // config account has carried since genesis.
+                                    //
                                     // zone-sdk funds from the node wallet, signs,
                                     // and enqueues this as its own independent
                                     // Mantle tx onto the drive loop's in-flight
@@ -386,12 +400,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         .handle()
                                         .channel_config(
                                             new_keys,
-                                            SlotTimeframe::from(
-                                                system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
-                                            ),
-                                            SlotTimeout::from(
-                                                system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                                            ),
+                                            SlotTimeframe::from(channel_params.posting_timeframe),
+                                            SlotTimeout::from(channel_params.posting_timeout),
                                             system_accounts::DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD,
                                             system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
                                         )
@@ -599,6 +609,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         &self,
         block: &Block,
         keys: Vec<Ed25519PublicKey>,
+        channel_params: ChannelParams,
     ) -> Result<PublishOutcome> {
         let own_key = self.bedrock_signing_key.public_key();
         ensure!(
@@ -614,10 +625,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             // The channel does not exist yet, so the config lineage starts here.
             parent: MsgId::root(),
             keys,
-            posting_timeframe: SlotTimeframe::from(
-                system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
-            ),
-            posting_timeout: SlotTimeout::from(system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT),
+            posting_timeframe: SlotTimeframe::from(channel_params.posting_timeframe),
+            posting_timeout: SlotTimeout::from(channel_params.posting_timeout),
             configuration_threshold: system_accounts::DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD,
             transfer_threshold: system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
         };
@@ -680,7 +689,11 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             .map(|state| (state.accredited_keys.to_vec(), state.config_tip_hash)))
     }
 
-    async fn submit_channel_config(&self, new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
+    async fn submit_channel_config(
+        &self,
+        new_keys: Vec<Ed25519PublicKey>,
+        channel_params: ChannelParams,
+    ) -> Result<()> {
         ensure!(
             !new_keys.is_empty(),
             "Refusing to submit a committee update with no accredited keys"
@@ -688,8 +701,12 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let new_keys =
             Keys::try_from(new_keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
 
-        self.dispatch(|resp| Command::SubmitChannelConfig { new_keys, resp })
-            .await
+        self.dispatch(|resp| Command::SubmitChannelConfig {
+            new_keys,
+            channel_params,
+            resp,
+        })
+        .await
     }
 
     fn channel_id(&self) -> ChannelId {
@@ -849,10 +866,11 @@ pub async fn post_channel_config(
             keys.len()
         );
     }
+    // A timeout above the timeframe never fires: the turn ends first.
     ensure!(
-        posting_timeframe > 0 && posting_timeout >= posting_timeframe,
-        "posting_timeframe must be nonzero and posting_timeout at least as long, \
-         got {posting_timeframe} and {posting_timeout}"
+        posting_timeframe > 0 && posting_timeout > 0 && posting_timeout <= posting_timeframe,
+        "posting_timeframe and posting_timeout must be nonzero and posting_timeout no longer \
+         than the timeframe, got {posting_timeframe} and {posting_timeout}"
     );
 
     let keys = Keys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;

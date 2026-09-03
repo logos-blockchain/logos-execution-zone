@@ -9,8 +9,8 @@ use lee_core::{
     },
 };
 use sequencer_stake_core::{
-    Instruction, PendingUnstake, SLASH_APPROVAL_THRESHOLD, SequencerEntry, SequencerKey,
-    SequencerStakeConfig, SlashApproval, StakeRecord,
+    ChannelParams, Instruction, PendingUnstake, SLASH_APPROVAL_THRESHOLD, SequencerEntry,
+    SequencerKey, SequencerStakeConfig, SlashApproval, StakeRecord,
     ed25519_dalek::{Signature, VerifyingKey},
     sequencer_stake_config_account_id, slash_approval_message, slash_sink_account_id,
     stake_funds_account_id, stake_funds_seed,
@@ -79,6 +79,14 @@ fn main() {
                 "FinalizeUnstake is only invoked as a top-level user transaction"
             );
             finalize_unstake(self_account_id, pre_states)
+        }
+        Instruction::InitChannelParams(channel_params) => {
+            assert!(
+                caller_account_id.is_none(),
+                "InitChannelParams is only invoked as a top-level user transaction"
+            );
+            let post = init_channel_params(self_account_id, pre_states, channel_params);
+            (post, Vec::new())
         }
         Instruction::Slash {
             sequencer_key,
@@ -161,7 +169,7 @@ fn stake(
     assert_funds_account(self_account_id, &ownership_account, &funds_account);
 
     let mut config = decode_config(&config_account, self_account_id);
-    let minimum_sequencer_stake = config.minimum_sequencer_stake;
+    let minimum_sequencer_stake = channel_params(&config).minimum_sequencer_stake;
 
     let balance_before = funds_account.account.balance;
     let expected_balance_after = balance_before
@@ -314,7 +322,7 @@ fn unstake_request(
     );
 
     let mut config = decode_config(&config_account, self_account_id);
-    let minimum_sequencer_stake = config.minimum_sequencer_stake;
+    let minimum_sequencer_stake = channel_params(&config).minimum_sequencer_stake;
     let entry = config
         .entries
         .get_mut(&record.sequencer_key)
@@ -399,6 +407,58 @@ fn verify_approvals(
         approvers.len() >= SLASH_APPROVAL_THRESHOLD,
         "slash carries fewer approvals than the threshold"
     );
+}
+
+/// The params genesis fixed. Absent only before genesis has run, which no
+/// transaction reaching this program can observe.
+const fn channel_params(config: &SequencerStakeConfig) -> ChannelParams {
+    config
+        .channel_params
+        .expect("genesis sets the channel params before any stake exists")
+}
+
+fn init_channel_params(
+    self_account_id: AccountId,
+    pre_states: Vec<AccountWithMetadata>,
+    channel_params: ChannelParams,
+) -> Vec<AccountStateDiff> {
+    let [config_account] = <[AccountWithMetadata; 1]>::try_from(pre_states)
+        .expect("InitChannelParams requires the config account");
+
+    let mut config = decode_config(&config_account, self_account_id);
+    assert!(
+        config.channel_params.is_none(),
+        "channel params are already set and cannot be changed"
+    );
+    // A zero timeframe would leave round robin unable to move off index 0, and
+    // a zero minimum would accredit every key that ever staked a nonzero amount.
+    assert!(
+        channel_params.posting_timeframe > 0,
+        "posting_timeframe must be non-zero"
+    );
+    // A timeout above the timeframe never fires: the turn ends first.
+    assert!(
+        channel_params.posting_timeout > 0
+            && channel_params.posting_timeout <= channel_params.posting_timeframe,
+        "posting_timeout must be non-zero and no longer than posting_timeframe"
+    );
+    assert!(
+        channel_params.minimum_sequencer_stake > 0,
+        "minimum_sequencer_stake must be non-zero"
+    );
+
+    config.channel_params = Some(channel_params);
+
+    let config_post = AccountStateDiff::new(
+        config_account,
+        BalanceDiff::Add(0),
+        config
+            .to_bytes()
+            .try_into()
+            .expect("SequencerStakeConfig should fit in account data"),
+    );
+
+    vec![config_post]
 }
 
 fn slash(

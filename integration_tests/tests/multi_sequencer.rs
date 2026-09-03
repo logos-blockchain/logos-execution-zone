@@ -69,6 +69,7 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
         funding_key: config::bedrock_funding_key(),
         auth: None,
         priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+        channel_params: sequencer_core::config::default_channel_params(),
     };
 
     // Phase 1: both keys accredited from channel creation.

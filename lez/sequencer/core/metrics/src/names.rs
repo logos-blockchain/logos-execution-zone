@@ -11,3 +11,4 @@ pub const CROSS_ZONE_DISPATCHES_RETIRED_TOTAL: &str = "cross_zone_dispatches_ret
 pub const CROSS_ZONE_DEAD_LETTER_DISPATCHES: &str = "cross_zone_dead_letter_dispatches";
 pub const CROSS_ZONE_PEER_COMMITTEE_SUSPENDED: &str = "cross_zone_peer_committee_suspended";
 pub const PUBLISH_BLOCKED_ATTEMPTS: &str = "publish_blocked_attempts";
+pub const PRODUCTION_FAILED_ATTEMPTS: &str = "production_failed_attempts";
