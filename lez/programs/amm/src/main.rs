@@ -17,8 +17,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -32,7 +32,6 @@ fn main() {
         Instruction::NewDefinition {
             token_a_amount,
             token_b_amount,
-            amm_program_id,
         } => {
             let [
                 pool,
@@ -45,6 +44,7 @@ fn main() {
             ] = pre_states
                 .try_into()
                 .expect("Transfer instruction requires exactly seven accounts");
+            let amm_account_id = self_account_id;
             amm_program::new_definition::new_definition(
                 &pool,
                 &vault_a,
@@ -55,7 +55,7 @@ fn main() {
                 &user_holding_lp,
                 NonZero::new(token_a_amount).expect("Token A should have a nonzero amount"),
                 NonZero::new(token_b_amount).expect("Token B should have a nonzero amount"),
-                amm_program_id,
+                amm_account_id,
             )
         }
         Instruction::AddLiquidity {
@@ -159,8 +159,8 @@ fn main() {
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         state_diffs,
     )

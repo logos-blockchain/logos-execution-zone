@@ -226,7 +226,7 @@ pub struct PrivacyPreservingTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
-    pub program_id: ProgramId,
+    pub program_account_id: AccountId,
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
@@ -268,6 +268,13 @@ pub struct PrivacyPreservingMessage {
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: ValidityWindow,
     pub timestamp_validity_window: ValidityWindow,
+    pub program_image_claims: Vec<ProgramImageClaim>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ProgramImageClaim {
+    pub account_id: AccountId,
+    pub image_id: ProgramId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

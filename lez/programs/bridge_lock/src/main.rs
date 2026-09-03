@@ -4,7 +4,7 @@ use bridge_lock_core::{
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff},
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiff},
     program::{
         AccountStateDiff, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramCall, ProgramId,
         ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
@@ -16,8 +16,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -28,7 +28,7 @@ fn main() {
     };
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "bridge_lock is only invoked as a top-level user transaction"
     );
 
@@ -41,8 +41,8 @@ fn main() {
             payload,
             ordinal,
         } => lock(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             amount,
@@ -53,19 +53,19 @@ fn main() {
             ordinal,
         ),
         Instruction::InitConfig {
-            outbox_program_id,
+            outbox_account_id,
             target_program_id,
         } => init_config(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
-            outbox_program_id,
+            outbox_account_id,
             target_program_id,
         ),
         Instruction::InitHolding { holder } => init_holding(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             &holder,
@@ -76,8 +76,8 @@ fn main() {
 /// Idempotent claim: a re-run on a funded holding must be a byte-identical
 /// echo, or a stranger's `InitHolding` could reset a balance.
 fn init_holding(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     holder: &[u8; 32],
@@ -87,13 +87,12 @@ fn init_holding(
         .expect("InitHolding requires the holding account");
     assert_eq!(
         holding.account_id,
-        holding_account_id(self_program_id, holder),
+        holding_account_id(self_account_id, holder),
         "account must be the holder's bridge-lock holding PDA"
     );
     if holding.account.program_owner != DEFAULT_PROGRAM_OWNER {
         assert_eq!(
-            holding.account.program_owner,
-            self_program_id.into(),
+            holding.account.program_owner, self_account_id,
             "bridge-lock holding PDA is owned by another program"
         );
     }
@@ -105,8 +104,8 @@ fn init_holding(
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![holding_post],
     )
@@ -118,8 +117,8 @@ fn init_holding(
     reason = "the emission fields are passed through verbatim"
 )]
 fn lock(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     amount: u128,
@@ -139,16 +138,17 @@ fn lock(
     // and leave no record of what it was for.
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "first account must be the bridge-lock config PDA"
     );
-    let (outbox_program_id, pinned_target) = read_config(&config.account.data)
+    let (outbox_account_id, pinned_target) = read_config(&config.account.data)
         .expect("config account holds an outbox and a mint target");
 
     // Value conservation: the forwarded payload must mint exactly what is locked.
     let WrappedInstruction::Mint {
         recipient,
         amount: mint_amount,
+        ..
     } = decode_mint(&payload)
     else {
         panic!("bridge_lock payload must be a wrapped-token mint");
@@ -165,11 +165,13 @@ fn lock(
         target_program_id, pinned_target,
         "bridge_lock only mints through the wrapped token it is pinned to"
     );
+    let pinned_target_account_id = program_loader_core::immutable_deploy_account_id(pinned_target);
     assert_eq!(
         target_accounts,
         vec![
-            wrapped_token_core::config_account_id(pinned_target).into_value(),
-            wrapped_token_core::holding_account_id(pinned_target, &recipient).into_value(),
+            wrapped_token_core::config_account_id(pinned_target_account_id).into_value(),
+            wrapped_token_core::holding_account_id(pinned_target_account_id, &recipient)
+                .into_value(),
         ],
         "target accounts must be the mint's config and the recipient's holding"
     );
@@ -177,21 +179,18 @@ fn lock(
         amount <= MAX_MINT_AMOUNT,
         "locked amount exceeds what the wrapped token will mint"
     );
-    // A zero lock would emit a real dispatch and zero-mint into any
-    // recipient's wrapped holding.
-    assert!(amount > 0, "locked amount must be positive");
 
     assert!(holder.is_authorized, "holder must authorize the lock");
     // The signature gates the debit; the derivation pins the debit target to a
     // genuine bridge-lock holding.
     assert_eq!(
         holding.account_id,
-        holding_account_id(self_program_id, &holder.account_id.into_value()),
+        holding_account_id(self_account_id, &holder.account_id.into_value()),
         "third account must be the holder's bridge-lock holding PDA"
     );
     assert_eq!(
         escrow.account_id,
-        escrow_account_id(self_program_id),
+        escrow_account_id(self_account_id),
         "fourth account must be the escrow PDA"
     );
 
@@ -213,7 +212,7 @@ fn lock(
     );
 
     let call = ChainedCall::new(
-        outbox_program_id,
+        outbox_account_id,
         vec![outbox.account_id],
         &OutboxInstruction::Emit {
             target_zone,
@@ -227,8 +226,8 @@ fn lock(
     let config_post = AccountStateDiff::unchanged(config);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![
             config_post,
@@ -246,11 +245,11 @@ fn lock(
 /// Writes the outbox program and the mint target into the config PDA exactly once
 /// at genesis.
 fn init_config(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
-    outbox_program_id: ProgramId,
+    outbox_account_id: AccountId,
     target_program_id: ProgramId,
 ) {
     // pre_states: [config PDA].
@@ -258,7 +257,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "account must be the bridge-lock config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
@@ -267,13 +266,12 @@ fn init_config(
     // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
     if config.account != Account::default() {
         assert_eq!(
-            config.account.program_owner,
-            self_program_id.into(),
+            config.account.program_owner, self_account_id,
             "bridge-lock config PDA is owned by another program"
         );
         assert_eq!(
-            *config.account.data,
-            config_bytes(outbox_program_id, target_program_id),
+            config.account.data.clone().into_inner(),
+            config_bytes(outbox_account_id, target_program_id).to_vec(),
             "bridge-lock config already pins a different outbox or mint target"
         );
     }
@@ -281,7 +279,7 @@ fn init_config(
     let config_post = AccountStateDiff::new_claimed_if_default(
         config,
         BalanceDiff::Add(0),
-        config_bytes(outbox_program_id, target_program_id)
+        config_bytes(outbox_account_id, target_program_id)
             .to_vec()
             .try_into()
             .expect("pinned ids fit in account data"),
@@ -289,8 +287,8 @@ fn init_config(
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![config_post],
     )

@@ -37,6 +37,7 @@ async fn fresh_store_and_chain(
         &signing_key,
         bootstrap_sequencer_key,
         config,
+        &[],
     )
     .await;
     let store = SequencerStore::new(storage_ref, signing_key)
@@ -48,7 +49,7 @@ async fn fresh_store_and_chain(
         .expect("read state")
         .expect("seeded store holds a state");
     let chain = Mutex::new(
-        SequencerCore::<MockBlockPublisher>::restore_chain_state(config, &store, &state).await,
+        SequencerCore::<MockBlockPublisher>::restore_chain_state(config, &store, &state, &[]).await,
     );
     (store, chain)
 }
@@ -660,7 +661,8 @@ fn deposit_event_record(
 
 //     seq_b.run_production_turn().await.unwrap();
 
-//     let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
+//     let vault_id =
+//         vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), recipient);
 //     let bridge_id = system_accounts::bridge_account_id();
 //     let state_b = seq_b.chain().lock().await.head_state().clone();
 //     let state_a = seq_a.chain().lock().await.head_state().clone();
@@ -809,7 +811,8 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         .expect("reconstruct");
 
     // The mint was applied exactly once.
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
+    let vault_id =
+        vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), recipient);
     assert_eq!(
         chain_b
             .lock()
@@ -924,7 +927,7 @@ async fn reconstructed_delivery_settles_its_pending_record() {
     );
 
     // The delivery landed exactly once, and the next turn does not re-emit it.
-    let record_id = ping_record_pda(programs::ping_receiver().id());
+    let record_id = ping_record_pda(programs::ping_receiver().deployed_account_id());
     assert_eq!(
         seq_b
             .with_state(|state| state.get_account_by_id(record_id).data.into_inner())

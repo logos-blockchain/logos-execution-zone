@@ -11,8 +11,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -27,7 +27,7 @@ fn main() {
     // immediate chained caller, not the top-level program that cross-zone
     // discovery names; the two coincide only while every emitter refuses to be
     // called by another program, which both do today.
-    let Some(emitter) = caller_program_id else {
+    let Some(emitter) = caller_account_id else {
         panic!("Outbox is only callable through a chain call from a user program");
     };
 
@@ -52,7 +52,7 @@ fn main() {
 
     assert_eq!(
         outbox.account_id,
-        outbox_pda(self_program_id, emitter, &target_zone, ordinal),
+        outbox_pda(self_account_id, emitter, &target_zone, ordinal),
         "Account must be the outbox PDA for (emitter, target_zone, ordinal)"
     );
 
@@ -94,8 +94,8 @@ fn main() {
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![post],
     )

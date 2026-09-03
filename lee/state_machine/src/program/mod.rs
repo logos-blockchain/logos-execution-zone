@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountWithMetadata, Cycles},
+    account::{AccountId, AccountWithMetadata, Cycles},
     from_frame,
     program::{CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_borsh_frame, to_frame,
@@ -48,6 +48,13 @@ impl Program {
         &self.elf
     }
 
+    /// The address this program dispatches at once seeded via [`crate::V03State::with_programs`]
+    /// — the bijection of `self.id()` (see `program_loader_core::immutable_deploy_account_id`).
+    #[must_use]
+    pub fn deployed_account_id(&self) -> AccountId {
+        program_loader_core::immutable_deploy_account_id(self.id)
+    }
+
     pub fn serialize_instruction<T: BorshSerialize>(
         instruction: T,
     ) -> Result<InstructionData, LeeError> {
@@ -57,7 +64,8 @@ impl Program {
 
     pub(crate) fn execute(
         &self,
-        caller_program_id: Option<ProgramId>,
+        self_account_id: AccountId,
+        caller_account_id: Option<AccountId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &InstructionData,
         cycle_budget: Cycles,
@@ -65,8 +73,9 @@ impl Program {
         // Write inputs to the program
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(cycle_budget));
-        self.write_inputs(
-            caller_program_id,
+        Self::write_inputs(
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             &mut env_builder,
@@ -114,8 +123,8 @@ impl Program {
     /// Writes a `CallKind::Execute` frame followed by the guest's `ProgramInput` as a single
     /// length-prefixed borsh frame, the form `read_lee_call` expects.
     pub fn write_inputs(
-        &self,
-        caller_program_id: Option<ProgramId>,
+        self_account_id: AccountId,
+        caller_account_id: Option<AccountId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &[u8],
         env_builder: &mut ExecutorEnvBuilder,
@@ -123,8 +132,8 @@ impl Program {
         env_builder.write_slice(&to_borsh_frame(&CallKind::Execute));
 
         let input = ProgramInput {
-            self_program_id: self.id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states: pre_states.to_vec(),
             instruction: instruction_data.to_vec(),
         };

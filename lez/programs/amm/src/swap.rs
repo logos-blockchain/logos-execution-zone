@@ -179,7 +179,7 @@ fn swap_logic(
     );
     assert!(withdraw_amount != 0, "Withdraw amount should be nonzero");
 
-    let token_program_id: lee_core::program::ProgramId = user_deposit.account.program_owner.into();
+    let token_program_id = user_deposit.account.program_owner;
 
     let mut chained_calls = Vec::new();
     chained_calls.push(ChainedCall::new(
@@ -189,6 +189,9 @@ fn swap_logic(
             amount_to_transfer: swap_amount_in,
         },
     ));
+
+    let mut vault_withdraw = vault_withdraw.clone();
+    vault_withdraw.is_authorized = true;
 
     let pda_seed = compute_vault_pda_seed(
         pool_id,
@@ -308,7 +311,7 @@ fn exact_output_swap_logic(
         "Required input exceeds maximum amount in"
     );
 
-    let token_program_id: lee_core::program::ProgramId = user_deposit.account.program_owner.into();
+    let token_program_id = user_deposit.account.program_owner;
 
     let mut chained_calls = Vec::new();
     chained_calls.push(ChainedCall::new(
@@ -318,6 +321,9 @@ fn exact_output_swap_logic(
             amount_to_transfer: deposit_amount,
         },
     ));
+
+    let mut vault_withdraw = vault_withdraw.clone();
+    vault_withdraw.is_authorized = true;
 
     let pda_seed = compute_vault_pda_seed(
         pool_id,

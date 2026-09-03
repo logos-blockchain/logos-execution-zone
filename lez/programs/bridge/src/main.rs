@@ -18,8 +18,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -30,7 +30,7 @@ fn main() {
     };
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "Bridge cannot be invoked through chain calls"
     );
 
@@ -39,7 +39,7 @@ fn main() {
     let (post_diffs, chained_calls, events) = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
-            vault_program_id,
+            vault_account_id,
             recipient_id,
             amount,
         } => {
@@ -49,19 +49,19 @@ fn main() {
 
             assert_eq!(
                 bridge.account_id,
-                bridge_core::compute_bridge_account_id(self_program_id),
+                bridge_core::compute_bridge_account_id(self_account_id),
                 "First account must be bridge PDA"
             );
 
             assert_eq!(
                 recipient_vault.account_id,
-                vault_core::compute_vault_account_id(vault_program_id, recipient_id),
+                vault_core::compute_vault_account_id(vault_account_id, recipient_id),
                 "Second account must be recipient vault PDA"
             );
 
             assert_eq!(
                 receipt.account_id,
-                bridge_core::deposit_receipt_account_id(self_program_id, l1_deposit_op_id),
+                bridge_core::deposit_receipt_account_id(self_account_id, l1_deposit_op_id),
                 "Third account must be the deposit-receipt PDA"
             );
 
@@ -94,10 +94,12 @@ fn main() {
                     receipt_post,
                 ];
 
+                let mut bridge_for_vault = bridge;
+                bridge_for_vault.is_authorized = true;
                 let chained_calls = vec![
                     ChainedCall::new(
-                        vault_program_id,
-                        vec![bridge.account_id, recipient_vault.account_id],
+                        vault_account_id,
+                        vec![bridge_for_vault.account_id, recipient_vault.account_id],
                         &vault_core::Instruction::Transfer {
                             recipient_id,
                             amount: u128::from(amount),
@@ -105,12 +107,11 @@ fn main() {
                     )
                     .with_pda_seeds(vec![bridge_core::compute_bridge_seed()]),
                 ];
-
                 let events = vec![ProgramEvent {
                     selector: bridge_core::event::Deposit::SELECTOR,
                     data: bridge_core::event::Deposit {
                         l1_deposit_op_id,
-                        vault_program_id,
+                        vault_account_id,
                         recipient_id,
                         amount,
                     }
@@ -132,7 +133,7 @@ fn main() {
 
             // assert_eq!(
             //     bridge.account_id,
-            //     bridge_core::compute_bridge_account_id(self_program_id),
+            //     bridge_core::compute_bridge_account_id(self_account_id),
             //     "Second account must be bridge PDA"
             // );
 
@@ -141,16 +142,6 @@ fn main() {
             //     sender.account.program_owner, auth_transfer_program_id,
             //     "Sender account must be owned by the authenticated transfer program"
             // );
-
-            // let events = vec![ProgramEvent {
-            //     selector: bridge_core::event::Withdraw::SELECTOR,
-            //     data: bridge_core::event::Withdraw {
-            //         sender_id: sender.account_id,
-            //         amount,
-            //         bedrock_account_pk,
-            //     }
-            //     .to_bytes(),
-            // }];
 
             // let chained_calls = vec![ChainedCall::new(
             //     auth_transfer_program_id,
@@ -164,8 +155,8 @@ fn main() {
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         post_diffs,
     )

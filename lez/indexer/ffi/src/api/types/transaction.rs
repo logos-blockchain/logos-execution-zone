@@ -2,8 +2,8 @@ use indexer_service_protocol::{
     AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
     EphemeralPublicKey, FeeDeclaration, HashType, Nullifier, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
-    ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
-    PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    ProgramDeploymentTransaction, ProgramImageClaim, Proof, PublicActionWithID, PublicKey,
+    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
@@ -12,8 +12,8 @@ use crate::api::types::{
     account::FfiAccount,
     vectors::{
         FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList,
-        FfiProgramDeploymentMessage, FfiProof, FfiPublicActionList, FfiSignaturePubKeyList,
-        FfiVecU8,
+        FfiProgramDeploymentMessage, FfiProgramImageClaimList, FfiProof, FfiPublicActionList,
+        FfiSignaturePubKeyList, FfiVecU8,
     },
 };
 
@@ -50,7 +50,9 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PublicMessage {
-                program_id: ProgramId(value.message.program_id.data),
+                program_account_id: AccountId {
+                    value: value.message.program_account_id.data,
+                },
                 account_ids: {
                     let std_vec: Vec<_> = value.message.account_ids.into();
                     std_vec
@@ -131,7 +133,7 @@ impl From<FfiFeeDeclaration> for FeeDeclaration {
 
 #[repr(C)]
 pub struct FfiPublicMessage {
-    pub program_id: FfiProgramId,
+    pub program_account_id: FfiAccountId,
     pub account_ids: FfiAccountIdList,
     pub nonces: FfiNonceList,
     pub instruction_data: FfiInstructionDataList,
@@ -142,7 +144,7 @@ pub struct FfiPublicMessage {
 impl From<PublicMessage> for FfiPublicMessage {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
@@ -150,7 +152,7 @@ impl From<PublicMessage> for FfiPublicMessage {
         } = value;
 
         Self {
-            program_id: program_id.into(),
+            program_account_id: program_account_id.into(),
             account_ids: account_ids
                 .into_iter()
                 .map(Into::into)
@@ -241,6 +243,18 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         })
                         .collect()
                 },
+                program_image_claims: {
+                    let std_vec: Vec<_> = value.message.program_image_claims.into();
+                    std_vec
+                        .into_iter()
+                        .map(|ffi_val| ProgramImageClaim {
+                            account_id: AccountId {
+                                value: ffi_val.account_id.data,
+                            },
+                            image_id: ffi_val.image_id.data.into(),
+                        })
+                        .collect()
+                },
                 block_validity_window: cast_ffi_validity_window(
                     value.message.block_validity_window,
                 ),
@@ -287,6 +301,21 @@ impl From<PublicActionWithID> for FfiPublicAction {
 }
 
 #[repr(C)]
+pub struct FfiProgramImageClaim {
+    pub account_id: FfiAccountId,
+    pub image_id: FfiProgramId,
+}
+
+impl From<ProgramImageClaim> for FfiProgramImageClaim {
+    fn from(value: ProgramImageClaim) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            image_id: value.image_id.into(),
+        }
+    }
+}
+
+#[repr(C)]
 pub struct FfiPrivateAction {
     pub nullifier: FfiBytes32,
     pub root: FfiBytes32,
@@ -316,6 +345,7 @@ pub struct FfiPrivacyPreservingMessage {
     pub private_actions: FfiPrivateActionList,
     pub block_validity_window: [u64; 2],
     pub timestamp_validity_window: [u64; 2],
+    pub program_image_claims: FfiProgramImageClaimList,
 }
 
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
@@ -326,6 +356,7 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            program_image_claims,
         } = value;
 
         Self {
@@ -346,6 +377,11 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
                 .into(),
             block_validity_window: cast_validity_window(block_validity_window),
             timestamp_validity_window: cast_validity_window(timestamp_validity_window),
+            program_image_claims: program_image_claims
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 }
@@ -614,7 +650,7 @@ mod tests {
         let tx = |fee| PublicTransaction {
             hash: HashType([1; 32]),
             message: PublicMessage {
-                program_id: ProgramId([2; 8]),
+                program_account_id: AccountId { value: [2; 32] },
                 account_ids: vec![AccountId { value: [3; 32] }],
                 nonces: vec![],
                 instruction_data: vec![9, 9],

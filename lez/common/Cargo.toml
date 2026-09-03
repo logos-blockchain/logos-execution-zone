@@ -9,7 +9,7 @@ workspace = true
 
 [dependencies]
 lee.workspace = true
-lee_core = { workspace = true, features = ["host"] }
+lee_core.workspace = true
 authenticated_transfer_core.workspace = true
 clock_core.workspace = true
 fee_core.workspace = true
@@ -20,6 +20,7 @@ cross_zone_inbox_core.workspace = true
 ping_core.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
+program_loader_core.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true

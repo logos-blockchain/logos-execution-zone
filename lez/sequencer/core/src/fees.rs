@@ -347,7 +347,8 @@ mod tests {
         let mut state = initial_state(true);
         let sweeper_key = key(9);
         let sweeper = account_of(&sweeper_key);
-        let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), sweeper);
+        let vault_id =
+            vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), sweeper);
         state.force_insert_account(
             vault_id,
             lee::Account {
@@ -358,7 +359,7 @@ mod tests {
         );
 
         let message = lee::public_transaction::Message::try_new_with_fees(
-            programs::vault().id(),
+            programs::vault().deployed_account_id(),
             vec![sweeper, vault_id],
             vec![0_u128.into()],
             vault_core::Instruction::Claim {

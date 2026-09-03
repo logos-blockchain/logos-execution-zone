@@ -26,9 +26,13 @@ fn program_transaction<T: borsh::BorshSerialize>(
     account_id: AccountId,
     instruction: T,
 ) -> PublicTransaction {
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], instruction)
-            .expect("test instruction must serialize");
+    let message = public_transaction::Message::try_new(
+        program_id.into(),
+        vec![account_id],
+        vec![],
+        instruction,
+    )
+    .expect("test instruction must serialize");
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     PublicTransaction::new(message, witness_set)
 }
@@ -122,8 +126,8 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     let emitter = crate::test_methods::event_emitter();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0; 32]));
-    let receiver_id = AccountId::for_public_pda(&emitter.id(), &PdaSeed::new([1; 32]));
+    let vault_id = AccountId::for_public_pda(&initiator.id().into(), &PdaSeed::new([0; 32]));
+    let receiver_id = AccountId::for_public_pda(&emitter.id().into(), &PdaSeed::new([1; 32]));
 
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(
@@ -152,8 +156,8 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     })
     .unwrap();
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id(),
-        callback_program_id: emitter.id(),
+        token_account_id: token.deployed_account_id(),
+        callback_account_id: emitter.deployed_account_id(),
         amount_out: 0,
         callback_instruction_data,
     };

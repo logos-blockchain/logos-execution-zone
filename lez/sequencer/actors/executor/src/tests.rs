@@ -64,7 +64,7 @@ fn test_transaction() -> LeeTransaction {
     let nonces = vec![0_u128.into(), 0_u128.into()];
     let instruction = 1337;
     let message = Message::try_new_with_fees(
-        test_programs::simple_balance_transfer().id(),
+        test_programs::simple_balance_transfer().id().into(),
         vec![payer, acc2],
         nonces,
         instruction,
@@ -210,7 +210,7 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let executor = ExecutorActor::spawn(
-        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone()).await,
+        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone(), Vec::new()).await,
     );
 
     storage_ref
@@ -278,7 +278,7 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
 
     let storage_ref = MockStorageActor::spawn(mock_storage);
     let executor = ExecutorActor::spawn(
-        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone()).await,
+        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone(), Vec::new()).await,
     );
 
     let range = (STALLED_FIRST..=STALLED_LAST)
@@ -322,7 +322,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let mock_storage = prepare_mock_storage_with_empty_genesis();
     let storage_ref = MockStorageActor::spawn(mock_storage);
     let executor = ExecutorActor::spawn(
-        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone()).await,
+        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone(), Vec::new()).await,
     );
     storage_ref
         .tell(sequencer_storage_actor::mock::Checkpoint)
@@ -338,7 +338,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let payer = accounts[0].account_id;
     let payer_key = accounts[0].pub_sign_key.clone();
     let message = Message::try_new_with_fees(
-        test_programs::simple_balance_transfer().id(),
+        test_programs::simple_balance_transfer().id().into(),
         vec![payer, acc2],
         vec![0_u128.into(), 0_u128.into()],
         1337,

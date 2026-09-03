@@ -1,12 +1,12 @@
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, SeenShard, inbox_config_account_id,
     inbox_config_seed, inbox_seen_shard_account_id, inbox_seen_shard_seed,
+    inbox_source_marker_account_id,
 };
-use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff},
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiff},
     program::{
-        AccountStateDiff, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        AccountStateDiff, ChainedCall, Claim, ProgramCall, ProgramInput, ProgramOutput,
         read_lee_call, respond_unsupported_call,
     },
 };
@@ -19,8 +19,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -31,21 +31,21 @@ fn main() {
     };
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "Inbox is only invoked as a top-level sequencer-origin transaction"
     );
 
     match instruction {
-        Instruction::Dispatch(msg) => dispatch(
-            self_program_id,
-            caller_program_id,
+        Instruction::Dispatch { message } => dispatch(
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
-            &msg,
+            &message,
         ),
-        Instruction::InitConfig(config) => init_config(
-            self_program_id,
-            caller_program_id,
+        Instruction::InitConfig { config } => init_config(
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             &config,
@@ -69,8 +69,8 @@ fn main() {
 /// mind. User-deployed programs are reachable too, and were written with no
 /// expectation of an inbox caller at all.
 fn dispatch(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     msg: &CrossZoneMessage,
@@ -89,12 +89,12 @@ fn dispatch(
 
     assert_eq!(
         config.account_id,
-        inbox_config_account_id(self_program_id),
+        inbox_config_account_id(self_account_id),
         "First account must be the inbox config PDA"
     );
     assert_eq!(
         seen.account_id,
-        inbox_seen_shard_account_id(self_program_id, &msg.src_zone, msg.src_block_id),
+        inbox_seen_shard_account_id(self_account_id, &msg.src_zone, msg.src_block_id),
         "Second account must be the seen-shard PDA"
     );
     // The one value the chained call carries about where the message came from.
@@ -102,7 +102,7 @@ fn dispatch(
     // here is what makes a target's own check meaningful.
     assert_eq!(
         marker.account_id,
-        inbox_source_marker_account_id(self_program_id, &msg.src_zone, msg.src_program_id),
+        inbox_source_marker_account_id(self_account_id, &msg.src_zone, msg.src_account_id),
         "Third account must be the source marker PDA for this message"
     );
 
@@ -148,11 +148,11 @@ fn dispatch(
 
         // The marker leads, so a target reads its source at a fixed position
         // without knowing anything about the accounts that follow it.
-        let mut call_accounts = vec![marker.account_id];
-        call_accounts.extend(target_accounts.iter().map(|a| a.account_id));
+        let mut call_pre_states = vec![marker.clone()];
+        call_pre_states.extend(target_accounts.clone());
         let call = ChainedCall {
-            program_id: msg.target_program_id,
-            pre_state_ids: call_accounts,
+            program_account_id: msg.target_account_id,
+            pre_state_ids: call_pre_states.iter().map(|p| p.account_id).collect(),
             instruction_data: call_instruction_data,
             pda_seeds: vec![],
         };
@@ -163,8 +163,8 @@ fn dispatch(
     post_diffs.extend(target_accounts.iter().map(unchanged));
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         post_diffs,
     )
@@ -174,8 +174,8 @@ fn dispatch(
 
 /// Writes the inbox config into the config PDA exactly once at genesis.
 fn init_config(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     config: &InboxConfig,
@@ -185,7 +185,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config_meta.account_id,
-        inbox_config_account_id(self_program_id),
+        inbox_config_account_id(self_account_id),
         "account must be the inbox config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
@@ -195,8 +195,7 @@ fn init_config(
     // rewriting its own config data on a later call.
     if config_meta.account != Account::default() {
         assert_eq!(
-            config_meta.account.program_owner,
-            self_program_id.into(),
+            config_meta.account.program_owner, self_account_id,
             "inbox config PDA is owned by another program"
         );
         assert_eq!(
@@ -217,8 +216,8 @@ fn init_config(
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![config_post],
     )

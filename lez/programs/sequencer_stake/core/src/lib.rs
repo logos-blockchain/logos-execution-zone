@@ -4,10 +4,7 @@ use std::collections::BTreeMap;
 
 pub use ed25519_dalek;
 pub use lee_core::program::PdaSeed;
-use lee_core::{
-    account::AccountId,
-    program::{InstructionData, ProgramId},
-};
+use lee_core::{account::AccountId, program::InstructionData};
 use serde::{Deserialize, Serialize};
 
 /// Approvals a `Slash` must carry. Raising it moves the program id.
@@ -78,7 +75,7 @@ pub enum Instruction {
     Stake {
         sequencer_key: SequencerKey,
         amount: u128,
-        mover_program_id: ProgramId,
+        mover_account_id: AccountId,
         mover_instruction_data: InstructionData,
     },
 
@@ -213,8 +210,8 @@ pub const fn slash_sink_seed() -> PdaSeed {
 }
 
 #[must_use]
-pub fn slash_sink_account_id(program_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&program_id, &slash_sink_seed())
+pub fn slash_sink_account_id(program_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&program_account_id, &slash_sink_seed())
 }
 
 /// Seed of the PDA holding the [`SequencerStakeConfig`].
@@ -224,15 +221,15 @@ pub const fn sequencer_stake_config_seed() -> PdaSeed {
 }
 
 #[must_use]
-pub fn sequencer_stake_config_account_id(program_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&program_id, &sequencer_stake_config_seed())
+pub fn sequencer_stake_config_account_id(program_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&program_account_id, &sequencer_stake_config_seed())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const PROGRAM_ID: ProgramId = [9; 8];
+    const ACCOUNT_ID: AccountId = AccountId::new([9; 32]);
 
     fn test_destination() -> AccountId {
         AccountId::new([3; 32])
@@ -396,8 +393,8 @@ mod tests {
     #[test]
     fn sequencer_stake_config_account_id_is_deterministic() {
         assert_eq!(
-            sequencer_stake_config_account_id(PROGRAM_ID),
-            sequencer_stake_config_account_id(PROGRAM_ID)
+            sequencer_stake_config_account_id(ACCOUNT_ID),
+            sequencer_stake_config_account_id(ACCOUNT_ID)
         );
     }
 }

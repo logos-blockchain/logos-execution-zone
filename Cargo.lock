@@ -153,6 +153,7 @@ dependencies = [
  "amm_core",
  "lee",
  "lee_core",
+ "program_loader_core",
  "programs",
  "token_core",
 ]
@@ -1271,6 +1272,7 @@ dependencies = [
  "bridge_lock_core",
  "cross_zone_outbox_core",
  "lee_core",
+ "program_loader_core",
  "risc0-zkvm",
  "wrapped_token_core",
 ]
@@ -1814,6 +1816,7 @@ dependencies = [
  "log",
  "logos-blockchain-common-http-client",
  "ping_core",
+ "program_loader_core",
  "programs",
  "serde",
  "serde_with",
@@ -2113,11 +2116,11 @@ dependencies = [
  "bridge_lock_core",
  "common",
  "cross_zone_inbox_core",
- "cross_zone_marker_core",
  "hex",
  "lee",
  "lee_core",
  "ping_core",
+ "program_loader_core",
  "programs",
  "wrapped_token_core",
 ]
@@ -2136,6 +2139,7 @@ dependencies = [
  "lee",
  "log",
  "ping_core",
+ "program_loader_core",
  "programs",
  "rand 0.8.6",
  "sequencer_service_rpc",
@@ -2159,7 +2163,6 @@ name = "cross_zone_inbox_program"
 version = "0.1.0"
 dependencies = [
  "cross_zone_inbox_core",
- "cross_zone_marker_core",
  "lee_core",
 ]
 
@@ -3187,6 +3190,7 @@ dependencies = [
  "bytemuck",
  "hex",
  "lee_core",
+ "program_loader_core",
  "risc0-zkvm",
 ]
 
@@ -4634,6 +4638,7 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-zone-sdk",
  "ping_core",
+ "program_loader_core",
  "programs",
  "serde",
  "serde_json",
@@ -4803,7 +4808,6 @@ dependencies = [
  "bytesize",
  "common",
  "cross_zone_inbox_core",
- "cross_zone_marker_core",
  "cross_zone_outbox_core",
  "cucumber",
  "faucet_core",
@@ -4821,6 +4825,7 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
  "ping_core",
+ "program_loader_core",
  "programs",
  "sequencer_core",
  "sequencer_service",
@@ -5623,6 +5628,7 @@ dependencies = [
  "k256 0.13.4",
  "lee_core",
  "log",
+ "program_loader_core",
  "rand 0.8.6",
  "risc0-binfmt",
  "risc0-zkvm",
@@ -5639,9 +5645,9 @@ version = "0.1.0"
 dependencies = [
  "base58",
  "borsh",
- "bytemuck",
  "bytesize",
  "chacha20",
+ "hex-literal 1.1.0",
  "ml-kem",
  "risc0-zkvm",
  "serde",
@@ -9165,7 +9171,7 @@ dependencies = [
 name = "ping_receiver_program"
 version = "0.1.0"
 dependencies = [
- "cross_zone_marker_core",
+ "cross_zone_inbox_core",
  "lee_core",
  "ping_core",
 ]
@@ -9495,6 +9501,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "program_loader_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+ "risc0-binfmt",
+ "risc0-zkvm",
+]
+
+[[package]]
 name = "programs"
 version = "0.1.0"
 dependencies = [
@@ -9509,13 +9525,13 @@ dependencies = [
  "build_utils",
  "clock_core",
  "cross_zone_inbox_core",
- "cross_zone_marker_core",
  "cross_zone_outbox_core",
  "faucet_core",
  "fee_core",
  "lee",
  "lee_core",
  "ping_core",
+ "program_loader_core",
  "risc0-zkvm",
  "sequencer_stake_core",
  "token_core",
@@ -11108,8 +11124,10 @@ dependencies = [
  "mempool",
  "num-bigint 0.4.6",
  "ping_core",
+ "program_loader_core",
  "programs",
  "rand 0.8.6",
+ "risc0-binfmt",
  "sequencer_core_metrics",
  "sequencer_service_protocol",
  "sequencer_stake_core",
@@ -11213,6 +11231,7 @@ dependencies = [
  "lee",
  "log",
  "metrics-exporter-prometheus",
+ "program_loader_core",
  "programs",
  "sequencer_core",
  "sequencer_executor_actor",
@@ -12128,6 +12147,7 @@ dependencies = [
  "faucet_core",
  "fee_core",
  "lee_core",
+ "program_loader_core",
  "programs",
  "sequencer_stake_core",
 ]
@@ -12333,6 +12353,7 @@ dependencies = [
  "clock_core",
  "faucet_core",
  "lee_core",
+ "program_loader_core",
  "risc0-zkvm",
 ]
 
@@ -12536,6 +12557,7 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
+ "program_loader_core",
  "programs",
  "serde",
  "system_accounts",
@@ -13664,6 +13686,7 @@ dependencies = [
  "lee_core",
  "log",
  "optfield",
+ "program_loader_core",
  "programs",
  "rand 0.8.6",
  "rpassword",
@@ -13692,6 +13715,7 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
+ "program_loader_core",
  "programs",
  "serde_json",
  "tokio",
@@ -14466,7 +14490,7 @@ dependencies = [
 name = "wrapped_token_program"
 version = "0.1.0"
 dependencies = [
- "cross_zone_marker_core",
+ "cross_zone_inbox_core",
  "lee_core",
  "wrapped_token_core",
 ]

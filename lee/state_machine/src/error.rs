@@ -71,9 +71,6 @@ pub enum LeeError {
     #[error("Invalid program bytecode")]
     InvalidProgramBytecode(#[source] anyhow::Error),
 
-    #[error("Program already exists")]
-    ProgramAlreadyExists,
-
     #[error("Chain of calls is too long")]
     MaxChainedCallsDepthExceeded,
 
@@ -130,14 +127,14 @@ pub enum InvalidProgramBehaviorError {
 
     #[error("Program ID mismatch: expected {expected:?}, actual {actual:?}")]
     MismatchedProgramId {
-        expected: ProgramId,
-        actual: ProgramId,
+        expected: AccountId,
+        actual: AccountId,
     },
 
     #[error("Caller program ID mismatch: expected {expected:?}, actual {actual:?}")]
     MismatchedCallerProgramId {
-        expected: Option<ProgramId>,
-        actual: Option<ProgramId>,
+        expected: Option<AccountId>,
+        actual: Option<AccountId>,
     },
 
     #[error("Chained call to {program_id:?} did not execute")]
@@ -161,8 +158,8 @@ pub enum InvalidProgramBehaviorError {
     #[error("Default account {account_id} was modified without being claimed")]
     DefaultAccountModifiedWithoutClaim { account_id: AccountId },
 
-    #[error("Called program {program_id:?} which is not listed in dependencies")]
-    UndeclaredProgramDependency { program_id: ProgramId },
+    #[error("Called program {account_id} which is not listed in dependencies")]
+    UndeclaredProgramDependency { account_id: AccountId },
 
     #[error(
         "Account {account_id} was declared in the transaction but is missing from the program output"

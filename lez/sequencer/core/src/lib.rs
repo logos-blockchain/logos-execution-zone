@@ -199,6 +199,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         config: &SequencerConfig,
         store: &SequencerStore<S>,
         stored_head_state: &lee::V03State,
+        extra_genesis_programs: &[lee::program::Program],
     ) -> ChainState {
         let final_snapshot = store
             .get_final_snapshot()
@@ -207,7 +208,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let (final_state, final_tip) = match final_snapshot {
             Some((state, meta)) => (state, Some(Tip::from(meta))),
             // Nothing finalized yet: replay the whole stored chain.
-            None => (build_initial_state(config), None),
+            None => (build_initial_state(config, extra_genesis_programs), None),
         };
         let boundary = final_tip.as_ref().map_or(0, |tip| tip.block_id);
 
@@ -262,6 +263,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         signing_key: &lee::PrivateKey,
         bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
         config: &SequencerConfig,
+        extra_genesis_programs: &[lee::program::Program],
     ) {
         let first_block_id = storage_ref
             .ask(GetFirstBlockId)
@@ -271,7 +273,12 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             return;
         }
 
-        let (block, state) = genesis_block_and_state(signing_key, bootstrap_sequencer_key, config);
+        let (block, state) = genesis_block_and_state(
+            signing_key,
+            bootstrap_sequencer_key,
+            config,
+            extra_genesis_programs,
+        );
         storage_ref
             .ask(RecordNewBlock {
                 block,
@@ -293,6 +300,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     pub async fn start_from_config(
         config: SequencerConfig,
         storage_ref: ActorRef<S>,
+        extra_genesis_programs: Vec<lee::program::Program>,
     ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
         sequencer_core_metrics::init();
 
@@ -336,8 +344,14 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         }
         let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-        Self::seed_genesis_if_absent(&storage_ref, &signing_key, bootstrap_sequencer_key, &config)
-            .await;
+        Self::seed_genesis_if_absent(
+            &storage_ref,
+            &signing_key,
+            bootstrap_sequencer_key,
+            &config,
+            &extra_genesis_programs,
+        )
+        .await;
 
         let store = SequencerStore::new(storage_ref, signing_key)
             .await
@@ -368,7 +382,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         }
 
         let chain = Arc::new(Mutex::new(
-            Self::restore_chain_state(&config, &store, &state).await,
+            Self::restore_chain_state(&config, &store, &state, &extra_genesis_programs).await,
         ));
 
         let initial_checkpoint = store
@@ -1761,8 +1775,10 @@ impl LiveCommittee {
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — its receipt
 /// PDA exists. The receipt is the exactly-once ledger the bridge program keeps.
 fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> bool {
-    let receipt_id =
-        bridge_core::deposit_receipt_account_id(programs::bridge().id(), deposit_op_id.0);
+    let receipt_id = bridge_core::deposit_receipt_account_id(
+        programs::bridge().deployed_account_id(),
+        deposit_op_id.0,
+    );
     state
         .get_account_by_id_ref(receipt_id)
         .is_some_and(|receipt| *receipt != lee::Account::default())
@@ -1780,7 +1796,7 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
 /// delivered would drop the record instead of dead-lettering it.
 fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage) -> bool {
     let shard_id = cross_zone_inbox_core::inbox_seen_shard_account_id(
-        programs::cross_zone_inbox().id(),
+        programs::cross_zone_inbox().deployed_account_id(),
         &message.src_zone,
         message.src_block_id,
     );
@@ -2084,9 +2100,14 @@ fn genesis_block_and_state(
     signing_key: &lee::PrivateKey,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     config: &SequencerConfig,
+    extra_genesis_programs: &[lee::program::Program],
 ) -> (Block, lee::V03State) {
-    let (genesis_state, genesis_txs) =
-        build_genesis_state(signing_key, config, bootstrap_sequencer_key);
+    let (genesis_state, genesis_txs) = build_genesis_state(
+        signing_key,
+        config,
+        bootstrap_sequencer_key,
+        extra_genesis_programs,
+    );
     let genesis_block = HashableBlockData {
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
@@ -2098,15 +2119,21 @@ fn genesis_block_and_state(
     (genesis_block, genesis_state)
 }
 
-/// The pre-genesis state: `testnet_initial_state`, nothing else. Everything is
-/// applied as genesis transactions in [`build_genesis_state`] so followers replay it.
-fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
+/// The pre-genesis state: `testnet_initial_state`, plus any extra test-only builtins the caller
+/// wants seeded directly rather than live-deployed. Everything else is applied as genesis
+/// transactions in [`build_genesis_state`] so followers replay it.
+fn build_initial_state(
+    config: &SequencerConfig,
+    extra_genesis_programs: &[lee::program::Program],
+) -> lee::V03State {
     let cross_zone = config.cross_zone.is_some();
     #[cfg(not(feature = "testnet"))]
     let base = testnet_initial_state::initial_state(cross_zone);
 
     #[cfg(feature = "testnet")]
     let base = testnet_initial_state::initial_state_testnet(cross_zone);
+
+    let base = base.with_programs(extra_genesis_programs.iter().cloned());
 
     // Stamped on fresh genesis and restore-replay: compare against the
     // indexer's on divergence.
@@ -2125,8 +2152,9 @@ fn build_genesis_state(
     signing_key: &lee::PrivateKey,
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
+    extra_genesis_programs: &[lee::program::Program],
 ) -> (lee::V03State, Vec<LeeTransaction>) {
-    let mut state = build_initial_state(config);
+    let mut state = build_initial_state(config, extra_genesis_programs);
 
     // Config txs seed the config accounts by transaction, so every node
     // reconstructs them by replaying the genesis block. Every cross-zone config
@@ -2313,7 +2341,7 @@ fn genesis_stake_message(
         .expect("genesis funding nonce overflow");
 
     Message::try_new(
-        programs::sequencer_stake().id(),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![
             genesis_stake_funding_account(),
             ownership_id,
@@ -2326,7 +2354,9 @@ fn genesis_stake_message(
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
             amount,
-            mover_program_id: programs::authenticated_transfer().id(),
+            mover_account_id: program_loader_core::immutable_deploy_account_id(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         },
     )
@@ -2362,7 +2392,7 @@ fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTrans
         .expect("genesis stake total overflow");
 
     let fund_message = Message::try_new(
-        programs::faucet().id(),
+        program_loader_core::immutable_deploy_account_id(programs::faucet().id()),
         vec![
             system_accounts::faucet_account_id(),
             genesis_stake_funding_account(),
@@ -2422,8 +2452,9 @@ fn bridge_lock_holdings(
 /// block. The fee program is invoked solely by the forced per-block fee
 /// transaction.
 #[must_use]
-pub fn is_sequencer_only_program(program_id: lee::ProgramId) -> bool {
-    cross_zone::is_sequencer_only_program(program_id) || program_id == programs::fee().id()
+pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
+    cross_zone::is_sequencer_only_program(account_id)
+        || account_id == programs::fee().deployed_account_id()
 }
 
 fn build_supply_account_genesis_transaction(
@@ -2432,14 +2463,15 @@ fn build_supply_account_genesis_transaction(
 ) -> PublicTransaction {
     let faucet_program_id = programs::faucet().id();
     let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, *account_id);
+    let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
+    let recipient_vault_id = vault_core::compute_vault_account_id(vault_account_id, *account_id);
 
     let message = Message::try_new(
-        faucet_program_id,
+        program_loader_core::immutable_deploy_account_id(faucet_program_id),
         vec![system_accounts::faucet_account_id(), recipient_vault_id],
         Vec::new(),
         faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
+            vault_account_id,
             recipient_id: *account_id,
             amount: balance,
         },
@@ -2463,7 +2495,7 @@ fn build_supply_holding_genesis_transaction(
     let faucet_program_id = programs::faucet().id();
 
     let message = Message::try_new(
-        faucet_program_id,
+        program_loader_core::immutable_deploy_account_id(faucet_program_id),
         vec![system_accounts::faucet_account_id(), recipient],
         Vec::new(),
         faucet_core::Instruction::GenesisTransferDirect { amount: balance },
@@ -2488,16 +2520,18 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
     let bridge_program_id = programs::bridge().id();
+    let bridge_account_id = program_loader_core::immutable_deploy_account_id(bridge_program_id);
     let vault_program_id = programs::vault().id();
+    let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
     let recipient_vault_id =
-        vault_core::compute_vault_account_id(vault_program_id, metadata.recipient_id);
+        vault_core::compute_vault_account_id(vault_account_id, metadata.recipient_id);
     // The receipt PDA carries the exactly-once check: the program reads it to
     // detect a replay, so it must be in the tx's account list.
     let receipt_id =
-        bridge_core::deposit_receipt_account_id(bridge_program_id, event.deposit_op_id.0);
+        bridge_core::deposit_receipt_account_id(bridge_account_id, event.deposit_op_id.0);
 
     let message = Message::try_new(
-        bridge_program_id,
+        bridge_account_id,
         vec![
             system_accounts::bridge_account_id(),
             recipient_vault_id,
@@ -2506,7 +2540,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         Vec::new(),
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
-            vault_program_id,
+            vault_account_id,
             recipient_id: metadata.recipient_id,
             amount: event.amount,
         },
@@ -2542,7 +2576,9 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
     };
 
     let message = tx.message();
-    if message.program_id != programs::sequencer_stake().id() {
+    if message.program_account_id
+        != program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id())
+    {
         return None;
     }
 
@@ -2574,7 +2610,7 @@ fn build_finalize_unstake_tx(
     pending: sequencer_stake_core::PendingUnstake,
 ) -> Result<LeeTransaction> {
     let message = Message::try_new(
-        programs::sequencer_stake().id(),
+        program_loader_core::immutable_deploy_account_id(programs::sequencer_stake().id()),
         vec![
             ownership_id,
             pending.destination,
@@ -2610,7 +2646,7 @@ fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
 #[must_use]
 fn is_sequencer_only_tx(tx: &LeeTransaction) -> bool {
     matches!(tx, LeeTransaction::Public(tx)
-        if is_sequencer_only_program(tx.message().program_id))
+        if is_sequencer_only_program(tx.message().program_account_id))
 }
 
 /// The cross-zone message an inbox dispatch delivers, or `None` if `tx` is not
@@ -2622,13 +2658,15 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
     };
 
     let message = tx.message();
-    if message.program_id != programs::cross_zone_inbox().id() {
+    if message.program_account_id
+        != program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id())
+    {
         return None;
     }
 
     match borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data) {
-        Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) => Some(msg),
-        Ok(cross_zone_inbox_core::Instruction::InitConfig(_)) | Err(_) => None,
+        Ok(cross_zone_inbox_core::Instruction::Dispatch { message, .. }) => Some(message),
+        Ok(cross_zone_inbox_core::Instruction::InitConfig { .. }) | Err(_) => None,
     }
 }
 
@@ -2728,7 +2766,9 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     };
 
     let message = tx.message();
-    if message.program_id != programs::bridge().id() {
+    if message.program_account_id
+        != program_loader_core::immutable_deploy_account_id(programs::bridge().id())
+    {
         return None;
     }
 
@@ -2750,7 +2790,9 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     };
 
     let message = tx.message();
-    if message.program_id != programs::bridge().id() {
+    if message.program_account_id
+        != program_loader_core::immutable_deploy_account_id(programs::bridge().id())
+    {
         return None;
     }
 

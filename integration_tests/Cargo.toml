@@ -25,7 +25,6 @@ bridge_core.workspace = true
 ping_core.workspace = true
 cross_zone_outbox_core.workspace = true
 cross_zone_inbox_core.workspace = true
-cross_zone_marker_core.workspace = true
 bridge_lock_core.workspace = true
 wrapped_token_core.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
@@ -40,6 +39,7 @@ sequencer_stake_core.workspace = true
 programs.workspace = true
 test_programs.workspace = true
 testnet_initial_state.workspace = true
+program_loader_core.workspace = true
 
 logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true

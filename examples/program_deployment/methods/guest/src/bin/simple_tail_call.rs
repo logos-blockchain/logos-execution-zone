@@ -29,8 +29,8 @@ fn main() {
     let call = read_lee_call::<()>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (),
         },
@@ -54,7 +54,9 @@ fn main() {
     let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();
     let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
     let chained_call = ChainedCall {
-        program_id: hello_world_program_id(),
+        program_account_id: program_loader_core::immutable_deploy_account_id(
+            hello_world_program_id(),
+        ),
         instruction_data: chained_call_instruction_data,
         pre_state_ids: vec![pre_state_account_id],
         pda_seeds: vec![],
@@ -64,8 +66,8 @@ fn main() {
     // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
     // called to commit the output.
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![post_state],
     )

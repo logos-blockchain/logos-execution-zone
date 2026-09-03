@@ -63,7 +63,8 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
     fn try_from(value: &FfiProgramWithDependencies) -> Result<Self, Self::Error> {
         let mut program_map = HashMap::new();
 
-        let orig_program = (&value.program).try_into()?;
+        let orig_program: Program = (&value.program).try_into()?;
+        let orig_program_id = orig_program.id();
 
         // Alignment will be different, we need to read elements one-by-one
         for i in 0..value.deps_size {
@@ -71,13 +72,17 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
                 .ok_or(WalletFfiError::NullPointer)?
                 .try_into()?;
 
-            program_map.insert(program_dep.id(), program_dep);
+            program_map.insert(
+                program_loader_core::immutable_deploy_account_id(program_dep.id()),
+                program_dep,
+            );
         }
 
-        Ok(Self {
-            program: orig_program,
-            dependencies: program_map,
-        })
+        Ok(
+            Self::new(orig_program, program_map).with_program_account_id(
+                program_loader_core::immutable_deploy_account_id(orig_program_id),
+            ),
+        )
     }
 }
 
@@ -196,7 +201,11 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         }
     }
 
-    match block_on(wallet.send_pub_tx(accounts, instruction_data.to_vec(), program_id.into())) {
+    match block_on(wallet.send_pub_tx(
+        accounts,
+        instruction_data.to_vec(),
+        program_loader_core::immutable_deploy_account_id(program_id.into()),
+    )) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(std::ptr::null_mut(), std::ffi::CString::into_raw);

@@ -9,10 +9,10 @@ use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, utils::sync_private, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, utils::sync_private, verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, PrivacyPreservingTransaction, ProgramId,
+    AccountId, PrivacyPreservingTransaction,
     privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, execute_and_prove},
         message::Message,
@@ -28,6 +28,9 @@ use lee_core::{
     program::PdaSeed,
 };
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 use wallet::{AccountIdentity, WalletCore};
 
@@ -43,12 +46,12 @@ async fn fund_private_pda(
     vpk: ViewingPublicKey,
     identifier: u128,
     seed: PdaSeed,
-    authority_program_id: ProgramId,
+    authority_account_id: AccountId,
     amount: u128,
     auth_transfer: &ProgramWithDependencies,
 ) -> Result<()> {
     let pda_account_id =
-        AccountId::for_private_pda(&authority_program_id, &seed, &npk, &vpk, identifier);
+        AccountId::for_private_pda(&authority_account_id, &seed, &npk, &vpk, identifier);
     let sender_account = wallet
         .get_account_public(sender)
         .await
@@ -70,7 +73,7 @@ async fn fund_private_pda(
             random_seed: [0; 32],
             identifier,
             kind: WitnessKind::Pda {
-                binding: Some((authority_program_id, seed)),
+                binding: Some((authority_account_id, seed)),
             },
             nullifier: NullifierWitness::Init {
                 npk,
@@ -116,7 +119,7 @@ async fn spend_private_pda(
     seed: PdaSeed,
     amount: u128,
     spend_program: &ProgramWithDependencies,
-    auth_transfer_id: ProgramId,
+    auth_transfer_account_id: AccountId,
 ) -> Result<()> {
     wallet
         .send_privacy_preserving_tx(
@@ -128,7 +131,7 @@ async fn spend_private_pda(
                     identifier: 0,
                 },
             ],
-            Program::serialize_instruction((seed, amount, auth_transfer_id))
+            Program::serialize_instruction((seed, amount, auth_transfer_account_id))
                 .context("failed to serialize pda_spend_proxy instruction")?,
             spend_program,
         )
@@ -144,7 +147,16 @@ async fn spend_private_pda(
 ///   receive(id=0), receive(id=1) → sync → spend(id=0), spend(id=1) → sync → assert.
 #[test]
 async fn private_pda_family_members_receive_and_spend() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
+    // Seeded into genesis: a live `Deploy` has no predictable address to give
+    // `ProgramWithDependencies` anymore, since segment/header addresses aren't derivable.
+    let proxy = test_programs::pda_spend_proxy();
+    let mut ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_extra_genesis_programs(vec![proxy.clone()]),
+        )
+        .build()
+        .await?;
 
     // ── Build alice's key chain ──────────────────────────────────────────────────────────────────
     let (alice_id, _alice_chain_index) = ctx.wallet_mut().create_new_account_private(None);
@@ -159,16 +171,18 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         (kc.nullifier_public_key, kc.viewing_public_key.clone())
     };
 
-    let proxy = test_programs::pda_spend_proxy();
     let auth_transfer = programs::authenticated_transfer();
-    let proxy_id = proxy.id();
+    let proxy_id = proxy.deployed_account_id();
     let auth_transfer_id = auth_transfer.id();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
-    let auth_transfer_program = ProgramWithDependencies::new(auth_transfer.clone(), [].into());
+    let auth_transfer_account_id =
+        program_loader_core::immutable_deploy_account_id(auth_transfer_id);
+    let auth_transfer_program = ProgramWithDependencies::new(auth_transfer.clone(), [].into())
+        .with_program_account_id(auth_transfer_account_id);
     let spend_program =
-        ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer)].into());
+        ProgramWithDependencies::new(proxy, [(auth_transfer_account_id, auth_transfer)].into());
 
     let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 0);
     let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 1);
@@ -271,7 +285,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         amount_spend_0,
         &spend_program,
-        auth_transfer_id,
+        auth_transfer_account_id,
     )
     .await?;
 
@@ -284,7 +298,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         amount_spend_1,
         &spend_program,
-        auth_transfer_id,
+        auth_transfer_account_id,
     )
     .await?;
 

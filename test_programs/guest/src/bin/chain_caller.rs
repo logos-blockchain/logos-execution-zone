@@ -1,24 +1,27 @@
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use borsh::to_vec;
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
-type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
+type Instruction = (u128, AccountId, u32, Option<PdaSeed>);
 
 /// A program that calls another program `num_chain_calls` times.
 /// It permutes the order of the input accounts on the subsequent call
-/// The `ProgramId` in the instruction must be the `program_id` of the authenticated transfers
-/// program.
+/// The `AccountId` in the instruction must be the dispatch address of the authenticated
+/// transfers program.
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
-            instruction: (balance, auth_transfer_id, num_chain_calls, pda_seed),
+            instruction: (balance, auth_transfer_account_id, num_chain_calls, pda_seed),
         },
         instruction_data,
     ) = call
@@ -33,21 +36,41 @@ fn main() {
     let call_instruction_data =
         to_vec(&AuthTransferInstruction::Transfer { amount: balance }).unwrap();
 
+    let mut running_recipient_pre = recipient_pre.clone();
+    let mut running_sender_pre = sender_pre.clone();
+
+    if pda_seed.is_some() {
+        running_sender_pre.is_authorized = true;
+    }
+
     let mut chained_calls = Vec::new();
     for _i in 0..num_chain_calls {
         let new_chained_call = ChainedCall {
-            program_id: auth_transfer_id,
+            program_account_id: auth_transfer_account_id,
             instruction_data: call_instruction_data.clone(),
-            // Account order permuted here (sender before recipient).
-            pre_state_ids: vec![sender_pre.account_id, recipient_pre.account_id],
+            pre_state_ids: vec![
+                running_sender_pre.account_id,
+                running_recipient_pre.account_id,
+            ], // <- Account order permutation here
             pda_seeds: pda_seed.iter().copied().collect(),
         };
         chained_calls.push(new_chained_call);
+
+        running_sender_pre.account.balance =
+            match running_sender_pre.account.balance.checked_sub(balance) {
+                Some(new_balance) => new_balance,
+                None => return,
+            };
+        running_recipient_pre.account.balance =
+            match running_recipient_pre.account.balance.checked_add(balance) {
+                Some(new_balance) => new_balance,
+                None => return,
+            };
     }
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![
             AccountStateDiff::unchanged(sender_pre),

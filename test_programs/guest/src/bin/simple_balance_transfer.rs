@@ -12,8 +12,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: balance,
         },
@@ -32,8 +32,8 @@ fn main() {
         );
 
         ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             instruction_data,
             vec![account_post],
         )
@@ -46,8 +46,8 @@ fn main() {
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![
             AccountStateDiff::new_claimed_if_default(

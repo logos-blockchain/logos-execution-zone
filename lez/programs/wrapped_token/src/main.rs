@@ -1,4 +1,4 @@
-use cross_zone_marker_core::inbox_source_marker_account_id;
+use cross_zone_inbox_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountWithMetadata, BalanceDiff},
     program::{
@@ -7,16 +7,16 @@ use lee_core::{
     },
 };
 use wrapped_token_core::{
-    Instruction, MAX_MINT_AMOUNT, SourceEntry, SourcePolicy, WrappedTokenConfig, balance_bytes,
-    config_account_id, config_seed, holding_account_id, holding_seed, read_balance,
+    Instruction, MAX_MINT_AMOUNT, WrappedTokenConfig, balance_bytes, config_account_id,
+    config_seed, holding_account_id, holding_seed, read_balance,
 };
 
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -28,39 +28,39 @@ fn main() {
 
     match instruction {
         Instruction::Mint { recipient, amount } => mint(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             recipient,
             amount,
         ),
-        Instruction::InitConfig(config) => init_config(
-            self_program_id,
-            caller_program_id,
+        Instruction::InitConfig { config } => init_config(
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             &config,
         ),
         Instruction::RenounceAuthority => renounce_authority(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
         ),
         Instruction::UpdateSources { sources } => update_sources(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
-            sources,
+            &sources,
         ),
     }
 }
 
 fn mint(
-    self_program_id: lee_core::program::ProgramId,
-    caller_program_id: Option<lee_core::program::ProgramId>,
+    self_account_id: lee_core::account::AccountId,
+    caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     recipient: [u8; 32],
@@ -74,13 +74,13 @@ fn mint(
     // inbox). Pin the caller to it, since the guest cannot import the inbox id.
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "second account must be the wrapped-token config PDA"
     );
     let mut cfg = WrappedTokenConfig::from_bytes(&config.account.data)
         .expect("config account holds a wrapped-token config");
     assert_eq!(
-        caller_program_id,
+        caller_account_id,
         Some(cfg.minter),
         "Mint is only callable by the authorized minter (the cross-zone inbox)"
     );
@@ -97,7 +97,7 @@ fn mint(
                 == inbox_source_marker_account_id(
                     minter,
                     &entry.policy.src_zone,
-                    entry.policy.src_program_id,
+                    entry.policy.src_account_id,
                 )
         })
         .expect("Mint is only callable for a peer source this token authorizes");
@@ -114,7 +114,7 @@ fn mint(
 
     assert_eq!(
         holding.account_id,
-        holding_account_id(self_program_id, &recipient),
+        holding_account_id(self_account_id, &recipient),
         "third account must be the recipient holding PDA"
     );
 
@@ -146,8 +146,8 @@ fn mint(
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![
             AccountStateDiff::unchanged(marker),
@@ -160,8 +160,8 @@ fn mint(
 
 /// Gives up the authority, freezing the source list for good.
 fn renounce_authority(
-    self_program_id: lee_core::program::ProgramId,
-    caller_program_id: Option<lee_core::program::ProgramId>,
+    self_account_id: lee_core::account::AccountId,
+    caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
 ) {
@@ -172,7 +172,7 @@ fn renounce_authority(
         .expect("RenounceAuthority requires the config account");
     assert_eq!(
         config_meta.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "first account must be the wrapped-token config PDA"
     );
     let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data)
@@ -180,7 +180,7 @@ fn renounce_authority(
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
     assert!(
-        caller_program_id.is_none() || caller_program_id == cfg.governance,
+        caller_account_id.is_none() || caller_account_id == cfg.governance,
         "the authority acts at top level, or through the configured governance program"
     );
 
@@ -216,8 +216,8 @@ fn renounce_authority(
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![
             config_post,
@@ -237,11 +237,11 @@ fn renounce_authority(
 /// Replaces the authorized sources, if the config names an authority and that
 /// account authorized this transaction.
 fn update_sources(
-    self_program_id: lee_core::program::ProgramId,
-    caller_program_id: Option<lee_core::program::ProgramId>,
+    self_account_id: lee_core::account::AccountId,
+    caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
-    sources: Vec<SourcePolicy>,
+    sources: &[wrapped_token_core::SourcePolicy],
 ) {
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
@@ -250,7 +250,7 @@ fn update_sources(
         .expect("UpdateSources requires the config account");
     assert_eq!(
         config_meta.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "first account must be the wrapped-token config PDA"
     );
     let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data)
@@ -258,7 +258,7 @@ fn update_sources(
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
     assert!(
-        caller_program_id.is_none() || caller_program_id == cfg.governance,
+        caller_account_id.is_none() || caller_account_id == cfg.governance,
         "the authority acts at top level, or through the configured governance program"
     );
 
@@ -284,31 +284,24 @@ fn update_sources(
         "the configured authority must authorize a source change"
     );
 
-    // Mint advances the first matching entry, so a duplicated pair would split
-    // one source's policy across entries an auditor reads as two.
-    for (index, policy) in sources.iter().enumerate() {
-        assert!(
-            !sources[..index].iter().any(|other| {
-                other.src_zone == policy.src_zone && other.src_program_id == policy.src_program_id
-            }),
-            "UpdateSources lists the same source twice"
-        );
-    }
-    // The counter is the guest's, never the caller's: a kept source carries its
-    // spent allowance over, so an update cannot reset it, and a source removed
+    // Carry the mint counter over for a source that stays on the list, keyed by
+    // identity: an update must not reset spent allowance, and a source removed
     // and later re-added starts at zero.
-    let previous = core::mem::take(&mut cfg.sources);
     cfg.sources = sources
-        .into_iter()
-        .map(|policy| SourceEntry {
-            minted: previous
+        .iter()
+        .map(|policy| {
+            let minted = cfg
+                .sources
                 .iter()
                 .find(|entry| {
                     entry.policy.src_zone == policy.src_zone
-                        && entry.policy.src_program_id == policy.src_program_id
+                        && entry.policy.src_account_id == policy.src_account_id
                 })
-                .map_or(0, |entry| entry.minted),
-            policy,
+                .map_or(0, |entry| entry.minted);
+            wrapped_token_core::SourceEntry {
+                policy: policy.clone(),
+                minted,
+            }
         })
         .collect();
     let config_post = AccountStateDiff::new(
@@ -320,8 +313,8 @@ fn update_sources(
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![
             config_post,
@@ -341,14 +334,14 @@ fn update_sources(
 /// Writes the minter and the authorized peer sources into the config PDA exactly
 /// once at genesis.
 fn init_config(
-    self_program_id: lee_core::program::ProgramId,
-    caller_program_id: Option<lee_core::program::ProgramId>,
+    self_account_id: lee_core::account::AccountId,
+    caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     config_value: &WrappedTokenConfig,
 ) {
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "InitConfig is a top-level genesis transaction"
     );
 
@@ -357,7 +350,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "account must be the wrapped-token config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
@@ -368,8 +361,7 @@ fn init_config(
     // rewriting its own config data on a later call.
     if config.account != Account::default() {
         assert_eq!(
-            config.account.program_owner,
-            self_program_id.into(),
+            config.account.program_owner, self_account_id,
             "wrapped-token config PDA is owned by another program"
         );
         assert_eq!(
@@ -390,8 +382,8 @@ fn init_config(
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![config_post],
     )

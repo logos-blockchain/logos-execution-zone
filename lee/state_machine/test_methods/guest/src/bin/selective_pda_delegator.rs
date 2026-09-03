@@ -1,6 +1,6 @@
 use borsh::to_vec;
 use lee_core::{
-    account::BalanceDiff,
+    account::{AccountId, BalanceDiff},
     program::{
         AccountStateDiff, ChainedCall, Claim, InstructionData, PdaSeed, ProgramCall, ProgramId,
         ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
@@ -10,7 +10,7 @@ use lee_core::{
 type Instruction = (
     PdaSeed,
     PdaSeed,
-    ProgramId,
+    AccountId,
     InstructionData,
     Option<(ProgramId, bool)>,
 );
@@ -19,11 +19,11 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction:
-                (claim_seed, delegated_seed, callee_program_id, callee_instruction, sibling),
+                (claim_seed, delegated_seed, callee_account_id, callee_instruction, sibling),
         },
         instruction_data,
     ) = call
@@ -38,7 +38,7 @@ fn main() {
     // Delegate the PDA to the callee via `pda_seeds` — the protocol resolves its
     // authorization there from the seed match, not from anything supplied here.
     let mut chained_calls = vec![ChainedCall {
-        program_id: callee_program_id,
+        program_account_id: callee_account_id,
         instruction_data: callee_instruction,
         pre_state_ids: std::iter::once(pda.account_id)
             .chain(rest.iter().map(|r| r.account_id))
@@ -50,7 +50,7 @@ fn main() {
     // stays unauthorized in that parallel branch.
     if let Some((sibling_program_id, include_pda)) = sibling {
         chained_calls.push(ChainedCall {
-            program_id: sibling_program_id,
+            program_account_id: sibling_program_id.into(),
             instruction_data: to_vec(&()).unwrap(),
             pre_state_ids: if include_pda {
                 std::iter::once(pda.account_id)
@@ -64,8 +64,8 @@ fn main() {
     }
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         // Claim first PDA supplied
         vec![AccountStateDiff::new_claimed(

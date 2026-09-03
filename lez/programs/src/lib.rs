@@ -147,16 +147,19 @@ mod inner {
 
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
             let message = public_transaction::Message::try_new(
-                bridge().id(),
+                bridge().deployed_account_id(),
                 vec![
-                    bridge_core::compute_bridge_account_id(bridge().id()),
-                    vault_core::compute_vault_account_id(vault().id(), recipient_id),
-                    bridge_core::deposit_receipt_account_id(bridge().id(), op_id),
+                    bridge_core::compute_bridge_account_id(bridge().deployed_account_id()),
+                    vault_core::compute_vault_account_id(
+                        vault().deployed_account_id(),
+                        recipient_id,
+                    ),
+                    bridge_core::deposit_receipt_account_id(bridge().deployed_account_id(), op_id),
                 ],
                 vec![],
                 bridge_core::Instruction::Deposit {
                     l1_deposit_op_id: op_id,
-                    vault_program_id: vault().id(),
+                    vault_account_id: vault().deployed_account_id(),
                     recipient_id,
                     amount,
                 },
@@ -175,21 +178,24 @@ mod inner {
             let op_id = [9; 32];
             let amount = 1_000;
             let auth_transfer_owned = Account {
-                program_owner: authenticated_transfer().id().into(),
+                program_owner: authenticated_transfer().deployed_account_id(),
                 ..Account::default()
             };
 
             let mut state = V03State::new()
                 .with_public_accounts([
                     (
-                        bridge_core::compute_bridge_account_id(bridge().id()),
+                        bridge_core::compute_bridge_account_id(bridge().deployed_account_id()),
                         Account {
                             balance: u128::from(amount),
                             ..auth_transfer_owned.clone()
                         },
                     ),
                     (
-                        vault_core::compute_vault_account_id(vault().id(), recipient_id),
+                        vault_core::compute_vault_account_id(
+                            vault().deployed_account_id(),
+                            recipient_id,
+                        ),
                         auth_transfer_owned,
                     ),
                 ])
@@ -208,7 +214,7 @@ mod inner {
                 bridge_core::event::Deposit::from_bytes(&events[0].event.data).unwrap(),
                 bridge_core::event::Deposit {
                     l1_deposit_op_id: op_id,
-                    vault_program_id: vault().id(),
+                    vault_account_id: vault().deployed_account_id(),
                     recipient_id,
                     amount,
                 }

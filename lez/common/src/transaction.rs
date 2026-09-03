@@ -109,7 +109,7 @@ impl LeeTransaction {
                 tx, state, block_id, timestamp,
             ),
             Self::ProgramDeployment(tx) => {
-                ValidatedStateDiff::from_program_deployment_transaction(tx, state)
+                ValidatedStateDiff::from_program_deployment_transaction(tx)
             }
         }
     }
@@ -134,8 +134,6 @@ impl LeeTransaction {
     ///
     /// The indexer replays blocks the sequencer already validated and inscribed on Bedrock,
     /// so it trusts those inscriptions and re-derives state without re-validating them.
-    ///
-    /// Returns the events the transaction emitted.
     pub fn execute_on_state(
         &self,
         state: &mut V03State,
@@ -203,7 +201,7 @@ pub struct TxEvents {
 #[must_use]
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
-        programs::clock().id(),
+        program_loader_core::immutable_deploy_account_id(programs::clock().id()),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
         vec![],
         timestamp,
@@ -238,19 +236,19 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
         return false;
     }
     let message = public_tx.message();
-    if message.program_id == programs::bridge().id() {
+    if message.program_account_id == programs::bridge().deployed_account_id() {
         return matches!(
             borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data),
             Ok(bridge_core::Instruction::Deposit { .. })
         );
     }
-    if message.program_id == programs::cross_zone_inbox().id() {
+    if message.program_account_id == programs::cross_zone_inbox().deployed_account_id() {
         return matches!(
             borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data),
-            Ok(cross_zone_inbox_core::Instruction::Dispatch(_))
+            Ok(cross_zone_inbox_core::Instruction::Dispatch { .. })
         );
     }
-    if message.program_id == programs::ping_sender().id() {
+    if message.program_account_id == programs::ping_sender().deployed_account_id() {
         return matches!(
             borsh::from_slice::<ping_core::SenderInstruction>(&message.instruction_data),
             Ok(ping_core::SenderInstruction::Send { .. })
@@ -272,7 +270,7 @@ pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
         return false;
     };
     let message = public_tx.message();
-    if message.program_id != programs::bridge_lock().id() {
+    if message.program_account_id != programs::bridge_lock().deployed_account_id() {
         return false;
     }
     matches!(
@@ -292,7 +290,7 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
         return false;
     };
-    public_tx.message().program_id == programs::sequencer_stake().id()
+    public_tx.message().program_account_id == programs::sequencer_stake().deployed_account_id()
 }
 
 /// Whether `tx` is a full-sweep vault claim.
@@ -310,7 +308,7 @@ pub fn is_full_vault_sweep(tx: &LeeTransaction, state: &V03State) -> bool {
     };
 
     let message = public_tx.message();
-    if message.program_id != programs::vault().id() {
+    if message.program_account_id != programs::vault().deployed_account_id() {
         return false;
     }
 
@@ -323,7 +321,9 @@ pub fn is_full_vault_sweep(tx: &LeeTransaction, state: &V03State) -> bool {
     let [owner_id, vault_id] = message.account_ids.as_slice() else {
         return false;
     };
-    if *vault_id != vault_core::compute_vault_account_id(programs::vault().id(), *owner_id) {
+    if *vault_id
+        != vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), *owner_id)
+    {
         return false;
     }
 
@@ -343,7 +343,7 @@ pub fn fee_invocation(
     let mut account_ids = system_accounts::fee_account_ids().to_vec();
     account_ids.push(producer); // this is the 4th account
     let message = lee::public_transaction::Message::try_new(
-        programs::fee().id(),
+        programs::fee().deployed_account_id(),
         account_ids,
         vec![],
         fee_core::Instruction::Distribute(summary),
@@ -397,7 +397,7 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
     // TODO: consider a stake-program like pattern where tx carries the program id & the instruction
     // itself, instead of fixing the auth transfer program here
     lee::public_transaction::Message::try_new(
-        programs::authenticated_transfer().id(),
+        programs::authenticated_transfer().deployed_account_id(),
         vec![payer, system_accounts::fee_inbox_account_id()],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
@@ -412,7 +412,7 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
 #[must_use]
 pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
     lee::public_transaction::Message::try_new(
-        programs::fee().id(),
+        programs::fee().deployed_account_id(),
         vec![system_accounts::fee_inbox_account_id(), payer],
         vec![],
         fee_core::Instruction::Refund { amount },

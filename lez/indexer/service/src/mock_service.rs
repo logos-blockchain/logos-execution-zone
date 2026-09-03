@@ -440,7 +440,7 @@ fn mock_public_tx(
     Transaction::Public(PublicTransaction {
         hash: tx_hash,
         message: PublicMessage {
-            program_id: ProgramId([1_u32; 8]),
+            program_account_id: AccountId { value: [1_u8; 32] },
             account_ids: vec![
                 account_ids[tx_idx as usize % account_ids.len()],
                 account_ids[(tx_idx as usize + 1) % account_ids.len()],
@@ -487,6 +487,7 @@ fn mock_privacy_preserving_tx(
             }],
             block_validity_window: ValidityWindow((None, None)),
             timestamp_validity_window: ValidityWindow((None, None)),
+            program_image_claims: vec![],
         },
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],

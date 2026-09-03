@@ -431,7 +431,7 @@ fn settle_charged_transaction(
     let reserve_msg = fee_reserve_invocation(payer, reserved);
     let payer_authorized = HashSet::from([payer]);
     let reserve_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
-        reserve_msg.program_id,
+        reserve_msg.program_account_id,
         &reserve_msg.account_ids,
         &reserve_msg.instruction_data,
         &payer_authorized,
@@ -498,7 +498,7 @@ fn settle_charged_transaction(
     if refund > 0 {
         let refund_msg = fee_refund_invocation(payer, refund);
         let refund_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
-            refund_msg.program_id,
+            refund_msg.program_account_id,
             &refund_msg.account_ids,
             &refund_msg.instruction_data,
             &HashSet::new(),
@@ -826,11 +826,11 @@ mod tests {
         // revenue to the attacker. The guest accepts it — the fee program owns
         // the inbox it debits — producing a diff that modifies the restricted
         // inbox, which the apply-path guard must reject.
-        let fee_program_id = fee_invocation(BlockFeeSummary::default(), attacker)
+        let fee_program_account_id = fee_invocation(BlockFeeSummary::default(), attacker)
             .message()
-            .program_id;
+            .program_account_id;
         let message = lee::public_transaction::Message::try_new_with_fees(
-            fee_program_id,
+            fee_program_account_id,
             vec![system_accounts::fee_inbox_account_id(), attacker],
             vec![state.get_account_by_id(attacker).nonce],
             fee_core::Instruction::Refund {

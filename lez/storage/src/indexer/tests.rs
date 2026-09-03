@@ -1,4 +1,4 @@
-use common::{test_utils::produce_dummy_block, transaction::TxEvents};
+use common::test_utils::produce_dummy_block;
 use lee::{Account, AccountId, PublicKey};
 use tempfile::tempdir;
 
@@ -78,7 +78,7 @@ fn initial_state() -> lee::V03State {
         (
             id,
             Account {
-                program_owner: programs::authenticated_transfer().id().into(),
+                program_owner: programs::authenticated_transfer().deployed_account_id(),
                 balance,
                 ..Account::default()
             },
@@ -604,102 +604,4 @@ fn reopen_preserves_seeded_breakpoint() {
     } // drop releases the RocksDB lock
     let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
     assert!(dbio.get_breakpoint_opt(0).unwrap().is_some());
-}
-
-fn tx_events_fixture(tx_index: u32, tx_hash: [u8; 32]) -> TxEvents {
-    TxEvents {
-        tx_index,
-        tx_hash: tx_hash.into(),
-        events: vec![
-            lee_core::program::TransactionEvent {
-                program_id: [7; 8],
-                event: lee_core::program::ProgramEvent {
-                    selector: [1; 8],
-                    data: vec![1, 2, 3],
-                },
-            },
-            lee_core::program::TransactionEvent {
-                program_id: [9; 8],
-                event: lee_core::program::ProgramEvent {
-                    selector: [2; 8],
-                    data: vec![],
-                },
-            },
-        ],
-    }
-}
-
-#[test]
-fn put_block_stores_events_in_same_batch() {
-    let initial_state = initial_state();
-    let temp_dir = tempdir().unwrap();
-    let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
-
-    let block = genesis_block();
-    let events = vec![
-        tx_events_fixture(0, [11; 32]),
-        tx_events_fixture(3, [12; 32]),
-    ];
-
-    dbio.put_block(&block, [0; 32], 0, &initial_state, &events)
-        .unwrap();
-
-    // One put_block call makes both the block and its events readable.
-    assert!(dbio.get_block(1).unwrap().is_some());
-    assert_eq!(dbio.get_block_events(1).unwrap(), Some(events));
-}
-
-#[test]
-fn block_without_events_writes_no_row() {
-    let initial_state = initial_state();
-    let temp_dir = tempdir().unwrap();
-    let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
-
-    dbio.put_block(&genesis_block(), [0; 32], 0, &initial_state, &[])
-        .unwrap();
-
-    assert!(dbio.get_block(1).unwrap().is_some());
-    assert_eq!(dbio.get_block_events(1).unwrap(), None);
-}
-
-#[test]
-fn get_block_events_is_none_for_unknown_block() {
-    let initial_state = initial_state();
-    let temp_dir = tempdir().unwrap();
-    let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
-
-    assert_eq!(dbio.get_block_events(999).unwrap(), None);
-}
-
-#[test]
-fn get_block_events_range_skips_blocks_without_events() {
-    let initial_state = initial_state();
-    let temp_dir = tempdir().unwrap();
-    let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
-
-    let mut prev_hash = None;
-    let mut expected = vec![];
-    for block_id in 1..=4_u64 {
-        let block = produce_dummy_block(block_id, prev_hash, vec![]);
-        prev_hash = Some(block.header.hash);
-
-        // Only odd blocks emit.
-        let events = if block_id.is_multiple_of(2) {
-            vec![]
-        } else {
-            vec![tx_events_fixture(0, [u8::try_from(block_id).unwrap(); 32])]
-        };
-        if !events.is_empty() {
-            expected.push((block_id, events.clone()));
-        }
-        dbio.put_block(&block, [0; 32], 0, &initial_state, &events)
-            .unwrap();
-    }
-
-    assert_eq!(dbio.get_block_events_range(1, 4).unwrap(), expected);
-    assert_eq!(
-        dbio.get_block_events_range(2, 2).unwrap(),
-        Vec::<(u64, Vec<TxEvents>)>::new()
-    );
-    assert_eq!(dbio.get_block_events_range(3, 3).unwrap(), expected[1..]);
 }

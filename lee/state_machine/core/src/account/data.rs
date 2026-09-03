@@ -4,15 +4,16 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 
-/// Raised from the original 100 KiB to accommodate program elfs stored directly in
-/// `Account.data` under the Program-as-Account migration.
-///
-/// Observed elfs currently run 375 KB-520 KB, plus 631 KB for the fixed
-/// privacy-preserving circuit itself. This value is a rough placeholder, not a considered
-/// protocol constant yet — it still needs to be refined against real transaction/block-size
-/// budgets (e.g. `SequencerConfig::max_block_size`, currently 1 MiB) before this is something
-/// production traffic should rely on.
-pub const DATA_MAX_LENGTH: ByteSize = ByteSize::kib(700);
+/// A program's bytecode is split across multiple segment accounts (see
+/// `program_loader_core::ProgramSegment`), so a single account never needs to hold more than
+/// one segment's worth of data.
+pub const DATA_MAX_LENGTH: ByteSize = ByteSize::kib(100);
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "usize::try_from is not yet const-stable; the value is tiny and always fits"
+)]
+pub const DATA_MAX_LENGTH_BYTES: usize = DATA_MAX_LENGTH.as_u64() as usize;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, BorshSerialize)]
 pub struct Data(Vec<u8>);
@@ -60,9 +61,7 @@ impl TryFrom<Vec<u8>> for Data {
     type Error = DataTooBigError;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        if value.len()
-            > usize::try_from(DATA_MAX_LENGTH.as_u64()).expect("DATA_MAX_LENGTH fits in usize")
-        {
+        if value.len() > DATA_MAX_LENGTH_BYTES {
             Err(DataTooBigError)
         } else {
             Ok(Self(value))
@@ -110,21 +109,12 @@ impl<'de> Deserialize<'de> for Data {
             where
                 A: serde::de::SeqAccess<'de>,
             {
-                let mut vec = Vec::with_capacity(
-                    seq.size_hint().unwrap_or(0).min(
-                        usize::try_from(DATA_MAX_LENGTH.as_u64())
-                            .expect("DATA_MAX_LENGTH fits in usize"),
-                    ),
-                );
+                let mut vec =
+                    Vec::with_capacity(seq.size_hint().unwrap_or(0).min(DATA_MAX_LENGTH_BYTES));
 
                 while let Some(value) = seq.next_element()? {
-                    if vec.len()
-                        >= usize::try_from(DATA_MAX_LENGTH.as_u64())
-                            .expect("DATA_MAX_LENGTH fits in usize")
-                    {
-                        return Err(serde::de::Error::custom(DataTooBigError));
-                    }
                     vec.push(value);
+                    check_len(vec.len())?;
                 }
 
                 Ok(Data(vec))
@@ -155,41 +145,35 @@ impl BorshDeserialize for Data {
     }
 }
 
+fn check_len<E: serde::de::Error>(len: usize) -> Result<(), E> {
+    if len > DATA_MAX_LENGTH_BYTES {
+        Err(serde::de::Error::custom(DataTooBigError))
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn data_max_length_allowed() {
-        let max_vec = vec![
-            0_u8;
-            usize::try_from(DATA_MAX_LENGTH.as_u64())
-                .expect("DATA_MAX_LENGTH fits in usize")
-        ];
+        let max_vec = vec![0_u8; DATA_MAX_LENGTH_BYTES];
         let result = Data::try_from(max_vec);
         assert!(result.is_ok());
     }
 
     #[test]
     fn data_too_big_error() {
-        let big_vec = vec![
-            0_u8;
-            usize::try_from(DATA_MAX_LENGTH.as_u64())
-                .expect("DATA_MAX_LENGTH fits in usize")
-                + 1
-        ];
+        let big_vec = vec![0_u8; DATA_MAX_LENGTH_BYTES + 1];
         let result = Data::try_from(big_vec);
         assert!(matches!(result, Err(DataTooBigError)));
     }
 
     #[test]
     fn borsh_deserialize_exceeding_limit_error() {
-        let too_big_data = vec![
-            0_u8;
-            usize::try_from(DATA_MAX_LENGTH.as_u64())
-                .expect("DATA_MAX_LENGTH fits in usize")
-                + 1
-        ];
+        let too_big_data = vec![0_u8; DATA_MAX_LENGTH_BYTES + 1];
         let mut serialized = Vec::new();
         <_ as BorshSerialize>::serialize(&too_big_data, &mut serialized).unwrap();
 
@@ -199,12 +183,7 @@ mod tests {
 
     #[test]
     fn json_deserialize_exceeding_limit_error() {
-        let data = vec![
-            0_u8;
-            usize::try_from(DATA_MAX_LENGTH.as_u64())
-                .expect("DATA_MAX_LENGTH fits in usize")
-                + 1
-        ];
+        let data = vec![0_u8; DATA_MAX_LENGTH_BYTES + 1];
         let json = serde_json::to_string(&data).unwrap();
 
         let result: Result<Data, _> = serde_json::from_str(&json);

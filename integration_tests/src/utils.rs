@@ -1,8 +1,8 @@
-use std::time::Duration;
+use std::{io::Write as _, time::Duration};
 
 use anyhow::{Context as _, Result, ensure};
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use lee_core::account::AccountId;
+use lee_core::{account::AccountId, program::PROGRAM_LOADER_ACCOUNT_ID};
 use log::info;
 use sequencer_core::{
     block_publisher::{Ed25519PublicKey, read_channel_state},
@@ -12,11 +12,13 @@ use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, verify_commitment_is_in_state};
 use wallet::{
     AccountIdentity,
+    account::AccountIdWithPrivacy,
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
         account::{AccountSubcommand, NewSubcommand},
         programs::{
-            native_token_transfer::AuthTransferSubcommand, token::TokenProgramAgnosticSubcommand,
+            native_token_transfer::AuthTransferSubcommand, program_loader::ProgramLoaderSubcommand,
+            token::TokenProgramAgnosticSubcommand,
         },
     },
     program_facades::{native_token_transfer::NativeTokenTransfer, token::Token},
@@ -112,6 +114,52 @@ pub async fn new_account(
         anyhow::bail!("Expected RegisterAccount return value");
     };
     Ok(account_id)
+}
+
+/// Deploys `program` via `program_loader`'s `Deploy` command.
+///
+/// Creates a fresh header account plus one fresh segment account per chunk `program`'s elf
+/// splits into, then wires them all up in a single command. Returns the header's `AccountId`
+/// (the program's dispatch address).
+///
+/// `payer` funds the fee for every segment/header transaction the deploy sends — the header and
+/// segments are always freshly claimed here, so they hold nothing to self-pay with; pass an
+/// existing funded account (e.g. `ctx.existing_public_accounts()[0]`).
+pub async fn deploy_program(
+    ctx: &mut TestContext,
+    program: lee::program::Program,
+    immutable: bool,
+    payer: AccountId,
+) -> Result<AccountId> {
+    let elf = program.elf().to_vec();
+    let chunk_count = elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .count()
+        .max(1);
+
+    let header_id = new_account(ctx, false, None).await?;
+    let mut segment_ids = Vec::with_capacity(chunk_count);
+    for _ in 0..chunk_count {
+        segment_ids.push(new_account(ctx, false, None).await?);
+    }
+
+    let mut tempfile = tempfile::NamedTempFile::new()?;
+    tempfile.write_all(&elf)?;
+
+    let command = Command::ProgramLoader(ProgramLoaderSubcommand::Deploy {
+        elf: tempfile.path().to_owned(),
+        header: CliAccountMention::Id(AccountIdWithPrivacy::Public(header_id)),
+        segments: segment_ids
+            .into_iter()
+            .map(|id| CliAccountMention::Id(AccountIdWithPrivacy::Public(id)))
+            .collect(),
+        immutable,
+        payer: Some(CliAccountMention::Id(AccountIdWithPrivacy::Public(payer))),
+    });
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+
+    Ok(header_id)
 }
 
 /// Send `amount` from `from` to `to` via an authenticated transfer (identifier 0).
@@ -320,4 +368,166 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
                 "Indexer failed to catch up within {L2_TO_L1_TIMEOUT:?}. Last indexer block id observed: {last_ind}, but needed to catch up to at least {block_id_to_catch_up}"
             )
         })?
+}
+
+/// Builds the transaction that uploads `bytecode` as a single new segment, signed by `key`.
+///
+/// Returns the segment's `AccountId` and the transaction. Useful on its own for tests that only
+/// care about transaction size/shape, not about invoking the deployed program afterward.
+#[must_use]
+pub fn new_segment_transaction(
+    bytecode: Vec<u8>,
+    key: &lee::PrivateKey,
+) -> (AccountId, lee::PublicTransaction) {
+    let segment = AccountId::from(&lee::PublicKey::new_from_private_key(key));
+    let message = lee::public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        vec![segment],
+        vec![lee_core::account::Nonce(0)],
+        program_loader_core::Instruction::WriteSegment {
+            bytecode,
+            next_segment: None,
+        },
+    )
+    .expect("NewSegment instruction data should always be serializable");
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[key]);
+    (segment, lee::PublicTransaction::new(message, witness_set))
+}
+
+/// A funded genesis account plus its key, used to pay the fee on transactions built directly
+/// (bypassing the wallet, which would otherwise pick a payer itself).
+fn test_fee_payer() -> (AccountId, lee::PrivateKey) {
+    let data = &testnet_initial_state::initial_pub_accounts_private_keys()[0];
+    (data.account_id, data.pub_sign_key.clone())
+}
+
+/// Uploads `bytecode` as a chunked, tail-to-head segment chain, one signed `NewSegment` tx per
+/// chunk, in submission order.
+///
+/// Segment keys are `[key_seed + i; 32]`; pick seeds with enough headroom to avoid collisions.
+/// `payer_nonce` is the shared fee payer's next nonce — advanced by one per transaction built, so
+/// callers building several transactions for the same payer (e.g. a full deploy) must thread the
+/// same counter through in submission order. Returns segment `AccountId`s (first to last) and
+/// their txs.
+#[must_use]
+pub fn segment_upload_transactions(
+    bytecode: &[u8],
+    key_seed: u8,
+    payer_nonce: &mut u128,
+) -> (Vec<AccountId>, Vec<lee::PublicTransaction>) {
+    let chunks: Vec<&[u8]> = bytecode
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    assert!(!chunks.is_empty(), "bytecode must not be empty");
+
+    let segment_keys: Vec<lee::PrivateKey> = (0..chunks.len())
+        .map(|i| {
+            let seed = key_seed
+                .checked_add(u8::try_from(i).expect("chunk count fits in a u8"))
+                .expect("key_seed left enough headroom for every chunk");
+            lee::PrivateKey::try_new([seed; 32]).unwrap()
+        })
+        .collect();
+    let segment_ids: Vec<AccountId> = segment_keys
+        .iter()
+        .map(|key| AccountId::from(&lee::PublicKey::new_from_private_key(key)))
+        .collect();
+
+    let (payer, payer_key) = test_fee_payer();
+    let mut txs = Vec::with_capacity(chunks.len());
+    for (i, chunk) in chunks.iter().enumerate().rev() {
+        let next_segment = segment_ids.get(i.saturating_add(1)).copied();
+        let mut account_ids = vec![segment_ids[i]];
+        account_ids.extend(next_segment);
+        let message = lee::public_transaction::Message::try_new_with_fees(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            account_ids,
+            // One nonce per witness signer, in the same order: the segment's own (fixed
+            // at 0 — segments are always fresh accounts) and the fee payer's current one.
+            vec![
+                lee_core::account::Nonce(0),
+                lee_core::account::Nonce(*payer_nonce),
+            ],
+            program_loader_core::Instruction::WriteSegment {
+                bytecode: (*chunk).to_vec(),
+                next_segment,
+            },
+            common::test_utils::test_fee_declaration(payer),
+        )
+        .expect("NewSegment instruction data should always be serializable");
+        let witness_set = lee::public_transaction::WitnessSet::for_message(
+            &message,
+            &[&segment_keys[i], &payer_key],
+        );
+        *payer_nonce = payer_nonce
+            .checked_add(1)
+            .expect("payer nonce fits u128 across a test's transactions");
+        txs.push(lee::PublicTransaction::new(message, witness_set));
+    }
+    (segment_ids, txs)
+}
+
+/// Builds the `UploadHeader` transaction for a chain already uploaded via
+/// [`segment_upload_transactions`], signed by `header_key`. See `payer_nonce` there.
+#[must_use]
+pub fn upload_header_transaction(
+    all_segment_ids: &[AccountId],
+    header_key: &lee::PrivateKey,
+    payer_nonce: &mut u128,
+) -> (AccountId, lee::PublicTransaction) {
+    let header = AccountId::from(&lee::PublicKey::new_from_private_key(header_key));
+    let mut account_ids = vec![header];
+    account_ids.extend_from_slice(all_segment_ids);
+    let (payer, payer_key) = test_fee_payer();
+    let message = lee::public_transaction::Message::try_new_with_fees(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        account_ids,
+        vec![
+            lee_core::account::Nonce(0),
+            lee_core::account::Nonce(*payer_nonce),
+        ],
+        program_loader_core::Instruction::CreateHeader {
+            first_segment: all_segment_ids[0],
+            immutable: true,
+        },
+        common::test_utils::test_fee_declaration(payer),
+    )
+    .expect("UploadHeader instruction data should always be serializable");
+    let witness_set =
+        lee::public_transaction::WitnessSet::for_message(&message, &[header_key, &payer_key]);
+    *payer_nonce = payer_nonce
+        .checked_add(1)
+        .expect("payer nonce fits u128 across a test's transactions");
+    (header, lee::PublicTransaction::new(message, witness_set))
+}
+
+/// Every transaction needed to deploy `bytecode` for real: its full segment chain (see
+/// [`segment_upload_transactions`]) followed by the `UploadHeader`, in submission order.
+///
+/// All must land in a block, in order, before the program is invocable at the returned header
+/// `AccountId`. See `payer_nonce` on [`segment_upload_transactions`] — pass the same counter
+/// across multiple deploys sharing a test context.
+#[must_use]
+pub fn deploy_program_transactions(
+    bytecode: &[u8],
+    key_seed: u8,
+    header_key: &lee::PrivateKey,
+    payer_nonce: &mut u128,
+) -> (AccountId, Vec<lee::PublicTransaction>) {
+    let (segment_ids, mut txs) = segment_upload_transactions(bytecode, key_seed, payer_nonce);
+    let (header, header_tx) = upload_header_transaction(&segment_ids, header_key, payer_nonce);
+    txs.push(header_tx);
+    (header, txs)
+}
+
+/// The exact wire size the sequencer measures a transaction by (see
+/// `sequencer_rpc_server_actor::actor::service`'s `send_transaction`).
+#[must_use]
+pub fn encoded_tx_size(tx: &common::transaction::LeeTransaction) -> u64 {
+    u64::try_from(
+        borsh::to_vec(tx)
+            .expect("transaction should serialize")
+            .len(),
+    )
+    .expect("transaction size should fit in u64")
 }

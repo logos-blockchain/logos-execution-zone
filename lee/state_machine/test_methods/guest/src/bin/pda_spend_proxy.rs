@@ -1,21 +1,25 @@
 use borsh::to_vec;
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
 /// Proxy for spending from a private PDA via `simple_transfer`.
 ///
 /// `pre_states = [pda, recipient]`. Debits the PDA and credits the recipient.
 /// The PDA-to-npk binding is established via `pda_seeds` in the chained call to `simple_transfer`.
-type Instruction = (PdaSeed, u128, ProgramId);
+/// The `AccountId` in the instruction must be the dispatch address of the transfer program.
+type Instruction = (PdaSeed, u128, AccountId);
 
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (seed, amount, simple_transfer_id),
         },
@@ -30,7 +34,7 @@ fn main() {
     };
 
     let chained_call = ChainedCall {
-        program_id: simple_transfer_id,
+        program_account_id: simple_transfer_id,
         instruction_data: to_vec(&amount).unwrap(),
         pre_state_ids: vec![first.account_id, second.account_id],
         pda_seeds: vec![seed],
@@ -40,8 +44,8 @@ fn main() {
     let second_post = AccountStateDiff::unchanged(second);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![first_post, second_post],
     )

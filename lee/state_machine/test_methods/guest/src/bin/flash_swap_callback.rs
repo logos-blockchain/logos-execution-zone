@@ -17,16 +17,19 @@
 //!   will fail (vault balance < initial), causing full atomic rollback. This simulates a malicious
 //!   or buggy callback that does not repay the flash loan.
 //!
-//! # Note on `caller_program_id`
+//! # Note on `caller_account_id`
 //!
-//! This program does not enforce any access control on `caller_program_id`.
+//! This program does not enforce any access control on `caller_account_id`.
 //! It is designed to be called by the flash swap initiator but could in principle be
 //! called by any program. In production, a callback would typically verify the caller
 //! if it needs to trust the context it is called from.
 
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -34,7 +37,8 @@ pub struct CallbackInstruction {
     /// If true, return the borrowed funds to the vault (happy path).
     /// If false, keep the funds (simulates a malicious callback, triggers rollback).
     pub return_funds: bool,
-    pub token_program_id: ProgramId,
+    /// The dispatch address of the token program.
+    pub token_account_id: AccountId,
     pub amount: u128,
 }
 
@@ -42,8 +46,8 @@ fn main() {
     let call = read_lee_call::<CallbackInstruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id, // not enforced in this callback
+            self_account_id,
+            caller_account_id, // not enforced in this callback
             pre_states,
             instruction,
         },
@@ -67,7 +71,7 @@ fn main() {
             borsh::to_vec(&instruction.amount).expect("transfer instruction serialization");
 
         chained_calls.push(ChainedCall {
-            program_id: instruction.token_program_id,
+            program_account_id: instruction.token_account_id,
             pre_state_ids: vec![receiver_pre.account_id, vault_pre.account_id],
             instruction_data: transfer_instruction,
             pda_seeds: vec![PdaSeed::new([1_u8; 32])],
@@ -80,8 +84,8 @@ fn main() {
     // The callback itself makes no direct state changes, accounts pass through unchanged.
     // All mutations go through the token program via chained calls.
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![
             AccountStateDiff::unchanged(vault_pre),

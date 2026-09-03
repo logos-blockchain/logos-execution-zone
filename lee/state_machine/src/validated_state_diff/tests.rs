@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 
-use lee_core::account::{Account, AccountId, Nonce};
+use lee_core::{
+    account::{Account, AccountId, Data, Nonce},
+    program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramSegment},
+};
 
 use crate::{
     PrivateKey, PublicKey, V03State,
     error::LeeError,
     public_transaction::{Message, WitnessSet},
+    state::get_program_via,
     validated_state_diff::ValidatedStateDiff,
 };
 
@@ -17,7 +21,8 @@ fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<Acc
             (
                 account_id,
                 Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+                    program_owner: crate::test_methods::simple_balance_transfer()
+                        .deployed_account_id(),
                     balance,
                     ..Account::default()
                 },
@@ -41,7 +46,7 @@ fn public_diff_reflects_a_successful_transfer() {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id = crate::test_methods::simple_balance_transfer().id();
+    let program_id = crate::test_methods::simple_balance_transfer().deployed_account_id();
     let message =
         Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
@@ -104,6 +109,7 @@ fn privacy_garbage_proof_is_rejected() {
         }],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        program_image_claims: vec![],
     };
 
     // Garbage proof bytes: not a valid borsh-encoded `InnerReceipt`.
@@ -132,8 +138,13 @@ fn metering_transfer_fixture() -> (V03State, crate::PublicTransaction) {
             crate::test_methods::simple_balance_transfer(),
         ));
     let program_id = crate::test_methods::simple_balance_transfer().id();
-    let message =
-        Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
+    let message = Message::try_new(
+        program_id.into(),
+        vec![from, to],
+        vec![Nonce(0), Nonce(0)],
+        5_u128,
+    )
+    .unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
     (state, crate::PublicTransaction::new(message, witness_set))
 }
@@ -189,7 +200,7 @@ fn chained_calls_share_one_budget() {
     );
     // The chain_caller program permutes the account order in the chain call.
     let message = Message::try_new(
-        chain_caller.id(),
+        chain_caller.id().into(),
         vec![to, from],
         vec![Nonce(0)],
         instruction,
@@ -247,7 +258,7 @@ fn metered_guest_panic_is_charged_the_full_budget() {
         ));
     let program_id = crate::test_methods::simple_balance_transfer().id();
     let message = Message::try_new(
-        program_id,
+        program_id.into(),
         vec![from, to],
         vec![Nonce(0), Nonce(0)],
         1_000_u128,
@@ -300,4 +311,105 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     );
     assert_eq!(state.get_account_by_id(from).nonce.0, 1);
     assert_eq!(state.get_account_by_id(to).nonce.0, 1);
+}
+
+/// Chains `elf` across as many force-inserted segments as it needs, returning the first
+/// segment's `AccountId`.
+fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) -> AccountId {
+    let chunks: Vec<&[u8]> = elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    let segment_ids: Vec<AccountId> = (0..chunks.len())
+        .map(|i| {
+            let mut bytes = [key_seed; 32];
+            bytes[1] = u8::try_from(i).expect("chunk count fits in a u8");
+            AccountId::new(bytes)
+        })
+        .collect();
+    for i in (0..chunks.len()).rev() {
+        state.force_insert_account(
+            segment_ids[i],
+            Account {
+                program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+                data: Data::from(&ProgramSegment {
+                    bytecode: chunks[i].to_vec(),
+                    next_segment: segment_ids.get(i.saturating_add(1)).copied(),
+                }),
+                ..Account::default()
+            },
+        );
+    }
+    segment_ids[0]
+}
+
+/// A header updated only in a pending `state_diff` is seen immediately, not the stale committed
+/// version.
+#[test]
+fn get_program_via_prefers_state_diff_over_committed_state() {
+    let old_program = crate::test_methods::claimer();
+    let new_program = crate::test_methods::noop();
+    assert_ne!(
+        old_program.id(),
+        new_program.id(),
+        "test needs two programs with genuinely different image_ids"
+    );
+
+    let header_id = AccountId::new([0xAA; 32]);
+
+    let mut state = V03State::new();
+    let old_segment_id = force_insert_segment_chain(&mut state, old_program.elf(), 0x01);
+    state.force_insert_account(
+        header_id,
+        Account {
+            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+            data: Data::from(&ProgramHeader {
+                image_id: old_program.id(),
+                program_first_segment: old_segment_id,
+                immutable: false,
+            }),
+            ..Account::default()
+        },
+    );
+    let new_segment_id = force_insert_segment_chain(&mut state, new_program.elf(), 0x02);
+
+    // Only in the diff, as an in-progress UpdateHeader would leave it.
+    let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
+    state_diff.insert(
+        header_id,
+        Account {
+            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+            data: Data::from(&ProgramHeader {
+                image_id: new_program.id(),
+                program_first_segment: new_segment_id,
+                immutable: false,
+            }),
+            ..Account::default()
+        },
+    );
+
+    let (found_id, elf) = get_program_via(header_id, |id| {
+        state_diff
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| state.get_account_by_id(id))
+    })
+    .expect("lookup should succeed")
+    .expect("program should be found");
+    assert_eq!(
+        found_id,
+        new_program.id(),
+        "a diff-aware lookup must see the pending update"
+    );
+    assert_eq!(elf, new_program.elf());
+
+    let (stale_id, stale_elf) = state
+        .get_program(header_id)
+        .expect("lookup should succeed")
+        .expect("program should be found");
+    assert_eq!(
+        stale_id,
+        old_program.id(),
+        "state alone, with no diff, must still see only the committed version"
+    );
+    assert_eq!(stale_elf, old_program.elf());
 }

@@ -73,7 +73,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .add_imported_public_account(funding_private_key);
 
     // Claim the genesis supply out of its vault.
-    let owner_vault_id = vault_core::compute_vault_account_id(programs::vault().id(), funding_id);
+    let owner_vault_id =
+        vault_core::compute_vault_account_id(programs::vault().deployed_account_id(), funding_id);
     let claim_instruction_data = Program::serialize_instruction(vault_core::Instruction::Claim {
         amount: FUNDING_BALANCE,
     })
@@ -85,7 +86,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 AccountIdentity::PublicNoSign(owner_vault_id),
             ],
             claim_instruction_data,
-            programs::vault().id(),
+            programs::vault().deployed_account_id(),
         )
         .await
         .map_err(|err| {
@@ -114,7 +115,9 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: demo_stake_key,
             amount: FUNDING_BALANCE,
-            mover_program_id: programs::authenticated_transfer().id(),
+            mover_account_id: program_loader_core::immutable_deploy_account_id(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         })
         .context("Failed to serialize Stake instruction")?;
@@ -132,7 +135,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 AccountIdentity::PublicNoSign(config_id),
             ],
             stake_instruction_data,
-            programs::sequencer_stake().id(),
+            programs::sequencer_stake().deployed_account_id(),
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
@@ -140,7 +143,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     info!("Waiting for the Stake transaction's block to land");
     poll_until("stake to take ownership", 30, || async {
         Ok(get_account(&ctx, ownership_id).await?.program_owner
-            == programs::sequencer_stake().id().into())
+            == programs::sequencer_stake().deployed_account_id())
     })
     .await?;
 
@@ -149,7 +152,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .context("Failed to read the stake ownership account")?;
     assert_eq!(
         ownership_account.program_owner,
-        programs::sequencer_stake().id().into(),
+        programs::sequencer_stake().deployed_account_id(),
         "ownership account should now be owned by sequencer_stake"
     );
     assert_eq!(
@@ -279,7 +282,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 AccountIdentity::PublicNoSign(config_id),
             ],
             unstake_request_data,
-            programs::sequencer_stake().id(),
+            programs::sequencer_stake().deployed_account_id(),
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;

@@ -126,7 +126,7 @@ fn validity_window_from_range_full() {
 
 #[test]
 fn program_output_try_with_block_validity_window_range() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![])
         .try_with_block_validity_window(10_u64..100)
         .unwrap();
     assert_eq!(output.block_validity_window.start(), Some(10));
@@ -135,7 +135,7 @@ fn program_output_try_with_block_validity_window_range() {
 
 #[test]
 fn program_output_with_block_validity_window_range_from() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![])
         .with_block_validity_window(10_u64..);
     assert_eq!(output.block_validity_window.start(), Some(10));
     assert_eq!(output.block_validity_window.end(), None);
@@ -143,7 +143,7 @@ fn program_output_with_block_validity_window_range_from() {
 
 #[test]
 fn program_output_with_block_validity_window_range_to() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![])
         .with_block_validity_window(..100_u64);
     assert_eq!(output.block_validity_window.start(), None);
     assert_eq!(output.block_validity_window.end(), Some(100));
@@ -151,7 +151,7 @@ fn program_output_with_block_validity_window_range_to() {
 
 #[test]
 fn program_output_try_with_block_validity_window_empty_range_fails() {
-    let result = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
+    let result = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![])
         .try_with_block_validity_window(5_u64..5);
     assert!(result.is_err());
 }
@@ -210,7 +210,7 @@ fn validate_execution_rejects_insufficient_balance_even_if_globally_conserved() 
         pre_state.account.data,
     )];
 
-    let result = validate_execution(&state_diffs, executing_program_id);
+    let result = validate_execution(&state_diffs, executing_program_id.into());
 
     assert!(matches!(
         result,
@@ -237,7 +237,7 @@ fn validate_execution_rejects_add_overflow() {
         pre_state.account.data,
     )];
 
-    let result = validate_execution(&state_diffs, executing_program_id);
+    let result = validate_execution(&state_diffs, executing_program_id.into());
 
     assert!(matches!(
         result,
@@ -248,21 +248,21 @@ fn validate_execution_rejects_add_overflow() {
 // ---- AccountId::for_private_pda tests ----
 
 /// Pins `AccountId::for_private_pda` against a hardcoded expected output for a specific
-/// `(program_id, seed, npk, identifier)` tuple. Any change to `PRIVATE_PDA_PREFIX`, byte
+/// `(program_account_id, seed, npk, identifier)` tuple. Any change to `PRIVATE_PDA_PREFIX`, byte
 /// ordering, or the underlying hash breaks this test.
 #[test]
 fn for_private_pda_matches_pinned_value() {
-    let program_id: ProgramId = [1; 8];
+    let program_account_id = AccountId::new([1; 32]);
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     let identifier: Identifier = u128::MAX;
     let expected = AccountId::new([
-        5, 87, 128, 244, 206, 244, 65, 130, 178, 88, 225, 183, 0, 159, 201, 201, 212, 206, 6, 156,
-        13, 55, 32, 139, 91, 222, 209, 83, 172, 148, 123, 179,
+        45, 111, 98, 244, 74, 174, 52, 116, 162, 206, 73, 35, 144, 34, 128, 43, 111, 35, 11, 7, 70,
+        138, 245, 238, 254, 218, 194, 225, 201, 202, 160, 109,
     ]);
     assert_eq!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, identifier),
+        AccountId::for_private_pda(&program_account_id, &seed, &npk, &vpk, identifier),
         expected
     );
 }
@@ -270,60 +270,61 @@ fn for_private_pda_matches_pinned_value() {
 /// Two groups with different viewing keys at the same (program, seed) get different addresses.
 #[test]
 fn for_private_pda_differs_for_different_npk() {
-    let program_id: ProgramId = [1; 8];
+    let program_account_id = AccountId::new([1; 32]);
     let seed = PdaSeed::new([2; 32]);
     let npk_a = NullifierPublicKey([3; 32]);
     let npk_b = NullifierPublicKey([4; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk_a, &vpk, u128::MAX),
-        AccountId::for_private_pda(&program_id, &seed, &npk_b, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_account_id, &seed, &npk_a, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_account_id, &seed, &npk_b, &vpk, u128::MAX),
     );
 }
 
 /// Different seeds produce different addresses, even with the same program and npk.
 #[test]
 fn for_private_pda_differs_for_different_seed() {
-    let program_id: ProgramId = [1; 8];
+    let program_account_id = AccountId::new([1; 32]);
     let seed_a = PdaSeed::new([2; 32]);
     let seed_b = PdaSeed::new([5; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed_a, &npk, &vpk, u128::MAX),
-        AccountId::for_private_pda(&program_id, &seed_b, &npk, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_account_id, &seed_a, &npk, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_account_id, &seed_b, &npk, &vpk, u128::MAX),
     );
 }
 
 /// Different programs produce different addresses, even with the same seed and npk.
 #[test]
-fn for_private_pda_differs_for_different_program_id() {
-    let program_id_a: ProgramId = [1; 8];
-    let program_id_b: ProgramId = [9; 8];
+fn for_private_pda_differs_for_different_program_account_id() {
+    let program_account_id_a = AccountId::new([1; 32]);
+    let program_account_id_b = AccountId::new([9; 32]);
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id_a, &seed, &npk, &vpk, u128::MAX),
-        AccountId::for_private_pda(&program_id_b, &seed, &npk, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_account_id_a, &seed, &npk, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_account_id_b, &seed, &npk, &vpk, u128::MAX),
     );
 }
 
-/// Different identifiers produce different addresses for the same `(program_id, seed, npk)`,
-/// confirming that each `(program_id, seed, npk)` tuple controls a family of 2^128 addresses.
+/// Different identifiers produce different addresses for the same
+/// `(program_account_id, seed, npk)`, confirming that each `(program_account_id, seed, npk)`
+/// tuple controls a family of 2^128 addresses.
 #[test]
 fn for_private_pda_differs_for_different_identifier() {
-    let program_id: ProgramId = [1; 8];
+    let program_account_id = AccountId::new([1; 32]);
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, 0),
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, 1),
+        AccountId::for_private_pda(&program_account_id, &seed, &npk, &vpk, 0),
+        AccountId::for_private_pda(&program_account_id, &seed, &npk, &vpk, 1),
     );
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, 0),
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_account_id, &seed, &npk, &vpk, 0),
+        AccountId::for_private_pda(&program_account_id, &seed, &npk, &vpk, u128::MAX),
     );
 }
 
@@ -331,12 +332,12 @@ fn for_private_pda_differs_for_different_identifier() {
 /// because the private formula uses a different prefix and includes npk.
 #[test]
 fn for_private_pda_differs_from_public_pda() {
-    let program_id: ProgramId = [1; 8];
+    let program_account_id = AccountId::new([1; 32]);
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let private_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, u128::MAX);
-    let public_id = AccountId::for_public_pda(&program_id, &seed);
+    let private_id = AccountId::for_private_pda(&program_account_id, &seed, &npk, &vpk, u128::MAX);
+    let public_id = AccountId::for_public_pda(&program_account_id, &seed);
     assert_ne!(private_id, public_id);
 }
 
@@ -345,7 +346,7 @@ fn for_private_pda_differs_from_public_pda() {
 fn private_account_kind_header_round_trips() {
     let regular = PrivateAccountKind::Regular(42);
     let pda = PrivateAccountKind::Pda {
-        program_id: [1_u32; 8],
+        program_account_id: AccountId::new([1_u8; 32]),
         seed: PdaSeed::new([2_u8; 32]),
         identifier: u128::MAX,
     };
@@ -369,7 +370,7 @@ fn private_account_kind_unknown_discriminant_returns_none() {
 
 #[test]
 fn for_private_account_dispatches_correctly() {
-    let program_id: ProgramId = [1; 8];
+    let program_account_id = AccountId::new([1; 32]);
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
@@ -384,18 +385,18 @@ fn for_private_account_dispatches_correctly() {
             &npk,
             &vpk,
             &PrivateAccountKind::Pda {
-                program_id,
+                program_account_id,
                 seed,
                 identifier
             }
         ),
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, identifier),
+        AccountId::for_private_pda(&program_account_id, &seed, &npk, &vpk, identifier),
     );
 }
 
 #[test]
 fn compute_public_authorized_pdas_with_seeds() {
-    let caller: ProgramId = [1; 8];
+    let caller = AccountId::new([1; 32]);
     let seed = PdaSeed::new([2; 32]);
     let result = compute_public_authorized_pdas(Some(caller), &[seed]);
     let expected = AccountId::for_public_pda(&caller, &seed);
@@ -480,7 +481,7 @@ fn an_unowned_account_with_history_may_be_echoed_byte_identically() {
     };
     let pre = AccountWithMetadata::new(account, true, account_id);
     let diff = AccountStateDiff::unchanged(pre);
-    assert!(validate_execution(&[diff], [9; 8]).is_ok());
+    assert!(validate_execution(&[diff], [9; 8].into()).is_ok());
 }
 
 #[test]
@@ -493,7 +494,7 @@ fn an_unowned_account_echoed_with_sub_zero_may_still_validate() {
     };
     let pre = AccountWithMetadata::new(account, true, account_id);
     let diff = AccountStateDiff::new(pre.clone(), BalanceDiff::Sub(0), pre.account.data);
-    assert!(validate_execution(&[diff], [9; 8]).is_ok());
+    assert!(validate_execution(&[diff], [9; 8].into()).is_ok());
 }
 
 /// Any modification of an unowned non-default account still needs ownership.
@@ -508,7 +509,7 @@ fn modifying_an_unowned_account_with_history_is_still_refused() {
     let pre = AccountWithMetadata::new(account, true, account_id);
     let diff = AccountStateDiff::new(pre.clone(), BalanceDiff::Add(1), pre.account.data);
     assert!(matches!(
-        validate_execution(&[diff], [9; 8]),
+        validate_execution(&[diff], [9; 8].into()),
         Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id: id })
             if id == account_id
     ));
@@ -532,7 +533,7 @@ fn a_claimed_echo_of_an_unowned_account_with_history_is_refused() {
         Claim::Authorized,
     );
     assert!(matches!(
-        validate_execution(&[diff], [9; 8]),
+        validate_execution(&[diff], [9; 8].into()),
         Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id: id })
             if id == account_id
     ));
@@ -549,5 +550,5 @@ fn a_first_claim_of_a_fresh_account_still_passes() {
         pre.account.data,
         Claim::Authorized,
     );
-    assert!(validate_execution(&[diff], [9; 8]).is_ok());
+    assert!(validate_execution(&[diff], [9; 8].into()).is_ok());
 }

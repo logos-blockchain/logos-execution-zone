@@ -7,9 +7,9 @@ use crate::{
     Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData,
     EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState,
     Nullifier, PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    PrivateAction, ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, Signature,
-    StallReason, Transaction, ValidityWindow, WitnessSet,
+    PrivateAction, ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId,
+    ProgramImageClaim, Proof, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction,
+    Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -25,6 +25,24 @@ impl From<[u32; 8]> for ProgramId {
 impl From<ProgramId> for [u32; 8] {
     fn from(value: ProgramId) -> Self {
         value.0
+    }
+}
+
+impl From<lee_core::ProgramImageClaim> for ProgramImageClaim {
+    fn from(value: lee_core::ProgramImageClaim) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            image_id: value.image_id.into(),
+        }
+    }
+}
+
+impl From<ProgramImageClaim> for lee_core::ProgramImageClaim {
+    fn from(value: ProgramImageClaim) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            image_id: value.image_id.into(),
+        }
     }
 }
 
@@ -275,14 +293,14 @@ impl From<FeeDeclaration> for lee::FeeDeclaration {
 impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::public_transaction::Message {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
             fee,
         } = value;
         Self {
-            program_id: program_id.into(),
+            program_account_id: program_account_id.into(),
             account_ids: account_ids.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
@@ -294,14 +312,14 @@ impl From<lee::public_transaction::Message> for PublicMessage {
 impl From<PublicMessage> for lee::public_transaction::Message {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
             fee,
         } = value;
         Self::new_preserialized(
-            program_id.into(),
+            program_account_id.into(),
             account_ids.into_iter().map(Into::into).collect(),
             nonces
                 .iter()
@@ -341,6 +359,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            program_image_claims,
         } = value;
         Self {
             public_actions: public_actions.into_iter().map(Into::into).collect(),
@@ -348,6 +367,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             private_actions: private_actions.into_iter().map(Into::into).collect(),
             block_validity_window: block_validity_window.into(),
             timestamp_validity_window: timestamp_validity_window.into(),
+            program_image_claims: program_image_claims.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -389,6 +409,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            program_image_claims,
         } = value;
 
         let public_actions = public_actions
@@ -410,6 +431,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             timestamp_validity_window: timestamp_validity_window
                 .try_into()
                 .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+            program_image_claims: program_image_claims.into_iter().map(Into::into).collect(),
         })
     }
 }
@@ -1023,7 +1045,7 @@ mod tests {
 
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
         let message = lee::public_transaction::Message::try_new_with_fees(
-            [7_u32; 8],
+            [7_u32; 8].into(),
             vec![signer_id],
             vec![0_u128.into()],
             0_u32,
@@ -1057,7 +1079,7 @@ mod tests {
         let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
 
         let message = lee::public_transaction::Message::try_new(
-            [7_u32; 8],
+            [7_u32; 8].into(),
             vec![signer_id],
             vec![0_u128.into()],
             0_u32,

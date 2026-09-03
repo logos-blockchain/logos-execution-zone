@@ -13,8 +13,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (target_program_id, target_instruction_data, pda_seed),
         },
@@ -25,7 +25,7 @@ fn main() {
     };
 
     let chained_call = ChainedCall {
-        program_id: target_program_id,
+        program_account_id: program_loader_core::immutable_deploy_account_id(target_program_id),
         instruction_data: target_instruction_data,
         pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
         pda_seeds: pda_seed.into_iter().collect(),
@@ -37,8 +37,8 @@ fn main() {
         .collect();
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         state_diffs,
     )

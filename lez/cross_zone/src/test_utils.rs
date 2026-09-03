@@ -31,19 +31,24 @@ pub fn ping_emission(
     target_program_id: ProgramId,
     payload: &[u8],
 ) -> LeeTransaction {
-    let receiver_id = programs::ping_receiver().id();
+    let receiver_account_id = programs::ping_receiver().deployed_account_id();
     let send = SenderInstruction::Send {
         target_zone,
         target_program_id,
         target_accounts: vec![
-            receiver_config_account_id(receiver_id).into_value(),
-            ping_record_pda(receiver_id).into_value(),
+            receiver_config_account_id(receiver_account_id).into_value(),
+            ping_record_pda(receiver_account_id).into_value(),
         ],
         payload: payload.to_vec(),
         ordinal: 0,
     };
-    let message = Message::try_new(programs::ping_sender().id(), vec![], vec![], send)
-        .expect("emission serializes");
+    let message = Message::try_new(
+        program_loader_core::immutable_deploy_account_id(programs::ping_sender().id()),
+        vec![],
+        vec![],
+        send,
+    )
+    .expect("emission serializes");
     LeeTransaction::Public(PublicTransaction::new(
         message,
         WitnessSet::from_raw_parts(vec![]),

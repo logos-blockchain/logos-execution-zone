@@ -646,7 +646,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
     assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
     assert!(account.data.is_empty());
@@ -686,7 +686,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
     // A private account: private balances stay small (fee-exempt under the
     // interim policy), so this asserts against the private constant, not the
@@ -954,7 +954,7 @@ fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
     };
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
 
     unsafe {

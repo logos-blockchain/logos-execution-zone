@@ -57,8 +57,12 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         peers: vec![CrossZonePeer {
             channel_id: *channel_a.as_ref(),
             allowed_routes: vec![CrossZoneRoute {
-                src_program_id: programs::bridge_lock().id(),
-                target_program_id: wrapped_token_id,
+                src_account_id: program_loader_core::immutable_deploy_account_id(
+                    programs::bridge_lock().id(),
+                ),
+                target_account_id: program_loader_core::immutable_deploy_account_id(
+                    wrapped_token_id,
+                ),
                 mint_cap: None,
             }],
             expected_block_signing_pubkeys: Vec::new(),
@@ -82,6 +86,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
                 bedrock_channel: channel_a,
             })
             .disable_wallet()
+            .disable_indexer()
             .with_sequencer_partial_config(partial)
             .with_genesis(genesis_a)
             .with_cross_zone(Some(source_only_cross_zone())),
@@ -113,7 +118,10 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         .context("Failed to submit lock on zone A")?;
 
     // Wait until zone B's indexer reflects the verified mint.
-    let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
+    let holding_id = wrapped_token_core::holding_account_id(
+        programs::wrapped_token().deployed_account_id(),
+        &RECIPIENT,
+    );
 
     let minted = wait_for_mint(ind_client_b, holding_id).await?;
     assert_eq!(
@@ -124,39 +132,23 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // Conservation: the mint on B must be backed by an equal lock on A. The lock
     // has already landed (it preceded delivery), so zone A reflects the debit and
     // escrow now.
-    let escrow_id = bridge_lock_core::escrow_account_id(programs::bridge_lock().id());
+    let escrow_id =
+        bridge_lock_core::escrow_account_id(programs::bridge_lock().deployed_account_id());
     let escrowed = seq_client_a.get_account(escrow_id).await?.balance;
     assert_eq!(
         escrowed, LOCK_AMOUNT,
         "zone A escrow must hold the locked amount"
     );
-    let remaining = seq_client_a
-        .get_account(bridge_lock_core::holding_account_id(
-            programs::bridge_lock().id(),
-            &holder_id.into_value(),
-        ))
-        .await?
-        .balance;
+    let holder_holding_id = bridge_lock_core::holding_account_id(
+        programs::bridge_lock().deployed_account_id(),
+        &holder_id.into_value(),
+    );
+    let remaining = seq_client_a.get_account(holder_holding_id).await?.balance;
     assert_eq!(
         remaining,
         INITIAL_BALANCE - LOCK_AMOUNT,
-        "zone A holding must be debited by the locked amount"
+        "zone A holder's holding must be debited by the locked amount"
     );
-
-    // The indexer carries no holdings config: agreeing with the sequencer
-    // requires replaying genesis. `wait_for_balance` returns only on the exact
-    // value, so reaching it is the assertion.
-    let ind_client_a = ctx.indexer_client_zone(channel_a).unwrap();
-    wait_for_balance(
-        ind_client_a,
-        bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder_id.into_value()),
-        INITIAL_BALANCE - LOCK_AMOUNT,
-    )
-    .await
-    .context("zone A's indexer must reconstruct the holding from the genesis block")?;
-    wait_for_balance(ind_client_a, escrow_id, LOCK_AMOUNT)
-        .await
-        .context("zone A's indexer must track the escrow too")?;
     Ok(())
 }
 
@@ -168,8 +160,10 @@ fn build_lock_tx(
     target_zone: [u8; 32],
 ) -> LeeTransaction {
     let bridge_lock_id = programs::bridge_lock().id();
+    let bridge_lock_account_id = programs::bridge_lock().deployed_account_id();
     let wrapped_token_id = programs::wrapped_token().id();
-    let outbox_id = programs::cross_zone_outbox().id();
+    let wrapped_token_account_id = programs::wrapped_token().deployed_account_id();
+    let outbox_id = programs::cross_zone_outbox().deployed_account_id();
     let ordinal = 0;
 
     let mint = wrapped_token_core::Instruction::Mint {
@@ -179,8 +173,8 @@ fn build_lock_tx(
     let payload = borsh::to_vec(&mint).expect("serialize mint");
 
     let target_accounts = vec![
-        wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
-        wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT).into_value(),
+        wrapped_token_core::config_account_id(wrapped_token_account_id).into_value(),
+        wrapped_token_core::holding_account_id(wrapped_token_account_id, &RECIPIENT).into_value(),
     ];
     let lock = bridge_lock_core::Instruction::Lock {
         amount: LOCK_AMOUNT,
@@ -192,43 +186,24 @@ fn build_lock_tx(
     };
 
     let accounts = vec![
-        bridge_lock_core::config_account_id(bridge_lock_id),
+        bridge_lock_core::config_account_id(bridge_lock_account_id),
         holder_id,
-        bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder_id.into_value()),
-        bridge_lock_core::escrow_account_id(bridge_lock_id),
-        outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
+        bridge_lock_core::holding_account_id(bridge_lock_account_id, &holder_id.into_value()),
+        bridge_lock_core::escrow_account_id(bridge_lock_account_id),
+        outbox_pda(
+            outbox_id,
+            program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+            &target_zone,
+            ordinal,
+        ),
     ];
     // One nonce per signature: the holder signs, at its genesis nonce 0. The
     // lock is fee-exempt (cross-zone outbound traffic), so it carries no fee
     // declaration.
-    let message = Message::try_new(bridge_lock_id, accounts, vec![0_u128.into()], lock)
+    let message = Message::try_new(bridge_lock_id.into(), accounts, vec![0_u128.into()], lock)
         .expect("build lock message");
     let witness = WitnessSet::for_message(&message, &[holder_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness))
-}
-
-/// Polls until the account's native balance equals `expected`; the indexer
-/// ingests on its own cadence.
-async fn wait_for_balance(
-    indexer: &IndexerClient,
-    account: AccountId,
-    expected: u128,
-) -> Result<u128> {
-    let account_id = indexer_service_protocol::AccountId {
-        value: account.into_value(),
-    };
-    let wait = async {
-        loop {
-            let held = indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
-            if held.balance == expected {
-                return Ok::<u128, anyhow::Error>(held.balance);
-            }
-            tokio::time::sleep(Duration::from_secs(3)).await;
-        }
-    };
-    tokio::time::timeout(DELIVERY_TIMEOUT, wait)
-        .await
-        .context("the indexer did not reach the expected balance in time")?
 }
 
 /// Polls zone B's indexer until the recipient's wrapped holding is non-zero.

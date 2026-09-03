@@ -54,8 +54,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: solution,
         },
@@ -85,7 +85,7 @@ fn main() {
     let pinata_definition_data = data.next_data();
 
     let chained_call = ChainedCall::new(
-        pinata_token_holding.account.program_owner.into(),
+        pinata_token_holding.account.program_owner,
         vec![
             pinata_token_holding.account_id,
             winner_token_holding.account_id,
@@ -97,8 +97,8 @@ fn main() {
     .with_pda_seeds(vec![PdaSeed::new([0; 32])]);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![
             AccountStateDiff::new(

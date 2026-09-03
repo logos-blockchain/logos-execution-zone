@@ -35,6 +35,7 @@ mod authenticated_transfer;
 mod changer_claimer;
 mod circuit;
 mod claiming;
+mod deploy;
 mod events;
 mod flash_swap;
 mod genesis;
@@ -160,15 +161,15 @@ impl TestPrivateKeys {
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct CallbackInstruction {
     return_funds: bool,
-    token_program_id: ProgramId,
+    token_account_id: AccountId,
     amount: u128,
 }
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 enum FlashSwapInstruction {
     Initiate {
-        token_program_id: ProgramId,
-        callback_program_id: ProgramId,
+        token_account_id: AccountId,
+        callback_account_id: AccountId,
         amount_out: u128,
         callback_instruction_data: Vec<u8>,
     },
@@ -213,7 +214,8 @@ fn transfer_transaction(
     let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
     let program_id = crate::test_methods::simple_balance_transfer().id();
     let message =
-        public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
+        public_transaction::Message::try_new(program_id.into(), account_ids, nonces, balance)
+            .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
     PublicTransaction::new(message, witness_set)
 }
@@ -225,7 +227,7 @@ fn build_flash_swap_tx(
     instruction: FlashSwapInstruction,
 ) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
-        initiator.id(),
+        initiator.id().into(),
         vec![vault_id, receiver_id],
         vec![], // no signers — vault is PDA-authorised
         instruction,
@@ -267,7 +269,7 @@ pub fn test_private_account_keys_2() -> TestPrivateKeys {
 pub fn init_pda_witness(
     keys: &TestPrivateKeys,
     identifier: Identifier,
-    binding: Option<(ProgramId, PdaSeed)>,
+    binding: Option<(AccountId, PdaSeed)>,
 ) -> InputAccountIdentity {
     InputAccountIdentity::Private(PrivateWitness {
         vpk: keys.vpk(),
@@ -451,13 +453,15 @@ fn deshielded_balance_transfer_for_tests(
 fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransaction) {
     let sender_keys = test_private_account_keys_1();
     let sender_private_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+        program_owner: crate::test_methods::simple_balance_transfer().deployed_account_id(),
         balance: 100,
         nonce: Nonce(0xdead_beef),
         ..Account::default()
     };
     let recipient_keys = test_private_account_keys_2();
-    let state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
+    let state = V03State::new()
+        .with_test_programs()
+        .with_private_account(&sender_keys, &sender_private_account);
     let tx = private_balance_transfer_for_tests(
         &sender_keys,
         &sender_private_account,

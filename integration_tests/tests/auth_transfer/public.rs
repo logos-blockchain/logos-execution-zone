@@ -8,6 +8,9 @@ use integration_tests::{
 };
 use lee::{PublicKey, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 use wallet::{
     AccountIdentity, DEFAULT_MAX_FEE, ExecutionFailureKind,
@@ -361,7 +364,7 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        programs::authenticated_transfer().id(),
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id()),
         vec![faucet_account_id, recipient],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
@@ -398,18 +401,19 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 
     let recipient = ctx.existing_public_accounts()[0];
     let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient);
+    let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
+    let recipient_vault_id = vault_core::compute_vault_account_id(vault_account_id, recipient);
 
     let recipient_balance_before = account_balance(&ctx, recipient).await?;
     let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        programs::faucet().id(),
+        program_loader_core::immutable_deploy_account_id(programs::faucet().id()),
         vec![faucet_account_id, recipient_vault_id],
         vec![],
         faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
+            vault_account_id,
             recipient_id: recipient,
             amount,
         },
@@ -440,29 +444,36 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 
 #[test]
 async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
-    let ctx = TestContext::new().await?;
-
     let faucet_chain_caller = test_programs::faucet_chain_caller();
-    let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-        lee::program_deployment_transaction::Message::new(faucet_chain_caller.elf().to_owned()),
-    ));
-    ctx.sequencer_client().send_transaction(deploy_tx).await?;
+    let faucet_chain_caller_header =
+        program_loader_core::immutable_deploy_account_id(faucet_chain_caller.id());
 
-    log::info!("Waiting for deploy block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_extra_genesis_programs(vec![faucet_chain_caller.clone()]),
+        )
+        .build()
+        .await?;
 
     let faucet_account_id = system_accounts::faucet_account_id();
     let attacker = ctx.existing_public_accounts()[0];
     let faucet_program_id = programs::faucet().id();
     let vault_program_id = programs::vault().id();
-    let attacker_vault_id = vault_core::compute_vault_account_id(vault_program_id, attacker);
+    let vault_account_id = program_loader_core::immutable_deploy_account_id(vault_program_id);
+    let attacker_vault_id = vault_core::compute_vault_account_id(vault_account_id, attacker);
     let amount: u128 = 1;
 
     let message = public_transaction::Message::try_new(
-        faucet_chain_caller.id(),
+        faucet_chain_caller_header,
         vec![faucet_account_id, attacker_vault_id],
         vec![],
-        (faucet_program_id, vault_program_id, attacker, amount),
+        (
+            program_loader_core::immutable_deploy_account_id(faucet_program_id),
+            vault_account_id,
+            attacker,
+            amount,
+        ),
     )?;
     let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         message,

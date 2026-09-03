@@ -31,7 +31,7 @@ async fn get_existing_account() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id().into()
+        program_loader_core::immutable_deploy_account_id(programs::authenticated_transfer().id())
     );
     assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
     assert!(account.data.is_empty());
@@ -151,7 +151,9 @@ async fn import_private_account() -> Result<()> {
         0,
     ));
     let account = lee::Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(
+            programs::authenticated_transfer().id(),
+        ),
         balance: 777,
         data: Data::default(),
         nonce: Nonce::default(),
@@ -215,7 +217,9 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;
 
     let initial_account = lee::Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(
+            programs::authenticated_transfer().id(),
+        ),
         balance: 100,
         data: Data::default(),
         nonce: Nonce::default(),
@@ -234,7 +238,9 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     .await?;
 
     let updated_account = lee::Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(
+            programs::authenticated_transfer().id(),
+        ),
         balance: 999,
         data: Data::default(),
         nonce: Nonce::default(),

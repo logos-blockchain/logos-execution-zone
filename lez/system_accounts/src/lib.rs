@@ -32,7 +32,7 @@ pub fn pinata_account_id() -> AccountId {
 #[must_use]
 pub fn pinata_account() -> Account {
     Account {
-        program_owner: programs::pinata().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(programs::pinata().id()),
         balance: 1_500_000,
         // Difficulty: 3
         data: vec![3; 33].try_into().expect("Should fit"),
@@ -42,13 +42,15 @@ pub fn pinata_account() -> Account {
 
 #[must_use]
 pub fn faucet_account_id() -> AccountId {
-    faucet_core::compute_faucet_account_id(programs::faucet().id())
+    faucet_core::compute_faucet_account_id(programs::faucet().deployed_account_id())
 }
 
 #[must_use]
 pub fn faucet_account() -> Account {
     Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(
+            programs::authenticated_transfer().id(),
+        ),
         balance: u128::MAX,
         ..Account::default()
     }
@@ -56,30 +58,32 @@ pub fn faucet_account() -> Account {
 
 #[must_use]
 pub fn bridge_account_id() -> AccountId {
-    bridge_core::compute_bridge_account_id(programs::bridge().id())
+    bridge_core::compute_bridge_account_id(programs::bridge().deployed_account_id())
 }
 
 #[must_use]
 pub fn bridge_account() -> Account {
     Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(
+            programs::authenticated_transfer().id(),
+        ),
         ..Account::default()
     }
 }
 
 #[must_use]
 pub fn fee_state_account_id() -> AccountId {
-    fee_core::compute_fee_state_account_id(programs::fee().id())
+    fee_core::compute_fee_state_account_id(programs::fee().deployed_account_id())
 }
 
 #[must_use]
 pub fn fee_escrow_account_id() -> AccountId {
-    fee_core::compute_fee_escrow_account_id(programs::fee().id())
+    fee_core::compute_fee_escrow_account_id(programs::fee().deployed_account_id())
 }
 
 #[must_use]
 pub fn fee_inbox_account_id() -> AccountId {
-    fee_core::compute_fee_inbox_account_id(programs::fee().id())
+    fee_core::compute_fee_inbox_account_id(programs::fee().deployed_account_id())
 }
 
 /// Fee program account IDs in the order expected by the fee program.
@@ -121,7 +125,9 @@ pub const fn clock_account_ids() -> [AccountId; 3] {
 
 #[must_use]
 pub fn sequencer_stake_config_account_id() -> AccountId {
-    sequencer_stake_core::sequencer_stake_config_account_id(programs::sequencer_stake().id())
+    sequencer_stake_core::sequencer_stake_config_account_id(
+        programs::sequencer_stake().deployed_account_id(),
+    )
 }
 
 /// Starts with no entries; every stake, including the bootstrap sequencer's
@@ -129,7 +135,9 @@ pub fn sequencer_stake_config_account_id() -> AccountId {
 #[must_use]
 pub fn sequencer_stake_config_account() -> Account {
     Account {
-        program_owner: programs::sequencer_stake().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(
+            programs::sequencer_stake().id(),
+        ),
         data: sequencer_stake_core::SequencerStakeConfig {
             minimum_sequencer_stake: DEFAULT_MINIMUM_SEQUENCER_STAKE,
             entries: BTreeMap::new(),
@@ -144,7 +152,7 @@ pub fn sequencer_stake_config_account() -> Account {
 #[must_use]
 pub fn clock_account() -> Account {
     Account {
-        program_owner: programs::clock().id().into(),
+        program_owner: program_loader_core::immutable_deploy_account_id(programs::clock().id()),
         data: ClockAccountData {
             block_id: 0,
             timestamp: 0,

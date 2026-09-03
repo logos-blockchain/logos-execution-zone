@@ -131,8 +131,7 @@ pub fn add_liquidity(
         ..pool_def_data
     };
 
-    let token_program_id: lee_core::program::ProgramId =
-        user_holding_a.account.program_owner.into();
+    let token_program_id = user_holding_a.account.program_owner;
 
     // Chain call for Token A (UserHoldingA -> Vault_A)
     let call_token_a = ChainedCall::new(
@@ -151,9 +150,14 @@ pub fn add_liquidity(
         },
     );
     // Chain call for LP (mint new tokens for user_holding_lp)
+    let mut pool_definition_lp_auth = pool_definition_lp.clone();
+    pool_definition_lp_auth.is_authorized = true;
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_definition_lp.account_id, user_holding_lp.account_id],
+        vec![
+            pool_definition_lp_auth.account_id,
+            user_holding_lp.account_id,
+        ],
         &token_core::Instruction::Mint {
             amount_to_mint: delta_lp,
         },

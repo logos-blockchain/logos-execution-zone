@@ -553,7 +553,7 @@ mod tests {
         // create message with payer so that it's not rejected due to missing fee declaration
         let payer = &initial_pub_accounts_private_keys()[0];
         let message = lee::public_transaction::Message::try_new_with_fees(
-            test_methods::EVENT_EMITTER_ID,
+            test_methods::EVENT_EMITTER_ID.into(),
             vec![AccountId::new([42; 32])],
             vec![0_u128.into()],
             EmitterInstruction {
@@ -1527,7 +1527,7 @@ mod accept_tests {
         // longer works here: it reverts-with-fee inside a valid block.
         let bogus_deposit = {
             let message = lee::public_transaction::Message::try_new(
-                programs::bridge().id(),
+                programs::bridge().id().into(),
                 vec![
                     lee::AccountId::new([1_u8; 32]),
                     lee::AccountId::new([2_u8; 32]),
@@ -1535,7 +1535,7 @@ mod accept_tests {
                 vec![],
                 bridge_core::Instruction::Deposit {
                     l1_deposit_op_id: [7_u8; 32],
-                    vault_program_id: programs::vault().id(),
+                    vault_account_id: programs::vault().deployed_account_id(),
                     recipient_id: lee::AccountId::new([3_u8; 32]),
                     amount: 5,
                 },

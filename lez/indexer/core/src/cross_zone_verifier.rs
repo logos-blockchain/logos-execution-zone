@@ -835,14 +835,16 @@ impl CrossZoneVerifier {
         let LeeTransaction::Public(public_tx) = tx else {
             return None;
         };
-        if public_tx.message().program_id != programs::cross_zone_inbox().id() {
+        if public_tx.message().program_account_id
+            != program_loader_core::immutable_deploy_account_id(programs::cross_zone_inbox().id())
+        {
             return None;
         }
         match borsh::from_slice::<InboxInstruction>(&public_tx.message().instruction_data) {
-            Ok(InboxInstruction::Dispatch(msg)) => Some(msg),
+            Ok(InboxInstruction::Dispatch { message, .. }) => Some(message),
             // Only a dispatch carries a cross-zone message to re-derive; a genesis
             // `InitConfig` is not verifier-relevant.
-            Ok(InboxInstruction::InitConfig(_)) | Err(_) => None,
+            Ok(InboxInstruction::InitConfig { .. }) | Err(_) => None,
         }
     }
 
@@ -889,8 +891,8 @@ impl CrossZoneVerifier {
             ));
         };
         let message = emission_tx.message();
-        let emission =
-            extract_emission(message.program_id, &message.instruction_data).ok_or_else(|| {
+        let emission = extract_emission(message.program_account_id, &message.instruction_data)
+            .ok_or_else(|| {
                 forged(
                     msg,
                     "peer transaction at src_tx_index is not a recognized emitter".to_owned(),
@@ -916,7 +918,7 @@ impl CrossZoneVerifier {
                 src_block_id: msg.src_block_id,
                 src_block_hash: peer_block.recompute_hash().0,
                 src_tx_index: msg.src_tx_index,
-                src_program_id: message.program_id,
+                src_account_id: message.program_account_id,
             },
             emission.target_program_id,
             &emission.target_accounts,
@@ -1544,18 +1546,21 @@ mod tests {
 
     fn dispatch_naming_block_hash(payload: &[u8], src_block_hash: [u8; 32]) -> LeeTransaction {
         let receiver_id = programs::ping_receiver().id();
+        let receiver_account_id = programs::ping_receiver().deployed_account_id();
         LeeTransaction::Public(build_dispatch_from_emission(
             &EmissionSource {
                 src_zone: PEER_ZONE,
                 src_block_id: PEER_BLOCK_ID,
                 src_block_hash,
                 src_tx_index: 0,
-                src_program_id: programs::ping_sender().id(),
+                src_account_id: program_loader_core::immutable_deploy_account_id(
+                    programs::ping_sender().id(),
+                ),
             },
             receiver_id,
             &[
-                receiver_config_account_id(receiver_id).into_value(),
-                ping_record_pda(receiver_id).into_value(),
+                receiver_config_account_id(receiver_account_id).into_value(),
+                ping_record_pda(receiver_account_id).into_value(),
             ],
             payload.to_vec(),
         ))

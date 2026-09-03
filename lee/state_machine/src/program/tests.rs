@@ -38,6 +38,7 @@ fn program_execution() {
 
     let (program_output, _cycles) = program
         .execute(
+            AccountId::from(program.id()),
             None,
             &pre_states,
             &instruction_data,
@@ -76,9 +77,14 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
     ];
 
     let mut env_builder = ExecutorEnv::builder();
-    program
-        .write_inputs(None, &pre_states, &instruction_data, &mut env_builder)
-        .unwrap();
+    Program::write_inputs(
+        AccountId::from(program.id()),
+        None,
+        &pre_states,
+        &instruction_data,
+        &mut env_builder,
+    )
+    .unwrap();
     let session_info = default_executor()
         .execute(env_builder.build().unwrap(), program.elf())
         .unwrap();
@@ -100,7 +106,13 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
 fn malformed_journal_frame_is_an_error_not_a_panic() {
     let program = crate::test_methods::malformed_journal();
     let err = program
-        .execute(None, &[], &Vec::new(), DEFAULT_PUBLIC_CYCLE_BUDGET)
+        .execute(
+            AccountId::from(program.id()),
+            None,
+            &[],
+            &Vec::new(),
+            DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
         .unwrap_err();
     assert!(
         matches!(
@@ -117,6 +129,7 @@ fn execute_reports_cycles_within_budget() {
     let (program, pre_states, instruction_data, _) = transfer_fixture();
     let (_, cycles) = program
         .execute(
+            AccountId::from(program.id()),
             None,
             &pre_states,
             &instruction_data,
@@ -132,7 +145,13 @@ fn execute_reports_cycles_within_budget() {
 #[test]
 fn tiny_budget_is_out_of_gas() {
     let (program, pre_states, instruction_data, _) = transfer_fixture();
-    let result = program.execute(None, &pre_states, &instruction_data, 1_024);
+    let result = program.execute(
+        AccountId::from(program.id()),
+        None,
+        &pre_states,
+        &instruction_data,
+        1_024,
+    );
     assert!(matches!(result, Err(LeeError::OutOfGas { budget: 1_024 })));
 }
 
@@ -159,8 +178,8 @@ fn program_survives_a_call_kind_it_does_not_recognize() {
     // Stands in for a call kind a future protocol upgrade defines.
     env_builder.write_slice(&to_borsh_frame(&CallKind::Unknown(77)));
     let input = ProgramInput {
-        self_program_id: program.id(),
-        caller_program_id: None,
+        self_account_id: program.id().into(),
+        caller_account_id: None,
         pre_states: pre_states.clone(),
         instruction: instruction_data.clone(),
     };
