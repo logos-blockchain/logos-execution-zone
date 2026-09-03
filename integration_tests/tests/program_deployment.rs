@@ -10,15 +10,15 @@ use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, deploy_program, get_account, new_account,
 };
+use program_loader_core::MAX_PROGRAM_SEGMENTS;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
 };
 use tokio::test;
-use program_loader_core::MAX_PROGRAM_SEGMENTS;
 use wallet::{
     account::AccountIdWithPrivacy,
-    cli::{Command, CliAccountMention, programs::program_loader::ProgramLoaderSubcommand},
+    cli::{CliAccountMention, Command, programs::program_loader::ProgramLoaderSubcommand},
     config::WalletConfigOverrides,
 };
 
@@ -36,12 +36,8 @@ async fn deploy_and_execute_program() -> Result<()> {
         .wallet()
         .get_account_public_signing_key(account_id)
         .unwrap();
-    let message = lee::public_transaction::Message::try_new(
-        header_id,
-        vec![account_id],
-        nonces,
-        (),
-    )?;
+    let message =
+        lee::public_transaction::Message::try_new(header_id, vec![account_id], nonces, ())?;
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[private_key]);
     let transaction = lee::PublicTransaction::new(message, witness_set);
     let _response = ctx

@@ -17,8 +17,8 @@ use wallet::{
         CliAccountMention, Command, SubcommandReturnValue,
         account::{AccountSubcommand, NewSubcommand},
         programs::{
-            native_token_transfer::AuthTransferSubcommand,
-            program_loader::ProgramLoaderSubcommand, token::TokenProgramAgnosticSubcommand,
+            native_token_transfer::AuthTransferSubcommand, program_loader::ProgramLoaderSubcommand,
+            token::TokenProgramAgnosticSubcommand,
         },
     },
     program_facades::{native_token_transfer::NativeTokenTransfer, token::Token},

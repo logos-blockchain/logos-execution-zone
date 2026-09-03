@@ -313,7 +313,9 @@ pub async fn execute_subcommand(
             SubcommandReturnValue::Empty
         }
         Command::ProgramLoader(program_loader_subcommand) => {
-            program_loader_subcommand.handle_subcommand(wallet_core).await?
+            program_loader_subcommand
+                .handle_subcommand(wallet_core)
+                .await?
         }
         Command::Statistics(statistics_subcommand) => {
             statistics_subcommand.handle_subcommand(wallet_core).await?
