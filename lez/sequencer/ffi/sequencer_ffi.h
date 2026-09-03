@@ -12,6 +12,18 @@ typedef enum OperationStatus {
   ClientError = 3,
 } OperationStatus;
 
+typedef enum FfiTransactionKind {
+  Public = 0,
+  Private,
+  ProgramDeploy,
+} FfiTransactionKind;
+
+typedef enum FfiBedrockStatus {
+  Pending = 0,
+  Safe,
+  Finalized,
+} FfiBedrockStatus;
+
 typedef enum PointerKind_Tag {
   Owned,
   Borrowed,
@@ -69,6 +81,278 @@ typedef struct PointerResult_SequencerServiceFFI__OperationStatus {
 } PointerResult_SequencerServiceFFI__OperationStatus;
 
 typedef struct PointerResult_SequencerServiceFFI__OperationStatus InitializedSequencerServiceFFIResult;
+
+/**
+ * 32-byte array type for `AccountId`, keys, hashes, etc.
+ */
+typedef struct FfiBytes32 {
+  uint8_t data[32];
+} FfiBytes32;
+
+/**
+ * U128 - 16 bytes little endian.
+ */
+typedef struct FfiU128 {
+  uint8_t data[16];
+} FfiU128;
+
+/**
+ * Account data structure - C-compatible version of lee Account.
+ *
+ * Note: `balance` and `nonce` are u128 values represented as little-endian
+ * byte arrays since C doesn't have native u128 support.
+ */
+typedef struct FfiAccount {
+  struct FfiBytes32 program_owner;
+  /**
+   * Balance as little-endian [u8; 16].
+   */
+  struct FfiU128 balance;
+  /**
+   * Pointer to account data bytes.
+   */
+  uint8_t *data;
+  /**
+   * Length of account data.
+   */
+  uintptr_t data_len;
+  /**
+   * Capacity of account data.
+   */
+  uintptr_t data_cap;
+  /**
+   * Nonce as little-endian [u8; 16].
+   */
+  struct FfiU128 nonce;
+} FfiAccount;
+
+typedef uint64_t FfiBlockId;
+
+typedef struct FfiBytes32 FfiHashType;
+
+typedef uint64_t FfiTimestamp;
+
+typedef struct FfiBytes32 FfiPublicKey;
+
+/**
+ * 64-byte array type for signatures, etc.
+ */
+typedef struct FfiBytes64 {
+  uint8_t data[64];
+} FfiBytes64;
+
+typedef struct FfiBytes64 FfiSignature;
+
+typedef struct FfiBlockHeader {
+  FfiBlockId block_id;
+  FfiHashType prev_block_hash;
+  FfiHashType hash;
+  FfiTimestamp timestamp;
+  FfiPublicKey producer;
+  FfiSignature signature;
+} FfiBlockHeader;
+
+/**
+ * Program ID - 8 u32 values (32 bytes total).
+ */
+typedef struct FfiProgramId {
+  uint32_t data[8];
+} FfiProgramId;
+
+typedef struct FfiBytes32 FfiAccountId;
+
+typedef struct FfiVec_FfiAccountId {
+  FfiAccountId *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiAccountId;
+
+typedef struct FfiVec_FfiAccountId FfiAccountIdList;
+
+typedef struct FfiU128 FfiNonce;
+
+typedef struct FfiVec_FfiNonce {
+  FfiNonce *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiNonce;
+
+typedef struct FfiVec_FfiNonce FfiNonceList;
+
+typedef struct FfiVec_u8 {
+  uint8_t *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_u8;
+
+typedef struct FfiVec_u8 FfiInstructionDataList;
+
+/**
+ * Fee declaration of a public transaction. Held inline (not behind a
+ * pointer): a fee-exempt transaction carries `has_fee == false` and a zeroed
+ * declaration.
+ */
+typedef struct FfiFeeDeclaration {
+  FfiAccountId payer;
+  uint64_t gas_limit;
+  uint64_t tip;
+  struct FfiU128 max_fee;
+} FfiFeeDeclaration;
+
+typedef struct FfiPublicMessage {
+  struct FfiProgramId program_id;
+  FfiAccountIdList account_ids;
+  FfiNonceList nonces;
+  FfiInstructionDataList instruction_data;
+  bool has_fee;
+  struct FfiFeeDeclaration fee;
+} FfiPublicMessage;
+
+typedef struct FfiSignaturePubKeyEntry {
+  FfiSignature signature;
+  FfiPublicKey public_key;
+} FfiSignaturePubKeyEntry;
+
+typedef struct FfiVec_FfiSignaturePubKeyEntry {
+  struct FfiSignaturePubKeyEntry *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiSignaturePubKeyEntry;
+
+typedef struct FfiVec_FfiSignaturePubKeyEntry FfiSignaturePubKeyList;
+
+typedef struct FfiPublicTransactionBody {
+  FfiHashType hash;
+  struct FfiPublicMessage message;
+  FfiSignaturePubKeyList witness_set;
+} FfiPublicTransactionBody;
+
+typedef struct FfiPublicAction {
+  FfiAccountId account_id;
+  struct FfiAccount post_state;
+} FfiPublicAction;
+
+typedef struct FfiVec_FfiPublicAction {
+  struct FfiPublicAction *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiPublicAction;
+
+typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
+
+typedef struct FfiVec_u8 FfiVecU8;
+
+typedef struct FfiEncryptedAccountData {
+  FfiVecU8 ciphertext;
+  FfiVecU8 epk;
+  uint8_t view_tag;
+} FfiEncryptedAccountData;
+
+typedef struct FfiPrivateAction {
+  struct FfiBytes32 nullifier;
+  struct FfiBytes32 root;
+  struct FfiBytes32 commitment;
+  struct FfiEncryptedAccountData encrypted_post_state;
+} FfiPrivateAction;
+
+typedef struct FfiVec_FfiPrivateAction {
+  struct FfiPrivateAction *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiPrivateAction;
+
+typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
+
+typedef struct FfiPrivacyPreservingMessage {
+  FfiPublicActionList public_actions;
+  FfiNonceList nonces;
+  FfiPrivateActionList private_actions;
+  uint64_t block_validity_window[2];
+  uint64_t timestamp_validity_window[2];
+} FfiPrivacyPreservingMessage;
+
+typedef FfiVecU8 FfiProof;
+
+typedef struct FfiPrivateTransactionBody {
+  FfiHashType hash;
+  struct FfiPrivacyPreservingMessage message;
+  FfiSignaturePubKeyList witness_set;
+  FfiProof proof;
+} FfiPrivateTransactionBody;
+
+typedef FfiVecU8 FfiProgramDeploymentMessage;
+
+typedef struct FfiProgramDeploymentTransactionBody {
+  FfiHashType hash;
+  FfiProgramDeploymentMessage message;
+} FfiProgramDeploymentTransactionBody;
+
+typedef struct FfiTransactionBody {
+  struct FfiPublicTransactionBody *public_body;
+  struct FfiPrivateTransactionBody *private_body;
+  struct FfiProgramDeploymentTransactionBody *program_deployment_body;
+} FfiTransactionBody;
+
+typedef struct FfiTransaction {
+  struct FfiTransactionBody body;
+  enum FfiTransactionKind kind;
+} FfiTransaction;
+
+typedef struct FfiVec_FfiTransaction {
+  struct FfiTransaction *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiTransaction;
+
+typedef struct FfiVec_FfiTransaction FfiBlockBody;
+
+typedef struct FfiBlock {
+  struct FfiBlockHeader header;
+  FfiBlockBody body;
+  enum FfiBedrockStatus bedrock_status;
+} FfiBlock;
+
+typedef struct FfiOption_FfiBlock {
+  struct FfiBlock *value;
+  bool is_some;
+} FfiOption_FfiBlock;
+
+typedef struct FfiOption_FfiBlock FfiBlockOpt;
+
+typedef struct FfiVec_FfiBlock {
+  struct FfiBlock *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiBlock;
+
+/**
+ * 8-byte array type for event selectors.
+ */
+typedef struct FfiBytes8 {
+  uint8_t data[8];
+} FfiBytes8;
+
+typedef struct FfiBytes8 FfiSelector;
+
+typedef struct FfiEventRecord {
+  FfiBlockId block_id;
+  uint32_t tx_index;
+  FfiHashType tx_hash;
+  struct FfiProgramId program_id;
+  FfiSelector selector;
+  FfiVecU8 data;
+} FfiEventRecord;
+
+typedef struct FfiVec_FfiEventRecord {
+  struct FfiEventRecord *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiEventRecord;
+
+typedef struct FfiOption_FfiTransaction {
+  struct FfiTransaction *value;
+  bool is_some;
+} FfiOption_FfiTransaction;
 
 #ifdef __cplusplus
 extern "C" {
@@ -138,6 +422,182 @@ void init_logger(const char *level);
  * will cause a segfault.
  */
 void free_cstring(char *block);
+
+/**
+ * Frees the resources associated with the given ffi account.
+ *
+ * Takes ownership of the whole allocation produced by a `query_*` call: the
+ * outer `Box<FfiAccount>` (the `PointerResult.value` pointer) *and* its inner
+ * data buffer. Passing the struct by value previously freed only the inner
+ * buffer and leaked the outer box.
+ *
+ * # Arguments
+ *
+ * - `val`: The `*mut FfiAccount` returned in `PointerResult.value`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
+ */
+void free_ffi_account(struct FfiAccount *val);
+
+/**
+ * Frees the resources owned by an `FfiBlock` value.
+ *
+ * This frees the block's transaction bodies (the only heap-owning field); the
+ * header/status fields are `Copy`. It operates on the struct by value because
+ * it is an element-level helper, used both for the vector path
+ * ([`free_ffi_block_vec`]) and the optional path ([`free_ffi_block_opt`]) — in
+ * neither case is an `FfiBlock` itself wrapped in its own outer box.
+ *
+ * # Arguments
+ *
+ * - `val`: An instance of `FfiBlock`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a valid instance of `FfiBlock` produced by this library and not yet freed.
+ */
+void free_ffi_block(struct FfiBlock val);
+
+/**
+ * Frees the resources associated with the given ffi block option.
+ *
+ * Takes ownership of the whole allocation produced by a `query_*` call: the
+ * outer `Box<FfiBlockOpt>` (the `PointerResult.value` pointer), the inner
+ * `Box<FfiBlock>` (when present), and that block's transaction bodies.
+ *
+ * # Arguments
+ *
+ * - `val`: The `*mut FfiBlockOpt` returned in `PointerResult.value`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a pointer to an `FfiBlockOpt` produced by this library and not yet freed.
+ */
+void free_ffi_block_opt(FfiBlockOpt *val);
+
+/**
+ * Frees the resources associated with the given ffi block vector.
+ *
+ * Takes ownership of the whole allocation produced by a `query_*` call: the
+ * outer `Box<FfiVec<FfiBlock>>` (the `PointerResult.value` pointer), the
+ * vector's backing buffer, and every block within it.
+ *
+ * # Arguments
+ *
+ * - `val`: The `*mut FfiVec<FfiBlock>` returned in `PointerResult.value`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
+ */
+void free_ffi_block_vec(struct FfiVec_FfiBlock *val);
+
+/**
+ * Frees the resources associated with the given vector of ffi event records.
+ *
+ * Takes ownership of the whole allocation produced by `query_events`: the outer
+ * `Box<FfiVec<FfiEventRecord>>` (the `PointerResult.value` pointer), the vector's
+ * backing buffer, and every record's payload within it.
+ *
+ * # Arguments
+ *
+ * - `val`: The `*mut FfiVec<FfiEventRecord>` returned in `PointerResult.value`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yet freed.
+ */
+void free_ffi_event_record_vec(struct FfiVec_FfiEventRecord *val);
+
+/**
+ * Frees the resources associated with the given ffi transaction.
+ *
+ * # Arguments
+ *
+ * - `val`: An instance of `FfiTransaction`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a valid instance of `FfiTransaction`.
+ */
+void free_ffi_transaction(struct FfiTransaction val);
+
+/**
+ * Frees the resources associated with the given ffi transaction option.
+ *
+ * Takes ownership of the whole allocation produced by a `query_*` call: the
+ * outer `Box<FfiOption<FfiTransaction>>` (the `PointerResult.value` pointer),
+ * the inner `Box<FfiTransaction>` (when present), and its body.
+ *
+ * # Arguments
+ *
+ * - `val`: The `*mut FfiOption<FfiTransaction>` returned in `PointerResult.value`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a pointer to an `FfiOption<FfiTransaction>` produced by this library and not yet
+ *   freed.
+ */
+void free_ffi_transaction_opt(struct FfiOption_FfiTransaction *val);
+
+/**
+ * Frees the resources associated with the given vector of ffi transactions.
+ *
+ * Takes ownership of the whole allocation produced by a `query_*` call: the
+ * outer `Box<FfiVec<FfiTransaction>>` (the `PointerResult.value` pointer), the
+ * vector's backing buffer, and every transaction within it.
+ *
+ * # Arguments
+ *
+ * - `val`: The `*mut FfiVec<FfiTransaction>` returned in `PointerResult.value`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a pointer to an `FfiVec<FfiTransaction>` produced by this library and not yet freed.
+ */
+void free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
 
 bool is_ok(const enum OperationStatus *self);
 
