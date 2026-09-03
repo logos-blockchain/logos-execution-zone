@@ -11,7 +11,7 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::config::SequencerPartialConfig;
@@ -33,6 +33,17 @@ use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
 };
 use tokio::test;
+use wallet::DEFAULT_MAX_FEE;
+
+/// Genesis supply per TPS account: enough to cover one transfer's fee reserve
+/// (`gas_limit x base_fee` ≈ 0.8M at genesis fees) with ample headroom.
+const TPS_ACCOUNT_SUPPLY: u128 = 10_000_000;
+
+/// Declared execution gas per transfer. A metered native transfer runs
+/// ~82k cycles; the declared limit gates how many transfers the builder packs
+/// per block (`MAX_GAS_EXEC` over the limit), so it is kept tight — at 100k the block
+/// carries ~100 transfers, which is what makes the 8 TPS target reachable.
+const TPS_TRANSFER_GAS_LIMIT: u64 = 100_000;
 
 pub(crate) struct TpsTestManager {
     public_keypairs: Vec<(PrivateKey, AccountId)>,
@@ -77,11 +88,15 @@ impl TpsTestManager {
             .windows(2)
             .map(|pair| {
                 let amount: u128 = 1;
-                let message = putx::Message::try_new(
+                let message = putx::Message::try_new_with_fees(
                     program.id(),
                     [pair[0].1, pair[1].1].to_vec(),
                     [Nonce(0_u128)].to_vec(),
                     authenticated_transfer_core::Instruction::Transfer { amount },
+                    // A generous max_fee (a ceiling, not the fee paid) so the
+                    // base-fee rise this test's own sustained load causes cannot
+                    // push the reserve past it and drop later txs.
+                    lee::FeeDeclaration::new(pair[0].1, TPS_TRANSFER_GAS_LIMIT, 0, DEFAULT_MAX_FEE),
                 )
                 .unwrap();
                 let witness_set =
@@ -101,7 +116,7 @@ impl TpsTestManager {
             .iter()
             .map(|(_, account_id)| GenesisAction::SupplyAccount {
                 account_id: *account_id,
-                balance: 10,
+                balance: TPS_ACCOUNT_SUPPLY,
             })
             .collect()
     }
@@ -109,7 +124,8 @@ impl TpsTestManager {
     const fn generate_sequencer_partial_config() -> SequencerPartialConfig {
         SequencerPartialConfig {
             max_num_tx_in_block: 300,
-            max_block_size: ByteSize::mb(500),
+            // The largest block Bedrock can carry as one inscription.
+            max_block_size: ByteSize::b(sequencer_core::config::MAX_PUBLISHABLE_BLOCK_SIZE),
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(12),
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
@@ -185,6 +201,26 @@ pub async fn tps_test() -> Result<()> {
     assert!(
         time_elapsed <= target_time.as_secs(),
         "Elapsed time {time_elapsed:?} exceeded target time {target_time:?}"
+    );
+
+    // Guard against silent revert-keeps-fee false passes: an OutOfGas-reverted
+    // transfer is still INCLUDED (fee charged, nonce burned), so `get_transaction`
+    // returning does not prove the transfer executed. The last keypair is a pure
+    // recipient in the chained transfers (never a sender, so never charged a fee),
+    // making its post-state deterministic: it must have gained exactly the
+    // transferred amount (1) over its genesis supply. If the chain reverted instead
+    // of executing, it would still sit at its untouched genesis supply.
+    let last_recipient = tps_test.public_keypairs.last().unwrap().1;
+    let last_recipient_balance = ctx
+        .sequencer_client()
+        .get_account_balance(last_recipient)
+        .await
+        .context("Failed to fetch last recipient balance")?;
+    assert_eq!(
+        last_recipient_balance,
+        TPS_ACCOUNT_SUPPLY + 1,
+        "Last recipient balance mismatch: transfers were included but did not execute \
+         (revert-keeps-fee), so no funds actually moved"
     );
 
     log::info!("TPS test finished successfully");

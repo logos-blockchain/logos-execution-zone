@@ -90,6 +90,11 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
 
 #[test]
 async fn restore_keys_from_seed() -> Result<()> {
+    // Well above a single transfer's fee reserve, and distinct so restoration
+    // maps each balance to the right account.
+    const ACC3_FUNDING: u128 = 1_000_000_000;
+    const ACC4_FUNDING: u128 = 1_000_000_001;
+
     let mut ctx = TestContext::new().await?;
 
     let from: AccountId = ctx.existing_private_accounts()[0];
@@ -120,19 +125,20 @@ async fn restore_keys_from_seed() -> Result<()> {
     let to_account_id3 = new_account(&mut ctx, false, Some(ChainIndex::root())).await?;
     let to_account_id4 = new_account(&mut ctx, false, Some(ChainIndex::from_str("/0")?)).await?;
 
-    // Send to both public accounts.
+    // Send to both public accounts. Public transfers pay a real fee, so these accounts must hold
+    // enough to cover one when they transact below (unlike the fee-exempt private accounts above).
     send(
         &mut ctx,
         public_mention(from),
         public_mention(to_account_id3),
-        102,
+        ACC3_FUNDING,
     )
     .await?;
     send(
         &mut ctx,
         public_mention(from),
         public_mention(to_account_id4),
-        103,
+        ACC4_FUNDING,
     )
     .await?;
 
@@ -199,8 +205,13 @@ async fn restore_keys_from_seed() -> Result<()> {
         .get_account_balance(to_account_id4)
         .await?;
 
-    assert_eq!(acc3, 91); // 102 - 11
-    assert_eq!(acc4, 114); // 103 + 11
+    // The recipient gains exactly the transferred amount; the sender pays that
+    // plus a real fee, so its balance drops by strictly more than 11.
+    assert_eq!(acc4, ACC4_FUNDING + 11);
+    assert!(
+        acc3 < ACC3_FUNDING - 11,
+        "sender must also pay a fee on the transfer, got {acc3}"
+    );
 
     log::info!("Successfully restored keys and verified transactions");
 

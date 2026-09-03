@@ -36,7 +36,9 @@ use test_fixtures::{
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
-const INITIAL_BALANCE: u128 = 100;
+// LGO-scale: the holder's balance also pays the lock's fee (reserve ≈ 16M+ at
+// wallet-like gas limits), so the bridgeable seed must dwarf it.
+const INITIAL_BALANCE: u128 = 10_000_000_000;
 const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
 
@@ -196,7 +198,9 @@ fn build_lock_tx(
         bridge_lock_core::escrow_account_id(bridge_lock_id),
         outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
     ];
-    // One nonce per signature: the holder signs, at its genesis nonce 0.
+    // One nonce per signature: the holder signs, at its genesis nonce 0. The
+    // lock is fee-exempt (cross-zone outbound traffic), so it carries no fee
+    // declaration.
     let message = Message::try_new(bridge_lock_id, accounts, vec![0_u128.into()], lock)
         .expect("build lock message");
     let witness = WitnessSet::for_message(&message, &[holder_key]);

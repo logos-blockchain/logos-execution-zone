@@ -3,7 +3,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 #[cfg(feature = "image_id")]
 use lee_core::{
-    account::AccountWithMetadata,
+    account::AccountId,
     program::{ChainedCall, PdaSeed},
 };
 
@@ -26,12 +26,11 @@ pub enum Instruction {
 #[cfg(feature = "image_id")]
 #[must_use]
 pub fn custody_transfer(
-    mut from: AccountWithMetadata,
+    from: AccountId,
     seed: PdaSeed,
-    to: AccountWithMetadata,
+    to: AccountId,
     amount: u128,
 ) -> ChainedCall {
-    from.is_authorized = true;
     ChainedCall::new(
         AUTHENTICATED_TRANSFER_IMAGE_ID,
         vec![from, to],

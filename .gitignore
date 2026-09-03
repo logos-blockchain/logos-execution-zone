@@ -17,6 +17,7 @@ result
 
 wallet-ffi/wallet_ffi.h
 bedrock_signing_key
+sequencer_stake_signing_key
 integration_tests/configs/debug/
 
 .DS_Store

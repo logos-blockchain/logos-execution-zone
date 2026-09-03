@@ -87,9 +87,9 @@ fn main() {
                 ];
 
                 let chained_calls = vec![custody_transfer(
-                    bridge,
+                    bridge.account_id,
                     bridge_core::compute_bridge_seed(),
-                    recipient,
+                    recipient.account_id,
                     u128::from(amount),
                 )];
 

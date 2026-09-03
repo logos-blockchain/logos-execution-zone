@@ -144,15 +144,15 @@ fn lock(
 
     // The balance moves in a chained authenticated_transfer call.
     let move_call = custody_transfer(
-        holding.clone(),
+        holding.account_id,
         holding_seed(&holder.account_id.into_value()),
-        escrow.clone(),
+        escrow.account_id,
         amount,
     );
 
     let emit_call = ChainedCall::new(
         outbox_program_id,
-        vec![outbox.clone()],
+        vec![outbox.account_id],
         &OutboxInstruction::Emit {
             target_zone,
             target_program_id,

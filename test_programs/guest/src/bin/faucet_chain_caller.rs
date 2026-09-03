@@ -18,12 +18,11 @@ fn main() {
     let post_states: Vec<_> = pre_states.iter().map(|pre| pre.account.clone()).collect();
 
     assert_eq!(pre_states.len(), 2);
-    let [faucet_pre, recipient_pre] = [pre_states[0].clone(), pre_states[1].clone()];
 
     let chained_calls = vec![ChainedCall {
         program_id: faucet_program_id,
         instruction_data: to_vec(&faucet_core::Instruction::GenesisTransfer { amount }).unwrap(),
-        pre_states: vec![faucet_pre, recipient_pre],
+        pre_state_ids: vec![pre_states[0].account_id, pre_states[1].account_id],
         pda_seeds: vec![],
     }];
 

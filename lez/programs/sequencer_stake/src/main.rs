@@ -219,7 +219,7 @@ fn stake(
     }
 
     // pass-through: propagates authorization into the nested mover call
-    let funding_account_post = funding_account.account.clone();
+    let funding_account_post = funding_account.account;
 
     // the first stake's write acquires the ownership account; a top-up is an ordinary owned write
     let mut ownership_account_post = ownership_account.account;
@@ -231,7 +231,7 @@ fn stake(
     .try_into()
     .expect("StakeRecord should fit in account data");
 
-    let funds_account_post = funds_account.account.clone();
+    let funds_account_post = funds_account.account;
 
     let mut config_account_post = config_account.account;
     config_account_post.data = config
@@ -241,18 +241,14 @@ fn stake(
 
     let mover_call = ChainedCall {
         program_id: mover_program_id,
-        pre_states: vec![funding_account, funds_account.clone()],
+        pre_state_ids: vec![funding_account.account_id, funds_account.account_id],
         instruction_data: mover_instruction_data,
         pda_seeds: Vec::new(),
     };
 
-    // expected balance after the mover call
-    let mut funds_account_after_mover = funds_account;
-    funds_account_after_mover.account.balance = expected_balance_after;
-
     let confirm_call = ChainedCall::new(
         self_program_id,
-        vec![funds_account_after_mover],
+        vec![funds_account.account_id],
         &Instruction::ConfirmStake {
             expected_balance_after,
         },
@@ -450,14 +446,14 @@ fn slash(
         .try_into()
         .expect("SequencerStakeConfig should fit in account data");
 
-    let funds_account_post = funds_account.account.clone();
-    let sink_account_post = sink_account.account.clone();
+    let funds_account_post = funds_account.account;
+    let sink_account_post = sink_account.account;
 
     // The burn happens in a chained authenticated_transfer call.
     let burn_call = custody_transfer(
-        funds_account,
+        funds_account.account_id,
         stake_funds_seed(&ownership_account.account_id),
-        sink_account,
+        sink_account.account_id,
         entry.total_staked,
     );
 
@@ -534,13 +530,13 @@ fn finalize_unstake(
         .try_into()
         .expect("SequencerStakeConfig should fit in account data");
 
-    let funds_account_post = funds_account.account.clone();
-    let destination_post = destination_account.account.clone();
+    let funds_account_post = funds_account.account;
+    let destination_post = destination_account.account;
 
     let release_call = custody_transfer(
-        funds_account,
+        funds_account.account_id,
         stake_funds_seed(&ownership_account.account_id),
-        destination_account,
+        destination_account.account_id,
         pending.amount,
     );
 

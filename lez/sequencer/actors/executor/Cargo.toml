@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 sequencer_core.workspace = true
+sequencer_service_protocol.workspace = true
 common.workspace = true
 lee_core.workspace = true
 mempool.workspace = true
@@ -31,6 +32,7 @@ sequencer_storage_actor = { workspace = true, features = ["mock"] }
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
 test_programs.workspace = true
+testnet_initial_state.workspace = true
 
 env_logger.workspace = true
 mockall.workspace = true

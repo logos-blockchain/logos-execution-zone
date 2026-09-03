@@ -1,7 +1,7 @@
-use indexer_service_protocol::{BedrockStatus, Block, BlockHeader, HashType, Signature};
+use indexer_service_protocol::{BedrockStatus, Block, BlockHeader, HashType, PublicKey, Signature};
 
 use crate::api::types::{
-    FfiBlockId, FfiHashType, FfiOption, FfiSignature, FfiTimestamp, FfiVec,
+    FfiBlockId, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiTimestamp, FfiVec,
     transaction::free_transaction_vec_value, vectors::FfiBlockBody,
 };
 
@@ -41,6 +41,7 @@ pub struct FfiBlockHeader {
     pub prev_block_hash: FfiHashType,
     pub hash: FfiHashType,
     pub timestamp: FfiTimestamp,
+    pub producer: FfiPublicKey,
     pub signature: FfiSignature,
 }
 
@@ -51,6 +52,7 @@ impl From<BlockHeader> for FfiBlockHeader {
             prev_block_hash,
             hash,
             timestamp,
+            producer,
             signature,
         } = value;
 
@@ -59,6 +61,7 @@ impl From<BlockHeader> for FfiBlockHeader {
             prev_block_hash: prev_block_hash.into(),
             hash: hash.into(),
             timestamp,
+            producer: producer.into(),
             signature: signature.into(),
         }
     }
@@ -120,6 +123,7 @@ pub unsafe extern "C" fn free_ffi_block(val: FfiBlock) {
         prev_block_hash: HashType(val.header.prev_block_hash.data),
         hash: HashType(val.header.hash.data),
         timestamp: val.header.timestamp,
+        producer: PublicKey(val.header.producer.data),
         signature: Signature(val.header.signature.data),
     };
     let ffi_tx_ffi_vec = val.body;

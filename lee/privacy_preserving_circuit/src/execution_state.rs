@@ -10,7 +10,8 @@ use lee_core::{
     program::{
         BlockValidityWindow, CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER,
         MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow,
-        acquire_ownership_on_data_write, is_ownership_settled, validate_execution,
+        acquire_ownership_on_data_write, is_ownership_settled, pre_states_match_accounts,
+        validate_execution,
     },
 };
 use risc0_zkvm::guest::env;
@@ -121,10 +122,16 @@ impl ExecutionState {
             panic!("No program outputs provided");
         };
 
+        // `pre_state_ids` is never read below (every check uses `program_output` instead) —
+        // this synthetic call only bootstraps the loop's first iteration.
         let initial_call = ChainedCall {
             program_id,
             instruction_data: first_output.instruction_data.clone(),
-            pre_states: first_output.pre_states.clone(),
+            pre_state_ids: first_output
+                .pre_states
+                .iter()
+                .map(|p| p.account_id)
+                .collect(),
             pda_seeds: Vec::new(),
         };
         let initial_caller_data = CallerData {
@@ -151,6 +158,18 @@ impl ExecutionState {
             assert_eq!(
                 chained_call.instruction_data, program_output.instruction_data,
                 "Mismatched instruction data between chained call and program output"
+            );
+
+            // Check accounts used are exactly those the call was performed with.
+            assert!(
+                // If the call is top-level, nothing to check.
+                caller_data.program_id.is_none()
+                    // Else, match.
+                    || pre_states_match_accounts(
+                        &chained_call.pre_state_ids,
+                        &program_output.pre_states
+                    ),
+                "Callee ran on accounts the chained call did not name"
             );
 
             // Check that `program_output` is consistent with the execution of the corresponding

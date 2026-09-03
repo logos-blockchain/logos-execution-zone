@@ -23,14 +23,18 @@ fn main() {
     };
 
     let mut target_post = target.account.clone();
-    let mut forwarded = target.clone();
     if let Some(data) = data {
         target_post.data = data
             .try_into()
             .expect("provided data should fit into data limit");
-        forwarded.account = target_post.clone();
-        forwarded.account.program_owner = self_program_id.into();
     }
+
+    let chained_call = ChainedCall {
+        program_id: callee,
+        instruction_data: callee_instruction,
+        pre_state_ids: vec![target.account_id],
+        pda_seeds: vec![],
+    };
 
     ProgramOutput::new(
         self_program_id,
@@ -39,11 +43,6 @@ fn main() {
         vec![target],
         vec![target_post],
     )
-    .with_chained_calls(vec![ChainedCall {
-        program_id: callee,
-        instruction_data: callee_instruction,
-        pre_states: vec![forwarded],
-        pda_seeds: vec![],
-    }])
+    .with_chained_calls(vec![chained_call])
     .write();
 }

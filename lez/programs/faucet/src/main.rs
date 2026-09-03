@@ -29,9 +29,9 @@ fn main() {
     );
 
     let transfer = custody_transfer(
-        faucet,
+        faucet.account_id,
         faucet_core::compute_faucet_seed(),
-        recipient,
+        recipient.account_id,
         amount,
     );
 

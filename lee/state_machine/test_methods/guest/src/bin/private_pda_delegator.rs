@@ -24,13 +24,10 @@ fn main() {
 
     let post = pre.account.clone();
 
-    let mut pre_for_callee = pre.clone();
-    pre_for_callee.is_authorized = true;
-
     let chained_call = ChainedCall {
         program_id: callee_program_id,
         instruction_data: to_vec(&()).unwrap(),
-        pre_states: vec![pre_for_callee],
+        pre_state_ids: vec![pre.account_id],
         pda_seeds: vec![delegated_seed],
     };
 
