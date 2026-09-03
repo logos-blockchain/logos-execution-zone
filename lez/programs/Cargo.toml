@@ -112,7 +112,9 @@ lee = { workspace = true, optional = true }
 lee_core = { workspace = true, optional = true }
 amm_core = { workspace = true, optional = true }
 associated_token_account_core = { workspace = true, optional = true }
-authenticated_transfer_core = { workspace = true, optional = true, features = ["image_id"] }
+authenticated_transfer_core = { workspace = true, optional = true, features = [
+  "image_id",
+] }
 bridge_core = { workspace = true, optional = true }
 clock_core = { workspace = true, optional = true }
 faucet_core = { workspace = true, optional = true }
