@@ -83,7 +83,7 @@ async fn program_loader_new_segment_and_upload_header_deploys_program() -> Resul
     // Upload tail-to-head, one `NewSegment` transaction per chunk, matching program_loader's
     // linking requirement (each `next_segment` must already exist on-chain).
     for i in (0..chunks.len()).rev() {
-        let next_segment = segment_ids.get(i + 1).copied();
+        let next_segment = segment_ids.get(i.saturating_add(1)).copied();
         let mut tempfile = tempfile::NamedTempFile::new()?;
         tempfile.write_all(chunks[i])?;
 
@@ -141,9 +141,9 @@ async fn program_loader_resolve_chain_rejects_overlong_chain() -> Result<()> {
     // Upload tail-to-head with trivial one-byte bytecode per segment: resolve_chain never reads
     // segment content, so real ELF chunks aren't needed to exercise the cap.
     for i in (0..segment_count).rev() {
-        let next_segment = segment_ids.get(i + 1).copied();
+        let next_segment = segment_ids.get(i.saturating_add(1)).copied();
         let mut tempfile = tempfile::NamedTempFile::new()?;
-        tempfile.write_all(&[0u8])?;
+        tempfile.write_all(&[0_u8])?;
 
         let command = Command::ProgramLoader(ProgramLoaderSubcommand::NewSegment {
             target: CliAccountMention::Id(AccountIdWithPrivacy::Public(segment_ids[i])),
