@@ -111,6 +111,8 @@ pub fn execute_and_prove_with_padded_inputs(
         .map(|pre| (pre.account_id, pre.account.clone()))
         .collect();
     let pre_state_ids: Vec<AccountId> = pre_states.iter().map(|pre| pre.account_id).collect();
+    // Captured before pre_states moves into initial_call below.
+    let initial_pre_states: Vec<AccountId> = pre_state_ids.clone();
 
     // Non-PDA accounts authorized at their first sight, anywhere in the call tree — mirrors
     // the circuit's own `globally_authorized`. Seeded from top-level `is_authorized` since the
@@ -256,7 +258,10 @@ pub fn execute_and_prove_with_padded_inputs(
                 Account {
                     program_owner,
                     balance,
-                    data: diff.post_data.clone(),
+                    data: diff
+                        .post_data
+                        .clone()
+                        .unwrap_or_else(|| pre.account.data.clone()),
                     nonce: pre.account.nonce,
                 },
             );
@@ -302,6 +307,7 @@ pub fn execute_and_prove_with_padded_inputs(
         account_identities,
         program_id: program_with_dependencies.program.id(),
         dummy_inputs,
+        initial_pre_states,
     };
 
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;

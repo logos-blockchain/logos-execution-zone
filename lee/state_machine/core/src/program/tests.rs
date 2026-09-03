@@ -171,7 +171,7 @@ fn account_state_diff_new_claimed_constructor() {
 
     assert_eq!(diff.pre_state, pre_state);
     assert_eq!(diff.post_balance_diff, post_balance_diff);
-    assert_eq!(diff.post_data, post_data);
+    assert_eq!(diff.post_data, Some(post_data));
     assert_eq!(diff.post_claim, Some(Claim::Authorized));
 }
 
@@ -185,7 +185,7 @@ fn account_state_diff_new_constructor_has_no_claim() {
 
     assert_eq!(diff.pre_state, pre_state);
     assert_eq!(diff.post_balance_diff, post_balance_diff);
-    assert_eq!(diff.post_data, post_data);
+    assert_eq!(diff.post_data, Some(post_data));
     assert_eq!(diff.post_claim, None);
 }
 
@@ -480,6 +480,19 @@ fn an_unowned_account_with_history_may_be_echoed_byte_identically() {
     };
     let pre = AccountWithMetadata::new(account, true, account_id);
     let diff = AccountStateDiff::unchanged(pre);
+    assert!(validate_execution(&[diff], [9; 8]).is_ok());
+}
+
+#[test]
+fn an_unowned_account_echoed_with_sub_zero_may_still_validate() {
+    let account_id = AccountId::new([7; 32]);
+    let account = Account {
+        nonce: 1_u128.into(),
+        balance: 55,
+        ..Account::default()
+    };
+    let pre = AccountWithMetadata::new(account, true, account_id);
+    let diff = AccountStateDiff::new(pre.clone(), BalanceDiff::Sub(0), pre.account.data);
     assert!(validate_execution(&[diff], [9; 8]).is_ok());
 }
 

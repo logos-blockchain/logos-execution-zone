@@ -114,7 +114,14 @@ fn reordered_state_diffs_still_succeed() {
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let initial_balance = 10;
     let mut state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[(from, initial_balance)]))
+        .with_public_accounts([(
+            from,
+            Account {
+                program_owner: program.id().into(),
+                balance: initial_balance,
+                ..Account::default()
+            },
+        )])
         .with_test_programs();
 
     let to_key = PrivateKey::try_new([24; 32]).unwrap();

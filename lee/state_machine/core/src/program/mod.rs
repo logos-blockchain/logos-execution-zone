@@ -313,7 +313,9 @@ pub enum Claim {
 pub struct AccountStateDiff {
     pub pre_state: AccountWithMetadata,
     pub post_balance_diff: BalanceDiff,
-    pub post_data: Data,
+    /// `None` means unchanged from `pre_state.account.data` — the common case, kept cheap by not
+    /// carrying a second copy of data that's already available via `pre_state`.
+    pub post_data: Option<Data>,
     pub post_claim: Option<Claim>,
 }
 
@@ -321,21 +323,21 @@ impl AccountStateDiff {
     /// A diff that leaves `pre_state`'s balance and data untouched.
     #[must_use]
     pub fn unchanged(pre_state: AccountWithMetadata) -> Self {
-        let post_data = pre_state.account.data.clone();
         Self {
             pre_state,
             post_balance_diff: BalanceDiff::Add(0),
-            post_data,
+            post_data: None,
             post_claim: None,
         }
     }
 
     #[must_use]
-    pub const fn new(
+    pub fn new(
         pre_state: AccountWithMetadata,
         post_balance_diff: BalanceDiff,
         post_data: Data,
     ) -> Self {
+        let post_data = (post_data != pre_state.account.data).then_some(post_data);
         Self {
             pre_state,
             post_balance_diff,
@@ -345,12 +347,13 @@ impl AccountStateDiff {
     }
 
     #[must_use]
-    pub const fn new_claimed(
+    pub fn new_claimed(
         pre_state: AccountWithMetadata,
         post_balance_diff: BalanceDiff,
         post_data: Data,
         claim: Claim,
     ) -> Self {
+        let post_data = (post_data != pre_state.account.data).then_some(post_data);
         Self {
             pre_state,
             post_balance_diff,
@@ -371,6 +374,7 @@ impl AccountStateDiff {
         claim: Claim,
     ) -> Self {
         let is_default_owner = pre_state.account.program_owner == DEFAULT_PROGRAM_OWNER;
+        let post_data = (post_data != pre_state.account.data).then_some(post_data);
         Self {
             pre_state,
             post_balance_diff,
@@ -491,7 +495,7 @@ pub struct ProgramEvent {
     pub data: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use = "ProgramOutput does nothing unless written"]
 pub struct ProgramOutput {
@@ -500,6 +504,9 @@ pub struct ProgramOutput {
     /// The program ID of the caller that invoked this program via a chained call,
     /// or `None` if this is a top-level call.
     pub caller_program_id: Option<ProgramId>,
+    /// Which call kind actually ran to produce this output. A chained call must be `Execute`;
+    /// only a top-level call may legitimately be `Unknown`.
+    pub call_kind: CallKind,
     /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
     /// Each account's pre-state paired with the diff the program's execution applies to it.
@@ -525,6 +532,7 @@ impl ProgramOutput {
         Self {
             self_program_id,
             caller_program_id,
+            call_kind: CallKind::Execute,
             instruction_data,
             state_diffs,
             chained_calls: Vec::new(),
@@ -536,6 +544,11 @@ impl ProgramOutput {
 
     pub fn write(self) {
         env::commit_slice(&crate::to_borsh_frame(&self));
+    }
+
+    pub const fn with_call_kind(mut self, call_kind: CallKind) -> Self {
+        self.call_kind = call_kind;
+        self
     }
 
     pub fn with_chained_calls(mut self, chained_calls: Vec<ChainedCall>) -> Self {
@@ -848,6 +861,7 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
         envelope.instruction,
         state_diffs,
     )
+    .with_call_kind(CallKind::Unknown(raw_discriminant))
     .with_events(vec![ProgramEvent {
         selector: UnsupportedCallKind::SELECTOR,
         data: UnsupportedCallKind { raw_discriminant }.to_bytes(),
@@ -906,7 +920,7 @@ pub fn validate_execution(
 
         // 3. Data changes only allowed if owned by executing program or if account pre state has
         //    default values
-        if diff.post_data != pre.account.data
+        if diff.post_data.is_some()
             && pre.account != Account::default()
             && account_program_owner != executing_account_id
         {
@@ -929,8 +943,10 @@ pub fn validate_execution(
         let post_owner_is_default =
             diff.post_claim.is_none() && account_program_owner == DEFAULT_PROGRAM_OWNER;
         if post_owner_is_default && pre.account != Account::default() {
-            let claimless_echo =
-                diff.post_balance_diff == BalanceDiff::Add(0) && diff.post_data == pre.account.data;
+            let claimless_echo = matches!(
+                diff.post_balance_diff,
+                BalanceDiff::Add(0) | BalanceDiff::Sub(0)
+            ) && diff.post_data.is_none();
             if !claimless_echo {
                 return Err(
                     ExecutionValidationError::NonDefaultAccountWithDefaultOwner {

@@ -1653,3 +1653,30 @@ fn two_private_pda_family_members_receive_and_spend() {
 
     assert_eq!(state.get_account_by_id(recipient_id).balance, amount);
 }
+
+/// Mirrors the public path's `program_should_fail_if_it_drops_a_declared_account`:
+/// `dropped_account` is fed two public pre_states but reports only one `AccountStateDiff`,
+/// silently dropping the second. `initial_pre_states` catches this — the circuit checks the
+/// dropped account against what the top-level call was actually invoked with, so a valid proof
+/// can no longer be produced.
+#[test]
+fn dropped_public_account_through_the_privacy_circuit_is_caught() {
+    let program = crate::test_methods::dropped_account();
+    let account1 = AccountId::new([1; 32]);
+    let account2 = AccountId::new([2; 32]);
+
+    let result = execute_and_prove(
+        vec![
+            AccountWithMetadata::new(Account::default(), false, account1),
+            AccountWithMetadata::new(Account::default(), false, account2),
+        ],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    );
+
+    assert!(
+        matches!(result, Err(LeeError::CircuitProvingError(_))),
+        "dropping account2 should prevent a valid proof, got {result:?}"
+    );
+}

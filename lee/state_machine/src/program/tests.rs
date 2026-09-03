@@ -51,15 +51,12 @@ fn program_execution() {
         sender_post.post_balance_diff,
         BalanceDiff::Sub(balance_to_move)
     );
-    assert_eq!(sender_post.post_data, sender_post.pre_state.account.data);
+    assert_eq!(sender_post.post_data, None);
     assert_eq!(
         recipient_post.post_balance_diff,
         BalanceDiff::Add(balance_to_move)
     );
-    assert_eq!(
-        recipient_post.post_data,
-        recipient_post.pre_state.account.data
-    );
+    assert_eq!(recipient_post.post_data, None);
 }
 
 #[test]
@@ -176,11 +173,13 @@ fn program_survives_a_call_kind_it_does_not_recognize() {
     let payload = lee_core::from_frame(&session_info.journal.bytes).unwrap();
     let output: lee_core::program::ProgramOutput = borsh::from_slice(payload).unwrap();
 
+    assert_eq!(output.call_kind, CallKind::Unknown(77));
+
     // A no-op, not the program's own transfer logic: every account comes back unchanged.
     assert_eq!(output.state_diffs.len(), pre_states.len());
     for diff in &output.state_diffs {
         assert_eq!(diff.post_balance_diff, BalanceDiff::Add(0));
-        assert_eq!(diff.post_data, diff.pre_state.account.data);
+        assert_eq!(diff.post_data, None);
     }
     assert!(output.chained_calls.is_empty());
     assert_eq!(output.instruction_data, instruction_data);

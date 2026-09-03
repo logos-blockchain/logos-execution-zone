@@ -8,8 +8,9 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Cycles, apply_balance_diff},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, TransactionEvent,
-        compute_public_authorized_pdas, pre_states_match_accounts, validate_execution,
+        CallerData, CallKind, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId,
+        TransactionEvent, compute_public_authorized_pdas, pre_states_match_accounts,
+        validate_execution,
     },
 };
 use log::debug;
@@ -438,6 +439,16 @@ impl ValidatedStateDiff {
                 }
             );
 
+            // Only a top-level call may legitimately be a no-op; a chained call must execute.
+            if caller_data.program_id.is_some() {
+                ensure!(
+                    program_output.call_kind == CallKind::Execute,
+                    InvalidProgramBehaviorError::ChainedCallDidNotExecute {
+                        program_id: chained_call.program_id
+                    }
+                );
+            }
+
             // Verify execution corresponds to a well-behaved program.
             // See the # Programs section for the definition of the `validate_execution` method.
             validate_execution(&program_output.state_diffs, chained_call.program_id)
@@ -459,7 +470,10 @@ impl ValidatedStateDiff {
                 let balance = apply_balance_diff(pre.account.balance, Some(diff.post_balance_diff))
                     .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
 
-                let data = diff.post_data.clone();
+                let data = diff
+                    .post_data
+                    .clone()
+                    .unwrap_or_else(|| pre.account.data.clone());
 
                 // Owner is inherited unless a claim overrides it (AccountStateDiff carries no
                 // ownership).

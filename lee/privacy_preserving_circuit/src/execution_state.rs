@@ -8,7 +8,7 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     encryption::ViewingPublicKey,
     program::{
-        AccountStateDiff, BlockValidityWindow, CallerData, ChainedCall, Claim,
+        AccountStateDiff, BlockValidityWindow, CallerData, CallKind, ChainedCall, Claim,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
         TimestampValidityWindow, pre_states_match_accounts, validate_execution,
     },
@@ -62,6 +62,7 @@ impl ExecutionState {
         account_identities: &[InputAccountIdentity],
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
+        initial_pre_states: &[AccountId],
     ) -> Self {
         // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
         // in `account_identities`. The vec is documented as 1:1 with the program's pre_state
@@ -198,6 +199,16 @@ impl ExecutionState {
                 "Program output caller_program_id does not match actual caller"
             );
 
+            // Only a top-level call may legitimately be a no-op; a chained call must execute.
+            if caller_data.program_id.is_some() {
+                assert_eq!(
+                    program_output.call_kind,
+                    CallKind::Execute,
+                    "Chained call to {:?} did not execute",
+                    chained_call.program_id
+                );
+            }
+
             // Check that the program is well behaved.
             // See the # Programs section for the definition of the `validate_execution` method.
             let validated_execution =
@@ -270,6 +281,20 @@ impl ExecutionState {
             assert_ne!(
                 post.program_owner, DEFAULT_PROGRAM_OWNER,
                 "Account {account_id} was modified but not claimed"
+            );
+        }
+
+        // Nothing the top-level call was actually invoked with may vanish from a chained call's
+        // own output — a program can't silently drop an account it was handed.
+        let touched_account_ids: HashSet<AccountId> = execution_state
+            .pre_states
+            .iter()
+            .map(|pre| pre.account_id)
+            .collect();
+        for account_id in initial_pre_states {
+            assert!(
+                touched_account_ids.contains(account_id),
+                "initial pre-state {account_id:?} is missing from the final execution state"
             );
         }
 
@@ -431,7 +456,10 @@ impl ExecutionState {
                 apply_balance_diff(pre_account.balance, Some(state_diff.post_balance_diff))
                     .expect("balance diff must be valid; validate_execution already checked it");
 
-            let data = state_diff.post_data.clone();
+            let data = state_diff
+                .post_data
+                .clone()
+                .unwrap_or_else(|| pre_account.data.clone());
 
             // Owner is inherited unless a claim overrides it (AccountStateDiff carries no
             // ownership).

@@ -532,7 +532,11 @@ impl IdForTests {
 /// Asserts the diff leaves the native balance untouched and sets data to exactly `expected`'s.
 fn assert_data_diff(diff_output: &AccountStateDiff, expected: &AccountWithMetadata) {
     assert_eq!(diff_output.post_balance_diff, BalanceDiff::Add(0));
-    assert_eq!(diff_output.post_data, expected.account.data.clone());
+    let effective_data = diff_output
+        .post_data
+        .clone()
+        .unwrap_or_else(|| diff_output.pre_state.account.data.clone());
+    assert_eq!(effective_data, expected.account.data);
 }
 
 #[should_panic(expected = "Definition target account must have default values")]

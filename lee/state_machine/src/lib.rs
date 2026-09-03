@@ -74,14 +74,6 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn missing_output() -> Program {
-        Program::new_unchecked(
-            test_methods::MISSING_OUTPUT_ID,
-            Cow::Borrowed(test_methods::MISSING_OUTPUT_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn data_changer() -> Program {
         Program::new_unchecked(
             test_methods::DATA_CHANGER_ID,

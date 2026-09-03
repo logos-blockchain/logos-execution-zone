@@ -140,6 +140,9 @@ pub enum InvalidProgramBehaviorError {
         actual: Option<ProgramId>,
     },
 
+    #[error("Chained call to {program_id:?} did not execute")]
+    ChainedCallDidNotExecute { program_id: ProgramId },
+
     #[error(transparent)]
     ExecutionValidationFailed(#[from] lee_core::program::ExecutionValidationError),
 

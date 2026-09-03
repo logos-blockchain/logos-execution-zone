@@ -86,34 +86,6 @@ fn program_should_fail_if_transfers_balance_from_non_owned_account() {
     ));
 }
 
-/// Same underlying rule as `program_should_fail_if_it_drops_a_declared_account`, exercised by a
-/// separately-named program that models "forgot to report the second account" rather than
-/// "deliberately drops it" — both are caught the same way.
-#[test]
-fn program_should_fail_with_missing_output_accounts() {
-    let mut state = V03State::new()
-        .with_public_account_balances([(AccountId::new([1; 32]), 100)])
-        .with_test_programs();
-    let account_ids = vec![AccountId::new([1; 32]), AccountId::new([2; 32])];
-    let program_id = crate::test_methods::missing_output().id();
-    let message =
-        public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
-
-    assert!(
-        matches!(
-            result,
-            Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput { account_id }
-            )) if account_id == AccountId::new([2; 32])
-        ),
-        "expected DeclaredAccountMissingFromOutput for the missing account, got {result:?}"
-    );
-}
-
 #[test]
 fn program_should_fail_if_modifies_data_of_non_owned_account() {
     let initial_data = HashMap::new();

@@ -7,7 +7,7 @@ use amm_core::{
 use lee::{PrivateKey, PublicKey, PublicTransaction, V03State, public_transaction};
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
-    program::{ChainedCall, ProgramId},
+    program::{AccountStateDiff, ChainedCall, ProgramId},
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -17,6 +17,14 @@ use crate::{
     remove::remove_liquidity,
     swap::{swap_exact_input, swap_exact_output},
 };
+
+/// The diff's effective post-data: `post_data` if the program actually wrote new data, or the
+/// pre-state's data if it was left unchanged.
+fn effective_post_data(diff: &AccountStateDiff) -> Data {
+    diff.post_data
+        .clone()
+        .unwrap_or_else(|| diff.pre_state.account.data.clone())
+}
 
 const TOKEN_PROGRAM_ID: ProgramId = [15; 8];
 const AMM_PROGRAM_ID: ProgramId = [42; 8];
@@ -2158,7 +2166,7 @@ fn call_add_liquidity_chained_call_successsful() {
     let pool_post = post_diffs[0].clone();
 
     assert_eq!(
-        pool_post.post_data,
+        effective_post_data(&pool_post),
         AccountWithMetadataForTests::pool_definition_add_successful()
             .account
             .data
@@ -2333,7 +2341,7 @@ fn call_remove_liquidity_chained_call_successful() {
     let pool_post = post_diffs[0].clone();
 
     assert_eq!(
-        pool_post.post_data,
+        effective_post_data(&pool_post),
         AccountWithMetadataForTests::pool_definition_remove_successful()
             .account
             .data
@@ -2503,7 +2511,7 @@ fn call_new_definition_chained_call_successful() {
     let pool_post = post_diffs[0].clone();
 
     assert_eq!(
-        pool_post.post_data,
+        effective_post_data(&pool_post),
         AccountWithMetadataForTests::pool_definition_add_successful()
             .account
             .data
@@ -2639,7 +2647,7 @@ fn call_swap_chained_call_successful_1() {
     let pool_post = post_diffs[0].clone();
 
     assert_eq!(
-        pool_post.post_data,
+        effective_post_data(&pool_post),
         AccountWithMetadataForTests::pool_definition_swap_test_1()
             .account
             .data
@@ -2674,7 +2682,7 @@ fn call_swap_chained_call_successful_2() {
     let pool_post = post_diffs[0].clone();
 
     assert_eq!(
-        pool_post.post_data,
+        effective_post_data(&pool_post),
         AccountWithMetadataForTests::pool_definition_swap_test_2()
             .account
             .data
@@ -2844,7 +2852,7 @@ fn call_swap_exact_output_chained_call_successful() {
     let pool_post = post_diffs[0].clone();
 
     assert_eq!(
-        pool_post.post_data,
+        effective_post_data(&pool_post),
         AccountWithMetadataForTests::pool_definition_swap_exact_output_test_1()
             .account
             .data
@@ -2879,7 +2887,7 @@ fn call_swap_exact_output_chained_call_successful_2() {
     let pool_post = post_diffs[0].clone();
 
     assert_eq!(
-        pool_post.post_data,
+        effective_post_data(&pool_post),
         AccountWithMetadataForTests::pool_definition_swap_exact_output_test_2()
             .account
             .data
@@ -2989,7 +2997,7 @@ fn new_definition_lp_asymmetric_amounts() {
 
     // check the minted LP amount
     let pool_post = post_diffs[0].clone();
-    let pool_def = PoolDefinition::try_from(&pool_post.post_data).unwrap();
+    let pool_def = PoolDefinition::try_from(&effective_post_data(&pool_post)).unwrap();
     assert_eq!(
         pool_def.liquidity_pool_supply,
         BalanceForTests::lp_supply_init()
@@ -3021,7 +3029,7 @@ fn new_definition_lp_symmetric_amounts() {
     );
 
     let pool_post = post_diffs[0].clone();
-    let pool_def = PoolDefinition::try_from(&pool_post.post_data).unwrap();
+    let pool_def = PoolDefinition::try_from(&effective_post_data(&pool_post)).unwrap();
     assert_eq!(pool_def.liquidity_pool_supply, expected_lp);
 
     let chained_call_lp = chained_calls[0].clone();
