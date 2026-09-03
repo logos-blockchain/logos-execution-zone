@@ -30,7 +30,7 @@ use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     ClockAccountData,
 };
-use cycle_bench::{ppe, stats::Stats};
+use cycle_bench::{circuit, ppe, stats::Stats};
 use lee::program::Program;
 use lee_core::{
     Timestamp,
@@ -53,6 +53,13 @@ struct Cli {
     /// with depth N=1,3,5,9. Requires --features ppe at build time. Very slow.
     #[arg(long)]
     ppe: bool,
+
+    /// Also run the privacy-circuit executor cases: the no-op program with one public
+    /// account / one private account initialised, executed through the circuit with an
+    /// unresolved assumption. Requires a locally built `test_programs` noop guest
+    /// (`RISC0_SKIP_BUILD` unset).
+    #[arg(long)]
+    circuit: bool,
 
     /// Iterations for executor wall-time sampling per case. First iter is
     /// discarded as warmup, remaining N feed the stats.
@@ -582,6 +589,15 @@ fn main() -> Result<()> {
         print_calibration(&cal);
     }
 
+    let circuit_results = if cli.circuit {
+        circuit::run_all(exec_iters)?
+    } else {
+        Vec::new()
+    };
+    if !circuit_results.is_empty() {
+        circuit::print_table(&circuit_results);
+    }
+
     #[cfg(feature = "ppe")]
     let ppe_results = if cli.ppe { ppe::run_all() } else { Vec::new() };
     #[cfg(not(feature = "ppe"))]
@@ -606,6 +622,7 @@ fn main() -> Result<()> {
     let combined = serde_json::json!({
         "standalone": results,
         "calibration": calibration,
+        "circuit": circuit_results,
         "ppe": ppe_results,
     });
     std::fs::write(&out_path, serde_json::to_string_pretty(&combined)?)?;

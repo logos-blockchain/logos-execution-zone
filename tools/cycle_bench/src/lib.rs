@@ -19,5 +19,6 @@
     )
 )]
 
+pub mod circuit;
 pub mod ppe;
 pub mod stats;
