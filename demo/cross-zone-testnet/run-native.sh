@@ -32,6 +32,12 @@ fi
 export RISC0_DEV_MODE=1
 export RUST_LOG="${RUST_LOG:-info}"
 
+# Kill any leftover demo processes from a prior run that would hold the ports.
+pkill -f "release/sequencer_service" 2>/dev/null || true
+pkill -f "release/indexer_service" 2>/dev/null || true
+pkill -f "release/explorer_service" 2>/dev/null || true
+sleep 1
+
 # Fresh channels and fresh state every run (a fresh home regenerates the Bedrock
 # signing key, so channels cannot be reused).
 ./prepare.sh
@@ -41,13 +47,11 @@ mkdir -p data logs
 TARGET_ZONE="$(python3 -c "import json;print(json.load(open('configs/sequencer_b.json'))['bedrock_config']['channel_id'])")"
 
 echo "Starting zone A sequencer (:3040)..."
-"$BIN/sequencer_service" configs/sequencer_a.json --port 3040 --home data/seq_a \
-  --metrics-address 127.0.0.1:9000 > logs/seq_a.log 2>&1 &
+"$BIN/sequencer_service" configs/sequencer_a.json --port 3040 --home data/seq_a > logs/seq_a.log 2>&1 &
 echo $! > logs/seq_a.pid
 
 echo "Starting zone B sequencer (:3041)..."
-"$BIN/sequencer_service" "$ZB_CONFIG" --port 3041 --home data/seq_b \
-  --metrics-address 127.0.0.1:9001 > logs/seq_b.log 2>&1 &
+"$BIN/sequencer_service" "$ZB_CONFIG" --port 3041 --home data/seq_b > logs/seq_b.log 2>&1 &
 echo $! > logs/seq_b.pid
 
 echo "Starting zone B indexer (:8779)..."
