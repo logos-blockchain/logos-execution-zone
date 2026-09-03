@@ -106,6 +106,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn acquire_then_fund() -> Program {
+        Program::new_unchecked(
+            test_methods::ACQUIRE_THEN_FUND_ID,
+            Cow::Borrowed(test_methods::ACQUIRE_THEN_FUND_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn burner() -> Program {
         Program::new_unchecked(
             test_methods::BURNER_ID,

@@ -53,6 +53,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::burner());
         self.insert_program(&crate::test_methods::squatter());
         self.insert_program(&crate::test_methods::acquire_and_forward());
+        self.insert_program(&crate::test_methods::acquire_then_fund());
         self.insert_program(&crate::test_methods::auth_asserting_noop());
         self.insert_program(&crate::test_methods::private_pda_delegator());
         self.insert_program(&crate::test_methods::noop());

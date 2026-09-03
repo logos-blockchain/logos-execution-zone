@@ -365,3 +365,88 @@ fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
         "expected ChainedCallAccountsMismatch for the callee, got {result:?}"
     );
 }
+
+#[test]
+fn insufficient_balance_transfer_leaves_state_untouched() {
+    let program = crate::test_methods::simple_balance_transfer();
+    let from_key = PrivateKey::try_new([21; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let initial_balance = 10;
+    let mut state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(from, initial_balance)]))
+        .with_test_programs();
+
+    let to_key = PrivateKey::try_new([22; 32]).unwrap();
+    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let amount: u128 = initial_balance + 1;
+
+    let sender_pre = state.get_account_by_id(from);
+    let recipient_pre = state.get_account_by_id(to);
+
+    let message = public_transaction::Message::try_new(
+        program.id(),
+        vec![from, to],
+        vec![Nonce(0), Nonce(0)],
+        amount,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key, &to_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(
+            InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::InvalidBalanceDiff { account_id, .. }
+            )
+        )) if account_id == from
+    ));
+
+    assert_eq!(state.get_account_by_id(from), sender_pre);
+    assert_eq!(state.get_account_by_id(to), recipient_pre);
+}
+
+/// Order no longer carries meaning: each `AccountStateDiff` embeds its own pre-state, so a
+/// program listing its diffs in a different order than it received the corresponding pre-states
+/// still validates and applies correctly.
+#[test]
+fn reordered_state_diffs_still_succeed() {
+    let program = crate::test_methods::reordering_transfer();
+    let from_key = PrivateKey::try_new([23; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let initial_balance = 10;
+    let mut state = V03State::new()
+        .with_public_accounts([(
+            from,
+            Account {
+                program_owner: program.id().into(),
+                balance: initial_balance,
+                ..Account::default()
+            },
+        )])
+        .with_test_programs();
+
+    let to_key = PrivateKey::try_new([24; 32]).unwrap();
+    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let amount: u128 = 4;
+
+    let message = public_transaction::Message::try_new(
+        program.id(),
+        vec![from, to],
+        vec![Nonce(0), Nonce(0)],
+        amount,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key, &to_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    assert_eq!(
+        state.get_account_by_id(from).balance,
+        initial_balance - amount
+    );
+    assert_eq!(state.get_account_by_id(to).balance, amount);
+}
