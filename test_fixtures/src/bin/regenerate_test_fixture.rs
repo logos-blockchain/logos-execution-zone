@@ -3,13 +3,16 @@
 
 #![expect(clippy::print_stdout, reason = "It's normal in this small cli")]
 
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use kameo::actor::Spawn as _;
 use sequencer_storage_actor::{
     StorageActor,
-    protocol::{DeleteZoneCheckpoint, DumpDb, ResetAllBlocksToPending},
+    protocol::{
+        ApplyStoreUpdate, DeleteZoneCheckpoint, DumpDb, GetLatestBlockMeta, GetLeeState,
+        ResetAllBlocksToPending,
+    },
 };
 use test_fixtures::{
     config,
@@ -94,6 +97,43 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         .ask(ResetAllBlocksToPending)
         .await
         .context("Failed to reset fixture blocks to pending")?;
+
+    // Stamp the final snapshot at the tip so restore replays no fixture blocks.
+    // The dump is generated under RISC0_DEV_MODE, so its privacy proofs are
+    // fake receipts that cannot verify in a real-proof run if they land after
+    // the finalized tip
+    let state = storage_ref
+        .ask(GetLeeState)
+        .await
+        .context("Failed to read the fixture head state")?
+        .context("Fixture store has no persisted head state")?;
+    let tip = storage_ref
+        .ask(GetLatestBlockMeta)
+        .await
+        .context("Failed to read the fixture tip block meta")?
+        .context("Fixture store has no blocks")?;
+    let state = Arc::new(state);
+    storage_ref
+        .ask(ApplyStoreUpdate {
+            checkpoint: None,
+            blocks: vec![],
+            channel_cursor: None,
+            head_tip: Some(tip.clone()),
+            head_state: Arc::clone(&state),
+            final_snapshot: Some((state, tip)),
+            // Blocks must stay Pending for the re-publish; only the snapshot moves.
+            finalized_up_to: None,
+            new_deposit_events: vec![],
+            remove_deposit_records: vec![],
+            remove_dispatch_records: vec![],
+            consumed_withdrawals: vec![],
+            new_withdraw_intents: vec![],
+            zone_anchor: None,
+            lower_published_high_water: None,
+        })
+        .await
+        .context("Failed to stamp the fixture final snapshot at the tip")?;
+
     let dump = storage_ref
         .ask(DumpDb)
         .await
