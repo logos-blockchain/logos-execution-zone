@@ -27,6 +27,8 @@ services:
     volumes:
       - ./configs/sequencer_a.json:/etc/sequencer_service/sequencer_config.json:ro
       - seq_a_data:/var/lib/sequencer_service
+    environment:
+      RUST_LOG: info
     ports:
       - "3040:3040"   # zone A sequencer RPC (the lock tool targets this)
 
@@ -38,6 +40,8 @@ services:
     volumes:
       - ./configs/sequencer_b.json:/etc/sequencer_service/sequencer_config.json:ro
       - seq_b_data:/var/lib/sequencer_service
+    environment:
+      RUST_LOG: info
     ports:
       - "3041:3040"   # zone B sequencer RPC
 
@@ -51,6 +55,8 @@ services:
     volumes:
       - ./configs/indexer_b.json:/etc/indexer_service/indexer_config.json:ro
       - idx_b_data:/var/lib/indexer_service
+    environment:
+      RUST_LOG: info
     ports:
       - "8779:8779"   # zone B indexer RPC (watch the mint here)
 
