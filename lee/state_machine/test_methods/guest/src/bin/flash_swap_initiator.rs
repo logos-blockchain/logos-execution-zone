@@ -38,7 +38,8 @@
 //! - `flash_swap_standalone_invariant_check_rejected`: `caller_program_id` access control
 
 use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -65,7 +66,8 @@ pub enum FlashSwapInstruction {
 }
 
 fn main() {
-    let (
+    let call = read_lee_call::<FlashSwapInstruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -73,7 +75,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<FlashSwapInstruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     match instruction {
         FlashSwapInstruction::Initiate {
@@ -132,10 +137,9 @@ fn main() {
                 self_program_id,
                 caller_program_id,
                 instruction_data,
-                vec![vault_pre.clone(), receiver_pre.clone()],
                 vec![
-                    AccountPostState::new(vault_pre.account),
-                    AccountPostState::new(receiver_pre.account),
+                    AccountStateDiff::unchanged(vault_pre),
+                    AccountStateDiff::unchanged(receiver_pre),
                 ],
             )
             .with_chained_calls(vec![call_1, call_2, call_3])
@@ -174,8 +178,7 @@ fn main() {
                 self_program_id,
                 caller_program_id,
                 instruction_data,
-                vec![vault.clone()],
-                vec![AccountPostState::new(vault.account)],
+                vec![AccountStateDiff::unchanged(vault)],
             )
             .write();
         }

@@ -1,6 +1,6 @@
 use lee_core::program::{
-    AccountPostState, ChainedCall, InstructionData, ProgramEvent, ProgramId, ProgramInput,
-    ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramEvent, ProgramId,
+    ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -10,7 +10,8 @@ pub struct EmitterInstruction {
 }
 
 fn main() {
-    let (
+    let call = read_lee_call::<EmitterInstruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -18,11 +19,14 @@ fn main() {
             instruction: EmitterInstruction { events, chain },
         },
         instruction_data,
-    ) = read_lee_inputs::<EmitterInstruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
-    let post_states = pre_states
+    let state_diffs = pre_states
         .iter()
-        .map(|account| AccountPostState::new(account.account.clone()))
+        .map(|account| AccountStateDiff::unchanged(account.clone()))
         .collect();
 
     let pre_state_ids: Vec<_> = pre_states.iter().map(|pre| pre.account_id).collect();
@@ -42,8 +46,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        pre_states,
-        post_states,
+        state_diffs,
     )
     .with_chained_calls(chained_calls)
     .with_events(events)

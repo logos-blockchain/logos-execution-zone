@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     from_frame,
     program::{
         ChainedCall, InstructionData, ProgramId, ProgramOutput, compute_public_authorized_pdas,
@@ -111,6 +111,8 @@ pub fn execute_and_prove_with_padded_inputs(
         .map(|pre| (pre.account_id, pre.account.clone()))
         .collect();
     let pre_state_ids: Vec<AccountId> = pre_states.iter().map(|pre| pre.account_id).collect();
+    // Captured before pre_states moves into initial_call below.
+    let initial_pre_states: Vec<AccountId> = pre_state_ids.clone();
 
     // Non-PDA accounts authorized at their first sight, anywhere in the call tree — mirrors
     // the circuit's own `globally_authorized`. Seeded from top-level `is_authorized` since the
@@ -215,11 +217,8 @@ pub fn execute_and_prove_with_padded_inputs(
         // `authorized_accounts.extend(authorized_output_accounts)` in-circuit.
         let mut authorized_output_accounts = caller_authorized_accounts;
 
-        for (pre, post) in program_output
-            .pre_states
-            .iter()
-            .zip(&program_output.post_states)
-        {
+        for diff in &program_output.state_diffs {
+            let pre = &diff.pre_state;
             let account_id = pre.account_id;
 
             // Assigned here, after this call has actually run, uniformly for the top-level
@@ -247,16 +246,23 @@ pub fn execute_and_prove_with_padded_inputs(
 
             // A successful claim reassigns ownership; the guest doesn't write this into its own
             // post_state, the circuit does it afterward, so predict it here too.
-            let program_owner = if post.required_claim().is_some() {
+            let program_owner = if diff.post_claim.is_some() {
                 AccountId::from(chained_call.program_id)
             } else {
-                post.account().program_owner
+                pre.account.program_owner
             };
+            let balance = apply_balance_diff(pre.account.balance, Some(diff.post_balance_diff))
+                .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
             materialized_state.insert(
                 account_id,
                 Account {
                     program_owner,
-                    ..post.account().clone()
+                    balance,
+                    data: diff
+                        .post_data
+                        .clone()
+                        .unwrap_or_else(|| pre.account.data.clone()),
+                    nonce: pre.account.nonce,
                 },
             );
             if pre.is_authorized {
@@ -301,6 +307,7 @@ pub fn execute_and_prove_with_padded_inputs(
         account_identities,
         program_id: program_with_dependencies.program.id(),
         dummy_inputs,
+        initial_pre_states,
     };
 
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;

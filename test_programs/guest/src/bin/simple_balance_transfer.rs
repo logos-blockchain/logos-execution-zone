@@ -1,9 +1,16 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
 
 type Instruction = u128;
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -11,17 +18,23 @@ fn main() {
             instruction: balance,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
-        let account_post =
-            AccountPostState::new_claimed_if_default(account_pre.account, Claim::Authorized);
+        let account_post = AccountStateDiff::new_claimed_if_default(
+            account_pre.clone(),
+            BalanceDiff::Add(0),
+            account_pre.account.data,
+            Claim::Authorized,
+        );
 
         ProgramOutput::new(
             self_program_id,
             caller_program_id,
             instruction_data,
-            pre_states,
             vec![account_post],
         )
         .write();
@@ -32,25 +45,23 @@ fn main() {
         return;
     };
 
-    let mut sender_post = sender_pre.account.clone();
-    let mut receiver_post = receiver_pre.account.clone();
-    sender_post.balance = sender_post
-        .balance
-        .checked_sub(balance)
-        .expect("Not enough balance to transfer");
-    receiver_post.balance = receiver_post
-        .balance
-        .checked_add(balance)
-        .expect("Overflow when adding balance");
-
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![sender_pre, receiver_pre],
         vec![
-            AccountPostState::new_claimed_if_default(sender_post, Claim::Authorized),
-            AccountPostState::new_claimed_if_default(receiver_post, Claim::Authorized),
+            AccountStateDiff::new_claimed_if_default(
+                sender_pre.clone(),
+                BalanceDiff::Sub(balance),
+                sender_pre.account.data,
+                Claim::Authorized,
+            ),
+            AccountStateDiff::new_claimed_if_default(
+                receiver_pre.clone(),
+                BalanceDiff::Add(balance),
+                receiver_pre.account.data,
+                Claim::Authorized,
+            ),
         ],
     )
     .write();

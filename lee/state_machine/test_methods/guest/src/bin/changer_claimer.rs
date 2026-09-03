@@ -1,10 +1,17 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
 
 type Instruction = (Option<Vec<u8>>, bool);
 
 /// A program that optionally modifies the account data and optionally claims it.
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -12,35 +19,35 @@ fn main() {
             instruction: (data_opt, should_claim),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let account_pre = &pre.account;
-    let mut account_post = account_pre.clone();
-
-    // Update data if provided
-    if let Some(data) = data_opt {
-        account_post.data = data
+    // Update data if provided, otherwise leave it unchanged.
+    let post_data = match data_opt {
+        Some(data) => data
             .try_into()
-            .expect("provided data should fit into data limit");
-    }
+            .expect("provided data should fit into data limit"),
+        None => pre.account.data.clone(),
+    };
 
     // Claim or not based on the boolean flag
-    let post_state = if should_claim {
-        AccountPostState::new_claimed(account_post, Claim::Authorized)
+    let state_diff = if should_claim {
+        AccountStateDiff::new_claimed(pre, BalanceDiff::Add(0), post_data, Claim::Authorized)
     } else {
-        AccountPostState::new(account_post)
+        AccountStateDiff::new(pre, BalanceDiff::Add(0), post_data)
     };
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![pre],
-        vec![post_state],
+        vec![state_diff],
     )
     .write();
 }

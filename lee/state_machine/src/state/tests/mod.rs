@@ -15,7 +15,6 @@ use lee_core::{
     program::{
         BlockValidityWindow, ExecutionValidationError, InstructionData, MAX_NUMBER_CHAINED_CALLS,
         PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow, TransactionEvent,
-        WrappedBalanceSum,
     },
 };
 
@@ -48,11 +47,7 @@ impl V03State {
     #[must_use]
     pub fn with_test_programs(mut self) -> Self {
         self.insert_program(&crate::test_methods::simple_balance_transfer());
-        self.insert_program(&crate::test_methods::nonce_changer());
-        self.insert_program(&crate::test_methods::extra_output());
-        self.insert_program(&crate::test_methods::missing_output());
         self.insert_program(&crate::test_methods::dropped_account());
-        self.insert_program(&crate::test_methods::program_owner_changer());
         self.insert_program(&crate::test_methods::data_changer());
         self.insert_program(&crate::test_methods::minter());
         self.insert_program(&crate::test_methods::burner());
@@ -64,7 +59,6 @@ impl V03State {
         self.insert_program(&crate::test_methods::chain_caller());
         self.insert_program(&crate::test_methods::non_delegating_forwarder());
         self.insert_program(&crate::test_methods::event_emitter());
-        self.insert_program(&crate::test_methods::modified_transfer_program());
         self.insert_program(&crate::test_methods::initialize_then_fund());
         self.insert_program(&crate::test_methods::validity_window());
         self.insert_program(&crate::test_methods::flash_swap_initiator());
@@ -76,9 +70,9 @@ impl V03State {
         self.insert_program(&crate::test_methods::changer_claimer());
         self.insert_program(&crate::test_methods::validity_window_chain_caller());
         self.insert_program(&crate::test_methods::simple_transfer_proxy());
-        self.insert_program(&crate::test_methods::modified_transfer_program());
         self.insert_program(&crate::test_methods::references_undeclared_account());
         self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
+        self.insert_program(&crate::test_methods::reordering_transfer());
         self
     }
 

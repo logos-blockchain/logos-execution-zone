@@ -5,24 +5,24 @@ use amm_core::{
     compute_pool_pda, compute_pool_pda_seed, compute_vault_pda, compute_vault_pda_seed,
 };
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall, Claim, ProgramId},
+    account::{Account, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountStateDiff, ChainedCall, Claim, ProgramId},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn new_definition(
-    pool: AccountWithMetadata,
-    vault_a: AccountWithMetadata,
-    vault_b: AccountWithMetadata,
-    pool_definition_lp: AccountWithMetadata,
-    user_holding_a: AccountWithMetadata,
-    user_holding_b: AccountWithMetadata,
-    user_holding_lp: AccountWithMetadata,
+    pool: &AccountWithMetadata,
+    vault_a: &AccountWithMetadata,
+    vault_b: &AccountWithMetadata,
+    pool_definition_lp: &AccountWithMetadata,
+    user_holding_a: &AccountWithMetadata,
+    user_holding_b: &AccountWithMetadata,
+    user_holding_lp: &AccountWithMetadata,
     token_a_amount: NonZeroU128,
     token_b_amount: NonZeroU128,
     amm_program_id: ProgramId,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     // Verify token_a and token_b are different
     let definition_token_a_id = token_core::TokenHolding::try_from(&user_holding_a.account.data)
         .expect("New definition: AMM Program expects valid Token Holding account for Token A")
@@ -93,7 +93,6 @@ pub fn new_definition(
     };
 
     // Update pool account
-    let mut pool_post = pool.account;
     let pool_post_definition = PoolDefinition {
         definition_token_a_id,
         definition_token_b_id,
@@ -107,9 +106,13 @@ pub fn new_definition(
         active: true,
     };
 
-    pool_post.data = Data::from(&pool_post_definition);
     let pool_pda_seed = compute_pool_pda_seed(definition_token_a_id, definition_token_b_id);
-    let pool_post = AccountPostState::new_claimed_if_default(pool_post, Claim::Pda(pool_pda_seed));
+    let pool_post = AccountStateDiff::new_claimed_if_default(
+        pool.clone(),
+        BalanceDiff::Add(0),
+        Data::from(&pool_post_definition),
+        Claim::Pda(pool_pda_seed),
+    );
 
     let token_program_id: lee_core::program::ProgramId =
         user_holding_a.account.program_owner.into();
@@ -146,15 +149,15 @@ pub fn new_definition(
 
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
-    let post_states = vec![
+    let post_diffs = vec![
         pool_post,
-        AccountPostState::new(vault_a.account),
-        AccountPostState::new(vault_b.account),
-        AccountPostState::new(pool_definition_lp.account),
-        AccountPostState::new(user_holding_a.account),
-        AccountPostState::new(user_holding_b.account),
-        AccountPostState::new(user_holding_lp.account),
+        AccountStateDiff::unchanged(vault_a.clone()),
+        AccountStateDiff::unchanged(vault_b.clone()),
+        AccountStateDiff::unchanged(pool_definition_lp.clone()),
+        AccountStateDiff::unchanged(user_holding_a.clone()),
+        AccountStateDiff::unchanged(user_holding_b.clone()),
+        AccountStateDiff::unchanged(user_holding_lp.clone()),
     ];
 
-    (post_states, chained_calls)
+    (post_diffs, chained_calls)
 }

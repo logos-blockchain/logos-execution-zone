@@ -1,11 +1,16 @@
-use lee_core::program::{
-    AccountPostState, Claim, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, Claim, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 type Instruction = PdaSeed;
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -13,19 +18,23 @@ fn main() {
             instruction: seed,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let account_post = AccountPostState::new_claimed(pre.account.clone(), Claim::Pda(seed));
+    let post_data = pre.account.data.clone();
+    let account_post =
+        AccountStateDiff::new_claimed(pre, BalanceDiff::Add(0), post_data, Claim::Pda(seed));
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![pre],
         vec![account_post],
     )
     .write();
