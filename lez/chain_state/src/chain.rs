@@ -642,14 +642,17 @@ mod tests {
         let genesis = produce_dummy_block(1, None, vec![]);
         chain.apply_finalized(&genesis, slot(10));
 
-        // Skip-ahead finalized block, not in head: parks the final tier.
+        // Skip-ahead finalized block, not in head: parks the final tier. Through
+        // `apply_follow`, so the stall records the slot threaded per block.
         let bad = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
+        let outcome = chain.apply_follow(&[], &[], &[(bad, slot(20))], msg(1));
         assert!(matches!(
-            chain.apply_finalized(&bad, slot(20)),
-            AcceptOutcome::Parked(_)
+            outcome.finalized.as_slice(),
+            [AcceptOutcome::Parked(_)]
         ));
         let stall = chain.final_stall().expect("final stall recorded");
         assert_eq!(stall.block_id, Some(3));
+        assert_eq!(stall.l1_slot, slot(20));
     }
 
     #[test]
