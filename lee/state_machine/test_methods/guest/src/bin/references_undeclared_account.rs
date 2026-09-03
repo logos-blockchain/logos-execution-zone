@@ -1,8 +1,8 @@
 use lee_core::{
     account::AccountId,
     program::{
-        AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call, respond_unsupported_call,
     },
 };
 
@@ -11,7 +11,8 @@ use lee_core::{
 type Instruction = (ProgramId, InstructionData, AccountId);
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -19,19 +20,21 @@ fn main() {
             instruction: (callee_program_id, callee_instruction, undeclared_account_id),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
-    let post_states = pre_states
-        .iter()
-        .map(|account| AccountPostState::new(account.account.clone()))
+    let state_diffs = pre_states
+        .into_iter()
+        .map(AccountStateDiff::unchanged)
         .collect();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        pre_states,
-        post_states,
+        state_diffs,
     )
     .with_chained_calls(vec![ChainedCall {
         program_id: callee_program_id,

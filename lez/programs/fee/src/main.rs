@@ -15,12 +15,16 @@
 
 use fee_core::{BlockFeeSummary, Instruction, market, state::FeeState};
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountWithMetadata, BalanceDiff},
+    program::{
+        AccountStateDiff, ProgramCall, ProgramId, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -28,13 +32,16 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
     assert!(
         caller_program_id.is_none(),
         "Fee program is only invoked as a top-level system transaction"
     );
 
-    let (pre_states, post_states) = match instruction {
+    let state_diffs = match instruction {
         Instruction::Distribute(summary) => distribute(self_program_id, pre_states, summary),
         Instruction::Refund { amount } => refund(self_program_id, pre_states, amount),
     };
@@ -43,8 +50,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_words,
-        pre_states,
-        post_states,
+        state_diffs,
     )
     .write();
 }
@@ -54,7 +60,7 @@ fn distribute(
     self_program_id: ProgramId,
     pre_states: Vec<AccountWithMetadata>,
     summary: BlockFeeSummary,
-) -> (Vec<AccountWithMetadata>, Vec<AccountPostState>) {
+) -> Vec<AccountStateDiff> {
     let Ok([pre_state, pre_escrow, pre_inbox, pre_producer]) = <[_; 4]>::try_from(pre_states)
     else {
         panic!("Distribute requires exactly 4 accounts");
@@ -97,42 +103,48 @@ fn distribute(
     let mut fee_state = FeeState::from_bytes(&pre_state.account.data);
     let payout = fee_state.apply_block(&summary);
 
-    let mut post_state_account = pre_state.account.clone();
-    post_state_account.data = fee_state
+    let post_state_data = fee_state
         .to_bytes()
         .try_into()
         .expect("FeeState data should fit in account data");
+    let state_diff = AccountStateDiff::new(pre_state, BalanceDiff::Add(0), post_state_data);
 
     // Money movement: inbox drains fully (base revenue to escrow, tips to the
-    // producer); the smoothed payout leaves escrow for the producer.
-    let mut post_escrow = pre_escrow.account.clone();
-    post_escrow.balance = post_escrow
-        .balance
-        .checked_add(summary.revenue_base)
-        .expect("escrow credit fits u128")
-        .checked_sub(payout)
-        .expect("payout never exceeds escrow");
+    // producer); the smoothed payout leaves escrow for the producer. Escrow's net
+    // delta is `revenue_base - payout`, which can be negative (drawing down escrow's
+    // existing reserve) — the protocol rejects it if that would underflow.
+    let escrow_data = pre_escrow.account.data.clone();
+    let escrow_diff_balance = if summary.revenue_base >= payout {
+        BalanceDiff::Add(
+            summary
+                .revenue_base
+                .checked_sub(payout)
+                .expect("revenue_base >= payout checked above"),
+        )
+    } else {
+        BalanceDiff::Sub(
+            payout
+                .checked_sub(summary.revenue_base)
+                .expect("payout > revenue_base checked above"),
+        )
+    };
+    let escrow_diff = AccountStateDiff::new(pre_escrow, escrow_diff_balance, escrow_data);
 
-    let mut post_inbox = pre_inbox.account.clone();
-    post_inbox.balance = 0;
+    let inbox_drain = pre_inbox.account.balance;
+    let inbox_data = pre_inbox.account.data.clone();
+    let inbox_diff = AccountStateDiff::new(pre_inbox, BalanceDiff::Sub(inbox_drain), inbox_data);
 
-    let mut post_producer = pre_producer.account.clone();
-    post_producer.balance = post_producer
-        .balance
-        .checked_add(payout)
-        .and_then(|balance| balance.checked_add(summary.revenue_tip))
+    let producer_credit = payout
+        .checked_add(summary.revenue_tip)
         .expect("producer credit fits u128");
+    let producer_data = pre_producer.account.data.clone();
+    let producer_diff = AccountStateDiff::new(
+        pre_producer,
+        BalanceDiff::Add(producer_credit),
+        producer_data,
+    );
 
-    let post_states = vec![
-        AccountPostState::new(post_state_account),
-        AccountPostState::new(post_escrow),
-        AccountPostState::new(post_inbox),
-        AccountPostState::new(post_producer),
-    ];
-    (
-        vec![pre_state, pre_escrow, pre_inbox, pre_producer],
-        post_states,
-    )
+    vec![state_diff, escrow_diff, inbox_diff, producer_diff]
 }
 
 /// Per-transaction refund over `[inbox, payer]`: return `amount` from the inbox
@@ -142,7 +154,7 @@ fn refund(
     self_program_id: ProgramId,
     pre_states: Vec<AccountWithMetadata>,
     amount: u128,
-) -> (Vec<AccountWithMetadata>, Vec<AccountPostState>) {
+) -> Vec<AccountStateDiff> {
     let Ok([pre_inbox, pre_payer]) = <[_; 2]>::try_from(pre_states) else {
         panic!("Refund requires exactly 2 accounts");
     };
@@ -157,23 +169,11 @@ fn refund(
         "Inbox must be owned by the fee program"
     );
 
-    let mut post_inbox = pre_inbox.account.clone();
-    post_inbox.balance = post_inbox
-        .balance
-        .checked_sub(amount)
-        .expect("refund never exceeds the inbox balance");
+    let inbox_data = pre_inbox.account.data.clone();
+    let payer_data = pre_payer.account.data.clone();
 
-    let mut post_payer = pre_payer.account.clone();
-    post_payer.balance = post_payer
-        .balance
-        .checked_add(amount)
-        .expect("payer credit fits u128");
+    let inbox_diff = AccountStateDiff::new(pre_inbox, BalanceDiff::Sub(amount), inbox_data);
+    let payer_diff = AccountStateDiff::new(pre_payer, BalanceDiff::Add(amount), payer_data);
 
-    (
-        vec![pre_inbox, pre_payer],
-        vec![
-            AccountPostState::new(post_inbox),
-            AccountPostState::new(post_payer),
-        ],
-    )
+    vec![inbox_diff, payer_diff]
 }

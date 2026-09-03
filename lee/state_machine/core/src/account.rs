@@ -113,10 +113,22 @@ pub enum BalanceDiffError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct AccountDiff {
+pub struct PostStateEffects {
     pub id: AccountId,
     pub diff_balance: Option<BalanceDiff>,
-    pub diff_data: Option<Data>,
+    pub new_data: Option<Data>,
+}
+
+impl PostStateEffects {
+    /// A diff that leaves `id`'s balance and data untouched.
+    #[must_use]
+    pub const fn new_unchanged(id: AccountId) -> Self {
+        Self {
+            id,
+            diff_balance: None,
+            new_data: None,
+        }
+    }
 }
 
 /// Account to be used both in public and private contexts.
@@ -442,5 +454,15 @@ mod tests {
         let diff_restored = borsh::from_slice(&borsh_serialized_diff).unwrap();
 
         assert_eq!(diff, diff_restored);
+    }
+
+    #[test]
+    fn account_diff_unchanged_has_no_balance_or_data_change() {
+        let id = AccountId::new([7; 32]);
+        let diff = PostStateEffects::new_unchanged(id);
+
+        assert_eq!(diff.id, id);
+        assert!(diff.diff_balance.is_none());
+        assert!(diff.new_data.is_none());
     }
 }

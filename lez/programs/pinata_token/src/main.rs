@@ -1,7 +1,8 @@
 use lee_core::{
-    account::Data,
+    account::{BalanceDiff, Data},
     program::{
-        AccountPostState, ChainedCall, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
     },
 };
 use risc0_zkvm::sha::{Impl, Sha256 as _};
@@ -50,7 +51,8 @@ fn main() {
     // Read input accounts.
     // It is expected to receive three accounts: [pinata_definition, pinata_token_holding,
     // winner_token_holding]
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -58,7 +60,10 @@ fn main() {
             instruction: solution,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok(
         [
@@ -77,13 +82,10 @@ fn main() {
         return;
     }
 
-    let mut pinata_definition_post = pinata_definition.account.clone();
-    let pinata_token_holding_post = pinata_token_holding.account.clone();
-    let winner_token_holding_post = winner_token_holding.account.clone();
-    pinata_definition_post.data = data.next_data();
+    let pinata_definition_data = data.next_data();
 
     let chained_call = ChainedCall::new(
-        pinata_token_holding_post.program_owner.into(),
+        pinata_token_holding.account.program_owner.into(),
         vec![
             pinata_token_holding.account_id,
             winner_token_holding.account_id,
@@ -99,14 +101,13 @@ fn main() {
         caller_program_id,
         instruction_data,
         vec![
-            pinata_definition,
-            pinata_token_holding,
-            winner_token_holding,
-        ],
-        vec![
-            AccountPostState::new(pinata_definition_post),
-            AccountPostState::new(pinata_token_holding_post),
-            AccountPostState::new(winner_token_holding_post),
+            AccountStateDiff::new(
+                pinata_definition,
+                BalanceDiff::Add(0),
+                pinata_definition_data,
+            ),
+            AccountStateDiff::unchanged(pinata_token_holding),
+            AccountStateDiff::unchanged(winner_token_holding),
         ],
     )
     .with_chained_calls(vec![chained_call])

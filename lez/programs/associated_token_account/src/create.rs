@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{AccountPostState, ChainedCall, Claim, ProgramId},
+    account::{Account, AccountWithMetadata, BalanceDiff},
+    program::{AccountStateDiff, ChainedCall, Claim, ProgramId},
 };
 
 pub fn create_associated_token_account(
@@ -8,7 +8,7 @@ pub fn create_associated_token_account(
     token_definition: AccountWithMetadata,
     ata_account: AccountWithMetadata,
     ata_program_id: ProgramId,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     // No authorization check needed: create is idempotent, so anyone can call it safely.
     let token_program_id: lee_core::program::ProgramId =
         token_definition.account.program_owner.into();
@@ -23,18 +23,28 @@ pub fn create_associated_token_account(
     if ata_account.account != Account::default() {
         return (
             vec![
-                AccountPostState::new_claimed_if_default(owner.account.clone(), Claim::Authorized),
-                AccountPostState::new(token_definition.account.clone()),
-                AccountPostState::new(ata_account.account.clone()),
+                AccountStateDiff::new_claimed_if_default(
+                    owner.clone(),
+                    BalanceDiff::Add(0),
+                    owner.account.data.clone(),
+                    Claim::Authorized,
+                ),
+                AccountStateDiff::unchanged(token_definition.clone()),
+                AccountStateDiff::unchanged(ata_account.clone()),
             ],
             vec![],
         );
     }
 
-    let post_states = vec![
-        AccountPostState::new_claimed_if_default(owner.account.clone(), Claim::Authorized),
-        AccountPostState::new(token_definition.account.clone()),
-        AccountPostState::new(ata_account.account.clone()),
+    let post_diffs = vec![
+        AccountStateDiff::new_claimed_if_default(
+            owner.clone(),
+            BalanceDiff::Add(0),
+            owner.account.data.clone(),
+            Claim::Authorized,
+        ),
+        AccountStateDiff::unchanged(token_definition.clone()),
+        AccountStateDiff::unchanged(ata_account.clone()),
     ];
     let chained_call = ChainedCall::new(
         token_program_id,
@@ -43,5 +53,5 @@ pub fn create_associated_token_account(
     )
     .with_pda_seeds(vec![ata_seed]);
 
-    (post_states, vec![chained_call])
+    (post_diffs, vec![chained_call])
 }

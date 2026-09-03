@@ -1,19 +1,21 @@
 use faucet_core::Instruction;
 use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    respond_unsupported_call,
 };
 
-fn unchanged_post_states(
+fn unchanged_post_diffs(
     pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountPostState> {
+) -> Vec<AccountStateDiff> {
     pre_states
         .iter()
-        .map(|pre_state| AccountPostState::new(pre_state.account.clone()))
+        .map(|pre_state| AccountStateDiff::unchanged(pre_state.clone()))
         .collect()
 }
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -21,7 +23,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     assert!(
         caller_program_id.is_none(),
@@ -29,7 +34,7 @@ fn main() {
     );
 
     let pre_states_clone = pre_states.clone();
-    let post_states = unchanged_post_states(&pre_states_clone);
+    let post_diffs = unchanged_post_diffs(&pre_states_clone);
 
     let chained_calls = match instruction {
         Instruction::GenesisTransferVault {
@@ -85,8 +90,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        pre_states_clone,
-        post_states,
+        post_diffs,
     )
     .with_chained_calls(chained_calls)
     .write();

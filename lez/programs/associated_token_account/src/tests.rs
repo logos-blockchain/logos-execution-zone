@@ -73,28 +73,28 @@ fn initialized_ata_account() -> AccountWithMetadata {
 
 #[test]
 fn create_emits_chained_call_for_uninitialized_ata() {
-    let (post_states, chained_calls) = crate::create::create_associated_token_account(
+    let (post_diffs, chained_calls) = crate::create::create_associated_token_account(
         owner_account(),
         definition_account(),
         uninitialized_ata_account(),
         ATA_PROGRAM_ID,
     );
 
-    assert_eq!(post_states.len(), 3);
+    assert_eq!(post_diffs.len(), 3);
     assert_eq!(chained_calls.len(), 1);
     assert_eq!(chained_calls[0].program_id, TOKEN_PROGRAM_ID);
 }
 
 #[test]
 fn create_is_idempotent_for_initialized_ata() {
-    let (post_states, chained_calls) = crate::create::create_associated_token_account(
+    let (post_diffs, chained_calls) = crate::create::create_associated_token_account(
         owner_account(),
         definition_account(),
         initialized_ata_account(),
         ATA_PROGRAM_ID,
     );
 
-    assert_eq!(post_states.len(), 3);
+    assert_eq!(post_diffs.len(), 3);
     assert!(
         chained_calls.is_empty(),
         "Should emit no chained call for already-initialized ATA"

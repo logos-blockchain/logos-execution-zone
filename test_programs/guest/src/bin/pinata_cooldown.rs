@@ -13,7 +13,13 @@
 //!   [prize: u64 LE | `cooldown_ms`: u64 LE | `last_claim_timestamp`: u64 LE].
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
 
 type Instruction = ();
 
@@ -46,7 +52,8 @@ impl PinataState {
 }
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -54,7 +61,10 @@ fn main() {
             instruction: (),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([pinata, winner, clock_pre]) = <[_; 3]>::try_from(pre_states) else {
         panic!("Expected exactly 3 input accounts: pinata, winner, clock");
@@ -76,40 +86,32 @@ fn main() {
         pinata_state.cooldown_ms,
     );
 
-    let mut pinata_post = pinata.account.clone();
-    let mut winner_post = winner.account.clone();
-
-    pinata_post.balance = pinata_post
-        .balance
-        .checked_sub(pinata_state.prize)
-        .expect("Not enough balance in the pinata");
-    winner_post.balance = winner_post
-        .balance
-        .checked_add(pinata_state.prize)
-        .expect("Overflow when adding prize to winner");
-
     // Update the last claim timestamp.
     let updated_state = PinataState {
         last_claim_timestamp: current_timestamp,
         ..pinata_state
     };
-    pinata_post.data = updated_state
-        .to_bytes()
-        .try_into()
-        .expect("Pinata state should fit in account data");
-
-    // Clock account is read-only.
-    let clock_post = clock_pre.account.clone();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![pinata, winner, clock_pre],
         vec![
-            AccountPostState::new_claimed_if_default(pinata_post, Claim::Authorized),
-            AccountPostState::new(winner_post),
-            AccountPostState::new(clock_post),
+            AccountStateDiff::new_claimed_if_default(
+                pinata,
+                BalanceDiff::Sub(updated_state.prize),
+                updated_state
+                    .to_bytes()
+                    .try_into()
+                    .expect("Pinata state should fit in account data"),
+                Claim::Authorized,
+            ),
+            AccountStateDiff::new(
+                winner.clone(),
+                BalanceDiff::Add(updated_state.prize),
+                winner.account.data,
+            ),
+            AccountStateDiff::unchanged(clock_pre),
         ],
     )
     .write();

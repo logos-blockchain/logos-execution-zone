@@ -4,8 +4,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountWithMetadata, Cycles},
     from_frame,
-    program::{InstructionData, ProgramId, ProgramInput, ProgramOutput},
-    to_frame,
+    program::{CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
+    to_borsh_frame, to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor};
 
@@ -111,8 +111,8 @@ impl Program {
         })
     }
 
-    /// Writes the guest's [`ProgramInput`] as a single length-prefixed borsh frame, the form
-    /// `read_lee_inputs` expects.
+    /// Writes a `CallKind::Execute` frame followed by the guest's `ProgramInput` as a single
+    /// length-prefixed borsh frame, the form `read_lee_call` expects.
     pub fn write_inputs(
         &self,
         caller_program_id: Option<ProgramId>,
@@ -120,6 +120,8 @@ impl Program {
         instruction_data: &[u8],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
+        env_builder.write_slice(&to_borsh_frame(&CallKind::Execute));
+
         let input = ProgramInput {
             self_program_id: self.id,
             caller_program_id,
