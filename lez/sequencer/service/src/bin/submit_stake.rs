@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
                         AccountIdentity::PublicNoSign(config_id),
                     ],
                     instruction_data,
-                    programs::sequencer_stake().id(),
+                    programs::sequencer_stake().deployed_account_id(),
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit Stake transaction: {err:?}"))?
@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
                         AccountIdentity::PublicNoSign(config_id),
                     ],
                     instruction_data,
-                    programs::sequencer_stake().id(),
+                    programs::sequencer_stake().deployed_account_id(),
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?

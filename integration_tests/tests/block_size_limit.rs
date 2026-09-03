@@ -147,7 +147,10 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         .collect();
 
     let claimer_total_size: u64 = claimer_txs.iter().map(encoded_tx_size).sum();
-    let block_size = ByteSize::b(claimer_total_size + 10 * 1024);
+    let chain_caller_total_size: u64 = chain_caller_txs.iter().map(encoded_tx_size).sum();
+    // Sized off whichever deploy is larger: big enough to hold either one whole, so
+    // chain_caller's deferred deploy also fits in a single block rather than splitting further.
+    let block_size = ByteSize::b(claimer_total_size.max(chain_caller_total_size) + 10 * 1024);
 
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(

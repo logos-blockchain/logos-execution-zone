@@ -86,7 +86,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 AccountIdentity::PublicNoSign(owner_vault_id),
             ],
             claim_instruction_data,
-            programs::vault().id(),
+            programs::vault().deployed_account_id(),
         )
         .await
         .map_err(|err| {
@@ -135,7 +135,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 AccountIdentity::PublicNoSign(config_id),
             ],
             stake_instruction_data,
-            programs::sequencer_stake().id(),
+            programs::sequencer_stake().deployed_account_id(),
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
@@ -282,7 +282,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 AccountIdentity::PublicNoSign(config_id),
             ],
             unstake_request_data,
-            programs::sequencer_stake().id(),
+            programs::sequencer_stake().deployed_account_id(),
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;

@@ -516,14 +516,27 @@ fn lock_escrows_balance_and_emits_to_outbox() {
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    state = state.with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let holding_id = bridge_lock_core::holding_account_id(
+        program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+        &holder_id.into_value(),
+    );
+    state = state.with_public_accounts([
+        (
+            holder_id,
+            Account {
+                program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+                ..Default::default()
+            },
+        ),
+        (
+            holding_id,
+            Account {
+                program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+                balance: INITIAL_BALANCE,
+                ..Default::default()
+            },
+        ),
+    ]);
     seed_bridge_lock_config(&mut state);
 
     let payload = mint_payload();
@@ -542,11 +555,11 @@ fn lock_escrows_balance_and_emits_to_outbox() {
         .expect("lock must validate and execute");
     let public_diff = diff.public_diff();
 
-    let holder_after = public_diff[&holder_id].balance;
+    let holding_after = public_diff[&holding_id].balance;
     assert_eq!(
-        holder_after,
+        holding_after,
         INITIAL_BALANCE - LOCK_AMOUNT,
-        "holder debited"
+        "holder's holding debited"
     );
 
     let escrow_after = public_diff[&escrow_id].balance;
@@ -634,6 +647,10 @@ fn lock_tx_to(
                 bridge_lock_id,
             )),
             holder_id,
+            bridge_lock_core::holding_account_id(
+                program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+                &holder_id.into_value(),
+            ),
             bridge_lock_core::escrow_account_id(program_loader_core::immutable_deploy_account_id(
                 bridge_lock_id,
             )),
@@ -663,16 +680,31 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: program_loader_core::immutable_deploy_account_id(
-                programs::bridge_lock().id(),
-            ),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let holding_id = bridge_lock_core::holding_account_id(
+        program_loader_core::immutable_deploy_account_id(programs::bridge_lock().id()),
+        &holder_id.into_value(),
+    );
+    let mut state = base_state().with_public_accounts([
+        (
+            holder_id,
+            Account {
+                program_owner: program_loader_core::immutable_deploy_account_id(
+                    programs::bridge_lock().id(),
+                ),
+                ..Default::default()
+            },
+        ),
+        (
+            holding_id,
+            Account {
+                program_owner: program_loader_core::immutable_deploy_account_id(
+                    programs::bridge_lock().id(),
+                ),
+                balance: INITIAL_BALANCE,
+                ..Default::default()
+            },
+        ),
+    ]);
     seed_bridge_lock_config(&mut state);
 
     let first = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
@@ -713,14 +745,27 @@ fn two_emitters_share_an_ordinal_without_colliding() {
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state().with_public_accounts([(
-        holder_id,
-        Account {
-            program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
-            balance: INITIAL_BALANCE,
-            ..Default::default()
-        },
-    )]);
+    let holding_id = bridge_lock_core::holding_account_id(
+        program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+        &holder_id.into_value(),
+    );
+    let mut state = base_state().with_public_accounts([
+        (
+            holder_id,
+            Account {
+                program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+                ..Default::default()
+            },
+        ),
+        (
+            holding_id,
+            Account {
+                program_owner: program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+                balance: INITIAL_BALANCE,
+                ..Default::default()
+            },
+        ),
+    ]);
     seed_ping_sender_config(&mut state);
     seed_bridge_lock_config(&mut state);
 
@@ -976,6 +1021,10 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
         vec![
             decoy_id,
             holder_id,
+            bridge_lock_core::holding_account_id(
+                program_loader_core::immutable_deploy_account_id(bridge_lock_id),
+                &holder_id.into_value(),
+            ),
             bridge_lock_core::escrow_account_id(program_loader_core::immutable_deploy_account_id(
                 bridge_lock_id,
             )),

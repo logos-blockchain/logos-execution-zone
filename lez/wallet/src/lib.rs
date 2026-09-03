@@ -19,7 +19,7 @@ use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, ProgramDeploymentTransaction, ProgramId,
+    Account, AccountId, PrivacyPreservingTransaction, ProgramId,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies,
         message::{EncryptedAccountData, Message},
@@ -91,6 +91,10 @@ pub enum ExecutionFailureKind {
     MultiSequencerTransactionSendError,
     #[error("Failed to join a task: {0}")]
     JoinError(#[from] tokio::task::JoinError),
+    #[error(
+        "Program bytecode needs {expected} segment(s) but {actual} segment account(s) were provided"
+    )]
+    SegmentCountMismatch { expected: usize, actual: usize },
 }
 
 pub struct WalletCore {
@@ -825,9 +829,9 @@ impl WalletCore {
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program_id: ProgramId,
+        program_account_id: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_id, |_| Ok(()))
+        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_account_id, |_| Ok(()))
             .await
     }
 
@@ -835,7 +839,7 @@ impl WalletCore {
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program_id: ProgramId,
+        program_account_id: AccountId,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
@@ -861,7 +865,7 @@ impl WalletCore {
         let nonces = acc_manager.public_account_nonces();
 
         let message = lee::public_transaction::Message::new_preserialized(
-            program_loader_core::immutable_deploy_account_id(program_id),
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
@@ -883,19 +887,6 @@ impl WalletCore {
             .into_iter()
             .find(std::result::Result::is_ok)
             .ok_or(ExecutionFailureKind::MultiSequencerTransactionSendError)?
-    }
-
-    pub async fn send_program_deployment_transaction(&self, bytecode: Vec<u8>) -> Result<HashType> {
-        let message = lee::program_deployment_transaction::Message::new(bytecode);
-        let transaction = ProgramDeploymentTransaction::new(message);
-
-        Ok(self
-            .multi_sequencer_client
-            .metered_send_transaction(LeeTransaction::ProgramDeployment(transaction))
-            .await
-            .into_iter()
-            .find(std::result::Result::is_ok)
-            .ok_or(ExecutionFailureKind::MultiSequencerTransactionSendError)??)
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {

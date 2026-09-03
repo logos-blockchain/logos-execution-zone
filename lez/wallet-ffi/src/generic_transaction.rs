@@ -201,7 +201,11 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         }
     }
 
-    match block_on(wallet.send_pub_tx(accounts, instruction_data.to_vec(), program_id.into())) {
+    match block_on(wallet.send_pub_tx(
+        accounts,
+        instruction_data.to_vec(),
+        program_loader_core::immutable_deploy_account_id(program_id.into()),
+    )) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(std::ptr::null_mut(), std::ffi::CString::into_raw);

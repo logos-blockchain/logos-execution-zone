@@ -4911,12 +4911,8 @@ fn loader_rejects_update_header_when_immutable() {
     );
     let original_image_id = state.get_program_image_id(header).unwrap();
 
-    let new_segment_ids = upload_program_segments(
-        &mut state,
-        test_programs::chain_caller().elf(),
-        220,
-        2,
-    );
+    let new_segment_ids =
+        upload_program_segments(&mut state, test_programs::chain_caller().elf(), 220, 2);
 
     let result = submit_loader_instruction(
         &mut state,
@@ -4955,12 +4951,8 @@ fn loader_rejects_update_header_without_authorization() {
         false,
     );
 
-    let new_segment_ids = upload_program_segments(
-        &mut state,
-        test_programs::chain_caller().elf(),
-        150,
-        2,
-    );
+    let new_segment_ids =
+        upload_program_segments(&mut state, test_programs::chain_caller().elf(), 150, 2);
     let new_first_segment = new_segment_ids[0];
 
     // Signed by a key with no relationship to `header` at all — not even the original deployer's.

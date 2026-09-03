@@ -549,7 +549,7 @@ fn execute_chained_call(
 ) -> Result<(ProgramId, ProgramOutput), LeeError> {
     if chained_call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
         // Runs the program loader's instructions as native Rust instead of interpreting a guest
-        // ELF — see `PROGRAM_LOADER_ACCOUNT_ID`'s doc comment for why.
+        // ELF.
         let program_id = ProgramId::from(PROGRAM_LOADER_ACCOUNT_ID);
         let instruction: program_loader_core::Instruction =
             borsh::from_slice(&chained_call.instruction_data).map_err(|e| {
