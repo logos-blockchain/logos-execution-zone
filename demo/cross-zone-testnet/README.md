@@ -33,7 +33,7 @@ From the worktree root:
 
     cd ~/logos/lez-demo-v024
     CARGO_TARGET_DIR=.cargo-target-demo cargo build --release \
-      -p sequencer_service -p indexer_service -p explorer_service -p cross_zone_lock
+      -p sequencer_service -p indexer_service -p cross_zone_lock
 
 The Bedrock node builds on first run of start-bedrock-native.sh below. It clones
 logos-blockchain to ~/logos/logos-blockchain, checks out tag 0.2.1, and runs

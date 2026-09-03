@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the demo as NATIVE binaries (no Docker), so it runs at native speed on
-# Apple Silicon. Same real two zones + explorer, same configs, against the live
-# testnet Bedrock.
+# Apple Silicon. Two real zones (each a sequencer + indexer) against the local
+# Bedrock node; confirm results over RPC (see README).
 #
 #   ./run-native.sh                # happy path (zone B allows the route)
 #   ./run-native.sh unauthorized   # refused (zone B has no authorized route)
@@ -9,14 +9,14 @@
 # Build the binaries first (once):
 #   cd ~/logos/lez-demo-v024
 #   CARGO_TARGET_DIR=.cargo-target-demo cargo build --release \
-#     -p sequencer_service -p indexer_service -p explorer_service -p cross_zone_lock
+#     -p sequencer_service -p indexer_service -p cross_zone_lock
 #
 # Stop everything with ./stop-native.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 
 BIN="../../.cargo-target-demo/release"
-for b in sequencer_service indexer_service explorer_service cross_zone_lock; do
+for b in sequencer_service indexer_service cross_zone_lock; do
   if [ ! -x "$BIN/$b" ]; then
     echo "Missing $BIN/$b — build first (see the header of this script)." >&2
     exit 1
@@ -42,7 +42,6 @@ export RUST_LOG="${RUST_LOG:-info}"
 # Kill any leftover demo processes from a prior run that would hold the ports.
 pkill -f "release/sequencer_service" 2>/dev/null || true
 pkill -f "release/indexer_service" 2>/dev/null || true
-pkill -f "release/explorer_service" 2>/dev/null || true
 sleep 1
 
 # Fresh channels and fresh state every run (a fresh home regenerates the Bedrock
@@ -66,14 +65,9 @@ echo "Starting zone B indexer (:8779)..."
   > logs/idx_b.log 2>&1 &
 echo $! > logs/idx_b.pid
 
-echo "Starting zone B explorer (:8080)..."
-INDEXER_RPC_URL=http://localhost:8779 LEPTOS_SITE_ADDR=0.0.0.0:8080 \
-  "$BIN/explorer_service" > logs/explorer.log 2>&1 &
-echo $! > logs/explorer.pid
-
 cat <<EOF
 
-All four processes started. Logs are in logs/ (tail -f logs/seq_a.log).
+Three processes started. Logs are in logs/ (tail -f logs/seq_a.log).
 
 Check both zones are producing blocks (run twice, ~10s apart):
   curl -s -X POST http://localhost:3040 -H 'content-type: application/json' \\
@@ -84,6 +78,6 @@ Check both zones are producing blocks (run twice, ~10s apart):
 Then submit the lock:
   $BIN/cross_zone_lock --sequencer-url http://localhost:3040 --target-zone $TARGET_ZONE
 
-Watch the mint on zone B's explorer: http://localhost:8080
+The mint lands on zone B ~2 min later. Confirm it in the log and over RPC (README).
 Stop everything: ./stop-native.sh
 EOF
