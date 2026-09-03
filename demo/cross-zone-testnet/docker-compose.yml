@@ -29,6 +29,7 @@ services:
       - seq_a_data:/var/lib/sequencer_service
     environment:
       RUST_LOG: info
+      RISC0_DEV_MODE: "1"
     ports:
       - "3040:3040"   # zone A sequencer RPC (the lock tool targets this)
 
@@ -42,6 +43,7 @@ services:
       - seq_b_data:/var/lib/sequencer_service
     environment:
       RUST_LOG: info
+      RISC0_DEV_MODE: "1"
     ports:
       - "3041:3040"   # zone B sequencer RPC
 
@@ -57,6 +59,7 @@ services:
       - idx_b_data:/var/lib/indexer_service
     environment:
       RUST_LOG: info
+      RISC0_DEV_MODE: "1"
     ports:
       - "8779:8779"   # zone B indexer RPC (watch the mint here)
 
