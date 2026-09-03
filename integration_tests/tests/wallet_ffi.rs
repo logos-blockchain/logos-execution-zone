@@ -200,12 +200,6 @@ unsafe extern "C" {
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
 
-    fn wallet_ffi_register_public_account(
-        handle: *mut WalletHandle,
-        account_id: *const FfiBytes32,
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
-
     fn wallet_ffi_register_private_account(
         handle: *mut WalletHandle,
         account_id: *const FfiBytes32,
@@ -839,7 +833,7 @@ fn wallet_ffi_base58_to_account_id() -> Result<()> {
 }
 
 #[test]
-fn wallet_ffi_registering_an_unfunded_public_account_is_refused() -> Result<()> {
+fn wallet_ffi_public_account_is_claimed_by_funded_transfer() -> Result<()> {
     let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -866,24 +860,27 @@ fn wallet_ffi_registering_an_unfunded_public_account_is_refused() -> Result<()> 
     };
     assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
 
-    // A bare Initialize is a charged transaction whose only account — and thus
-    // fee payer — is the fresh, unfunded one, so admission must refuse it: a
-    // public account is claimed by its first funded transfer instead.
-    let mut transfer_result = FfiTransferResult::default();
-    let result = unsafe {
-        wallet_ffi_register_public_account(
+    // A bare Initialize is inadmissible under fees (its only signer would be
+    // the unfunded fresh account), so a funded transfer from an owned account
+    // is the registration path: it signs with the fresh account's key too,
+    // claiming it.
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let amount: [u8; 16] = 100_u128.to_le_bytes();
+    let mut claim_result = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_transfer_public(
             wallet_ffi_handle,
+            &raw const from,
             &raw const out_account_id,
-            &raw mut transfer_result,
+            &raw const amount,
+            &raw mut claim_result,
         )
-    };
-    assert!(
-        !matches!(result, error::WalletFfiError::Success),
-        "registering an unfunded public account must be refused at fee admission"
-    );
-    assert!(!transfer_result.success);
+        .unwrap();
+    }
 
-    // Nothing landed: the account stays unclaimed.
+    log::info!("Waiting for next block creation");
+    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+
     let account: Account = unsafe {
         let mut out_account = FfiAccount::default();
         wallet_ffi_get_account_public(
@@ -894,10 +891,14 @@ fn wallet_ffi_registering_an_unfunded_public_account_is_refused() -> Result<()> 
         .unwrap();
         (&out_account).try_into().unwrap()
     };
-    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
+    assert_eq!(
+        account.program_owner,
+        programs::authenticated_transfer().id().into()
+    );
+    assert_eq!(ffi_balance(wallet_ffi_handle, &out_account_id, true), 100);
 
     unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
+        wallet_ffi_free_transfer_result(&raw mut claim_result);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
