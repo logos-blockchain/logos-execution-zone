@@ -939,14 +939,17 @@ pub fn validate_execution(
         }
 
         // 5. A non-default account left with the default owner must be a claimless byte-identical
-        //    echo: `Claim` is applied after this check, so a claimed echo would seize the account.
-        let post_owner_is_default =
-            diff.post_claim.is_none() && account_program_owner == DEFAULT_PROGRAM_OWNER;
+        //    echo: a claim on it would seize an account that already has real history despite never
+        //    having been properly owned, so a `Claim` disqualifies the echo just as much as an
+        //    actual balance/data change would.
+        let post_owner_is_default = account_program_owner == DEFAULT_PROGRAM_OWNER;
         if post_owner_is_default && pre.account != Account::default() {
-            let claimless_echo = matches!(
-                diff.post_balance_diff,
-                BalanceDiff::Add(0) | BalanceDiff::Sub(0)
-            ) && diff.post_data.is_none();
+            let claimless_echo = diff.post_claim.is_none()
+                && matches!(
+                    diff.post_balance_diff,
+                    BalanceDiff::Add(0) | BalanceDiff::Sub(0)
+                )
+                && diff.post_data.is_none();
             if !claimless_echo {
                 return Err(
                     ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
