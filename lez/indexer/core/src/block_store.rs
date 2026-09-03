@@ -577,8 +577,10 @@ mod tests {
             &segment_message,
             &[&segment_key, &payer.pub_sign_key],
         );
-        let segment_tx =
-            LeeTransaction::Public(lee::PublicTransaction::new(segment_message, segment_witness_set));
+        let segment_tx = LeeTransaction::Public(lee::PublicTransaction::new(
+            segment_message,
+            segment_witness_set,
+        ));
 
         let header_message = lee::public_transaction::Message::try_new_with_fees(
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
@@ -595,8 +597,10 @@ mod tests {
             &header_message,
             &[&header_key, &payer.pub_sign_key],
         );
-        let header_tx =
-            LeeTransaction::Public(lee::PublicTransaction::new(header_message, header_witness_set));
+        let header_tx = LeeTransaction::Public(lee::PublicTransaction::new(
+            header_message,
+            header_witness_set,
+        ));
 
         vec![segment_tx, header_tx]
     }

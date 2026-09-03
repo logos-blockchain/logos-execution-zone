@@ -165,7 +165,6 @@ impl ValidatedStateDiff {
                 public_diff: HashMap::new(),
                 new_commitments: Vec::new(),
                 new_nullifiers: Vec::new(),
-                program: None,
                 events: Vec::new(),
             }),
             // A non-chargeable failure is a structural defect a correct proposer

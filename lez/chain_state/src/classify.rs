@@ -1,10 +1,11 @@
 //! Fee classification: which transactions are charged and which are exempt.
 //!
 //! Interim policy: only user-submitted public transactions are charged.
-//! Private transactions and program deployments stay exempt pending the
-//! private-payer (Q3) and deployment replay-protection decisions; system
-//! injections, genesis transactions, and full-sweep vault claims are exempt
-//! by design.
+//! Private transactions stay exempt pending the private-payer (Q3) decision;
+//! system injections, genesis transactions, and full-sweep vault claims are
+//! exempt by design. Programs are deployed through ordinary public
+//! transactions (via `program_loader`), so deployment is charged like any
+//! other user action.
 //!
 //! A user public transaction that is none of those exempt shapes MUST declare a
 //! fee.
@@ -58,10 +59,9 @@ pub fn classify(
         return Ok(FeeClass::Exempt);
     }
     let public_tx = match tx {
-        // Private and deployment transactions: exempt under the interim
-        // policy, excluded from metering so free traffic cannot move the
-        // public base fee.
-        LeeTransaction::PrivacyPreserving(_) | LeeTransaction::ProgramDeployment(_) => {
+        // Private transactions: exempt under the interim policy, excluded from
+        // metering so free traffic cannot move the public base fee.
+        LeeTransaction::PrivacyPreserving(_) => {
             return Ok(FeeClass::Exempt);
         }
         LeeTransaction::Public(public_tx) => public_tx,

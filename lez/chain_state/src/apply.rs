@@ -354,15 +354,12 @@ pub fn settle_transaction(
                 }
             })?;
 
-            // Private and deployment transactions never legitimately touch the
-            // bridge, so any bridge diff from one is a drain attempt. Deposits
-            // legitimately debit the bridge, so they stay unguarded here — a
-            // forged empty-witness deposit still slips through by shape, which
-            // only L1 deposit verification can close (#809).
-            if matches!(
-                transaction,
-                LeeTransaction::PrivacyPreserving(_) | LeeTransaction::ProgramDeployment(_)
-            ) {
+            // Private transactions never legitimately touch the bridge, so any
+            // bridge diff from one is a drain attempt. Deposits legitimately
+            // debit the bridge, so they stay unguarded here — a forged
+            // empty-witness deposit still slips through by shape, which only
+            // L1 deposit verification can close (#809).
+            if matches!(transaction, LeeTransaction::PrivacyPreserving(_)) {
                 validate_bridge_account_modification(state, &diff, false).map_err(|err| {
                     BlockIngestError::RestrictedAccountModification {
                         tx_index,

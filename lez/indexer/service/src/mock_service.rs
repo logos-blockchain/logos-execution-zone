@@ -13,8 +13,7 @@ use indexer_service_protocol::{
     CommitmentSetDigest, Data, EncryptedAccountData, EventRecord, EventSubscriptionFilter,
     GetEventsFilter, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramId, PublicActionWithID, PublicKey,
-    PublicMessage, PublicTransaction, Selector, Signature, Transaction, ValidityWindow,
-    WitnessSet,
+    PublicMessage, PublicTransaction, Selector, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
