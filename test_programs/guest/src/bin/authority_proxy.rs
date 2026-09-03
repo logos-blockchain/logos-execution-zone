@@ -1,6 +1,6 @@
 use lee_core::program::{
-    AccountPostState, ChainedCall, InstructionData, PdaSeed, ProgramId, ProgramInput,
-    ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+    ProgramOutput, read_lee_call, respond_unsupported_call,
 };
 
 /// Chain-calls an arbitrary target with caller-supplied instruction data,
@@ -10,7 +10,8 @@ use lee_core::program::{
 type Instruction = (ProgramId, InstructionData, Option<PdaSeed>);
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -18,7 +19,10 @@ fn main() {
             instruction: (target_program_id, target_instruction_data, pda_seed),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let chained_call = ChainedCall {
         program_id: target_program_id,
@@ -27,17 +31,16 @@ fn main() {
         pda_seeds: pda_seed.into_iter().collect(),
     };
 
-    let post_states = pre_states
+    let state_diffs = pre_states
         .iter()
-        .map(|pre| AccountPostState::new(pre.account.clone()))
+        .map(|pre| AccountStateDiff::unchanged(pre.clone()))
         .collect();
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        pre_states,
-        post_states,
+        state_diffs,
     )
     .with_chained_calls(vec![chained_call])
     .write();

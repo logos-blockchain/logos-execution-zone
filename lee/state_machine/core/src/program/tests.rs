@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn unsupported_call_kind_selector_matches_its_derivation() {
+    use sha2::Digest as _;
+
+    assert_eq!(
+        UnsupportedCallKind::SELECTOR[..],
+        sha2::Sha256::digest(UnsupportedCallKind::SELECTOR_NAME.as_bytes())[..8]
+    );
+}
+
+#[test]
+fn call_kind_round_trips_execute_and_preserves_unknown_discriminants() {
+    let execute = borsh::to_vec(&CallKind::Execute).unwrap();
+    assert_eq!(
+        borsh::from_slice::<CallKind>(&execute).unwrap(),
+        CallKind::Execute
+    );
+
+    // Any nonzero discriminant must decode as `Unknown`, not fail.
+    for byte in 1..=u8::MAX {
+        assert_eq!(
+            borsh::from_slice::<CallKind>(&[byte]).unwrap(),
+            CallKind::Unknown(byte)
+        );
+    }
+}
+
+#[test]
 fn validity_window_unbounded_accepts_any_value() {
     let w: ValidityWindow<u64> = ValidityWindow::new_unbounded();
     assert!(w.is_valid_for(0));
@@ -99,7 +126,7 @@ fn validity_window_from_range_full() {
 
 #[test]
 fn program_output_try_with_block_validity_window_range() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
         .try_with_block_validity_window(10_u64..100)
         .unwrap();
     assert_eq!(output.block_validity_window.start(), Some(10));
@@ -108,7 +135,7 @@ fn program_output_try_with_block_validity_window_range() {
 
 #[test]
 fn program_output_with_block_validity_window_range_from() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
         .with_block_validity_window(10_u64..);
     assert_eq!(output.block_validity_window.start(), Some(10));
     assert_eq!(output.block_validity_window.end(), None);
@@ -116,7 +143,7 @@ fn program_output_with_block_validity_window_range_from() {
 
 #[test]
 fn program_output_with_block_validity_window_range_to() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
         .with_block_validity_window(..100_u64);
     assert_eq!(output.block_validity_window.start(), None);
     assert_eq!(output.block_validity_window.end(), Some(100));
@@ -124,54 +151,98 @@ fn program_output_with_block_validity_window_range_to() {
 
 #[test]
 fn program_output_try_with_block_validity_window_empty_range_fails() {
-    let result = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+    let result = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![])
         .try_with_block_validity_window(5_u64..5);
     assert!(result.is_err());
 }
 
 #[test]
-fn post_state_new_with_claim_constructor() {
-    let account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-        balance: 1337,
-        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
-        nonce: 10_u128.into(),
-    };
+fn account_state_diff_new_claimed_constructor() {
+    let pre_state = AccountWithMetadata::new(Account::default(), true, AccountId::new([7; 32]));
+    let post_balance_diff = BalanceDiff::Add(1337);
+    let post_data: Data = vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap();
 
-    let account_post_state = AccountPostState::new_claimed(account.clone(), Claim::Authorized);
+    let diff = AccountStateDiff::new_claimed(
+        pre_state.clone(),
+        post_balance_diff,
+        post_data.clone(),
+        Claim::Authorized,
+    );
 
-    assert_eq!(account, account_post_state.account);
-    assert_eq!(account_post_state.required_claim(), Some(Claim::Authorized));
+    assert_eq!(diff.pre_state, pre_state);
+    assert_eq!(diff.post_balance_diff, post_balance_diff);
+    assert_eq!(diff.post_data, post_data);
+    assert_eq!(diff.post_claim, Some(Claim::Authorized));
 }
 
 #[test]
-fn post_state_new_without_claim_constructor() {
-    let account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-        balance: 1337,
-        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
-        nonce: 10_u128.into(),
-    };
+fn account_state_diff_new_constructor_has_no_claim() {
+    let pre_state = AccountWithMetadata::new(Account::default(), true, AccountId::new([7; 32]));
+    let post_balance_diff = BalanceDiff::Add(1337);
+    let post_data: Data = vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap();
 
-    let account_post_state = AccountPostState::new(account.clone());
+    let diff = AccountStateDiff::new(pre_state.clone(), post_balance_diff, post_data.clone());
 
-    assert_eq!(account, account_post_state.account);
-    assert!(account_post_state.required_claim().is_none());
+    assert_eq!(diff.pre_state, pre_state);
+    assert_eq!(diff.post_balance_diff, post_balance_diff);
+    assert_eq!(diff.post_data, post_data);
+    assert_eq!(diff.post_claim, None);
+}
+
+// ---- validate_execution tests ----
+
+#[test]
+fn validate_execution_rejects_insufficient_balance_even_if_globally_conserved() {
+    let executing_program_id: ProgramId = [1; 8];
+    let account_id = AccountId::new([7; 32]);
+    let pre_state = AccountWithMetadata::new(
+        Account {
+            program_owner: executing_program_id.into(),
+            balance: 5,
+            ..Account::default()
+        },
+        false,
+        account_id,
+    );
+    let state_diffs = [AccountStateDiff::new(
+        pre_state.clone(),
+        BalanceDiff::Sub(10),
+        pre_state.account.data,
+    )];
+
+    let result = validate_execution(&state_diffs, executing_program_id);
+
+    assert!(matches!(
+        result,
+        Err(ExecutionValidationError::InvalidBalanceDiff { account_id: id, .. }) if id == account_id
+    ));
 }
 
 #[test]
-fn post_state_account_getter() {
-    let mut account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-        balance: 1337,
-        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
-        nonce: 10_u128.into(),
-    };
+fn validate_execution_rejects_add_overflow() {
+    let executing_program_id: ProgramId = [1; 8];
+    let account_id = AccountId::new([7; 32]);
+    let pre_state = AccountWithMetadata::new(
+        Account {
+            program_owner: executing_program_id.into(),
+            balance: u128::MAX,
+            ..Account::default()
+        },
+        false,
+        account_id,
+    );
+    let state_diffs = [AccountStateDiff::new(
+        pre_state.clone(),
+        BalanceDiff::Add(1),
+        pre_state.account.data,
+    )];
 
-    let mut account_post_state = AccountPostState::new(account.clone());
+    let result = validate_execution(&state_diffs, executing_program_id);
 
-    assert_eq!(account_post_state.account(), &account);
-    assert_eq!(account_post_state.account_mut(), &mut account);
+    assert!(matches!(
+        result,
+        Err(ExecutionValidationError::InvalidBalanceDiff { account_id: id, .. }) if id == account_id
+    ));
 }
 
 // ---- AccountId::for_private_pda tests ----
@@ -401,32 +472,32 @@ fn program_id_account_id_conversion_round_trips() {
 /// A byte-identical echo of an unowned account with history must validate.
 #[test]
 fn an_unowned_account_with_history_may_be_echoed_byte_identically() {
+    let account_id = AccountId::new([7; 32]);
     let account = Account {
         nonce: 1_u128.into(),
         balance: 55,
         ..Account::default()
     };
-    let pre = AccountWithMetadata::new(account.clone(), true, AccountId::new([7; 32]));
-    let post = AccountPostState::new(account);
-    assert!(validate_execution(&[pre], &[post], [9; 8]).is_ok());
+    let pre = AccountWithMetadata::new(account, true, account_id);
+    let diff = AccountStateDiff::unchanged(pre);
+    assert!(validate_execution(&[diff], [9; 8]).is_ok());
 }
 
 /// Any modification of an unowned non-default account still needs ownership.
 #[test]
 fn modifying_an_unowned_account_with_history_is_still_refused() {
+    let account_id = AccountId::new([7; 32]);
     let account = Account {
         nonce: 1_u128.into(),
         balance: 55,
         ..Account::default()
     };
-    let pre = AccountWithMetadata::new(account.clone(), true, AccountId::new([7; 32]));
-    let mut grown = account;
-    grown.balance += 1;
-    let post = AccountPostState::new(grown);
+    let pre = AccountWithMetadata::new(account, true, account_id);
+    let diff = AccountStateDiff::new(pre.clone(), BalanceDiff::Add(1), pre.account.data);
     assert!(matches!(
-        validate_execution(&[pre], &[post], [9; 8]),
-        Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id })
-            if account_id == AccountId::new([7; 32])
+        validate_execution(&[diff], [9; 8]),
+        Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id: id })
+            if id == account_id
     ));
 }
 
@@ -434,24 +505,36 @@ fn modifying_an_unowned_account_with_history_is_still_refused() {
 /// so a claimed echo would seize the account.
 #[test]
 fn a_claimed_echo_of_an_unowned_account_with_history_is_refused() {
+    let account_id = AccountId::new([7; 32]);
     let account = Account {
         nonce: 5_u128.into(),
         balance: 1000,
         ..Account::default()
     };
-    let pre = AccountWithMetadata::new(account.clone(), true, AccountId::new([7; 32]));
-    let post = AccountPostState::new_claimed(account, Claim::Authorized);
+    let pre = AccountWithMetadata::new(account, true, account_id);
+    let diff = AccountStateDiff::new_claimed(
+        pre.clone(),
+        BalanceDiff::Add(0),
+        pre.account.data,
+        Claim::Authorized,
+    );
     assert!(matches!(
-        validate_execution(&[pre], &[post], [9; 8]),
-        Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id })
-            if account_id == AccountId::new([7; 32])
+        validate_execution(&[diff], [9; 8]),
+        Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id: id })
+            if id == account_id
     ));
 }
 
 /// A first claim of a fresh account passes: its pre is default.
 #[test]
 fn a_first_claim_of_a_fresh_account_still_passes() {
-    let pre = AccountWithMetadata::new(Account::default(), true, AccountId::new([7; 32]));
-    let post = AccountPostState::new_claimed(Account::default(), Claim::Authorized);
-    assert!(validate_execution(&[pre], &[post], [9; 8]).is_ok());
+    let account_id = AccountId::new([7; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+    let diff = AccountStateDiff::new_claimed(
+        pre.clone(),
+        BalanceDiff::Add(0),
+        pre.account.data,
+        Claim::Authorized,
+    );
+    assert!(validate_execution(&[diff], [9; 8]).is_ok());
 }

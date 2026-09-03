@@ -1,4 +1,9 @@
-use lee_core::account::{Account, AccountId, AccountWithMetadata};
+use borsh::BorshDeserialize as _;
+use lee_core::{
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiff},
+    program::{CallKind, ProgramInput, UnsupportedCallKind},
+    to_borsh_frame, to_frame,
+};
 use risc0_zkvm::{ExecutorEnv, default_executor};
 
 use crate::{
@@ -31,14 +36,6 @@ fn transfer_fixture() -> (Program, Vec<AccountWithMetadata>, Vec<u8>, u128) {
 fn program_execution() {
     let (program, pre_states, instruction_data, balance_to_move) = transfer_fixture();
 
-    let expected_sender_post = Account {
-        balance: 77_665_544_332_211 - balance_to_move,
-        ..Account::default()
-    };
-    let expected_recipient_post = Account {
-        balance: balance_to_move,
-        ..Account::default()
-    };
     let (program_output, _cycles) = program
         .execute(
             None,
@@ -48,10 +45,21 @@ fn program_execution() {
         )
         .unwrap();
 
-    let [sender_post, recipient_post] = program_output.post_states.try_into().unwrap();
+    let [sender_post, recipient_post] = program_output.state_diffs.try_into().unwrap();
 
-    assert_eq!(sender_post.account(), &expected_sender_post);
-    assert_eq!(recipient_post.account(), &expected_recipient_post);
+    assert_eq!(
+        sender_post.post_balance_diff,
+        BalanceDiff::Sub(balance_to_move)
+    );
+    assert_eq!(sender_post.post_data, sender_post.pre_state.account.data);
+    assert_eq!(
+        recipient_post.post_balance_diff,
+        BalanceDiff::Add(balance_to_move)
+    );
+    assert_eq!(
+        recipient_post.post_data,
+        recipient_post.pre_state.account.data
+    );
 }
 
 #[test]
@@ -129,4 +137,60 @@ fn tiny_budget_is_out_of_gas() {
     let (program, pre_states, instruction_data, _) = transfer_fixture();
     let result = program.execute(None, &pre_states, &instruction_data, 1_024);
     assert!(matches!(result, Err(LeeError::OutOfGas { budget: 1_024 })));
+}
+
+/// An unmodified guest succeeds with a no-op when invoked with a call kind it was never
+/// compiled to understand, rather than failing. Crafts the invocation by hand to simulate what
+/// a future call kind looks like to a guest built before it existed.
+#[test]
+fn program_survives_a_call_kind_it_does_not_recognize() {
+    let program = crate::test_methods::simple_balance_transfer();
+    let instruction_data = Program::serialize_instruction(7_u128).unwrap();
+    let pre_states = vec![
+        AccountWithMetadata::new(
+            Account {
+                balance: 10,
+                ..Account::default()
+            },
+            true,
+            AccountId::new([0; 32]),
+        ),
+        AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32])),
+    ];
+
+    let mut env_builder = ExecutorEnv::builder();
+    // Stands in for a call kind a future protocol upgrade defines.
+    env_builder.write_slice(&to_borsh_frame(&CallKind::Unknown(77)));
+    let input = ProgramInput {
+        self_program_id: program.id(),
+        caller_program_id: None,
+        pre_states: pre_states.clone(),
+        instruction: instruction_data.clone(),
+    };
+    env_builder.write_slice(&to_frame(&borsh::to_vec(&input).unwrap()));
+
+    let session_info = default_executor()
+        .execute(env_builder.build().unwrap(), program.elf())
+        .expect("an unrecognized call kind must not fail guest execution");
+
+    let payload = lee_core::from_frame(&session_info.journal.bytes).unwrap();
+    let output: lee_core::program::ProgramOutput = borsh::from_slice(payload).unwrap();
+
+    // A no-op, not the program's own transfer logic: every account comes back unchanged.
+    assert_eq!(output.state_diffs.len(), pre_states.len());
+    for diff in &output.state_diffs {
+        assert_eq!(diff.post_balance_diff, BalanceDiff::Add(0));
+        assert_eq!(diff.post_data, diff.pre_state.account.data);
+    }
+    assert!(output.chained_calls.is_empty());
+    assert_eq!(output.instruction_data, instruction_data);
+
+    // The skip is recorded, not silent.
+    let event = output
+        .events
+        .iter()
+        .find(|event| event.selector == UnsupportedCallKind::SELECTOR)
+        .expect("an UnsupportedCallKind event must be emitted");
+    let decoded = UnsupportedCallKind::try_from_slice(&event.data).unwrap();
+    assert_eq!(decoded.raw_discriminant, 77);
 }

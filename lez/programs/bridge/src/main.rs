@@ -1,23 +1,22 @@
 use bridge_core::Instruction;
 use lee_core::{
-    account::Account,
+    account::{Account, BalanceDiff},
     program::{
-        AccountPostState, ChainedCall, Claim, ProgramEvent, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountStateDiff, ChainedCall, Claim, ProgramCall, ProgramEvent, ProgramInput,
+        ProgramOutput, read_lee_call, respond_unsupported_call,
     },
 };
 
-fn unchanged_post_states(
-    pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountPostState> {
+fn unchanged_diffs(pre_states: &[lee_core::account::AccountWithMetadata]) -> Vec<AccountStateDiff> {
     pre_states
         .iter()
-        .map(|pre_state| AccountPostState::new(pre_state.account.clone()))
+        .map(|pre_state| AccountStateDiff::unchanged(pre_state.clone()))
         .collect()
 }
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -25,7 +24,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     assert!(
         caller_program_id.is_none(),
@@ -34,7 +36,7 @@ fn main() {
 
     let pre_states_clone = pre_states.clone();
 
-    let (post_states, chained_calls, events) = match instruction {
+    let (post_diffs, chained_calls, events) = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
             vault_program_id,
@@ -74,19 +76,21 @@ fn main() {
             // is the only on-chain signal. Relevant once the explorer surfaces
             // deposits.
             if receipt.account != Account::default() {
-                (unchanged_post_states(&pre_states_clone), vec![], vec![])
+                (unchanged_diffs(&pre_states_clone), vec![], vec![])
             } else {
                 // First mint: claim the receipt — its existence is the record,
                 // the account's contents are never read — and chain the vault
                 // transfer.
-                let receipt_post = AccountPostState::new_claimed_if_default(
-                    receipt.account,
+                let receipt_post = AccountStateDiff::new_claimed_if_default(
+                    receipt.clone(),
+                    BalanceDiff::Add(0),
+                    receipt.account.data.clone(),
                     Claim::Pda(bridge_core::deposit_receipt_seed(l1_deposit_op_id)),
                 );
 
-                let post_states = vec![
-                    AccountPostState::new(bridge.account.clone()),
-                    AccountPostState::new(recipient_vault.account.clone()),
+                let post_diffs = vec![
+                    AccountStateDiff::unchanged(bridge.clone()),
+                    AccountStateDiff::unchanged(recipient_vault.clone()),
                     receipt_post,
                 ];
 
@@ -113,7 +117,7 @@ fn main() {
                     .to_bytes(),
                 }];
 
-                (post_states, chained_calls, events)
+                (post_diffs, chained_calls, events)
             }
         }
         Instruction::Withdraw {
@@ -155,7 +159,7 @@ fn main() {
             //         amount: u128::from(amount),
             //     },
             // )];
-            // (unchanged_post_states(&pre_states_clone), chained_calls, events)
+            // (unchanged_diffs(&pre_states_clone), chained_calls, events)
         }
     };
 
@@ -163,8 +167,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        pre_states_clone,
-        post_states,
+        post_diffs,
     )
     .with_chained_calls(chained_calls)
     .with_events(events)

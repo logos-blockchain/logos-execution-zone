@@ -63,6 +63,84 @@ fn unauthorized_public_account_claiming_fails() {
 }
 
 #[test]
+fn insufficient_balance_transfer_leaves_state_untouched() {
+    let program = crate::test_methods::simple_balance_transfer();
+    let from_key = PrivateKey::try_new([21; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let initial_balance = 10;
+    let mut state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(from, initial_balance)]))
+        .with_test_programs();
+
+    let to_key = PrivateKey::try_new([22; 32]).unwrap();
+    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let amount: u128 = initial_balance + 1;
+
+    let sender_pre = state.get_account_by_id(from);
+    let recipient_pre = state.get_account_by_id(to);
+
+    let message = public_transaction::Message::try_new(
+        program.id(),
+        vec![from, to],
+        vec![Nonce(0), Nonce(0)],
+        amount,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key, &to_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(
+            InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::InvalidBalanceDiff { account_id, .. }
+            )
+        )) if account_id == from
+    ));
+
+    assert_eq!(state.get_account_by_id(from), sender_pre);
+    assert_eq!(state.get_account_by_id(to), recipient_pre);
+}
+
+/// Order no longer carries meaning: each `AccountStateDiff` embeds its own pre-state, so a
+/// program listing its diffs in a different order than it received the corresponding pre-states
+/// still validates and applies correctly.
+#[test]
+fn reordered_state_diffs_still_succeed() {
+    let program = crate::test_methods::reordering_transfer();
+    let from_key = PrivateKey::try_new([23; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let initial_balance = 10;
+    let mut state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(from, initial_balance)]))
+        .with_test_programs();
+
+    let to_key = PrivateKey::try_new([24; 32]).unwrap();
+    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let amount: u128 = 4;
+
+    let message = public_transaction::Message::try_new(
+        program.id(),
+        vec![from, to],
+        vec![Nonce(0), Nonce(0)],
+        amount,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key, &to_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    assert_eq!(
+        state.get_account_by_id(from).balance,
+        initial_balance - amount
+    );
+    assert_eq!(state.get_account_by_id(to).balance, amount);
+}
+
+#[test]
 fn authorized_public_account_claiming_succeeds() {
     let program = crate::test_methods::simple_balance_transfer();
     let account_key = PrivateKey::try_new([10; 32]).unwrap();
@@ -736,96 +814,4 @@ fn claiming_mechanism_cannot_claim_initialied_accounts() {
             InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id: err_account_id }
         )) if err_account_id == account_id
     ));
-}
-
-/// This test ensures that even if a malicious program tries to perform overflow of balances
-/// it will not be able to break the balance validation.
-#[test]
-fn malicious_program_cannot_break_balance_validation_if_not_in_genesis() {
-    let sender_key = PrivateKey::try_new([37; 32]).unwrap();
-    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
-    let sender_init_balance: u128 = 10;
-
-    let recipient_key = PrivateKey::try_new([42; 32]).unwrap();
-    let recipient_id = AccountId::from(&PublicKey::new_from_private_key(&recipient_key));
-    let recipient_init_balance: u128 = 10;
-
-    let modified_transfer_id = crate::test_methods::modified_transfer_program().id();
-
-    let mut state = V03State::new()
-        .with_public_accounts([
-            (
-                sender_id,
-                Account {
-                    program_owner: modified_transfer_id.into(),
-                    balance: sender_init_balance,
-                    ..Account::default()
-                },
-            ),
-            (
-                recipient_id,
-                Account {
-                    program_owner: modified_transfer_id.into(),
-                    balance: recipient_init_balance,
-                    ..Account::default()
-                },
-            ),
-        ])
-        .with_test_programs();
-
-    let balance_to_move: u128 = 4;
-
-    let sender = AccountWithMetadata::new(state.get_account_by_id(sender_id), true, sender_id);
-
-    let sender_nonce = sender.account.nonce;
-
-    let _recipient =
-        AccountWithMetadata::new(state.get_account_by_id(recipient_id), false, sender_id);
-
-    let message = public_transaction::Message::try_new(
-        modified_transfer_id,
-        vec![sender_id, recipient_id],
-        vec![sender_nonce],
-        balance_to_move,
-    )
-    .unwrap();
-
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sender_key]);
-    let tx = PublicTransaction::new(message, witness_set);
-    let res = state.transition_from_public_transaction(&tx, 2, 0);
-    let expected_total_balance_pre_states =
-        WrappedBalanceSum::from_balances([sender_init_balance, recipient_init_balance].into_iter())
-            .unwrap();
-    let expected_total_balance_post_states = WrappedBalanceSum::from_balances(
-        [sender_init_balance, recipient_init_balance, u128::MAX, 1].into_iter(),
-    )
-    .unwrap();
-    assert!(matches!(
-        res,
-        Err(LeeError::InvalidProgramBehavior(
-            InvalidProgramBehaviorError::ExecutionValidationFailed(
-                ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
-            )
-        )) if total_balance_pre_states == expected_total_balance_pre_states && total_balance_post_states == expected_total_balance_post_states
-    ));
-
-    let sender_post = state.get_account_by_id(sender_id);
-    let recipient_post = state.get_account_by_id(recipient_id);
-
-    let expected_sender_post = {
-        let mut this = state.get_account_by_id(sender_id);
-        this.balance = sender_init_balance;
-        this.nonce = Nonce(0);
-        this
-    };
-
-    let expected_recipient_post = {
-        let mut this = state.get_account_by_id(sender_id);
-        this.balance = recipient_init_balance;
-        this.nonce = Nonce(0);
-        this
-    };
-
-    assert_eq!(expected_sender_post, sender_post);
-    assert_eq!(expected_recipient_post, recipient_post);
 }

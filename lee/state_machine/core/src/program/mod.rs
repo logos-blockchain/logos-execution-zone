@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountDiff, AccountId, AccountWithMetadata},
+    account::{
+        Account, AccountId, AccountWithMetadata, BalanceDiff, BalanceDiffError, Data,
+        apply_balance_diff,
+    },
     encryption::ViewingPublicKey,
 };
 
@@ -285,18 +288,6 @@ impl ChainedCall {
     }
 }
 
-/// Represents the final state of an `Account` after a program execution.
-///
-/// A post state may optionally request that the executing program
-/// becomes the owner of the account (a "claim"). This is used to signal
-/// that the program intends to take ownership of the account.
-#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
-pub struct AccountPostState {
-    account: Account,
-    claim: Option<Claim>,
-}
-
 /// A claim request for an account, indicating that the executing program intends to take ownership
 /// of the account.
 #[derive(
@@ -305,10 +296,10 @@ pub struct AccountPostState {
 pub enum Claim {
     /// The program requests ownership of the account which was authorized by the signer.
     ///
-    /// Note that it's possible to successfully execute program outputting [`AccountPostState`] with
-    /// `is_authorized == false` and `claim == Some(Claim::Authorized)`.
-    /// This will give no error if program had authorization in pre state and may be useful
-    /// if program decides to give up authorization for a chained call.
+    /// Note that it's possible to successfully execute a program outputting an
+    /// [`AccountStateDiff`] with `pre_state.is_authorized == false` and `post_claim ==
+    /// Some(Claim::Authorized)`. This will give no error if program had authorization in pre
+    /// state and may be useful if program decides to give up authorization for a chained call.
     Authorized,
     /// The program requests ownership of the account through a PDA. The program emits the
     /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
@@ -316,119 +307,76 @@ pub enum Claim {
     Pda(PdaSeed),
 }
 
-impl AccountPostState {
-    /// Creates a post state without a claim request.
-    /// The executing program is not requesting ownership of the account.
-    #[must_use]
-    pub const fn new(account: Account) -> Self {
-        Self {
-            account,
-            claim: None,
-        }
-    }
-
-    /// Creates a post state that requests ownership of the account.
-    /// This indicates that the executing program intends to claim the
-    /// account as its own and is allowed to mutate it.
-    #[must_use]
-    pub const fn new_claimed(account: Account, claim: Claim) -> Self {
-        Self {
-            account,
-            claim: Some(claim),
-        }
-    }
-
-    /// Creates a post state that requests ownership of the account
-    /// if the account's program owner is the default program ID.
-    #[must_use]
-    pub fn new_claimed_if_default(account: Account, claim: Claim) -> Self {
-        let is_default_owner = account.program_owner == DEFAULT_PROGRAM_OWNER;
-        Self {
-            account,
-            claim: is_default_owner.then_some(claim),
-        }
-    }
-
-    /// Returns whether this post state requires a claim.
-    #[must_use]
-    pub const fn required_claim(&self) -> Option<Claim> {
-        self.claim
-    }
-
-    /// Returns the underlying account.
-    #[must_use]
-    pub const fn account(&self) -> &Account {
-        &self.account
-    }
-
-    /// Returns the underlying account.
-    #[must_use]
-    pub const fn account_mut(&mut self) -> &mut Account {
-        &mut self.account
-    }
-
-    /// Consumes the post state and returns the underlying account.
-    #[must_use]
-    pub fn into_account(self) -> Account {
-        self.account
-    }
-}
-
+/// A single account's full pre-state paired with the diff a program's execution applies to it.
 #[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
-pub struct AccountDiffOutput {
-    diff: AccountDiff,
-    claim: Option<Claim>,
+pub struct AccountStateDiff {
+    pub pre_state: AccountWithMetadata,
+    pub post_balance_diff: BalanceDiff,
+    pub post_data: Data,
+    pub post_claim: Option<Claim>,
 }
 
-impl AccountDiffOutput {
+impl AccountStateDiff {
+    /// A diff that leaves `pre_state`'s balance and data untouched.
     #[must_use]
-    pub const fn new(diff: AccountDiff) -> Self {
-        Self { diff, claim: None }
-    }
-
-    #[must_use]
-    pub const fn new_claimed(diff: AccountDiff, claim: Claim) -> Self {
+    pub fn unchanged(pre_state: AccountWithMetadata) -> Self {
+        let post_data = pre_state.account.data.clone();
         Self {
-            diff,
-            claim: Some(claim),
+            pre_state,
+            post_balance_diff: BalanceDiff::Add(0),
+            post_data,
+            post_claim: None,
         }
     }
 
-    // `AccountDiff` deliberately carries no ownership info, unlike `Account`, so unlike
-    // `AccountPostState::new_claimed_if_default` this needs the pre-state's owner passed in.
     #[must_use]
-    pub fn new_claimed_if_default(
-        diff: AccountDiff,
-        pre_state_program_owner: ProgramId,
+    pub const fn new(
+        pre_state: AccountWithMetadata,
+        post_balance_diff: BalanceDiff,
+        post_data: Data,
+    ) -> Self {
+        Self {
+            pre_state,
+            post_balance_diff,
+            post_data,
+            post_claim: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn new_claimed(
+        pre_state: AccountWithMetadata,
+        post_balance_diff: BalanceDiff,
+        post_data: Data,
         claim: Claim,
     ) -> Self {
-        let is_default_owner = pre_state_program_owner == DEFAULT_PROGRAM_ID;
         Self {
-            diff,
-            claim: is_default_owner.then_some(claim),
+            pre_state,
+            post_balance_diff,
+            post_data,
+            post_claim: Some(claim),
         }
     }
 
+    /// Like [`Self::new_claimed`], but only actually claims if `pre_state`'s owner is
+    /// [`DEFAULT_PROGRAM_OWNER`] — claiming an already-owned account is otherwise rejected by
+    /// [`validate_execution`], so this is a convenience for the common "claim if unowned, else
+    /// leave ownership alone" case.
     #[must_use]
-    pub const fn claim(&self) -> Option<Claim> {
-        self.claim
-    }
-
-    #[must_use]
-    pub const fn diff(&self) -> &AccountDiff {
-        &self.diff
-    }
-
-    #[must_use]
-    pub const fn diff_mut(&mut self) -> &mut AccountDiff {
-        &mut self.diff
-    }
-}
-
-impl From<AccountDiffOutput> for AccountDiff {
-    fn from(output: AccountDiffOutput) -> Self {
-        output.diff
+    pub fn new_claimed_if_default(
+        pre_state: AccountWithMetadata,
+        post_balance_diff: BalanceDiff,
+        post_data: Data,
+        claim: Claim,
+    ) -> Self {
+        let is_default_owner = pre_state.account.program_owner == DEFAULT_PROGRAM_OWNER;
+        Self {
+            pre_state,
+            post_balance_diff,
+            post_data,
+            post_claim: is_default_owner.then_some(claim),
+        }
     }
 }
 
@@ -554,10 +502,8 @@ pub struct ProgramOutput {
     pub caller_program_id: Option<ProgramId>,
     /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
-    /// The account pre states the program received to produce this output.
-    pub pre_states: Vec<AccountWithMetadata>,
-    /// The account post states the program execution produced.
-    pub post_states: Vec<AccountPostState>,
+    /// Each account's pre-state paired with the diff the program's execution applies to it.
+    pub state_diffs: Vec<AccountStateDiff>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
     /// The block ID window where the program output is valid.
@@ -574,15 +520,13 @@ impl ProgramOutput {
         self_program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
         instruction_data: InstructionData,
-        pre_states: Vec<AccountWithMetadata>,
-        post_states: Vec<AccountPostState>,
+        state_diffs: Vec<AccountStateDiff>,
     ) -> Self {
         Self {
             self_program_id,
             caller_program_id,
             instruction_data,
-            pre_states,
-            post_states,
+            state_diffs,
             chained_calls: Vec::new(),
             block_validity_window: ValidityWindow::new_unbounded(),
             timestamp_validity_window: ValidityWindow::new_unbounded(),
@@ -713,20 +657,6 @@ pub enum ExecutionValidationError {
     PreStateAccountIdsNotUnique,
 
     #[error(
-        "Pre-state and post-state lengths do not match: pre-state length {pre_state_length}, post-state length {post_state_length}"
-    )]
-    MismatchedPreStatePostStateLength {
-        pre_state_length: usize,
-        post_state_length: usize,
-    },
-
-    #[error("Unallowed modification of nonce for account {account_id}")]
-    ModifiedNonce { account_id: AccountId },
-
-    #[error("Unallowed modification of program owner for account {account_id}")]
-    ModifiedProgramOwner { account_id: AccountId },
-
-    #[error(
         "Trying to decrease balance of account {account_id} owned by {owner_account_id:?} in a program {executing_program_id:?} which is not the owner"
     )]
     UnauthorizedBalanceDecrease {
@@ -743,39 +673,94 @@ pub enum ExecutionValidationError {
         executing_program_id: ProgramId,
     },
 
-    #[error(
-        "Post-state for account {account_id} has default program owner but pre-state was not default"
-    )]
-    NonDefaultAccountWithDefaultOwner { account_id: AccountId },
+    #[error("Invalid balance diff for account {account_id}: {source}")]
+    InvalidBalanceDiff {
+        account_id: AccountId,
+        #[source]
+        source: BalanceDiffError,
+    },
 
     #[error("Total balance across accounts overflowed 2^256 - 1")]
     BalanceSumOverflow,
 
     #[error(
-        "Total balance across accounts is not preserved: total balance in pre-states {total_balance_pre_states}, total balance in post-states {total_balance_post_states}"
+        "Account {account_id} is non-default but left with the default owner by something other than a claimless byte-identical echo"
+    )]
+    NonDefaultAccountWithDefaultOwner { account_id: AccountId },
+
+    #[error(
+        "Total balance across accounts is not preserved: total added {total_added}, total subtracted {total_subbed}"
     )]
     MismatchedTotalBalance {
-        total_balance_pre_states: WrappedBalanceSum,
-        total_balance_post_states: WrappedBalanceSum,
+        total_added: WrappedBalanceSum,
+        total_subbed: WrappedBalanceSum,
     },
 }
 
 /// Discriminates which entrypoint a single guest invocation is for. Written by the (trusted)
 /// orchestrator only.
 ///
-/// Currently only ever `Execute`; this exists so a future protocol upgrade can introduce
-/// additional entrypoints without changing the shape of a guest invocation's inputs.
+/// `Execute` is index 0 and must stay index 0; future variants are appended only, never
+/// inserted or reordered.
 ///
-/// Borsh-encodes by variant index. `Execute` must remain index 0. Future variants must only be
-/// appended at the end, never inserted or reordered.
-#[derive(BorshSerialize, BorshDeserialize)]
+/// Decoding is hand-written, not derived: an unrecognized discriminant decodes as `Unknown`
+/// rather than failing, so an already-deployed guest survives a call kind introduced after it
+/// was built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallKind {
     Execute,
+    /// An unrecognized discriminant, carrying the raw byte for diagnostics.
+    Unknown(u8),
+}
+
+impl BorshSerialize for CallKind {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        let discriminant: u8 = match *self {
+            Self::Execute => 0,
+            Self::Unknown(byte) => byte,
+        };
+        BorshSerialize::serialize(&discriminant, writer)
+    }
+}
+
+impl BorshDeserialize for CallKind {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let discriminant = u8::deserialize_reader(reader)?;
+        Ok(match discriminant {
+            0 => Self::Execute,
+            other => Self::Unknown(other),
+        })
+    }
 }
 
 /// The guest-side view of a single invocation.
+///
+/// `#[non_exhaustive]`: any `match` outside this crate must include a wildcard arm, so a guest
+/// implementing more than `Execute` is forced to reconsider when a new variant is added.
+#[non_exhaustive]
 pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
+    /// A call kind this build doesn't implement (an unrecognized `CallKind`), with the raw
+    /// discriminant and the envelope common to every call kind.
+    Unsupported(ProgramInput<InstructionData>, u8),
+}
+
+/// Diagnostic event recorded when a call kind isn't implemented; the call itself is a no-op,
+/// not a rejection.
+#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct UnsupportedCallKind {
+    /// The discriminant byte this build didn't recognize.
+    pub raw_discriminant: u8,
+}
+
+impl UnsupportedCallKind {
+    pub const SELECTOR: [u8; 8] = [0xb5, 0x9a, 0xac, 0x13, 0xbd, 0xb1, 0xa7, 0x3c];
+    pub const SELECTOR_NAME: &str = "lee_core::UnsupportedCallKind";
+
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("UnsupportedCallKind serializes")
+    }
 }
 
 /// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
@@ -810,46 +795,65 @@ pub fn read_input_frame() -> Vec<u8> {
     payload
 }
 
-/// Reads a single LEE guest invocation, dispatching on [`CallKind`].
-///
-/// Replaces [`read_lee_inputs`] as the entrypoint read — every guest `main` should match on the
-/// returned [`ProgramCall`] rather than assume it was invoked to execute. Each of `CallKind` and
-/// the invocation's own payload is read as its own length-prefixed borsh frame (see
-/// [`read_input_frame`]), one after the other.
+/// Reads a single LEE guest invocation, dispatching on `CallKind`.
 #[must_use]
 pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
     let call_kind: CallKind =
         borsh::from_slice(&read_input_frame()).expect("call kind must decode from borsh");
+
+    // The envelope's shape doesn't depend on call kind, so it's always readable -- even for a
+    // call kind this build doesn't recognize.
+    let envelope: ProgramInput<InstructionData> =
+        borsh::from_slice(&read_input_frame()).expect("guest input must be valid borsh");
+
     match call_kind {
         CallKind::Execute => {
-            let (program_input, instruction_words) = read_lee_inputs();
-            ProgramCall::Execute(program_input, instruction_words)
+            let ProgramInput {
+                self_program_id,
+                caller_program_id,
+                pre_states,
+                instruction: instruction_data,
+            } = envelope;
+            let instruction =
+                borsh::from_slice(&instruction_data).expect("instruction must decode from borsh");
+            ProgramCall::Execute(
+                ProgramInput {
+                    self_program_id,
+                    caller_program_id,
+                    pre_states,
+                    instruction,
+                },
+                instruction_data,
+            )
         }
+        CallKind::Unknown(raw) => ProgramCall::Unsupported(envelope, raw),
     }
 }
 
-/// Reads the LEE inputs from the guest environment. The frame decodes as
-/// `ProgramInput<InstructionData>`; `T` is a second decode of the instruction bytes.
-#[must_use]
-pub fn read_lee_inputs<T: BorshDeserialize>() -> (ProgramInput<T>, InstructionData) {
-    let ProgramInput {
-        self_program_id,
-        caller_program_id,
-        pre_states,
-        instruction: instruction_data,
-    } = borsh::from_slice::<ProgramInput<InstructionData>>(&read_input_frame())
-        .expect("guest input must be valid borsh");
-    let instruction =
-        borsh::from_slice(&instruction_data).expect("instruction must decode from borsh");
-    (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
+/// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip,
+/// not a failure.
+pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
+    let ProgramCall::Unsupported(envelope, raw_discriminant) = call else {
+        unreachable!("only reached after Execute was already ruled out by the caller");
+    };
+    let state_diffs = envelope
+        .pre_states
+        .iter()
+        .cloned()
+        .map(AccountStateDiff::unchanged)
+        .collect();
+    ProgramOutput::new(
+        envelope.self_program_id,
+        envelope.caller_program_id,
+        envelope.instruction,
+        state_diffs,
     )
+    .with_events(vec![ProgramEvent {
+        selector: UnsupportedCallKind::SELECTOR,
+        data: UnsupportedCallKind { raw_discriminant }.to_bytes(),
+    }])
+    .write();
+    env::exit(0)
 }
 
 /// Whether a callee's journalled `pre_states` name exactly the accounts in the call
@@ -866,13 +870,14 @@ pub fn pre_states_match_accounts(
 
 /// Validates well-behaved program execution.
 ///
+/// The diff has no `nonce`/`program_owner` field, so a program can't forge either; ownership is
+/// checked separately, via claims.
+///
 /// # Parameters
-/// - `pre_states`: The list of input accounts, each annotated with authorization metadata.
-/// - `post_states`: The list of resulting accounts after executing the program logic.
+/// - `state_diffs`: Each account's pre-state paired with the diff the program applied to it.
 /// - `executing_program_id`: The identifier of the program that was executed.
 pub fn validate_execution(
-    pre_states: &[AccountWithMetadata],
-    post_states: &[AccountPostState],
+    state_diffs: &[AccountStateDiff],
     executing_program_id: ProgramId,
 ) -> Result<(), ExecutionValidationError> {
     // `program_owner` is `AccountId`-typed; convert once up front rather than at each
@@ -880,39 +885,16 @@ pub fn validate_execution(
     let executing_account_id = AccountId::from(executing_program_id);
 
     // 1. Check account ids are all different
-    if !validate_uniqueness_of_account_ids(pre_states) {
+    if !validate_uniqueness_of_account_ids(state_diffs) {
         return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
     }
 
-    // 2. Lengths must match
-    if pre_states.len() != post_states.len() {
-        return Err(
-            ExecutionValidationError::MismatchedPreStatePostStateLength {
-                pre_state_length: pre_states.len(),
-                post_state_length: post_states.len(),
-            },
-        );
-    }
-
-    for (pre, post) in pre_states.iter().zip(post_states) {
-        // 3. Nonce must remain unchanged
-        if pre.account.nonce != post.account.nonce {
-            return Err(ExecutionValidationError::ModifiedNonce {
-                account_id: pre.account_id,
-            });
-        }
-
-        // 4. Program ownership changes are not allowed
-        if pre.account.program_owner != post.account.program_owner {
-            return Err(ExecutionValidationError::ModifiedProgramOwner {
-                account_id: pre.account_id,
-            });
-        }
-
+    for diff in state_diffs {
+        let pre = &diff.pre_state;
         let account_program_owner = pre.account.program_owner;
 
-        // 5. Decreasing balance only allowed if owned by executing program
-        if post.account.balance < pre.account.balance
+        // 2. Decreasing balance only allowed if owned by executing program
+        if matches!(diff.post_balance_diff, BalanceDiff::Sub(amount) if amount > 0)
             && account_program_owner != executing_account_id
         {
             return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
@@ -922,9 +904,9 @@ pub fn validate_execution(
             });
         }
 
-        // 6. Data changes only allowed if owned by executing program or if account pre state has
+        // 3. Data changes only allowed if owned by executing program or if account pre state has
         //    default values
-        if pre.account.data != post.account.data
+        if diff.post_data != pre.account.data
             && pre.account != Account::default()
             && account_program_owner != executing_account_id
         {
@@ -934,11 +916,21 @@ pub fn validate_execution(
             });
         }
 
-        // 7. A non-default account left with the default owner must be a claimless byte-identical
+        // 4. Balance diff must be valid against this account's own pre-state balance.
+        if let Err(source) = apply_balance_diff(pre.account.balance, Some(diff.post_balance_diff)) {
+            return Err(ExecutionValidationError::InvalidBalanceDiff {
+                account_id: pre.account_id,
+                source,
+            });
+        }
+
+        // 5. A non-default account left with the default owner must be a claimless byte-identical
         //    echo: `Claim` is applied after this check, so a claimed echo would seize the account.
-        if post.account.program_owner == DEFAULT_PROGRAM_OWNER && pre.account != Account::default()
-        {
-            let claimless_echo = post.account == pre.account && post.required_claim().is_none();
+        let post_owner_is_default =
+            diff.post_claim.is_none() && account_program_owner == DEFAULT_PROGRAM_OWNER;
+        if post_owner_is_default && pre.account != Account::default() {
+            let claimless_echo =
+                diff.post_balance_diff == BalanceDiff::Add(0) && diff.post_data == pre.account.data;
             if !claimless_echo {
                 return Err(
                     ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
@@ -949,34 +941,44 @@ pub fn validate_execution(
         }
     }
 
-    // 8. Total balance is preserved
-    let Some(total_balance_pre_states) =
-        WrappedBalanceSum::from_balances(pre_states.iter().map(|pre| pre.account.balance))
+    // 6. Total balance is preserved
+    let Some(total_added) =
+        WrappedBalanceSum::from_balances(state_diffs.iter().filter_map(|diff| {
+            match diff.post_balance_diff {
+                BalanceDiff::Add(amount) => Some(amount),
+                BalanceDiff::Sub(_) => None,
+            }
+        }))
     else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
-    let Some(total_balance_post_states) =
-        WrappedBalanceSum::from_balances(post_states.iter().map(|post| post.account.balance))
+    let Some(total_subbed) =
+        WrappedBalanceSum::from_balances(state_diffs.iter().filter_map(|diff| {
+            match diff.post_balance_diff {
+                BalanceDiff::Sub(amount) => Some(amount),
+                BalanceDiff::Add(_) => None,
+            }
+        }))
     else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
-    if total_balance_pre_states != total_balance_post_states {
+    if total_added != total_subbed {
         return Err(ExecutionValidationError::MismatchedTotalBalance {
-            total_balance_pre_states,
-            total_balance_post_states,
+            total_added,
+            total_subbed,
         });
     }
 
     Ok(())
 }
 
-fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> bool {
-    let number_of_accounts = pre_states.len();
-    let number_of_account_ids = pre_states
+fn validate_uniqueness_of_account_ids(state_diffs: &[AccountStateDiff]) -> bool {
+    let number_of_accounts = state_diffs.len();
+    let number_of_account_ids = state_diffs
         .iter()
-        .map(|account| &account.account_id)
+        .map(|diff| &diff.pre_state.account_id)
         .collect::<HashSet<_>>()
         .len();
 

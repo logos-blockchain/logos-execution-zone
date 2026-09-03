@@ -1,15 +1,19 @@
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 /// Echoes its real `pre_states` unchanged, then appends one fabricated, untouched account never
-/// present in its own input — to test whether reporting it in `ProgramOutput.pre_states` alone
+/// present in its own input — to test whether reporting it in `ProgramOutput.state_diffs` alone
 /// is enough to get it resolved, independent of `ChainedCall.pre_state_ids`.
 type Instruction = AccountId;
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -17,27 +21,27 @@ fn main() {
             instruction: fabricated_account_id,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
-    let mut output_pre_states = pre_states.clone();
-    let mut output_post_states: Vec<AccountPostState> = pre_states
-        .iter()
-        .map(|pre| AccountPostState::new(pre.account.clone()))
+    let mut state_diffs: Vec<AccountStateDiff> = pre_states
+        .into_iter()
+        .map(AccountStateDiff::unchanged)
         .collect();
 
-    output_pre_states.push(AccountWithMetadata {
+    state_diffs.push(AccountStateDiff::unchanged(AccountWithMetadata {
         account: Account::default(),
         is_authorized: false,
         account_id: fabricated_account_id,
-    });
-    output_post_states.push(AccountPostState::new(Account::default()));
+    }));
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        output_pre_states,
-        output_post_states,
+        state_diffs,
     )
     .write();
 }

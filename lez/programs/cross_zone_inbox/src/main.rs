@@ -4,19 +4,20 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountWithMetadata, BalanceDiff},
     program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountStateDiff, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
     },
 };
 
-fn unchanged(pre: &AccountWithMetadata) -> AccountPostState {
-    AccountPostState::new(pre.account.clone())
+fn unchanged(pre: &AccountWithMetadata) -> AccountStateDiff {
+    AccountStateDiff::unchanged(pre.clone())
 }
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -24,7 +25,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     assert!(
         caller_program_id.is_none(),
@@ -129,13 +133,13 @@ fn dispatch(
         (unchanged(&seen), vec![])
     } else {
         shard.insert(msg.src_block_hash, msg.src_tx_index);
-        let mut seen_account = seen.account.clone();
-        seen_account.data = shard
-            .to_bytes()
-            .try_into()
-            .expect("seen shard fits in account data");
-        let seen_post = AccountPostState::new_claimed_if_default(
-            seen_account,
+        let seen_post = AccountStateDiff::new_claimed_if_default(
+            seen,
+            BalanceDiff::Add(0),
+            shard
+                .to_bytes()
+                .try_into()
+                .expect("seen shard fits in account data"),
             Claim::Pda(inbox_seen_shard_seed(&msg.src_zone, msg.src_block_id)),
         );
 
@@ -155,18 +159,14 @@ fn dispatch(
         (seen_post, vec![call])
     };
 
-    let mut post_states = vec![unchanged(&config), seen_post, unchanged(&marker)];
-    post_states.extend(target_accounts.iter().map(unchanged));
-
-    let mut output_pre_states = vec![config, seen, marker];
-    output_pre_states.extend(target_accounts);
+    let mut post_diffs = vec![unchanged(&config), seen_post, unchanged(&marker)];
+    post_diffs.extend(target_accounts.iter().map(unchanged));
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        output_pre_states,
-        post_states,
+        post_diffs,
     )
     .with_chained_calls(chained_calls)
     .write();
@@ -206,19 +206,20 @@ fn init_config(
         );
     }
 
-    let mut config_account = config_meta.account.clone();
-    config_account.data = config
-        .to_bytes()
-        .try_into()
-        .expect("inbox config fits in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(inbox_config_seed()));
+    let config_post = AccountStateDiff::new_claimed_if_default(
+        config_meta,
+        BalanceDiff::Add(0),
+        config
+            .to_bytes()
+            .try_into()
+            .expect("inbox config fits in account data"),
+        Claim::Pda(inbox_config_seed()),
+    );
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config_meta],
         vec![config_post],
     )
     .write();

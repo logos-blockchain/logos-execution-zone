@@ -1,7 +1,7 @@
 use std::io;
 
 use lee_core::{
-    account::{Account, AccountId, Cycles},
+    account::{Account, AccountId, BalanceDiffError, Cycles},
     program::ProgramId,
 };
 use thiserror::Error;
@@ -186,6 +186,9 @@ pub enum InvalidProgramBehaviorError {
         program_id: ProgramId,
         account_id: AccountId,
     },
+
+    #[error(transparent)]
+    BalanceDiffFailed(#[from] BalanceDiffError),
 }
 
 #[cfg(test)]

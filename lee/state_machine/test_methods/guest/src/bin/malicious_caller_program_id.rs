@@ -1,11 +1,13 @@
 use lee_core::program::{
-    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, DEFAULT_PROGRAM_ID, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    respond_unsupported_call,
 };
 
 type Instruction = ();
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id: _, // ignore the actual caller
@@ -13,11 +15,14 @@ fn main() {
             instruction: (),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
-    let post_states = pre_states
+    let state_diffs = pre_states
         .iter()
-        .map(|a| AccountPostState::new(a.account.clone()))
+        .map(|a| AccountStateDiff::unchanged(a.clone()))
         .collect();
 
     // Deliberately output wrong caller_program_id.
@@ -27,8 +32,7 @@ fn main() {
         self_program_id,
         Some(DEFAULT_PROGRAM_ID), // WRONG: should be None for a top-level call
         instruction_data,
-        pre_states,
-        post_states,
+        state_diffs,
     )
     .write();
 }

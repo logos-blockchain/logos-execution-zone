@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     from_frame,
     program::{
         ChainedCall, InstructionData, ProgramId, ProgramOutput, compute_public_authorized_pdas,
@@ -215,11 +215,8 @@ pub fn execute_and_prove_with_padded_inputs(
         // `authorized_accounts.extend(authorized_output_accounts)` in-circuit.
         let mut authorized_output_accounts = caller_authorized_accounts;
 
-        for (pre, post) in program_output
-            .pre_states
-            .iter()
-            .zip(&program_output.post_states)
-        {
+        for diff in &program_output.state_diffs {
+            let pre = &diff.pre_state;
             let account_id = pre.account_id;
 
             // Assigned here, after this call has actually run, uniformly for the top-level
@@ -247,16 +244,20 @@ pub fn execute_and_prove_with_padded_inputs(
 
             // A successful claim reassigns ownership; the guest doesn't write this into its own
             // post_state, the circuit does it afterward, so predict it here too.
-            let program_owner = if post.required_claim().is_some() {
+            let program_owner = if diff.post_claim.is_some() {
                 AccountId::from(chained_call.program_id)
             } else {
-                post.account().program_owner
+                pre.account.program_owner
             };
+            let balance = apply_balance_diff(pre.account.balance, Some(diff.post_balance_diff))
+                .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
             materialized_state.insert(
                 account_id,
                 Account {
                     program_owner,
-                    ..post.account().clone()
+                    balance,
+                    data: diff.post_data.clone(),
+                    nonce: pre.account.nonce,
                 },
             );
             if pre.is_authorized {

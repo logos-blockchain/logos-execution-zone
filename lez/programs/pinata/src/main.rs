@@ -1,4 +1,10 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 
 const PRIZE: u128 = 150;
@@ -44,7 +50,8 @@ impl Challenge {
 fn main() {
     // Read input accounts.
     // It is expected to receive only two accounts: [pinata_account, winner_account]
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -52,7 +59,10 @@ fn main() {
             instruction: solution,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([pinata, winner]) = <[_; 2]>::try_from(pre_states) else {
         return;
@@ -64,30 +74,24 @@ fn main() {
         return;
     }
 
-    let mut pinata_post = pinata.account.clone();
-    let mut winner_post = winner.account.clone();
-    pinata_post.balance = pinata_post
-        .balance
-        .checked_sub(PRIZE)
-        .expect("Not enough balance in the pinata");
-    pinata_post.data = data
+    let pinata_data = data
         .next_data()
         .to_vec()
         .try_into()
         .expect("33 bytes should fit into Data");
-    winner_post.balance = winner_post
-        .balance
-        .checked_add(PRIZE)
-        .expect("Overflow when adding prize to winner");
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![pinata, winner],
         vec![
-            AccountPostState::new_claimed_if_default(pinata_post, Claim::Authorized),
-            AccountPostState::new(winner_post),
+            AccountStateDiff::new_claimed_if_default(
+                pinata,
+                BalanceDiff::Sub(PRIZE),
+                pinata_data,
+                Claim::Authorized,
+            ),
+            AccountStateDiff::new(winner.clone(), BalanceDiff::Add(PRIZE), winner.account.data),
         ],
     )
     .write();

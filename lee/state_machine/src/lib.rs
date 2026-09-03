@@ -66,30 +66,6 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn nonce_changer() -> Program {
-        Program::new_unchecked(
-            test_methods::NONCE_CHANGER_ID,
-            Cow::Borrowed(test_methods::NONCE_CHANGER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn extra_output() -> Program {
-        Program::new_unchecked(
-            test_methods::EXTRA_OUTPUT_ID,
-            Cow::Borrowed(test_methods::EXTRA_OUTPUT_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn missing_output() -> Program {
-        Program::new_unchecked(
-            test_methods::MISSING_OUTPUT_ID,
-            Cow::Borrowed(test_methods::MISSING_OUTPUT_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn dropped_account() -> Program {
         Program::new_unchecked(
             test_methods::DROPPED_ACCOUNT_ID,
@@ -98,10 +74,10 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn program_owner_changer() -> Program {
+    pub const fn missing_output() -> Program {
         Program::new_unchecked(
-            test_methods::PROGRAM_OWNER_CHANGER_ID,
-            Cow::Borrowed(test_methods::PROGRAM_OWNER_CHANGER_ELF),
+            test_methods::MISSING_OUTPUT_ID,
+            Cow::Borrowed(test_methods::MISSING_OUTPUT_ELF),
         )
     }
 
@@ -195,14 +171,6 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::EVENT_EMITTER_ID,
             Cow::Borrowed(test_methods::EVENT_EMITTER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn modified_transfer_program() -> Program {
-        Program::new_unchecked(
-            test_methods::MODIFIED_TRANSFER_ID,
-            Cow::Borrowed(test_methods::MODIFIED_TRANSFER_ELF),
         )
     }
 
@@ -324,6 +292,14 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::ASSERTS_SPECIFIC_ACCOUNT_AUTHORIZED_ID,
             Cow::Borrowed(test_methods::ASSERTS_SPECIFIC_ACCOUNT_AUTHORIZED_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn reordering_transfer() -> Program {
+        Program::new_unchecked(
+            test_methods::REORDERING_TRANSFER_ID,
+            Cow::Borrowed(test_methods::REORDERING_TRANSFER_ELF),
         )
     }
 }

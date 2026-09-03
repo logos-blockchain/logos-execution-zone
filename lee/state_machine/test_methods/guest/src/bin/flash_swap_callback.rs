@@ -25,7 +25,8 @@
 //! if it needs to trust the context it is called from.
 
 use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -38,7 +39,8 @@ pub struct CallbackInstruction {
 }
 
 fn main() {
-    let (
+    let call = read_lee_call::<CallbackInstruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id, // not enforced in this callback
@@ -46,7 +48,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<CallbackInstruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     // pre_states[0] = vault (after transfer out), pre_states[1] = receiver (after transfer out)
     let Ok([vault_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {
@@ -78,10 +83,9 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![vault_pre.clone(), receiver_pre.clone()],
         vec![
-            AccountPostState::new(vault_pre.account),
-            AccountPostState::new(receiver_pre.account),
+            AccountStateDiff::unchanged(vault_pre),
+            AccountStateDiff::unchanged(receiver_pre),
         ],
     )
     .with_chained_calls(chained_calls)

@@ -4,16 +4,17 @@ use bridge_lock_core::{
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountWithMetadata, BalanceDiff},
     program::{
-        AccountPostState, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_inputs,
+        AccountStateDiff, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramCall, ProgramId,
+        ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
     },
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -21,7 +22,10 @@ fn main() {
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     assert!(
         caller_program_id.is_none(),
@@ -93,8 +97,10 @@ fn init_holding(
             "bridge-lock holding PDA is owned by another program"
         );
     }
-    let holding_post = AccountPostState::new_claimed_if_default(
-        holding.account.clone(),
+    let holding_post = AccountStateDiff::new_claimed_if_default(
+        holding.clone(),
+        BalanceDiff::Add(0),
+        holding.account.data,
         Claim::Pda(holding_seed(holder)),
     );
 
@@ -102,7 +108,6 @@ fn init_holding(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![holding],
         vec![holding_post],
     )
     .write();
@@ -190,31 +195,22 @@ fn lock(
         "fourth account must be the escrow PDA"
     );
 
-    // bridge_lock owns holding and escrow, so the same amount moves between
-    // them and conservation holds. An unclaimed holding reads as balance 0, so
-    // a positive lock against one fails here.
-    let holding_new = holding
-        .account
-        .balance
-        .checked_sub(amount)
-        .expect("insufficient holding balance to lock");
-    let escrow_new = escrow
-        .account
-        .balance
-        .checked_add(amount)
-        .expect("escrow balance overflow");
-
-    let mut holding_account = holding.account.clone();
-    holding_account.balance = holding_new;
-    let holding_post = AccountPostState::new_claimed_if_default(
-        holding_account,
+    // bridge_lock owns holding and escrow, so the same amount moves between them and
+    // conservation holds; the protocol's own balance-diff application rejects an
+    // insufficient holding balance, so no manual checked_sub is needed here.
+    let holding_post = AccountStateDiff::new_claimed_if_default(
+        holding.clone(),
+        BalanceDiff::Sub(amount),
+        holding.account.data,
         Claim::Pda(holding_seed(&holder.account_id.into_value())),
     );
 
-    let mut escrow_account = escrow.account.clone();
-    escrow_account.balance = escrow_new;
-    let escrow_post =
-        AccountPostState::new_claimed_if_default(escrow_account, Claim::Pda(escrow_seed()));
+    let escrow_post = AccountStateDiff::new_claimed_if_default(
+        escrow.clone(),
+        BalanceDiff::Add(amount),
+        escrow.account.data,
+        Claim::Pda(escrow_seed()),
+    );
 
     let call = ChainedCall::new(
         outbox_program_id,
@@ -228,20 +224,19 @@ fn lock(
         },
     );
 
-    let config_post = AccountPostState::new(config.account.clone());
+    let config_post = AccountStateDiff::unchanged(config);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config, holder.clone(), holding, escrow, outbox.clone()],
         vec![
             config_post,
             // The holder only signs; its account is echoed untouched.
-            AccountPostState::new(holder.account),
+            AccountStateDiff::unchanged(holder),
             holding_post,
             escrow_post,
-            AccountPostState::new(outbox.account),
+            AccountStateDiff::unchanged(outbox),
         ],
     )
     .with_chained_calls(vec![call])
@@ -283,19 +278,20 @@ fn init_config(
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = config_bytes(outbox_program_id, target_program_id)
-        .to_vec()
-        .try_into()
-        .expect("pinned ids fit in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
+    let config_post = AccountStateDiff::new_claimed_if_default(
+        config,
+        BalanceDiff::Add(0),
+        config_bytes(outbox_program_id, target_program_id)
+            .to_vec()
+            .try_into()
+            .expect("pinned ids fit in account data"),
+        Claim::Pda(config_seed()),
+    );
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![config],
         vec![config_post],
     )
     .write();

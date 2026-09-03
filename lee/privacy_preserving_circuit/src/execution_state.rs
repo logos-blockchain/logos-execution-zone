@@ -5,10 +5,10 @@ use std::{
 
 use lee_core::{
     Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     encryption::ViewingPublicKey,
     program::{
-        AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim,
+        AccountStateDiff, BlockValidityWindow, CallerData, ChainedCall, Claim,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
         TimestampValidityWindow, pre_states_match_accounts, validate_execution,
     },
@@ -127,9 +127,9 @@ impl ExecutionState {
             program_id,
             instruction_data: first_output.instruction_data.clone(),
             pre_state_ids: first_output
-                .pre_states
+                .state_diffs
                 .iter()
-                .map(|p| p.account_id)
+                .map(|diff| diff.pre_state.account_id)
                 .collect(),
             pda_seeds: Vec::new(),
         };
@@ -166,7 +166,11 @@ impl ExecutionState {
                     // Else, match.
                     || pre_states_match_accounts(
                         &chained_call.pre_state_ids,
-                        &program_output.pre_states
+                        &program_output
+                            .state_diffs
+                            .iter()
+                            .map(|diff| diff.pre_state.clone())
+                            .collect::<Vec<_>>()
                     ),
                 "Callee ran on accounts the chained call did not name"
             );
@@ -196,11 +200,8 @@ impl ExecutionState {
 
             // Check that the program is well behaved.
             // See the # Programs section for the definition of the `validate_execution` method.
-            let validated_execution = validate_execution(
-                &program_output.pre_states,
-                &program_output.post_states,
-                chained_call.program_id,
-            );
+            let validated_execution =
+                validate_execution(&program_output.state_diffs, chained_call.program_id);
             if let Err(err) = validated_execution {
                 panic!(
                     "Invalid program behavior in program {:?}: {err}",
@@ -213,8 +214,7 @@ impl ExecutionState {
                 chained_call.program_id,
                 caller_data,
                 &chained_call.pda_seeds,
-                program_output.pre_states,
-                program_output.post_states,
+                program_output.state_diffs,
             );
 
             for next_call in program_output.chained_calls.into_iter().rev() {
@@ -286,13 +286,15 @@ impl ExecutionState {
         program_id: ProgramId,
         caller: CallerData,
         caller_pda_seeds: &[PdaSeed],
-        output_pre_states: Vec<AccountWithMetadata>,
-        output_post_states: Vec<AccountPostState>,
+        output_state_diffs: Vec<AccountStateDiff>,
     ) -> HashSet<AccountId> {
         let mut authorized_output_accounts = Vec::new();
-        for (mut pre, mut post) in output_pre_states.into_iter().zip(output_post_states) {
+        for state_diff in output_state_diffs {
+            let mut pre = state_diff.pre_state;
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
+            // `pre` is consumed by the match below, so capture what materialization needs now.
+            let pre_account = pre.account.clone();
             let post_states_entry = self.post_states.entry(pre.account_id);
             match &post_states_entry {
                 Entry::Occupied(occupied) => {
@@ -425,11 +427,18 @@ impl ExecutionState {
                 authorized_output_accounts.push(pre_account_id);
             }
 
-            if let Some(claim) = post.required_claim() {
+            let balance =
+                apply_balance_diff(pre_account.balance, Some(state_diff.post_balance_diff))
+                    .expect("balance diff must be valid; validate_execution already checked it");
+
+            let data = state_diff.post_data.clone();
+
+            // Owner is inherited unless a claim overrides it (AccountStateDiff carries no
+            // ownership).
+            let post_program_owner = if let Some(claim) = state_diff.post_claim {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(
-                    post.account().program_owner,
-                    DEFAULT_PROGRAM_OWNER,
+                    pre_account.program_owner, DEFAULT_PROGRAM_OWNER,
                     "Cannot claim an initialized account {pre_account_id}"
                 );
 
@@ -503,10 +512,17 @@ impl ExecutionState {
                     }
                 }
 
-                post.account_mut().program_owner = AccountId::from(program_id);
-            }
+                AccountId::from(program_id)
+            } else {
+                pre_account.program_owner
+            };
 
-            post_states_entry.insert_entry(post.into_account());
+            post_states_entry.insert_entry(Account {
+                program_owner: post_program_owner,
+                balance,
+                data,
+                nonce: pre_account.nonce,
+            });
         }
 
         let mut authorized_accounts = caller.authorized_accounts;

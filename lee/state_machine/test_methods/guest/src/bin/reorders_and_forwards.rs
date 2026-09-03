@@ -1,5 +1,6 @@
 use lee_core::program::{
-    ChainedCall, InstructionData, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
 };
 
 /// Reports empty pre/post (pure passthrough) and forwards its two `pre_states` to one callee in
@@ -7,7 +8,8 @@ use lee_core::program::{
 type Instruction = (ProgramId, InstructionData, Vec<PdaSeed>);
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
             self_program_id,
             caller_program_id,
@@ -15,24 +17,21 @@ fn main() {
             instruction: (callee_program_id, callee_instruction, pda_seeds),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([first, second]) = <[_; 2]>::try_from(pre_states) else {
         return;
     };
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        Vec::new(),
-        Vec::new(),
-    )
-    .with_chained_calls(vec![ChainedCall {
-        program_id: callee_program_id,
-        instruction_data: callee_instruction,
-        pre_state_ids: vec![second.account_id, first.account_id],
-        pda_seeds,
-    }])
-    .write();
+    ProgramOutput::new(self_program_id, caller_program_id, instruction_data, Vec::new())
+        .with_chained_calls(vec![ChainedCall {
+            program_id: callee_program_id,
+            instruction_data: callee_instruction,
+            pre_state_ids: vec![second.account_id, first.account_id],
+            pda_seeds,
+        }])
+        .write();
 }
