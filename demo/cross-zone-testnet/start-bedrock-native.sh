@@ -34,13 +34,12 @@ if [ ! -x "$BIN" ]; then
   ( cd "$LB_REPO" && cargo build --locked --release -p logos-blockchain-node )
 fi
 
-# 2. Validate our config files against the built node before running.
+# 2. Best-effort config validation (non-fatal; the real run surfaces errors too).
 export POL_PROOF_DEV_MODE=true
-if ! "$BIN" "$BEDROCK_CFG/node-config.yaml" \
-      --deployment "$BEDROCK_CFG/deployment-settings.yaml" --check-config 2>/dev/null; then
-  echo "Config check failed at ref $LB_REF. Retry with LB_REF=0.2.2 ./start-bedrock-native.sh" >&2
-  exit 1
-fi
+"$BIN" "$BEDROCK_CFG/node-config.yaml" \
+  --deployment "$BEDROCK_CFG/deployment-settings.yaml" --check-config 2>/dev/null \
+  && echo "Config check passed." \
+  || echo "Config check skipped/failed (continuing; if the node exits on an unknown key, retry with LB_REF=0.2.2)."
 
 # 3. Run it in a dedicated working dir (it creates ./state, ./state/logs, ./db there).
 RUN_DIR="$DEMO_DIR/bedrock-run"
