@@ -8,4 +8,6 @@ Bench tools live under `tools/` with READMEs for how to run each one. This direc
 | crypto_primitives_bench | [crypto_primitives_bench.md](crypto_primitives_bench.md) |
 | integration_bench | [integration_bench.md](integration_bench.md) |
 
-All numbers are from a single M2 Pro dev box unless noted otherwise.
+Each doc names the machine its numbers came from. User-cycle counts are deterministic and
+machine-independent; wall-time and prover-side numbers are not, and the prover-side tables are
+currently pending re-measurement.
