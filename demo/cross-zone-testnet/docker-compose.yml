@@ -21,6 +21,7 @@
 services:
   sequencer_a:
     image: harbor.status.im/logos-blockchain/logos-execution-zone/sequencer_service:v0.2.4
+    platform: linux/amd64
     container_name: cz_sequencer_a
     restart: unless-stopped
     volumes:
@@ -31,6 +32,7 @@ services:
 
   sequencer_b:
     image: harbor.status.im/logos-blockchain/logos-execution-zone/sequencer_service:v0.2.4
+    platform: linux/amd64
     container_name: cz_sequencer_b
     restart: unless-stopped
     volumes:
@@ -41,6 +43,7 @@ services:
 
   indexer_b:
     image: harbor.status.im/logos-blockchain/logos-execution-zone/indexer_service:v0.2.4
+    platform: linux/amd64
     container_name: cz_indexer_b
     restart: unless-stopped
     depends_on:
@@ -53,6 +56,7 @@ services:
 
   explorer_b:
     image: harbor.status.im/logos-blockchain/logos-execution-zone/explorer_service:v0.2.4
+    platform: linux/amd64
     container_name: cz_explorer_b
     restart: unless-stopped
     depends_on:
