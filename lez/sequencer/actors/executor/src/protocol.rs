@@ -19,10 +19,8 @@ pub struct Transaction {
     pub transaction: LeeTransaction,
 }
 
-/// Screen-only fee admission against the head state — no mempool push.
-///
-/// What gossip ingest asks before admitting a peer's transaction;
-/// `Admitted` here means "passed the screen".
+/// Like [`Transaction`] but for screening only, used by
+/// gossipsub to screen transactions before admitting them to the mempool.
 pub struct ScreenTransaction {
     pub transaction: LeeTransaction,
 }

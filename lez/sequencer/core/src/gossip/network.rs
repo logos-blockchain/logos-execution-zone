@@ -416,11 +416,7 @@ impl DriveTask {
                 if self.seen.contains(&hash) {
                     gossipsub::MessageAcceptance::Ignore
                 } else {
-                    // Fee-screen before the mempool sees it, so peers cannot
-                    // fill it with transactions the builder would only drop
-                    // after a full settlement pass. Advisory: the tx is still
-                    // forwarded, and stays unseen so a rebroadcast can retry
-                    // once e.g. its payer is funded.
+                    // before admitting to mempool, run the ingest screen
                     match (self.screen)(tx.clone()).await {
                         Err(reason) => {
                             log::debug!("Not admitting gossiped tx {hash:?}: {reason}");
