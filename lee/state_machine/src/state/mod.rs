@@ -195,9 +195,9 @@ impl V03State {
         self
     }
 
-    /// Seeds a builtin as a loader-owned header pointing at one segment holding its whole ELF —
-    /// the same shape a live `program_loader` deploy produces, just written directly rather than
-    /// through a transaction. The header keeps living at the bijection address
+    /// Seeds a builtin as a header pointing at one segment holding its whole ELF — the same shape
+    /// a live `program_loader` deploy produces, just written directly rather than through a
+    /// transaction. The header keeps living at the bijection address
     /// (`AccountId::from(program.id())`) so existing call sites addressing builtins by `ProgramId`
     /// keep working; the segment's address is this function's own internal convention, never
     /// independently recomputed elsewhere.
@@ -205,9 +205,9 @@ impl V03State {
         let header_account_id = AccountId::from(program.id());
         let segment_account_id = genesis_segment_account_id(header_account_id);
 
-        let segment = Account {
-            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(
+        let segment = Account::default().with_shard(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            Data::try_from(
                 ProgramSegment {
                     bytecode: program.elf().to_vec(),
                     next_segment: None,
@@ -215,11 +215,10 @@ impl V03State {
                 .to_bytes(),
             )
             .expect("elf must fit under DATA_MAX_LENGTH"),
-            ..Account::default()
-        };
-        let header = Account {
-            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(
+        );
+        let header = Account::default().with_shard(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            Data::try_from(
                 ProgramHeader {
                     image_id: program.id(),
                     program_first_segment: segment_account_id,
@@ -228,8 +227,7 @@ impl V03State {
                 .to_bytes(),
             )
             .expect("program header fits under DATA_MAX_LENGTH"),
-            ..Account::default()
-        };
+        );
         self.public_state.insert(segment_account_id, segment);
         self.public_state.insert(header_account_id, header);
     }

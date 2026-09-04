@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::Position,
+    program::{
+        ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
 /// PDA authorization program that delegates balance operations to `simple_transfer`.
@@ -52,15 +55,15 @@ fn main() {
 
         // Post-states stay unchanged in this program. The actual balance transfer
         // happens in the chained call to simple_transfer.
-        let pda_post = AccountStateDiff::unchanged(pda_pre.clone());
-        let recipient_post = AccountStateDiff::unchanged(recipient_pre.clone());
+        let pda_post = ShardStateDiff::unchanged(pda_pre.clone());
+        let recipient_post = ShardStateDiff::unchanged(recipient_pre.clone());
 
         // Chain to simple_transfer with pda_seeds to authorize the PDA.
         // The circuit's assert_authorization_and_record_bindings establishes the
         // private PDA (seed, npk) binding when pda_seeds match the private PDA derivation.
         let auth_call = ChainedCall::new(
             simple_transfer_id.into(),
-            vec![pda_pre.account_id, recipient_pre.account_id],
+            vec![Position::from(&pda_pre), Position::from(&recipient_pre)],
             &amount,
         )
         .with_pda_seeds(vec![pda_seed]);
@@ -79,13 +82,16 @@ fn main() {
             panic!("expected exactly 1 pre_state for init: [pda]");
         };
 
-        let pda_post = AccountStateDiff::unchanged(pda_pre.clone());
+        let pda_post = ShardStateDiff::unchanged(pda_pre.clone());
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
         // to authorize the PDA.
-        let auth_call =
-            ChainedCall::new(simple_transfer_id.into(), vec![pda_pre.account_id], &amount)
-                .with_pda_seeds(vec![pda_seed]);
+        let auth_call = ChainedCall::new(
+            simple_transfer_id.into(),
+            vec![Position::from(&pda_pre)],
+            &amount,
+        )
+        .with_pda_seeds(vec![pda_seed]);
 
         ProgramOutput::new(
             self_account_id,

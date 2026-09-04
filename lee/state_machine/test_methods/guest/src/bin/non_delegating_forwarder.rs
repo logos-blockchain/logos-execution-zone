@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-    ProgramOutput, read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::Position,
+    program::{
+        ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        ShardStateDiff, read_lee_call, respond_unsupported_call,
+    },
 };
 
 type Instruction = (ProgramId, InstructionData, bool, Vec<PdaSeed>);
@@ -20,12 +23,12 @@ fn main() {
         respond_unsupported_call(call);
     };
 
-    let pre_state_ids: Vec<_> = pre_states.iter().map(|pre| pre.account_id).collect();
+    let positions: Vec<_> = pre_states.iter().map(Position::from).collect();
 
     let output_state_diffs = if declare_pre_states {
         pre_states
             .iter()
-            .map(|account| AccountStateDiff::unchanged(account.clone()))
+            .map(|account| ShardStateDiff::unchanged(account.clone()))
             .collect()
     } else {
         Vec::new()
@@ -43,7 +46,7 @@ fn main() {
     .with_chained_calls(vec![ChainedCall {
         program_account_id: callee_program_id.into(),
         instruction_data: callee_instruction,
-        pre_state_ids,
+        positions,
         pda_seeds,
     }])
     .write();

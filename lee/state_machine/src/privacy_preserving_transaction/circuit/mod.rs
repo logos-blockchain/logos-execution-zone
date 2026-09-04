@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput, ProgramImageClaim,
-    account::{Account, AccountId, AccountWithMetadata},
+    DummyInput, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateWitness,
+    ProgramImageClaim, WitnessKind,
+    account::{Account, AccountId, Input, Position},
     from_frame,
     program::{
         ChainedCall, InstructionData, ProgramOutput, compute_public_authorized_pdas, post_state,
@@ -83,36 +83,30 @@ impl From<Program> for ProgramWithDependencies {
     }
 }
 
+/// Everything the prover supplies for one privacy-preserving execution.
+pub struct ProvingInput {
+    pub positions: Vec<Position>,
+    pub signers: HashSet<AccountId>,
+    pub public_accounts: HashMap<AccountId, Account>,
+    pub private_witnesses: Vec<PrivateWitness>,
+    pub instruction_data: InstructionData,
+    pub dummy_inputs: Vec<DummyInput>,
+}
+
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
 /// circuit.
 pub fn execute_and_prove(
-    pre_states: Vec<AccountWithMetadata>,
-    instruction_data: InstructionData,
-    account_identities: Vec<InputAccountIdentity>,
+    input: ProvingInput,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
-    execute_and_prove_with_padded_inputs(
-        pre_states,
+    let ProvingInput {
+        positions,
+        signers,
+        public_accounts,
+        private_witnesses,
         instruction_data,
-        account_identities,
-        vec![],
-        program_with_dependencies,
-    )
-}
-
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Public entry point — taking ownership signals the caller hands off its top-level \
-              account values for the duration of the proof; callers already construct these \
-              freshly per call, so a borrow would just push the clone to every call site"
-)]
-pub fn execute_and_prove_with_padded_inputs(
-    pre_states: Vec<AccountWithMetadata>,
-    instruction_data: InstructionData,
-    account_identities: Vec<InputAccountIdentity>,
-    dummy_inputs: Vec<DummyInput>,
-    program_with_dependencies: &ProgramWithDependencies,
-) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+        dummy_inputs,
+    } = input;
     let ProgramWithDependencies {
         program: initial_program,
         self_account_id: initial_account_id,
@@ -121,36 +115,79 @@ pub fn execute_and_prove_with_padded_inputs(
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
 
-    // Best-effort mirror of the account state the circuit will independently derive; getting it
-    // wrong just wastes a proving attempt, since the circuit itself is the source of truth.
-    let mut materialized_state: HashMap<AccountId, Account> = pre_states
+    // What makes an account private: some witness derives its address. Everything below is a
+    // best-effort mirror of what the circuit independently derives; getting it wrong just wastes
+    // a proving attempt, since the circuit itself is the source of truth.
+    let witness_by_account: HashMap<AccountId, usize> = private_witnesses
         .iter()
-        .map(|pre| (pre.account_id, pre.account.clone()))
+        .enumerate()
+        .map(|(index, witness)| (witness.account_id(), index))
         .collect();
-    let pre_state_ids: Vec<AccountId> = pre_states.iter().map(|pre| pre.account_id).collect();
-    // Captured before pre_states moves into initial_call below.
-    let initial_pre_states: Vec<AccountId> = pre_state_ids.clone();
+    let witness_at = |account_id: &AccountId| {
+        witness_by_account
+            .get(account_id)
+            .map(|index| &private_witnesses[*index])
+    };
+
+    // Seeded from the top-level positions alone: a chained call naming anything else has no
+    // resolvable value, exactly as on the public path.
+    let mut materialized: HashMap<AccountId, Account> = positions
+        .iter()
+        .map(|position| {
+            let account = witness_at(&position.account_id).map_or_else(
+                || {
+                    public_accounts
+                        .get(&position.account_id)
+                        .cloned()
+                        .unwrap_or_default()
+                },
+                |witness| witness.account.clone(),
+            );
+            (position.account_id, account)
+        })
+        .collect();
+
+    // A signature authorizes a public account; a regular private account is authorized by the
+    // `ask` its witness carries. A top-level private PDA is never authorized: only a caller's
+    // seeds can consent to it.
+    let is_authorized_top = |account_id: &AccountId| {
+        signers.contains(account_id)
+            || matches!(
+                witness_at(account_id).map(|witness| &witness.kind),
+                Some(&WitnessKind::Regular { ask: Some(_) })
+            )
+    };
 
     // Non-PDA accounts authorized at their first sight, anywhere in the call tree — mirrors
-    // the circuit's own `globally_authorized`. Seeded from top-level `is_authorized` since the
+    // the circuit's own `globally_authorized`. Seeded from the top-level positions since the
     // circuit never independently re-verifies a credential; nothing else could supply it.
-    let mut globally_authorized: HashSet<AccountId> = pre_states
+    let mut globally_authorized: HashSet<AccountId> = positions
         .iter()
-        .filter(|pre| pre.is_authorized)
-        .map(|pre| pre.account_id)
+        .map(|position| position.account_id)
+        .filter(|account_id| {
+            is_authorized_top(account_id)
+                && !witness_at(account_id).is_some_and(PrivateWitness::is_pda)
+        })
         .collect();
 
-    // First-sighting position in the circuit's own traversal order, for private-PDA witness
-    // lookup. Assigned lazily from each call's actual output (below), including the top-level
-    // one — never pre-seeded from raw input order, which the top-level program is free to not
-    // honor in its own output.
-    let mut position_by_account: HashMap<AccountId, usize> = HashMap::new();
-    let mut next_position: usize = 0;
+    // Accounts the traversal has already reached, so a later sighting is not a first one.
+    let mut seen: HashSet<AccountId> = HashSet::new();
+
+    let top_level_pre_states: Vec<Input> = positions
+        .iter()
+        .map(|position| {
+            Input::at(
+                *position,
+                is_authorized_top(&position.account_id),
+                &materialized[&position.account_id],
+            )
+        })
+        .collect();
 
     let initial_call = ChainedCall {
         program_account_id: *initial_account_id,
         instruction_data,
-        pre_state_ids,
+        positions: positions.clone(),
         pda_seeds: vec![],
     };
 
@@ -165,52 +202,44 @@ pub fn execute_and_prove_with_padded_inputs(
         }
 
         // Best-effort mirror of what the circuit will independently authorize (see comment at
-        // the top), used only to build this callee's input. The top-level call's pre_states
-        // came straight from the caller, not a `ChainedCall`, and are used as-is.
+        // the top), used only to build this callee's input. The top-level call's positions were
+        // resolved against the prover's own accounts above and are used as-is.
         let authorized_pdas =
             compute_public_authorized_pdas(caller_account_id, &chained_call.pda_seeds);
+        let seed_derives_private_pda = |account_id: &AccountId| {
+            let Some(caller_id) = caller_account_id else {
+                return false;
+            };
+            witness_at(account_id)
+                .filter(|witness| witness.is_pda())
+                .is_some_and(|witness| {
+                    let (npk, vpk, identifier) = witness.npk_vpk_identifier();
+                    chained_call.pda_seeds.iter().any(|seed| {
+                        AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
+                            == *account_id
+                    })
+                })
+        };
 
-        let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_id) = caller_account_id {
-            let mut resolved = Vec::with_capacity(chained_call.pre_state_ids.len());
-            for account_id in &chained_call.pre_state_ids {
-                let account = materialized_state.get(account_id).cloned().ok_or(
-                    InvalidProgramBehaviorError::UnknownChainedCallAccount {
-                        account_id: *account_id,
-                    },
-                )?;
+        let real_pre_states: Vec<Input> = if caller_account_id.is_some() {
+            let mut resolved = Vec::with_capacity(chained_call.positions.len());
+            for position in &chained_call.positions {
+                let account_id = position.account_id;
+                let account = materialized
+                    .get(&account_id)
+                    .ok_or(InvalidProgramBehaviorError::UnknownChainedCallAccount { account_id })?;
 
-                let position = *position_by_account.entry(*account_id).or_insert_with(|| {
-                    let pos = next_position;
-                    next_position = next_position
-                        .checked_add(1)
-                        .expect("account position count cannot overflow usize");
-                    pos
-                });
-                let private_pda_witness = account_identities
-                    .get(position)
-                    .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
+                let is_authorized = caller_authorized_accounts.contains(&account_id)
+                    || globally_authorized.contains(&account_id)
+                    || authorized_pdas.contains(&account_id)
+                    || seed_derives_private_pda(&account_id);
 
-                let pda_match = authorized_pdas.contains(account_id)
-                    || private_pda_witness.is_some_and(|(npk, vpk, identifier)| {
-                        chained_call.pda_seeds.iter().any(|seed| {
-                            AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
-                                == *account_id
-                        })
-                    });
-
-                let is_authorized = caller_authorized_accounts.contains(account_id)
-                    || globally_authorized.contains(account_id)
-                    || pda_match;
-
-                resolved.push(AccountWithMetadata::new(
-                    account,
-                    is_authorized,
-                    *account_id,
-                ));
+                resolved.push(Input::at(*position, is_authorized, account));
+                seen.insert(account_id);
             }
             resolved
         } else {
-            pre_states.clone()
+            top_level_pre_states.clone()
         };
 
         let inner_receipt = execute_and_prove_program(
@@ -236,37 +265,18 @@ pub fn execute_and_prove_with_padded_inputs(
         let mut authorized_output_accounts = caller_authorized_accounts;
 
         for diff in &program_output.state_diffs {
-            let pre = &diff.pre_state;
+            let pre = &diff.pre;
             let account_id = pre.account_id;
 
-            // Assigned here, after this call has actually run, uniformly for the top-level
-            // call too — it's free to never echo a given account in its own output at all.
-            let first_sighting = !position_by_account.contains_key(&account_id);
-            let position = *position_by_account.entry(account_id).or_insert_with(|| {
-                let pos = next_position;
-                next_position = next_position
-                    .checked_add(1)
-                    .expect("account position count cannot overflow usize");
-                pos
-            });
-            let private_pda_witness = account_identities
-                .get(position)
-                .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
-            let pda_match = authorized_pdas.contains(&account_id)
-                || caller_account_id.is_some_and(|caller_id| {
-                    private_pda_witness.is_some_and(|(npk, vpk, identifier)| {
-                        chained_call.pda_seeds.iter().any(|seed| {
-                            AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
-                                == account_id
-                        })
-                    })
-                });
+            let first_sighting = seen.insert(account_id);
+            let pda_match =
+                authorized_pdas.contains(&account_id) || seed_derives_private_pda(&account_id);
 
-            // A data write to an unowned account acquires it; the guest doesn't write this into
-            // its own post_state, the circuit does it afterward, so predict it here too.
-            let post = post_state(diff, chained_call.program_account_id)
-                .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-            materialized_state.insert(account_id, post);
+            let post = post_state(diff).map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
+            materialized
+                .entry(account_id)
+                .or_default()
+                .splice(Position::from(pre), post);
             if pre.is_authorized {
                 authorized_output_accounts.insert(account_id);
                 // Only a first-sighted, non-pda-matched account is a "regular account
@@ -323,10 +333,10 @@ pub fn execute_and_prove_with_padded_inputs(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         program_outputs,
-        account_identities,
+        private_witnesses,
         program_account_id: *initial_account_id,
         dummy_inputs,
-        initial_pre_states,
+        initial_positions: positions,
         program_image_claims,
     };
 
@@ -357,7 +367,7 @@ fn execute_and_prove_program(
     program: &Program,
     self_account_id: AccountId,
     caller_account_id: Option<AccountId>,
-    pre_states: &[AccountWithMetadata],
+    pre_states: &[Input],
     instruction_data: &InstructionData,
 ) -> Result<Receipt, LeeError> {
     // Write inputs to the program

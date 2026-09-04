@@ -14,7 +14,8 @@ pub use privacy_preserving_circuit::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
 };
 pub use privacy_preserving_transaction::{
-    PrivacyPreservingTransaction, circuit::execute_and_prove,
+    PrivacyPreservingTransaction,
+    circuit::{ProvingInput, execute_and_prove},
 };
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
@@ -98,34 +99,18 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn foreign_shard_writer() -> Program {
+        Program::new_unchecked(
+            test_methods::FOREIGN_SHARD_WRITER_ID,
+            Cow::Borrowed(test_methods::FOREIGN_SHARD_WRITER_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn minter() -> Program {
         Program::new_unchecked(
             test_methods::MINTER_ID,
             Cow::Borrowed(test_methods::MINTER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn squatter() -> Program {
-        Program::new_unchecked(
-            test_methods::SQUATTER_ID,
-            Cow::Borrowed(test_methods::SQUATTER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn acquire_and_forward() -> Program {
-        Program::new_unchecked(
-            test_methods::ACQUIRE_AND_FORWARD_ID,
-            Cow::Borrowed(test_methods::ACQUIRE_AND_FORWARD_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn acquire_then_fund() -> Program {
-        Program::new_unchecked(
-            test_methods::ACQUIRE_THEN_FUND_ID,
-            Cow::Borrowed(test_methods::ACQUIRE_THEN_FUND_ELF),
         )
     }
 

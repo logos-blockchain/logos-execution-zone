@@ -27,28 +27,6 @@ impl Data {
     pub fn into_inner(self) -> Vec<u8> {
         self.0
     }
-
-    /// Reads data from a cursor.
-    #[cfg(feature = "host")]
-    pub fn from_cursor(
-        cursor: &mut std::io::Cursor<&[u8]>,
-    ) -> Result<Self, crate::error::LeeCoreError> {
-        use std::io::Read as _;
-
-        let mut u32_bytes = [0_u8; 4];
-        cursor.read_exact(&mut u32_bytes)?;
-        let data_length = u32::from_le_bytes(u32_bytes);
-        if u64::from(data_length) > DATA_MAX_LENGTH.as_u64() {
-            return Err(
-                std::io::Error::new(std::io::ErrorKind::InvalidData, DataTooBigError).into(),
-            );
-        }
-
-        let mut data =
-            vec![0; usize::try_from(data_length).expect("data length is expected to fit in usize")];
-        cursor.read_exact(&mut data)?;
-        Ok(Self(data))
-    }
 }
 
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]

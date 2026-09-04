@@ -1,12 +1,12 @@
 use lee_core::program::{
-    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
     respond_unsupported_call,
 };
 
 type Instruction = ();
 
 /// Silently drops the second account entirely from its own output: given two `pre_states`, it
-/// returns only one `AccountStateDiff`, echoing the first account back unchanged.
+/// returns only one `ShardStateDiff`, echoing the first account back unchanged.
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
@@ -30,7 +30,7 @@ fn main() {
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![AccountStateDiff::unchanged(pre1)],
+        vec![ShardStateDiff::unchanged(pre1)],
     )
     .write();
 }

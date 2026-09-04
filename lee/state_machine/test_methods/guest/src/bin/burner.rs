@@ -1,7 +1,7 @@
 use lee_core::{
     account::BalanceDiff,
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -28,9 +28,8 @@ fn main() {
     };
 
     // Clamp to preserve the old saturating_sub semantics (burn at most what's there).
-    let burned = balance_to_burn.min(pre.account.balance);
-    let post_data = pre.account.data.clone();
-    let diff = AccountStateDiff::new(pre, BalanceDiff::Sub(burned), post_data);
+    let burned = balance_to_burn.min(pre.balance);
+    let diff = ShardStateDiff::balance_only(pre, BalanceDiff::Sub(burned));
 
     ProgramOutput::new(
         self_account_id,

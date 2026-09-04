@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountStateDiff, DEFAULT_PROGRAM_ID, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-    respond_unsupported_call,
+use lee_core::{
+    account::AccountId,
+    program::{
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 type Instruction = ();
@@ -22,12 +25,12 @@ fn main() {
 
     let state_diffs = pre_states
         .iter()
-        .map(|a| AccountStateDiff::unchanged(a.clone()))
+        .map(|a| ShardStateDiff::unchanged(a.clone()))
         .collect();
 
     // Deliberately output wrong self_account_id
     ProgramOutput::new(
-        DEFAULT_PROGRAM_ID.into(), // WRONG: should be self_account_id
+        AccountId::new([0; 32]), // WRONG: should be self_account_id
         caller_account_id,
         instruction_data,
         state_diffs,

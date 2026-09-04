@@ -8,7 +8,7 @@ use lee_core::{
 
 type Instruction = Vec<u8>;
 
-/// A program that modifies the account data by setting bytes sent in instruction.
+/// Writes data on whatever namespace its first position names, which only its own may accept.
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
@@ -24,20 +24,24 @@ fn main() {
         respond_unsupported_call(call);
     };
 
-    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
+    let Ok([target, other]) = <[_; 2]>::try_from(pre_states) else {
         return;
     };
 
-    let post_data = data
-        .try_into()
-        .expect("provided data should fit into data limit");
-    let diff_output = ShardStateDiff::new(pre, BalanceDiff::Add(0), post_data);
+    let target_diff = ShardStateDiff {
+        pre: target,
+        post_balance_diff: BalanceDiff::Add(0),
+        post_data: Some(
+            data.try_into()
+                .expect("provided data should fit into data limit"),
+        ),
+    };
 
     ProgramOutput::new(
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![diff_output],
+        vec![target_diff, ShardStateDiff::unchanged(other)],
     )
     .write();
 }

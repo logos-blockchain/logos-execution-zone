@@ -1,7 +1,10 @@
 use borsh::to_vec;
-use lee_core::program::{
-    AccountStateDiff, BlockValidityWindow, ChainedCall, ProgramCall, ProgramId, ProgramInput,
-    ProgramOutput, TimestampValidityWindow, read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::Position,
+    program::{
+        BlockValidityWindow, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        ShardStateDiff, TimestampValidityWindow, read_lee_call, respond_unsupported_call,
+    },
 };
 
 /// A program that sets a block validity window on its output and chains to another program with a
@@ -38,7 +41,7 @@ fn main() {
     let chained_call = ChainedCall {
         program_account_id: chained_program_id.into(),
         instruction_data: chained_instruction,
-        pre_state_ids: pre_states.iter().map(|p| p.account_id).collect(),
+        positions: pre_states.iter().map(Position::from).collect(),
         pda_seeds: vec![],
     };
 
@@ -46,7 +49,7 @@ fn main() {
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![AccountStateDiff::unchanged(pre)],
+        vec![ShardStateDiff::unchanged(pre)],
     )
     .with_block_validity_window(block_validity_window)
     .with_chained_calls(vec![chained_call])
