@@ -7,20 +7,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
     account::{
-        Account, AccountId, AccountWithMetadata, BalanceDiff, BalanceDiffError, Data,
+        Account, AccountId, BalanceDiff, BalanceDiffError, Data, Input, Position, PositionState,
         apply_balance_diff,
     },
     encryption::ViewingPublicKey,
 };
-
-pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
-
-/// TODO: Placeholder `program_owner` for uninitialized `Account`.
-pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
-
-/// TODO: Temporary placeholder for program deployment program id; this serves as
-/// `program_owner` for program `Account`s.
-pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
 
 /// The well-known dispatch address of the program loader: a native (non-guest) pseudo-program
 /// that runs its `Instruction` variants as Rust rather than interpreting a guest ELF.
@@ -70,7 +61,7 @@ pub type InstructionData = Vec<u8>;
 pub struct ProgramInput<T> {
     pub self_account_id: AccountId,
     pub caller_account_id: Option<AccountId>,
-    pub pre_states: Vec<AccountWithMetadata>,
+    pub pre_states: Vec<Input>,
     pub instruction: T,
 }
 
@@ -246,10 +237,9 @@ pub struct CallerData {
 pub struct ChainedCall {
     /// The account ID of the program to execute.
     pub program_account_id: AccountId,
-    /// The ids of the accounts the callee should receive as `pre_states`. The protocol
-    /// resolves each account's real value and `is_authorized` from its own tracked state — never
-    /// supplied by the calling program.
-    pub pre_state_ids: Vec<AccountId>,
+    /// The protocol resolves each position's value and `is_authorized` from its own tracked
+    /// state, never from the caller.
+    pub positions: Vec<Position>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
     /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
@@ -262,12 +252,12 @@ impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
     pub fn new<I: BorshSerialize>(
         program_account_id: AccountId,
-        pre_state_ids: Vec<AccountId>,
+        positions: Vec<Position>,
         instruction: &I,
     ) -> Self {
         Self {
             program_account_id,
-            pre_state_ids,
+            positions,
             instruction_data: borsh::to_vec(instruction)
                 .expect("borsh serialization is infallible"),
             pda_seeds: Vec::new(),
@@ -331,39 +321,42 @@ impl ProgramSegment {
     }
 }
 
-/// A single account's full pre-state paired with the diff a program's execution applies to it.
+/// One position's pre-state paired with the diff a program's execution applies to it.
 #[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
-pub struct AccountStateDiff {
-    pub pre_state: AccountWithMetadata,
+pub struct ShardStateDiff {
+    pub pre: Input,
     pub post_balance_diff: BalanceDiff,
-    /// `None` means unchanged from `pre_state.account.data` — the common case, kept cheap by not
-    /// carrying a second copy of data that's already available via `pre_state`.
+    /// `None` leaves the named shard as it was; a balance-only position never carries one.
     pub post_data: Option<Data>,
 }
 
-impl AccountStateDiff {
-    /// A diff that leaves `pre_state`'s balance and data untouched.
+impl ShardStateDiff {
+    /// A diff that leaves `pre`'s balance and shard untouched.
     #[must_use]
-    pub const fn unchanged(pre_state: AccountWithMetadata) -> Self {
+    pub const fn unchanged(pre: Input) -> Self {
         Self {
-            pre_state,
+            pre,
             post_balance_diff: BalanceDiff::Add(0),
             post_data: None,
         }
     }
 
     #[must_use]
-    pub fn new(
-        pre_state: AccountWithMetadata,
-        post_balance_diff: BalanceDiff,
-        post_data: Data,
-    ) -> Self {
-        let post_data = (post_data != pre_state.account.data).then_some(post_data);
+    pub const fn balance_only(pre: Input, post_balance_diff: BalanceDiff) -> Self {
         Self {
-            pre_state,
+            pre,
             post_balance_diff,
-            post_data,
+            post_data: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn new(pre: Input, post_balance_diff: BalanceDiff, post_data: Data) -> Self {
+        Self {
+            pre,
+            post_balance_diff,
+            post_data: Some(post_data),
         }
     }
 }
@@ -493,8 +486,8 @@ pub struct ProgramOutput {
     pub call_kind: CallKind,
     /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
-    /// Each account's pre-state paired with the diff the program's execution applies to it.
-    pub state_diffs: Vec<AccountStateDiff>,
+    /// Each position's pre-state paired with the diff the program's execution applies to it.
+    pub state_diffs: Vec<ShardStateDiff>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
     /// The block ID window where the program output is valid.
@@ -511,7 +504,7 @@ impl ProgramOutput {
         self_account_id: AccountId,
         caller_account_id: Option<AccountId>,
         instruction_data: InstructionData,
-        state_diffs: Vec<AccountStateDiff>,
+        state_diffs: Vec<ShardStateDiff>,
     ) -> Self {
         Self {
             self_account_id,
@@ -650,16 +643,16 @@ impl From<u128> for WrappedBalanceSum {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExecutionValidationError {
-    #[error("Pre-state account IDs are not unique")]
-    PreStateAccountIdsNotUnique,
+    #[error("Account {account_id} is named by more than one position in the call")]
+    DuplicatePosition { account_id: AccountId },
 
     #[error("Trying to decrease balance of unauthorized account {account_id}")]
     UnauthorizedBalanceDecrease { account_id: AccountId },
 
     #[error(
-        "Unauthorized modification of data for account {account_id} which is not default and not owned by executing program {executing_account_id}"
+        "Program {executing_account_id} wrote data on a position of {account_id} that does not name it"
     )]
-    UnauthorizedDataModification {
+    ForeignShardWrite {
         account_id: AccountId,
         executing_account_id: AccountId,
     },
@@ -826,7 +819,7 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
         .pre_states
         .iter()
         .cloned()
-        .map(AccountStateDiff::unchanged)
+        .map(ShardStateDiff::unchanged)
         .collect();
     ProgramOutput::new(
         envelope.self_account_id,
@@ -843,27 +836,17 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
     env::exit(0)
 }
 
-/// Whether a callee's journalled `pre_states` name exactly the accounts in the call
+/// Whether a callee's journalled `pre_states` name exactly the positions in the call
 /// in the appropriate order.
 #[must_use]
-pub fn pre_states_match_accounts(
-    accounts: &[AccountId],
-    pre_states: &[AccountWithMetadata],
-) -> bool {
-    accounts
+pub fn pre_states_match_positions(positions: &[Position], pre_states: &[Input]) -> bool {
+    positions
         .iter()
-        .eq(pre_states.iter().map(|pre| &pre.account_id))
+        .copied()
+        .eq(pre_states.iter().map(Position::from))
 }
 
-/// Resolves a deployed program from whatever account it lives at.
-///
-/// Verifies the account is loader-owned, decodes its [`ProgramHeader`], and reconstructs its
-/// bytecode by walking the segment chain from `program_first_segment`.
-///
-/// Returns `None` if `account_id` isn't a deployed program — any owner other than the loader,
-/// malformed header/segment data, or a chain longer than [`MAX_PROGRAM_SEGMENTS`]. By
-/// construction only the loader's own writes can make an account loader-owned, so this can't be
-/// spoofed by writing lookalike data as some other program.
+/// A deployed program is whatever the loader's shard at `account_id` decodes to.
 ///
 /// `lookup` resolves an account's current value; callers decide what that means (committed
 /// state, a pending diff, or a combination — see call sites).
@@ -872,11 +855,7 @@ pub fn get_program_via(
     account_id: AccountId,
     lookup: impl Fn(AccountId) -> Account,
 ) -> Option<(ProgramId, Vec<u8>)> {
-    let header_account = lookup(account_id);
-    if header_account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
-        return None;
-    }
-    let header = ProgramHeader::from_bytes(&header_account.data)?;
+    let header = ProgramHeader::from_bytes(lookup(account_id).shard(PROGRAM_LOADER_ACCOUNT_ID))?;
 
     let mut elf = Vec::new();
     let mut next = Some(header.program_first_segment);
@@ -886,11 +865,8 @@ pub fn get_program_via(
         if segment_count > MAX_PROGRAM_SEGMENTS {
             return None;
         }
-        let segment_account = lookup(segment_id);
-        if segment_account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
-            return None;
-        }
-        let segment = ProgramSegment::from_bytes(&segment_account.data)?;
+        let segment =
+            ProgramSegment::from_bytes(lookup(segment_id).shard(PROGRAM_LOADER_ACCOUNT_ID))?;
         elf.extend_from_slice(&segment.bytecode);
         next = segment.next_segment;
     }
@@ -900,24 +876,26 @@ pub fn get_program_via(
 
 /// Validates well-behaved program execution.
 ///
-/// The diff has no `nonce`/`program_owner` field, so a program can't forge either; ownership
-/// follows from the data write, see [`acquire_ownership_on_data_write`].
-///
-/// # Parameters
-/// - `state_diffs`: Each account's pre-state paired with the diff the program applied to it.
-/// - `executing_account_id`: The account ID of the program that was executed.
+/// A call names each account at most once; a balance decrease needs the position to be
+/// authorized; data may only be written on a position naming the executing program; every balance
+/// diff must apply to its own position's balance; and the balance added must equal the balance
+/// subtracted.
 pub fn validate_execution(
-    state_diffs: &[AccountStateDiff],
+    state_diffs: &[ShardStateDiff],
     executing_account_id: AccountId,
 ) -> Result<(), ExecutionValidationError> {
-    // 1. Check account ids are all different
-    if !validate_uniqueness_of_account_ids(state_diffs) {
-        return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
+    // 1. Every account is named by at most one position in the call.
+    let mut named = HashSet::new();
+    for diff in state_diffs {
+        if !named.insert(diff.pre.account_id) {
+            return Err(ExecutionValidationError::DuplicatePosition {
+                account_id: diff.pre.account_id,
+            });
+        }
     }
 
     for diff in state_diffs {
-        let pre = &diff.pre_state;
-        let account_program_owner = pre.account.program_owner;
+        let pre = &diff.pre;
 
         // 2. Decreasing balance requires the account to be authorized
         if matches!(diff.post_balance_diff, BalanceDiff::Sub(amount) if amount > 0)
@@ -928,22 +906,16 @@ pub fn validate_execution(
             });
         }
 
-        // 3. Data changes only allowed if owned by executing program or if the account is unowned.
-        if diff
-            .post_data
-            .as_ref()
-            .is_some_and(|data| *data != pre.account.data)
-            && account_program_owner != DEFAULT_PROGRAM_OWNER
-            && account_program_owner != executing_account_id
-        {
-            return Err(ExecutionValidationError::UnauthorizedDataModification {
+        // 3. Data may only be written on a position naming the executing program.
+        if diff.post_data.is_some() && pre.namespace() != Some(executing_account_id) {
+            return Err(ExecutionValidationError::ForeignShardWrite {
                 account_id: pre.account_id,
                 executing_account_id,
             });
         }
 
-        // 4. Balance diff must be valid against this account's own pre-state balance.
-        if let Err(source) = apply_balance_diff(pre.account.balance, Some(diff.post_balance_diff)) {
+        // 4. Balance diff must be valid against this position's own pre-state balance.
+        if let Err(source) = apply_balance_diff(pre.balance, Some(diff.post_balance_diff)) {
             return Err(ExecutionValidationError::InvalidBalanceDiff {
                 account_id: pre.account_id,
                 source,
@@ -984,45 +956,16 @@ pub fn validate_execution(
     Ok(())
 }
 
-/// Make any program that has changed the data of a default-owned account its owner.
-pub fn acquire_ownership_on_data_write(pre: &Account, post: &mut Account, account_id: AccountId) {
-    if pre.program_owner == DEFAULT_PROGRAM_OWNER && post.data != pre.data {
-        post.program_owner = account_id;
-    }
-}
-
-/// An account that ends a transaction unowned must carry no data.
-#[must_use]
-pub fn is_ownership_settled(post: &Account) -> bool {
-    post.program_owner != DEFAULT_PROGRAM_OWNER || post.data.is_empty()
-}
-
-/// The account a diff leaves behind: balance and data applied, ownership acquired by the
-/// executing program if it wrote data to an unowned account.
-pub fn post_state(
-    diff: &AccountStateDiff,
-    executing_account_id: AccountId,
-) -> Result<Account, BalanceDiffError> {
-    let pre = &diff.pre_state.account;
-    let mut post = Account {
-        program_owner: pre.program_owner,
-        balance: apply_balance_diff(pre.balance, Some(diff.post_balance_diff))?,
-        data: diff.post_data.clone().unwrap_or_else(|| pre.data.clone()),
-        nonce: pre.nonce,
-    };
-    acquire_ownership_on_data_write(pre, &mut post, executing_account_id);
-    Ok(post)
-}
-
-fn validate_uniqueness_of_account_ids(state_diffs: &[AccountStateDiff]) -> bool {
-    let number_of_accounts = state_diffs.len();
-    let number_of_account_ids = state_diffs
-        .iter()
-        .map(|diff| &diff.pre_state.account_id)
-        .collect::<HashSet<_>>()
-        .len();
-
-    number_of_accounts == number_of_account_ids
+/// The state a diff leaves its position in: the balance applied, and the named shard as written
+/// or as it was.
+pub fn post_state(diff: &ShardStateDiff) -> Result<PositionState, BalanceDiffError> {
+    Ok(PositionState {
+        balance: apply_balance_diff(diff.pre.balance, Some(diff.post_balance_diff))?,
+        shard: match (&diff.pre.shard, &diff.post_data) {
+            (None, _) => None,
+            (Some(_), Some(data)) | (Some((_, data)), None) => Some(data.clone()),
+        },
+    })
 }
 
 #[cfg(test)]
