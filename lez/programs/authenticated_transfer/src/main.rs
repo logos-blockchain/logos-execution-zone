@@ -1,26 +1,11 @@
 use authenticated_transfer_core::Instruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff},
+    account::{AccountWithMetadata, BalanceDiff},
     program::{
-        AccountStateDiff, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
-
-/// Initializes a default account under the ownership of this program.
-fn initialize_account(pre_state: AccountWithMetadata) -> AccountStateDiff {
-    assert!(
-        pre_state.account == Account::default(),
-        "Account must be uninitialized"
-    );
-
-    AccountStateDiff::new_claimed(
-        pre_state.clone(),
-        BalanceDiff::Add(0),
-        pre_state.account.data.clone(),
-        Claim::Authorized,
-    )
-}
 
 /// Transfers `balance_to_move` native balance from `sender` to `recipient`.
 fn transfer(
@@ -37,12 +22,13 @@ fn transfer(
         sender.account.data.clone(),
     );
 
-    // Claim recipient account if it has default program owner
-    let recipient_diff_output = AccountStateDiff::new_claimed_if_default(
+    // TODO(squatting): the credit leaves the recipient unowned, and unowned is takeable — the first
+    // program to write data there owns it, on a plain key account as much as on a derivable PDA.
+    // Accepted: no reclaim path today.
+    let recipient_diff_output = AccountStateDiff::new(
         recipient.clone(),
         BalanceDiff::Add(balance_to_move),
         recipient.account.data.clone(),
-        Claim::Authorized,
     );
 
     vec![sender_diff_output, recipient_diff_output]
@@ -58,7 +44,10 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction,
+            instruction:
+                Instruction::Transfer {
+                    amount: balance_to_move,
+                },
         },
         instruction_data,
     ) = call
@@ -66,20 +55,9 @@ fn main() {
         respond_unsupported_call(call);
     };
 
-    let post_diffs = match instruction {
-        Instruction::Initialize => {
-            let [account_to_claim] =
-                <[_; 1]>::try_from(pre_states).expect("Initialize requires exactly 1 account");
-            vec![initialize_account(account_to_claim)]
-        }
-        Instruction::Transfer {
-            amount: balance_to_move,
-        } => {
-            let [sender, recipient] =
-                <[_; 2]>::try_from(pre_states).expect("Transfer requires exactly 2 accounts");
-            transfer(sender, recipient, balance_to_move)
-        }
-    };
+    let [sender, recipient] =
+        <[_; 2]>::try_from(pre_states).expect("Transfer requires exactly 2 accounts");
+    let post_diffs = transfer(sender, recipient, balance_to_move);
 
     ProgramOutput::new(
         self_program_id,

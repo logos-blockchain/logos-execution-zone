@@ -1,14 +1,12 @@
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff},
+    account::{AccountWithMetadata, BalanceDiff},
     program::{
-        AccountStateDiff, ChainedCall, Claim, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
         read_lee_call, respond_unsupported_call,
     },
 };
-use ping_core::{
-    SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id, sender_config_seed,
-};
+use ping_core::{SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id};
 
 fn main() {
     let call = read_lee_call::<SenderInstruction>();
@@ -73,7 +71,7 @@ fn send(
     payload: Vec<u8>,
     ordinal: u32,
 ) {
-    // pre_states: [config PDA, outbox PDA]. The outbox claims its own slot, so
+    // pre_states: [config PDA, outbox PDA]. The outbox acquires its own slot, so
     // ping_sender forwards it unchanged.
     let [config, outbox] = <[AccountWithMetadata; 2]>::try_from(pre_states)
         .expect("Send requires the config and outbox accounts");
@@ -128,11 +126,11 @@ fn init_config(
         sender_config_account_id(self_program_id),
         "account must be the ping-sender config PDA"
     );
-    // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned one must already pin exactly this outbox, since
-    // genesis is replayed onto seeded state during multi-sequencer reconstruction.
-    // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
-    if config.account != Account::default() {
+    // Init-once, idempotent under genesis replay: an empty config is a first init;
+    // a written one must already pin exactly this outbox, since genesis is replayed
+    // onto seeded state during multi-sequencer reconstruction. Implicit ownership
+    // alone would not stop a later self-owned rewrite.
+    if !config.account.data.is_empty() {
         assert_eq!(
             config.account.program_owner,
             self_program_id.into(),
@@ -149,12 +147,7 @@ fn init_config(
         .to_vec()
         .try_into()
         .expect("outbox id fits in account data");
-    let config_post = AccountStateDiff::new_claimed_if_default(
-        config,
-        BalanceDiff::Add(0),
-        config_data,
-        Claim::Pda(sender_config_seed()),
-    );
+    let config_post = AccountStateDiff::new(config, BalanceDiff::Add(0), config_data);
 
     ProgramOutput::new(
         self_program_id,

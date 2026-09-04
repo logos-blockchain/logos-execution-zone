@@ -15,11 +15,6 @@ path = "associated_token_account/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
-name = "authenticated_transfer"
-path = "authenticated_transfer/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
 name = "bridge"
 path = "bridge/src/main.rs"
 required-features = ["programs"]
@@ -40,23 +35,8 @@ path = "fee/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
-name = "pinata"
-path = "pinata/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "pinata_token"
-path = "pinata_token/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
 name = "token"
 path = "token/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "vault"
-path = "vault/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
@@ -106,7 +86,6 @@ artifacts = ["dep:build_utils", "dep:lee"]
 # You don't need this if you only want to use the library target.
 programs = [
   "dep:lee_core",
-  "dep:risc0-zkvm",
   "dep:amm_program",
   "dep:associated_token_account_program",
   "dep:token_program",
@@ -118,7 +97,6 @@ programs = [
   "dep:faucet_core",
   "dep:fee_core",
   "dep:token_core",
-  "dep:vault_core",
   "dep:cross_zone_inbox_core",
   "dep:cross_zone_marker_core",
   "dep:cross_zone_outbox_core",
@@ -132,16 +110,16 @@ programs = [
 borsh.workspace = true
 lee = { workspace = true, optional = true }
 lee_core = { workspace = true, optional = true }
-risc0-zkvm = { workspace = true, optional = true }
 amm_core = { workspace = true, optional = true }
 associated_token_account_core = { workspace = true, optional = true }
-authenticated_transfer_core = { workspace = true, optional = true }
+authenticated_transfer_core = { workspace = true, optional = true, features = [
+  "image_id",
+] }
 bridge_core = { workspace = true, optional = true }
 clock_core = { workspace = true, optional = true }
 faucet_core = { workspace = true, optional = true }
 fee_core = { workspace = true, optional = true }
 token_core = { workspace = true, optional = true }
-vault_core = { workspace = true, optional = true }
 cross_zone_inbox_core = { workspace = true, optional = true }
 cross_zone_marker_core = { workspace = true, optional = true }
 cross_zone_outbox_core = { workspace = true, optional = true }
@@ -159,4 +137,3 @@ build_utils = { workspace = true, optional = true }
 
 [dev-dependencies]
 bridge_core = { workspace = true }
-vault_core = { workspace = true }

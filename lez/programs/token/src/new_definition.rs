@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountStateDiff, Claim},
+    account::{AccountWithMetadata, BalanceDiff, Data},
+    program::AccountStateDiff,
 };
 use token_core::{
     NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding, TokenMetadata,
@@ -13,16 +13,14 @@ pub fn new_fungible_definition(
     name: String,
     total_supply: u128,
 ) -> Vec<AccountStateDiff> {
-    assert_eq!(
-        definition_target_account.account,
-        Account::default(),
-        "Definition target account must have default values"
+    assert!(
+        definition_target_account.account.data.is_empty(),
+        "Definition target account must not already hold data"
     );
 
-    assert_eq!(
-        holding_target_account.account,
-        Account::default(),
-        "Holding target account must have default values"
+    assert!(
+        holding_target_account.account.data.is_empty(),
+        "Holding target account must not already hold data"
     );
 
     let token_definition = TokenDefinition::Fungible {
@@ -35,18 +33,16 @@ pub fn new_fungible_definition(
         balance: total_supply,
     };
 
-    let definition_diff = AccountStateDiff::new_claimed(
+    let definition_diff = AccountStateDiff::new(
         definition_target_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&token_definition),
-        Claim::Authorized,
     );
 
-    let holding_diff = AccountStateDiff::new_claimed(
+    let holding_diff = AccountStateDiff::new(
         holding_target_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&token_holding),
-        Claim::Authorized,
     );
 
     vec![definition_diff, holding_diff]
@@ -60,22 +56,19 @@ pub fn new_definition_with_metadata(
     new_definition: NewTokenDefinition,
     metadata: NewTokenMetadata,
 ) -> Vec<AccountStateDiff> {
-    assert_eq!(
-        definition_target_account.account,
-        Account::default(),
-        "Definition target account must have default values"
+    assert!(
+        definition_target_account.account.data.is_empty(),
+        "Definition target account must not already hold data"
     );
 
-    assert_eq!(
-        holding_target_account.account,
-        Account::default(),
-        "Holding target account must have default values"
+    assert!(
+        holding_target_account.account.data.is_empty(),
+        "Holding target account must not already hold data"
     );
 
-    assert_eq!(
-        metadata_target_account.account,
-        Account::default(),
-        "Metadata target account must have default values"
+    assert!(
+        metadata_target_account.account.data.is_empty(),
+        "Metadata target account must not already hold data"
     );
 
     let (token_definition, token_holding) = match new_definition {
@@ -114,25 +107,22 @@ pub fn new_definition_with_metadata(
         primary_sale_date: 0_u64, // TODO #261: future works to implement this
     };
 
-    let definition_diff = AccountStateDiff::new_claimed(
+    let definition_diff = AccountStateDiff::new(
         definition_target_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&token_definition),
-        Claim::Authorized,
     );
 
-    let holding_diff = AccountStateDiff::new_claimed(
+    let holding_diff = AccountStateDiff::new(
         holding_target_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&token_holding),
-        Claim::Authorized,
     );
 
-    let metadata_diff = AccountStateDiff::new_claimed(
+    let metadata_diff = AccountStateDiff::new(
         metadata_target_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&token_metadata),
-        Claim::Authorized,
     );
 
     vec![definition_diff, holding_diff, metadata_diff]

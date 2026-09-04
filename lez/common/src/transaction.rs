@@ -295,41 +295,6 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
     public_tx.message().program_id == programs::sequencer_stake().id()
 }
 
-/// Whether `tx` is a full-sweep vault claim.
-///
-/// A `vault::Claim` whose amount equals the vault's entire balance in `state`.
-/// Fee-exempt by the bootstrap decision — all funding lands in vaults while
-/// fees debit account balances, so a charged first claim could never pay.
-/// Asked against the working state at the transaction's turn.
-///
-/// FIXME: this can be removed after Vault is removed.
-#[must_use]
-pub fn is_full_vault_sweep(tx: &LeeTransaction, state: &V03State) -> bool {
-    let LeeTransaction::Public(public_tx) = tx else {
-        return false;
-    };
-
-    let message = public_tx.message();
-    if message.program_id != programs::vault().id() {
-        return false;
-    }
-
-    let Ok(vault_core::Instruction::Claim { amount }) =
-        borsh::from_slice::<vault_core::Instruction>(&message.instruction_data)
-    else {
-        return false;
-    };
-
-    let [owner_id, vault_id] = message.account_ids.as_slice() else {
-        return false;
-    };
-    if *vault_id != vault_core::compute_vault_account_id(programs::vault().id(), *owner_id) {
-        return false;
-    }
-
-    amount != 0 && amount == state.get_account_by_id(*vault_id).balance
-}
-
 /// Returns the canonical Fee Program invocation transaction for the given block fee summary.
 ///
 /// Every valid block must contain exactly one occurrence of this transaction as its

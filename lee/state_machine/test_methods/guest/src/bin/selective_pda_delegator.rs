@@ -1,14 +1,10 @@
 use borsh::to_vec;
-use lee_core::{
-    account::BalanceDiff,
-    program::{
-        AccountStateDiff, ChainedCall, Claim, InstructionData, PdaSeed, ProgramCall, ProgramId,
-        ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
-    },
+use lee_core::program::{
+    AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+    ProgramOutput, read_lee_call, respond_unsupported_call,
 };
 
 type Instruction = (
-    PdaSeed,
     PdaSeed,
     ProgramId,
     InstructionData,
@@ -22,8 +18,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction:
-                (claim_seed, delegated_seed, callee_program_id, callee_instruction, sibling),
+            instruction: (delegated_seed, callee_program_id, callee_instruction, sibling),
         },
         instruction_data,
     ) = call
@@ -67,13 +62,7 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_data,
-        // Claim first PDA supplied
-        vec![AccountStateDiff::new_claimed(
-            pda.clone(),
-            BalanceDiff::Add(0),
-            pda.account.data.clone(),
-            Claim::Pda(claim_seed),
-        )],
+        vec![AccountStateDiff::unchanged(pda.clone())],
     )
     .with_chained_calls(chained_calls)
     .write();

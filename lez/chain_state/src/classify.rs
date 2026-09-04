@@ -3,18 +3,14 @@
 //! Interim policy: only user-submitted public transactions are charged.
 //! Private transactions and program deployments stay exempt pending the
 //! private-payer (Q3) and deployment replay-protection decisions; system
-//! injections, genesis transactions, and full-sweep vault claims are exempt
-//! by design.
+//! injections and genesis transactions are exempt by design.
 //!
 //! A user public transaction that is none of those exempt shapes MUST declare a
 //! fee.
 //! Omitting it is rejected outright ([`ClassifyError::MissingFeeDeclaration`]).
 
-use common::transaction::{
-    LeeTransaction, is_cross_zone_lock, is_full_vault_sweep, is_sequencer_stake_operation,
-};
+use common::transaction::{LeeTransaction, is_cross_zone_lock, is_sequencer_stake_operation};
 use fee_core::assess::FeeTxView;
-use lee::V03State;
 
 /// The fee treatment of one transaction at its turn in the block.
 pub enum FeeClass {
@@ -31,14 +27,13 @@ pub enum ClassifyError {
     #[error("unserializable transaction: {0}")]
     Unserializable(#[from] borsh::io::Error),
     /// A user public transaction omitted its required fee declaration. Only the
-    /// system-shaped exemptions (bridge deposit, cross-zone dispatch, full vault
-    /// sweep, genesis) may omit it; exempting an arbitrary one would execute it
-    /// for free.
+    /// system-shaped exemptions (bridge deposit, cross-zone dispatch, genesis)
+    /// may omit it; exempting an arbitrary one would execute it for free.
     #[error("user public transaction omits its required fee declaration")]
     MissingFeeDeclaration,
 }
 
-/// Classifies `tx` against the working state at its turn.
+/// Classifies `tx` at its turn in the block.
 ///
 /// `is_genesis` covers the genesis block's config/supply transactions. The
 /// forced fee and clock transactions never reach this classifier: the
@@ -49,11 +44,7 @@ pub enum ClassifyError {
 /// [`ClassifyError::MissingFeeDeclaration`] if a user public transaction that is
 /// not an exempt shape omits its fee, and [`ClassifyError::Unserializable`] if a
 /// charged transaction cannot be serialized to price its storage gas.
-pub fn classify(
-    tx: &LeeTransaction,
-    is_genesis: bool,
-    state: &V03State,
-) -> Result<FeeClass, ClassifyError> {
+pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, ClassifyError> {
     if is_genesis {
         return Ok(FeeClass::Exempt);
     }
@@ -82,11 +73,6 @@ pub fn classify(
     // Sequencer-stake lifecycle txs (stake, unstake, slash) govern committee
     // membership, not user value; a staker funds only the stake itself.
     if is_sequencer_stake_operation(tx) {
-        return Ok(FeeClass::Exempt);
-    }
-
-    // TODO: this won't be needed when Vault sweeps are removed
-    if is_full_vault_sweep(tx, state) {
         return Ok(FeeClass::Exempt);
     }
 

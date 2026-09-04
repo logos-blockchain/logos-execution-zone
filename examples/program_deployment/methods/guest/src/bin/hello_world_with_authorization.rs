@@ -1,7 +1,7 @@
 use lee_core::{
     account::BalanceDiff,
     program::{
-        AccountStateDiff, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -11,11 +11,7 @@ use lee_core::{
 // This program reads an arbitrary sequence of bytes as its instruction
 // and appends those bytes to the `data` field of the single input account.
 //
-// Execution succeeds only if the input account **is authorized** and is either:
-// - uninitialized, or
-// - already owned by this program.
-//
-// In case the input account is uninitialized, the program claims it.
+// Execution succeeds only if the input account **is authorized**.
 //
 // The updated account is emitted as the sole post-state.
 
@@ -59,13 +55,7 @@ fn main() {
     };
 
     // Wrap the diff inside an `AccountStateDiff` instance.
-    // This is used to forward the account claiming request if any
-    let post_state = AccountStateDiff::new_claimed_if_default(
-        pre_state,
-        BalanceDiff::Add(0),
-        new_data,
-        Claim::Authorized,
-    );
+    let post_state = AccountStateDiff::new(pre_state, BalanceDiff::Add(0), new_data);
 
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms

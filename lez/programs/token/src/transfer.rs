@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountStateDiff, Claim},
+    account::{AccountWithMetadata, BalanceDiff, Data},
+    program::AccountStateDiff,
 };
 use token_core::TokenHolding;
 
@@ -15,7 +15,7 @@ pub fn transfer(
     let mut sender_holding =
         TokenHolding::try_from(&sender.account.data).expect("Invalid sender data");
 
-    let mut recipient_holding = if recipient.account == Account::default() {
+    let mut recipient_holding = if recipient.account.data.is_empty() {
         TokenHolding::zeroized_clone_from(&sender_holding)
     } else {
         TokenHolding::try_from(&recipient.account.data).expect("Invalid recipient data")
@@ -104,11 +104,10 @@ pub fn transfer(
         Data::from(&sender_holding),
     );
 
-    let recipient_diff = AccountStateDiff::new_claimed_if_default(
+    let recipient_diff = AccountStateDiff::new(
         recipient.clone(),
         BalanceDiff::Add(0),
         Data::from(&recipient_holding),
-        Claim::Authorized,
     );
 
     vec![sender_diff, recipient_diff]

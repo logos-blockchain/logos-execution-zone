@@ -570,6 +570,9 @@ fn deposit_event_record(
 //     crate::withdrawal_reconciliation_key(&note_id)
 // }
 
+// TODO(withdrawals): "re-mints the vault" predates the vault deletion — a
+// replayed deposit now re-credits the recipient directly; the receipt-PDA
+// idempotence reasoning still stands.
 // /// Cold-start backfill re-records an already-finalized deposit event as a
 // /// pending record before reconstruction replays the same deposit block.
 // /// Reconstruction must drop that record — its mint is permanently reflected in
@@ -808,16 +811,15 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         .await
         .expect("reconstruct");
 
-    // The mint was applied exactly once.
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
+    // The mint was applied exactly once, on top of the recipient's genesis supply.
     assert_eq!(
         chain_b
             .lock()
             .await
             .head_state()
-            .get_account_by_id(vault_id)
+            .get_account_by_id(recipient)
             .balance,
-        u128::from(deposit_amount),
+        initial_public_user_accounts()[0].balance + u128::from(deposit_amount),
         "already-finished deposit must be applied exactly once"
     );
 

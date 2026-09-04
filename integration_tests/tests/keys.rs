@@ -10,10 +10,7 @@ use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
     public_mention,
-    utils::{
-        assert_public_account_restored, new_account, restored_private_account, send,
-        send_claiming_new_account,
-    },
+    utils::{assert_public_account_restored, new_account, restored_private_account, send},
     verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
@@ -46,7 +43,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .private_account(to_account_id)
         .context("Failed to get private account")?;
 
-    // Send to this account using claiming path (using npk and vpk instead of account ID)
+    // Send to this account (using npk and vpk instead of the account ID)
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from: private_mention(from),
         to: None,
@@ -66,7 +63,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
-    // Sync the wallet to claim the new account
+    // Sync the wallet to discover the new account
     let command = Command::Account(AccountSubcommand::SyncPrivate {});
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -86,7 +83,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .context("Failed to get recipient's private account")?;
     assert_eq!(to_res_acc.balance, 100);
 
-    log::info!("Successfully transferred using claiming path");
+    log::info!("Successfully transferred");
 
     Ok(())
 }
@@ -128,13 +125,22 @@ async fn restore_keys_from_seed() -> Result<()> {
     let to_account_id3 = new_account(&mut ctx, false, Some(ChainIndex::root())).await?;
     let to_account_id4 = new_account(&mut ctx, false, Some(ChainIndex::from_str("/0")?)).await?;
 
-    // Send to both public accounts. Both are still unclaimed, so bypass the wallet CLI (which
-    // never signs with the recipient's key) and sign with the recipient's own key directly.
-    // Public transfers pay a real fee, so these accounts must hold enough to cover one when they
-    // transact below (unlike the fee-exempt private accounts above). Balances stay distinct so
-    // key restoration still maps each to the right account.
-    send_claiming_new_account(&mut ctx, from, to_account_id3, ACC3_FUNDING).await?;
-    send_claiming_new_account(&mut ctx, from, to_account_id4, ACC4_FUNDING).await?;
+    // Send to both public accounts. Public transfers pay a real fee, so these accounts must hold
+    // enough to cover one when they transact below (unlike the fee-exempt private accounts above).
+    send(
+        &mut ctx,
+        public_mention(from),
+        public_mention(to_account_id3),
+        ACC3_FUNDING,
+    )
+    .await?;
+    send(
+        &mut ctx,
+        public_mention(from),
+        public_mention(to_account_id4),
+        ACC4_FUNDING,
+    )
+    .await?;
 
     log::info!("Preparation complete, performing keys restoration");
 
@@ -149,14 +155,9 @@ async fn restore_keys_from_seed() -> Result<()> {
     assert_public_account_restored(&ctx, to_account_id3, "Acc 3");
     assert_public_account_restored(&ctx, to_account_id4, "Acc 4");
 
-    assert_eq!(
-        acc1.account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
-    assert_eq!(
-        acc2.account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
+    // Funding does not write data, so recipients stays unowned.
+    assert_eq!(acc1.account.program_owner, lee::AccountId::default());
+    assert_eq!(acc2.account.program_owner, lee::AccountId::default());
 
     assert_eq!(acc1.account.balance, 100);
     assert_eq!(acc2.account.balance, 101);

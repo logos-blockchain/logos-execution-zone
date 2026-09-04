@@ -45,11 +45,6 @@ pub enum Instruction {
         outbox_program_id: ProgramId,
         target_program_id: ProgramId,
     },
-    /// Claims the holder's holding PDA, idempotently; anyone may run it, and a
-    /// re-run on a funded holding leaves it untouched.
-    ///
-    /// Required accounts (1): the holder's holding PDA.
-    InitHolding { holder: [u8; 32] },
 }
 
 /// PDA accumulating all locked balance on this zone.
@@ -59,7 +54,7 @@ pub fn escrow_account_id(bridge_lock_id: ProgramId) -> AccountId {
 }
 
 #[must_use]
-pub const fn escrow_seed() -> PdaSeed {
+const fn escrow_seed() -> PdaSeed {
     PdaSeed::new(ESCROW_SEED_DOMAIN)
 }
 
@@ -91,7 +86,7 @@ pub fn config_account_id(bridge_lock_id: ProgramId) -> AccountId {
 }
 
 #[must_use]
-pub const fn config_seed() -> PdaSeed {
+const fn config_seed() -> PdaSeed {
     PdaSeed::new(CONFIG_SEED_DOMAIN)
 }
 
@@ -157,14 +152,6 @@ mod tests {
             holding_account_id(id, &[1; 32]),
             holding_account_id(id, &[1; 32])
         );
-    }
-
-    /// Genesis blocks already carry `InitHolding` at this tag: wire format.
-    #[test]
-    fn init_holding_is_the_third_variant() {
-        let init = Instruction::InitHolding { holder: [7; 32] };
-        let bytes = borsh::to_vec(&init).expect("InitHolding serializes");
-        assert_eq!(bytes[0], 2);
     }
 
     /// `extract_emission` decodes `Lock` off peer transactions, so its tag byte is

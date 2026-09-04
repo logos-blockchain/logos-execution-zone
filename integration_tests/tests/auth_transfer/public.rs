@@ -4,9 +4,9 @@ use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention,
-    utils::{account_balance, get_account, new_account, send, send_claiming_new_account},
+    utils::{account_balance, get_account, new_account, send},
 };
-use lee::{PublicKey, public_transaction};
+use lee::{AccountId, PublicKey, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -109,9 +109,13 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
 
     let sender = ctx.existing_public_accounts()[0];
     let sender_before = account_balance(&ctx, sender).await?;
-    // The wallet CLI never signs with the recipient's key, but claiming this fresh account
-    // requires it, so bypass the CLI for this one send.
-    send_claiming_new_account(&mut ctx, sender, new_persistent_account_id, 100).await?;
+    send(
+        &mut ctx,
+        public_mention(sender),
+        public_mention(new_persistent_account_id),
+        100,
+    )
+    .await?;
 
     log::info!("Checking correct balance move");
     let acc_1_balance = account_balance(&ctx, sender).await?;
@@ -237,25 +241,29 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     Ok(())
 }
 
-/// A fresh account holds nothing, so it cannot pay the fee to claim itself:
-/// the wallet designates the transaction's own signer as its fee payer, and
-/// admission refuses the submission (`PayerCannotFund`). Bootstrap paths for
-/// a new account are a claiming transfer from a funded account (see
-/// `successful_transfer_to_new_account`) or a fee-exempt full vault sweep.
+/// A fresh account holds nothing, so it cannot pay the fee for its own transaction: the wallet
+/// designates the transaction's only signer as its fee payer, and admission refuses the
+/// submission (`PayerCannotFund`). A new account is bootstrapped by a credit from a funded
+/// account instead.
 #[test]
-async fn fresh_account_cannot_pay_to_initialize_itself() -> Result<()> {
+async fn fresh_account_cannot_pay_for_its_own_transaction() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let account_id = new_account(&mut ctx, false, None).await?;
+    // A recipient this wallet holds no key for, so the fresh account is the only signer.
+    let foreign_recipient = AccountId::new([7; 32]);
 
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: public_mention(account_id),
-    });
-    let refused = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await;
-    let err = refused
-        .expect_err("an unfunded account must not be able to pay for its own initialization");
+    let refused = send(
+        &mut ctx,
+        public_mention(account_id),
+        public_mention(foreign_recipient),
+        0,
+    )
+    .await;
+    let err =
+        refused.expect_err("an unfunded account must not be able to pay for its own transaction");
     // Pin the specific rejection: a bare `is_err()` would pass equally on a
-    // network or wallet-build failure. The wallet now surfaces the sequencer's
+    // network or wallet-build failure. The wallet surfaces the sequencer's
     // fee-admission message, so match the `PayerCannotFund` text — distinct from
     // every other admission rejection.
     assert!(
@@ -397,8 +405,6 @@ async fn cannot_execute_faucet_program() -> Result<()> {
     let faucet_account_id = system_accounts::faucet_account_id();
 
     let recipient = ctx.existing_public_accounts()[0];
-    let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient);
 
     let recipient_balance_before = account_balance(&ctx, recipient).await?;
     let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
@@ -406,13 +412,9 @@ async fn cannot_execute_faucet_program() -> Result<()> {
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
         programs::faucet().id(),
-        vec![faucet_account_id, recipient_vault_id],
+        vec![faucet_account_id, recipient],
         vec![],
-        faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
-            recipient_id: recipient,
-            amount,
-        },
+        faucet_core::Instruction::GenesisTransfer { amount },
     )?;
     let tx = lee::PublicTransaction::new(
         message,
@@ -454,15 +456,13 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let faucet_account_id = system_accounts::faucet_account_id();
     let attacker = ctx.existing_public_accounts()[0];
     let faucet_program_id = programs::faucet().id();
-    let vault_program_id = programs::vault().id();
-    let attacker_vault_id = vault_core::compute_vault_account_id(vault_program_id, attacker);
     let amount: u128 = 1;
 
     let message = public_transaction::Message::try_new(
         faucet_chain_caller.id(),
-        vec![faucet_account_id, attacker_vault_id],
+        vec![faucet_account_id, attacker],
         vec![],
-        (faucet_program_id, vault_program_id, attacker, amount),
+        (faucet_program_id, amount),
     )?;
     let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         message,
@@ -470,7 +470,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     ));
 
     let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
-    let vault_balance_before = account_balance(&ctx, attacker_vault_id).await?;
+    let attacker_balance_before = account_balance(&ctx, attacker).await?;
 
     // Unsigned and fee-less: refused at the fee-admission door before the
     // sequencer-only chain-call defense would even see it.
@@ -485,10 +485,10 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     );
 
     let faucet_balance_after = account_balance(&ctx, faucet_account_id).await?;
-    let vault_balance_after = account_balance(&ctx, attacker_vault_id).await?;
+    let attacker_balance_after = account_balance(&ctx, attacker).await?;
 
     assert_eq!(faucet_balance_after, faucet_balance_before);
-    assert_eq!(vault_balance_after, vault_balance_before);
+    assert_eq!(attacker_balance_after, attacker_balance_before);
 
     Ok(())
 }

@@ -105,7 +105,6 @@ fn transition_from_privacy_preserving_transaction_private() {
     let expected_new_commitment_2 = Commitment::new(
         &recipient_account_id,
         &Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
             nonce: Nonce::private_account_nonce_init(&recipient_account_id),
             balance: balance_to_move,
             ..Account::default()
@@ -357,7 +356,7 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
 }
 
 #[test]
-fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
+fn unauthorized_debit_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::simple_balance_transfer();
     let public_account_1 = AccountWithMetadata::new(
         Account {
@@ -365,7 +364,7 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
             balance: 100,
             ..Account::default()
         },
-        true,
+        false,
         AccountId::new([0; 32]),
     );
     let public_account_2 = AccountWithMetadata::new(
@@ -385,5 +384,5 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
         &program.into(),
     );
 
-    assert_circuit_proving_failure(&result, "which is not the owner");
+    assert_circuit_proving_failure(&result, "decrease balance of unauthorized account");
 }

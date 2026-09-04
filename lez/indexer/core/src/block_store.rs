@@ -34,19 +34,14 @@ impl IndexerStore {
         genesis_seed: Vec<(AccountId, Account)>,
         event_filter: EventFilter,
     ) -> Result<Self> {
-        #[cfg(not(feature = "testnet"))]
         let initial_state =
             testnet_initial_state::initial_state(cross_zone).with_public_accounts(genesis_seed);
-
-        #[cfg(feature = "testnet")]
-        let initial_state = testnet_initial_state::initial_state_testnet(cross_zone)
-            .with_public_accounts(genesis_seed);
 
         // In production `genesis_seed` is empty: configs and holdings are
         // reconstructed by replaying the genesis block, so this state matches the
         // sequencer's by construction (fingerprint below is the diagnostic). Tests
-        // seed the producer's claimed reward account, which no genesis block of
-        // theirs stakes.
+        // seed the producer's reward account, which no genesis block of theirs
+        // stakes.
         log::info!(
             "Genesis fingerprint: {}",
             hex::encode(initial_state.genesis_fingerprint())
@@ -1535,7 +1530,6 @@ mod accept_tests {
                 vec![],
                 bridge_core::Instruction::Deposit {
                     l1_deposit_op_id: [7_u8; 32],
-                    vault_program_id: programs::vault().id(),
                     recipient_id: lee::AccountId::new([3_u8; 32]),
                     amount: 5,
                 },

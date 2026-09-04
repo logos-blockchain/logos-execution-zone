@@ -10,9 +10,9 @@ use common::{
 };
 use kameo::actor::Spawn as _;
 use lee::{
-    Account, AccountId, Data, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
+    Account, AccountId, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
 };
-use lee_core::{account::Nonce, program::PdaSeed};
+use lee_core::account::Nonce;
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
     mantle::{
@@ -298,19 +298,17 @@ fn create_charged_bridge_deposit(
     payer_key: &PrivateKey,
 ) -> LeeTransaction {
     let bridge_program_id = programs::bridge().id();
-    let vault_program_id = programs::vault().id();
     let payer = AccountId::from(&PublicKey::new_from_private_key(payer_key));
     let message = lee::public_transaction::Message::try_new_with_fees(
         bridge_program_id,
         vec![
             system_accounts::bridge_account_id(),
-            vault_core::compute_vault_account_id(vault_program_id, recipient_id),
+            recipient_id,
             bridge_core::deposit_receipt_account_id(bridge_program_id, op_id),
         ],
         vec![payer_nonce.into()],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: op_id,
-            vault_program_id,
             recipient_id,
             amount,
         },
@@ -721,7 +719,7 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
     // Manifestation 2 from #639: a deposit-carrying block is orphaned. Recovery
     // rests entirely on the receipt PDA reverting with the block — no requeue,
     // no bookkeeping of our own — so the still-pending record is drained again
-    // on the next turn and the vault is credited exactly once across the reorg.
+    // on the next turn and the recipient is credited exactly once across the reorg.
     let mut config = setup_sequencer_config();
     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
     let recipient_id = initial_public_user_accounts()[0].account_id;
@@ -729,6 +727,9 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
     let amount = 500_u64;
 
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+    let recipient_balance_before = sequencer
+        .with_state(|s| s.get_account_by_id(recipient_id).balance)
+        .await;
     sequencer
         .block_store()
         .storage_ref()
@@ -799,13 +800,12 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
         mints, 1,
         "the deposit is re-minted exactly once after the orphan"
     );
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient_id);
     assert_eq!(
         sequencer
-            .with_state(|s| s.get_account_by_id(vault_id).balance)
+            .with_state(|s| s.get_account_by_id(recipient_id).balance)
             .await,
-        u128::from(amount),
-        "the vault is credited exactly once across the reorg"
+        recipient_balance_before + u128::from(amount),
+        "the recipient is credited exactly once across the reorg"
     );
 }
 
@@ -835,31 +835,31 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
         panic!("bridge deposit tx is public");
     };
 
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient_id);
     let mut state = sequencer.chain().lock().await.head_state().clone();
+    let recipient_balance_before = state.get_account_by_id(recipient_id).balance;
 
-    // First mint: claims the receipt and credits the recipient vault.
+    // First mint: writes the receipt marker and credits the recipient.
     state
         .transition_from_public_transaction(public_tx, 1, 0)
         .expect("first mint executes");
     assert_eq!(
-        state.get_account_by_id(vault_id).balance,
-        u128::from(amount)
+        state.get_account_by_id(recipient_id).balance,
+        recipient_balance_before + u128::from(amount)
     );
     assert!(
         deposit_already_minted(&state, HashType(deposit_op_id)),
-        "the first mint claims the receipt PDA"
+        "the first mint takes ownership of the receipt PDA"
     );
 
-    // Replay the identical mint. The guest sees the receipt already exists and
-    // no-ops instead of failing, so the vault is credited exactly once.
+    // Replay the identical mint. The guest sees it owns the receipt and
+    // no-ops instead of failing, so the recipient is credited exactly once.
     state
         .transition_from_public_transaction(public_tx, 2, 0)
         .expect("a replayed deposit is a no-op, not an error");
     assert_eq!(
-        state.get_account_by_id(vault_id).balance,
-        u128::from(amount),
-        "a replayed deposit must not re-credit the vault"
+        state.get_account_by_id(recipient_id).balance,
+        recipient_balance_before + u128::from(amount),
+        "a replayed deposit must not re-credit the recipient"
     );
 }
 
@@ -2277,23 +2277,18 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
 }
 
-fn pinata_cooldown_data(prize: u128, cooldown_ms: u64, last_claim_timestamp: u64) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(32);
-    buf.extend_from_slice(&prize.to_le_bytes());
+fn cooldown_data(cooldown_ms: u64, last_run_timestamp: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(16);
     buf.extend_from_slice(&cooldown_ms.to_le_bytes());
-    buf.extend_from_slice(&last_claim_timestamp.to_le_bytes());
+    buf.extend_from_slice(&last_run_timestamp.to_le_bytes());
     buf
 }
 
-fn pinata_cooldown_transaction(
-    pinata_id: AccountId,
-    winner_id: AccountId,
-    clock_account_id: AccountId,
-) -> PublicTransaction {
-    let program_id = test_programs::pinata_cooldown().id();
+fn cooldown_transaction(state_id: AccountId, clock_account_id: AccountId) -> PublicTransaction {
+    let program_id = test_programs::cooldown().id();
     let message = lee::public_transaction::Message::try_new(
         program_id,
-        vec![pinata_id, winner_id, clock_account_id],
+        vec![state_id, clock_account_id],
         vec![],
         (),
     )
@@ -2303,198 +2298,75 @@ fn pinata_cooldown_transaction(
 }
 
 #[test]
-fn pinata_cooldown_claim_succeeds_after_cooldown() {
-    let winner_id = AccountId::new([11; 32]);
-    let pinata_id = AccountId::new([99; 32]);
+fn cooldown_opens_after_the_cooldown_elapses() {
+    let state_id = AccountId::new([99; 32]);
 
     let genesis_timestamp = 1000;
-    let prize = 50;
     let cooldown_ms = 500;
-    // Last claim was at genesis, so any timestamp >= genesis + cooldown should work.
-    let last_claim_timestamp = genesis_timestamp;
+    // Last run was at genesis, so any timestamp >= genesis + cooldown should work.
+    let last_run_timestamp = genesis_timestamp;
 
     // Advance the clock so the cooldown check reads an updated timestamp.
     let block_timestamp = genesis_timestamp + cooldown_ms;
-    let mut state = state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
+    let mut state = state_with_clock_and_program(test_programs::cooldown(), block_timestamp);
 
-    // The winner must be a non-default account so the program may credit it without claiming.
     state.force_insert_account(
-        winner_id,
+        state_id,
         Account {
-            program_owner: programs::authenticated_transfer().id().into(),
-            ..Account::default()
-        },
-    );
-    state.force_insert_account(
-        pinata_id,
-        Account {
-            program_owner: test_programs::pinata_cooldown().id().into(),
-            balance: 1000,
-            data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
+            program_owner: test_programs::cooldown().id().into(),
+            data: cooldown_data(cooldown_ms, last_run_timestamp)
                 .try_into()
                 .unwrap(),
             ..Account::default()
         },
     );
 
-    let tx = pinata_cooldown_transaction(
-        pinata_id,
-        winner_id,
-        system_accounts::clock_account_ids()[0],
-    );
+    let tx = cooldown_transaction(state_id, system_accounts::clock_account_ids()[0]);
 
     state
         .transition_from_public_transaction(&tx, 2, block_timestamp)
         .unwrap();
 
-    assert_eq!(state.get_account_by_id(pinata_id).balance, 1000 - prize);
-    assert_eq!(state.get_account_by_id(winner_id).balance, prize);
+    assert_eq!(
+        state.get_account_by_id(state_id).data.as_ref(),
+        cooldown_data(cooldown_ms, block_timestamp)
+    );
 }
 
 #[test]
-fn pinata_cooldown_claim_fails_during_cooldown() {
-    let winner_id = AccountId::new([11; 32]);
-    let pinata_id = AccountId::new([99; 32]);
+fn cooldown_rejects_before_the_cooldown_elapses() {
+    let state_id = AccountId::new([99; 32]);
 
     let genesis_timestamp = 1000;
-    let prize = 50;
     let cooldown_ms = 500;
-    let last_claim_timestamp = genesis_timestamp;
+    let last_run_timestamp = genesis_timestamp;
 
-    // Timestamp is only 100ms after the last claim, well within the 500ms cooldown.
+    // Timestamp is only 100ms after the last run, well within the 500ms cooldown.
     let block_timestamp = genesis_timestamp + 100;
-    let mut state = state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
+    let mut state = state_with_clock_and_program(test_programs::cooldown(), block_timestamp);
 
     state.force_insert_account(
-        winner_id,
+        state_id,
         Account {
-            program_owner: programs::authenticated_transfer().id().into(),
-            ..Account::default()
-        },
-    );
-    state.force_insert_account(
-        pinata_id,
-        Account {
-            program_owner: test_programs::pinata_cooldown().id().into(),
-            balance: 1000,
-            data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
+            program_owner: test_programs::cooldown().id().into(),
+            data: cooldown_data(cooldown_ms, last_run_timestamp)
                 .try_into()
                 .unwrap(),
             ..Account::default()
         },
     );
 
-    let tx = pinata_cooldown_transaction(
-        pinata_id,
-        winner_id,
-        system_accounts::clock_account_ids()[0],
-    );
+    let tx = cooldown_transaction(state_id, system_accounts::clock_account_ids()[0]);
 
     let result = state.transition_from_public_transaction(&tx, 2, block_timestamp);
 
-    assert!(result.is_err(), "Claim should fail during cooldown period");
-    assert_eq!(state.get_account_by_id(pinata_id).balance, 1000);
-    assert_eq!(state.get_account_by_id(winner_id).balance, 0);
-}
-
-#[test]
-fn pda_mechanism_with_pinata_token_program() {
-    let pinata_token = programs::pinata_token();
-    let token = programs::token();
-
-    let pinata_definition_id = AccountId::new([1; 32]);
-    let pinata_token_definition_id = AccountId::new([2; 32]);
-    // Total supply of pinata token will be in an account under a PDA.
-    let pinata_token_holding_id =
-        AccountId::for_public_pda(&pinata_token.id(), &PdaSeed::new([0; 32]));
-    let winner_token_holding_id = AccountId::new([3; 32]);
-
-    let expected_winner_account_holding = token_core::TokenHolding::Fungible {
-        definition_id: pinata_token_definition_id,
-        balance: 150,
-    };
-    let expected_winner_token_holding_post = Account {
-        program_owner: token.id().into(),
-        data: Data::from(&expected_winner_account_holding),
-        ..Account::default()
-    };
-
-    // Register the pinata-token and token programs and create the pinata definition account.
-    // This replaces the removed `add_pinata_token_program` helper.
-    let mut state = V03State::new().with_programs([pinata_token.clone(), token.clone()]);
-    state.force_insert_account(
-        pinata_definition_id,
-        Account {
-            program_owner: pinata_token.id().into(),
-            // Difficulty: 3
-            data: vec![3; 33].try_into().unwrap(),
-            ..Account::default()
-        },
+    assert!(
+        result.is_err(),
+        "The program should fail during the cooldown period"
     );
-
-    // Set up the token accounts directly (bypassing public transactions which
-    // would require signers for Claim::Authorized). The focus of this test is
-    // the PDA mechanism in the pinata program's chained call, not token creation.
-    let total_supply: u128 = 10_000_000;
-    let token_definition = token_core::TokenDefinition::Fungible {
-        name: String::from("PINATA"),
-        total_supply,
-        metadata_id: None,
-    };
-    let token_holding = token_core::TokenHolding::Fungible {
-        definition_id: pinata_token_definition_id,
-        balance: total_supply,
-    };
-    let winner_holding = token_core::TokenHolding::Fungible {
-        definition_id: pinata_token_definition_id,
-        balance: 0,
-    };
-    state.force_insert_account(
-        pinata_token_definition_id,
-        Account {
-            program_owner: token.id().into(),
-            data: Data::from(&token_definition),
-            ..Account::default()
-        },
-    );
-    state.force_insert_account(
-        pinata_token_holding_id,
-        Account {
-            program_owner: token.id().into(),
-            data: Data::from(&token_holding),
-            ..Account::default()
-        },
-    );
-    state.force_insert_account(
-        winner_token_holding_id,
-        Account {
-            program_owner: token.id().into(),
-            data: Data::from(&winner_holding),
-            ..Account::default()
-        },
-    );
-
-    // Submit a solution to the pinata program to claim the prize
-    let solution: u128 = 989_106;
-    let message = lee::public_transaction::Message::try_new(
-        pinata_token.id(),
-        vec![
-            pinata_definition_id,
-            pinata_token_holding_id,
-            winner_token_holding_id,
-        ],
-        vec![],
-        solution,
-    )
-    .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
-
-    let winner_token_holding_post = state.get_account_by_id(winner_token_holding_id);
     assert_eq!(
-        winner_token_holding_post,
-        expected_winner_token_holding_post
+        state.get_account_by_id(state_id).data.as_ref(),
+        cooldown_data(cooldown_ms, last_run_timestamp)
     );
 }
 
@@ -4007,7 +3879,12 @@ fn diag_sequencer_stake_claims_ownership_account() {
 
     let message = lee::public_transaction::Message::try_new(
         programs::sequencer_stake().id(),
-        vec![funding_id, ownership_id, config_id],
+        vec![
+            funding_id,
+            ownership_id,
+            system_accounts::stake_funds_account_id(&ownership_id),
+            config_id,
+        ],
         vec![Nonce(0), Nonce(0)],
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
@@ -4031,11 +3908,24 @@ fn diag_sequencer_stake_claims_ownership_account() {
         programs::sequencer_stake().id().into(),
         "ownership account should be claimed by sequencer_stake"
     );
-    assert_eq!(ownership_account.balance, amount);
+    assert_eq!(
+        ownership_account.balance, 0,
+        "the ownership account never custodies the stake"
+    );
+
+    let funds_account =
+        state.get_account_by_id(system_accounts::stake_funds_account_id(&ownership_id));
+    assert_eq!(
+        funds_account.program_owner,
+        lee::AccountId::default(),
+        "the funds PDA is balance-only, so nothing owns it; rule 5 guards the balance"
+    );
+    assert_eq!(funds_account.balance, amount);
 }
 
-/// Builds a `Stake` moving `amount` from `funding` into `ownership` via
-/// `authenticated_transfer`, taking each signer's nonce from `state`.
+/// Builds a `Stake` moving `amount` from `funding` into `ownership`'s stake
+/// funds PDA via `authenticated_transfer`, taking each signer's nonce from
+/// `state`.
 fn stake_transaction(
     state: &V03State,
     funding: (AccountId, &PrivateKey),
@@ -4056,6 +3946,7 @@ fn stake_transaction(
         vec![
             funding_id,
             ownership_id,
+            system_accounts::stake_funds_account_id(&ownership_id),
             system_accounts::sequencer_stake_config_account_id(),
         ],
         vec![
@@ -4164,11 +4055,12 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
         .transition_from_public_transaction(&stake, 1, 0)
         .expect("Stake should succeed");
 
-    // Donate into the claimed ownership account: a balance increase needs no
-    // ownership of the target.
+    // Donate into the claimed funds PDA, which is where the stake actually
+    // sits: a balance increase needs no ownership of the target.
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     let message = lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id(),
-        vec![funding_id, ownership_id],
+        vec![funding_id, funds_id],
         vec![state.get_account_by_id(funding_id).nonce],
         authenticated_transfer_core::Instruction::Transfer { amount: donation },
     )
@@ -4178,7 +4070,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
         .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
         .expect("donation should succeed");
 
-    let balance = state.get_account_by_id(ownership_id).balance;
+    let balance = state.get_account_by_id(funds_id).balance;
     assert_eq!(
         balance,
         amount + donation,
@@ -4397,6 +4289,17 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         .expect("FinalizeUnstake should succeed");
 
     assert_eq!(stake_entry(&state, sequencer_key), None, "key fully exited");
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
+    assert_eq!(
+        state.get_account_by_id(funds_id).balance,
+        0,
+        "the funds PDA is drained"
+    );
+    assert_eq!(
+        state.get_account_by_id(funding_id).balance,
+        amount,
+        "the destination received the released stake"
+    );
     assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
     assert_eq!(
         state.get_account_by_id(ownership_id).program_owner,
@@ -4404,8 +4307,8 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         "the ownership account stays claimed after a full exit"
     );
 
-    // The account is still claimed, so the re-stake goes through the same
-    // already-owned account rather than needing a fresh one.
+    // Both the ownership account and its funds PDA are still claimed, so the
+    // re-stake goes through the same accounts rather than needing fresh ones.
     let restake = stake_transaction(
         &state,
         (funding_id, &funding_key),
@@ -4421,7 +4324,8 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     assert_eq!(entry.account_id, ownership_id);
     assert_eq!(entry.total_staked, amount);
     assert_eq!(entry.total_pending_unstake, 0);
-    assert_eq!(state.get_account_by_id(ownership_id).balance, amount);
+    assert_eq!(state.get_account_by_id(funds_id).balance, amount);
+    assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
 }
 
 #[test]
@@ -4438,7 +4342,11 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
         programs::sequencer_stake().id().into()
     );
     assert_eq!(
-        stake_account.balance,
+        state
+            .get_account_by_id(system_accounts::stake_funds_account_id(
+                &bootstrap_stake_account_id(&config)
+            ))
+            .balance,
         system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE
     );
 
@@ -4502,6 +4410,64 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         record.pending_unstake.map(|pending| pending.amount),
         Some(system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE)
     );
+}
+
+#[test]
+fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
+    let funding_key = PrivateKey::try_new([64; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let ownership_key = PrivateKey::try_new([65; 32]).unwrap();
+    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let mut state =
+        stake_test_state(funding_id, amount).with_programs([test_programs::reverse_transfer()]);
+
+    // Seed the custody account so there is something worth taking.
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
+    state.force_insert_account(
+        funds_id,
+        lee::Account {
+            balance: amount,
+            ..lee::Account::default()
+        },
+    );
+
+    // A mover that moves balance the wrong way: out of the custody account it was
+    // handed, into the staker's own funding account.
+    let mover_instruction_data = Program::serialize_instruction(amount).unwrap();
+    let message = lee::public_transaction::Message::try_new(
+        programs::sequencer_stake().id(),
+        vec![
+            funding_id,
+            ownership_id,
+            funds_id,
+            system_accounts::sequencer_stake_config_account_id(),
+        ],
+        vec![
+            state.get_account_by_id(funding_id).nonce,
+            state.get_account_by_id(ownership_id).nonce,
+        ],
+        sequencer_stake_core::Instruction::Stake {
+            sequencer_key: test_sequencer_key(0x64),
+            amount,
+            mover_program_id: test_programs::reverse_transfer().id(),
+            mover_instruction_data,
+        },
+    )
+    .unwrap();
+    let witness_set =
+        lee::public_transaction::WitnessSet::for_message(&message, &[&funding_key, &ownership_key]);
+
+    let err = state
+        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 1, 0)
+        .expect_err("a mover must not be able to debit the custody account");
+    let reason = format!("{err:?}");
+    assert!(
+        reason.contains("UnauthorizedBalanceDecrease"),
+        "expected the custody debit to be refused for want of authorization, got {reason}"
+    );
+    assert_eq!(state.get_account_by_id(funds_id).balance, amount);
 }
 
 /// The sink burned stakes land in.
@@ -4581,7 +4547,12 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
         .transition_from_public_transaction(&slash, 2, 0)
         .expect("Slash should succeed");
 
-    assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
+    assert_eq!(
+        state
+            .get_account_by_id(system_accounts::stake_funds_account_id(&ownership_id))
+            .balance,
+        0
+    );
     assert_eq!(state.get_account_by_id(slash_sink_id()).balance, amount);
     assert_eq!(stake_entry(&state, sequencer_key), None);
 
@@ -4591,6 +4562,77 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
             .transition_from_public_transaction(&slash, 3, 0)
             .is_err()
     );
+}
+
+/// Squats `ownership_id`'s funds PDA: a stranger's data write takes the address.
+fn squat_stake_funds(state: &mut V03State, ownership_id: AccountId) -> AccountId {
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
+    let mut funds = state.get_account_by_id(funds_id);
+    funds.program_owner = AccountId::new([66; 32]);
+    funds.data = vec![1].try_into().expect("1 byte fits in account data");
+    state.force_insert_account(funds_id, funds);
+    funds_id
+}
+
+#[test]
+fn a_slash_burns_from_a_squatted_funds_pda() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, _ownership_key) = slashable_state(amount);
+    let funds_id = squat_stake_funds(&mut state, ownership_id);
+
+    let slash = slash_transaction(
+        ownership_id,
+        sequencer_key,
+        vec![test_approval(0x44, sequencer_key)],
+    );
+    state
+        .transition_from_public_transaction(&slash, 2, 0)
+        .expect("a squatted funds PDA still burns");
+
+    assert_eq!(state.get_account_by_id(funds_id).balance, 0);
+    assert_eq!(state.get_account_by_id(slash_sink_id()).balance, amount);
+    assert_eq!(
+        state.get_account_by_id(funds_id).program_owner,
+        AccountId::new([66; 32]),
+        "the squatter keeps the address"
+    );
+}
+
+#[test]
+fn a_finalize_unstake_releases_from_a_squatted_funds_pda() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, ownership_key) = slashable_state(amount);
+    let destination = AccountId::new([67; 32]);
+    let request = unstake_request_transaction(
+        &state,
+        (ownership_id, &ownership_key),
+        system_accounts::sequencer_stake_config_account_id(),
+        amount,
+        destination,
+    );
+    state
+        .transition_from_public_transaction(&request, 2, 0)
+        .expect("UnstakeRequest should succeed");
+    let funds_id = squat_stake_funds(&mut state, ownership_id);
+
+    let finalize = build_finalize_unstake_tx(
+        ownership_id,
+        sequencer_stake_core::PendingUnstake {
+            amount,
+            destination,
+        },
+    )
+    .unwrap();
+    let LeeTransaction::Public(finalize) = finalize else {
+        panic!("FinalizeUnstake should be a public transaction");
+    };
+    state
+        .transition_from_public_transaction(&finalize, 3, 0)
+        .expect("a squatted funds PDA still releases");
+
+    assert_eq!(state.get_account_by_id(funds_id).balance, 0);
+    assert_eq!(state.get_account_by_id(destination).balance, amount);
+    assert_eq!(stake_entry(&state, sequencer_key), None);
 }
 
 #[test]
@@ -4621,7 +4663,12 @@ fn a_slash_claws_back_a_pending_unstake() {
 
     // The pending release burned with the rest; nothing is left to finalize.
     assert_eq!(state.get_account_by_id(slash_sink_id()).balance, amount);
-    assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
+    assert_eq!(
+        state
+            .get_account_by_id(system_accounts::stake_funds_account_id(&ownership_id))
+            .balance,
+        0
+    );
     let LeeTransaction::Public(finalize) = build_finalize_unstake_tx(
         ownership_id,
         sequencer_stake_core::PendingUnstake {
@@ -4678,7 +4725,12 @@ fn a_slash_without_enough_approvals_is_rejected() {
             .is_err()
     );
 
-    assert_eq!(state.get_account_by_id(ownership_id).balance, amount);
+    assert_eq!(
+        state
+            .get_account_by_id(system_accounts::stake_funds_account_id(&ownership_id))
+            .balance,
+        amount
+    );
     assert_eq!(state.get_account_by_id(slash_sink_id()).balance, 0);
 }
 

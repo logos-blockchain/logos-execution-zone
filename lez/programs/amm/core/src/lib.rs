@@ -141,7 +141,7 @@ pub fn compute_pool_pda(
 }
 
 #[must_use]
-pub fn compute_pool_pda_seed(
+fn compute_pool_pda_seed(
     definition_token_a_id: AccountId,
     definition_token_b_id: AccountId,
 ) -> PdaSeed {

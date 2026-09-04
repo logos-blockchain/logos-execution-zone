@@ -100,6 +100,9 @@ async fn main() -> Result<()> {
                     vec![
                         AccountIdentity::Public(funding_account),
                         AccountIdentity::Public(ownership_account),
+                        AccountIdentity::PublicNoSign(system_accounts::stake_funds_account_id(
+                            &ownership_account,
+                        )),
                         AccountIdentity::PublicNoSign(config_id),
                     ],
                     instruction_data,

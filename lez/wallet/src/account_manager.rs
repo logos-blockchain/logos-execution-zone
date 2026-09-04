@@ -453,11 +453,9 @@ impl AccountManager {
     /// public accounts (`sk: None`) are skipped.
     ///
     /// If no signing account is funded, falls back to the first signing account.
-    /// A fee-exempt transaction — notably a bootstrap vault claim, where the
-    /// account's funds still sit in its vault so its balance is zero — carries a
-    /// vestigial fee declaration the sequencer never charges, so it still needs a
-    /// payer id to fill. Only a wallet with no signing account at all yields
-    /// `None`.
+    /// A fee-exempt transaction carries a vestigial fee declaration the sequencer
+    /// never charges, so it still needs a payer id to fill. Only a wallet with no
+    /// signing account at all yields `None`.
     pub fn fee_payer_account_id(&self) -> Option<AccountId> {
         let signing = || {
             self.states.iter().filter_map(|state| match state {
@@ -590,8 +588,7 @@ fn private_foreign_acc_preparation(
 ) -> AccountPreparedData {
     AccountPreparedData {
         // The wallet holds no key for a recipient, so it can neither spend the account nor
-        // consent on its behalf. The program still claims it: a private claim never requires
-        // authorization.
+        // consent on its behalf.
         ask: None,
         nsk: None,
         npk,
@@ -838,9 +835,9 @@ mod tests {
 
     #[test]
     fn an_all_unfunded_wallet_falls_back_to_the_first_signing_account() {
-        // No signing account is funded, but a fee-exempt transaction (e.g. a
-        // bootstrap vault claim) still needs a payer id to fill: fall back to the
-        // first signing account rather than refuse to build.
+        // No signing account is funded, but a fee-exempt transaction still needs a
+        // payer id to fill: fall back to the first signing account rather than
+        // refuse to build.
         let first = public_signing_state(7, 0);
         let State::Public { account, .. } = &first else {
             unreachable!("public_signing_state builds a public account");

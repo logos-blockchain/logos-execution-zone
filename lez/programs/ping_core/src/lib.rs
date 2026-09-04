@@ -102,14 +102,17 @@ pub enum SenderInstruction {
 }
 
 /// The account a `ping_receiver` records the latest delivered payload into.
+///
+/// TODO(squatting): a derivable address; a squatter who writes data first owns
+/// it and denies the demo flow.
 #[must_use]
 pub fn ping_record_pda(receiver_id: ProgramId) -> AccountId {
     AccountId::for_public_pda(&receiver_id, &ping_record_seed())
 }
 
-/// Seed of the record PDA, exposed so the guest can claim the account.
+/// Seed of the record PDA.
 #[must_use]
-pub const fn ping_record_seed() -> PdaSeed {
+const fn ping_record_seed() -> PdaSeed {
     PdaSeed::new(PING_RECORD_SEED)
 }
 
@@ -121,7 +124,7 @@ pub fn sender_config_account_id(sender_id: ProgramId) -> AccountId {
 }
 
 #[must_use]
-pub const fn sender_config_seed() -> PdaSeed {
+const fn sender_config_seed() -> PdaSeed {
     PdaSeed::new(SENDER_CONFIG_SEED)
 }
 
@@ -132,7 +135,7 @@ pub fn receiver_config_account_id(receiver_id: ProgramId) -> AccountId {
 }
 
 #[must_use]
-pub const fn receiver_config_seed() -> PdaSeed {
+const fn receiver_config_seed() -> PdaSeed {
     PdaSeed::new(RECEIVER_CONFIG_SEED)
 }
 

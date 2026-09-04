@@ -1,17 +1,9 @@
+use authenticated_transfer_core::custody_transfer;
 use faucet_core::Instruction;
 use lee_core::program::{
-    AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
     respond_unsupported_call,
 };
-
-fn unchanged_post_diffs(
-    pre_states: &[lee_core::account::AccountWithMetadata],
-) -> Vec<AccountStateDiff> {
-    pre_states
-        .iter()
-        .map(|pre_state| AccountStateDiff::unchanged(pre_state.clone()))
-        .collect()
-}
 
 fn main() {
     let call = read_lee_call::<Instruction>();
@@ -20,7 +12,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction,
+            instruction: Instruction::GenesisTransfer { amount },
         },
         instruction_data,
     ) = call
@@ -33,58 +25,25 @@ fn main() {
         "Faucet cannot be invoked through chain calls"
     );
 
-    let pre_states_clone = pre_states.clone();
-    let post_diffs = unchanged_post_diffs(&pre_states_clone);
+    let post_diffs = pre_states
+        .iter()
+        .map(|pre_state| AccountStateDiff::unchanged(pre_state.clone()))
+        .collect();
+    let [faucet, recipient] =
+        <[_; 2]>::try_from(pre_states).expect("GenesisTransfer requires exactly 2 accounts");
 
-    let chained_calls = match instruction {
-        Instruction::GenesisTransferVault {
-            vault_program_id,
-            recipient_id,
-            amount,
-        } => {
-            let [faucet, recipient_vault] = pre_states
-                .try_into()
-                .expect("Transfer requires exactly 2 accounts");
+    assert_eq!(
+        faucet.account_id,
+        faucet_core::compute_faucet_account_id(self_program_id),
+        "First account must be faucet PDA"
+    );
 
-            assert_eq!(
-                faucet.account_id,
-                faucet_core::compute_faucet_account_id(self_program_id),
-                "First account must be faucet PDA"
-            );
-
-            vec![
-                ChainedCall::new(
-                    vault_program_id,
-                    vec![faucet.account_id, recipient_vault.account_id],
-                    &vault_core::Instruction::Transfer {
-                        recipient_id,
-                        amount,
-                    },
-                )
-                .with_pda_seeds(vec![faucet_core::compute_faucet_seed()]),
-            ]
-        }
-        Instruction::GenesisTransferDirect { amount } => {
-            let [faucet, recipient] = pre_states
-                .try_into()
-                .expect("TransferDirect requires exactly 2 accounts");
-
-            assert_eq!(
-                faucet.account_id,
-                faucet_core::compute_faucet_account_id(self_program_id),
-                "First account must be faucet PDA"
-            );
-
-            vec![
-                ChainedCall::new(
-                    faucet.account.program_owner.into(),
-                    vec![faucet.account_id, recipient.account_id],
-                    &authenticated_transfer_core::Instruction::Transfer { amount },
-                )
-                .with_pda_seeds(vec![faucet_core::compute_faucet_seed()]),
-            ]
-        }
-    };
+    let transfer = custody_transfer(
+        faucet.account_id,
+        faucet_core::compute_faucet_seed(),
+        recipient.account_id,
+        amount,
+    );
 
     ProgramOutput::new(
         self_program_id,
@@ -92,6 +51,6 @@ fn main() {
         instruction_data,
         post_diffs,
     )
-    .with_chained_calls(chained_calls)
+    .with_chained_calls(vec![transfer])
     .write();
 }

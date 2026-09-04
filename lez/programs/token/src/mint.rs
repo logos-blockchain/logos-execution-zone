@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountStateDiff, Claim},
+    account::{AccountWithMetadata, BalanceDiff, Data},
+    program::AccountStateDiff,
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -17,7 +17,7 @@ pub fn mint(
 
     let mut definition = TokenDefinition::try_from(&definition_account.account.data)
         .expect("Token Definition account must be valid");
-    let mut holding = if user_holding_account.account == Account::default() {
+    let mut holding = if user_holding_account.account.data.is_empty() {
         TokenHolding::zeroized_from_definition(definition_account.account_id, &definition)
     } else {
         TokenHolding::try_from(&user_holding_account.account.data)
@@ -65,11 +65,10 @@ pub fn mint(
         Data::from(&definition),
     );
 
-    let holding_diff = AccountStateDiff::new_claimed_if_default(
+    let holding_diff = AccountStateDiff::new(
         user_holding_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&holding),
-        Claim::Authorized,
     );
 
     vec![definition_diff, holding_diff]

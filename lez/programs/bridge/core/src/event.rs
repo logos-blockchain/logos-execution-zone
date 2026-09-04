@@ -1,10 +1,9 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{account::AccountId, program::ProgramId};
+use lee_core::account::AccountId;
 
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Deposit {
     pub l1_deposit_op_id: [u8; 32],
-    pub vault_program_id: ProgramId,
     pub recipient_id: AccountId,
     pub amount: u64,
 }
@@ -68,7 +67,6 @@ mod tests {
     fn events_round_trip_through_bytes() {
         let deposit = Deposit {
             l1_deposit_op_id: [2; 32],
-            vault_program_id: [6; 8],
             recipient_id: AccountId::new([0; 32]),
             amount: 1,
         };
@@ -89,13 +87,11 @@ mod tests {
     fn deposit_wire_bytes_are_pinned() {
         let deposit = Deposit {
             l1_deposit_op_id: [0; 32],
-            vault_program_id: [1; 8],
             recipient_id: AccountId::new([2; 32]),
             amount: 3,
         };
 
         let mut expected = vec![0; 32];
-        expected.extend([1, 0, 0, 0].repeat(8));
         expected.extend([2; 32]);
         expected.extend(3_u64.to_le_bytes());
 

@@ -38,7 +38,7 @@ use sequencer_service_protocol::{AdmissionRejection, FeeStateQuote};
 ///
 /// The first check that fails, with the values that decided it.
 pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<(), AdmissionRejection> {
-    let class = classify(tx, false, state).map_err(|err| match err {
+    let class = classify(tx, false).map_err(|err| match err {
         ClassifyError::Unserializable(err) => AdmissionRejection::OtherFeeValidity {
             reason: format!("unserializable transaction: {err}"),
         },
@@ -337,44 +337,6 @@ mod tests {
             "expected an unauthorized payer, got: {err}",
         );
         assert!(settle_verdict(&tx, &state).is_err());
-    }
-
-    /// The bootstrap case: a full vault sweep is fee-exempt, so none of the
-    /// charged checks may run against it — its whole point is that the
-    /// sweeper holds nothing yet.
-    #[test]
-    fn a_full_vault_sweep_by_an_unfunded_account_is_admitted() {
-        let mut state = initial_state(true);
-        let sweeper_key = key(9);
-        let sweeper = account_of(&sweeper_key);
-        let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), sweeper);
-        state.force_insert_account(
-            vault_id,
-            lee::Account {
-                program_owner: programs::vault().id().into(),
-                balance: 500_000_000,
-                ..lee::Account::default()
-            },
-        );
-
-        let message = lee::public_transaction::Message::try_new_with_fees(
-            programs::vault().id(),
-            vec![sweeper, vault_id],
-            vec![0_u128.into()],
-            vault_core::Instruction::Claim {
-                amount: 500_000_000,
-            },
-            // A sweep is exempt whatever it declares, and a wallet with
-            // nothing to pay with signs a zero max_fee: neither the reserve
-            // check nor the balance check may see this.
-            FeeDeclaration::new(sweeper, TEST_GAS_LIMIT, 0, 0),
-        )
-        .expect("message builds");
-        let witness_set =
-            lee::public_transaction::WitnessSet::for_message(&message, &[&sweeper_key]);
-        let tx = LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set));
-
-        screen(&tx, &state).expect("a full sweep must be admitted unscreened");
     }
 
     /// Private transactions are fee-exempt under the interim policy, so

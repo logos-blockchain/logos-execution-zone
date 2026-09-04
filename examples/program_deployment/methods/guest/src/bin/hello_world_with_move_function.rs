@@ -1,7 +1,7 @@
 use lee_core::{
     account::{AccountWithMetadata, BalanceDiff, Data},
     program::{
-        AccountStateDiff, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -14,13 +14,6 @@ use lee_core::{
 // - `write`: appends `data` to the `data` field of a single input account.
 // - `move_data`: moves all bytes from one account to another. The source account is cleared and the
 //   destination account receives the appended bytes.
-//
-// Execution succeeds only if:
-// - the accounts involved are either uninitialized, or
-// - already owned by this program.
-//
-// In case an input account is uninitialized, the program will claim it when
-// producing the post-state.
 
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
@@ -37,12 +30,7 @@ fn write(pre_state: &AccountWithMetadata, greeting: &[u8]) -> AccountStateDiff {
             .expect("Data should fit within the allowed limits")
     };
 
-    AccountStateDiff::new_claimed_if_default(
-        pre_state.clone(),
-        BalanceDiff::Add(0),
-        new_data,
-        Claim::Authorized,
-    )
+    AccountStateDiff::new(pre_state.clone(), BalanceDiff::Add(0), new_data)
 }
 
 fn move_data(
@@ -52,12 +40,7 @@ fn move_data(
     // Construct the new data values.
     let from_data: Vec<u8> = from_pre.account.data.clone().into();
 
-    let from_post = AccountStateDiff::new_claimed_if_default(
-        from_pre.clone(),
-        BalanceDiff::Add(0),
-        Data::default(),
-        Claim::Authorized,
-    );
+    let from_post = AccountStateDiff::new(from_pre.clone(), BalanceDiff::Add(0), Data::default());
 
     let to_post = {
         let mut bytes = to_pre.account.data.clone().into_inner();
@@ -65,12 +48,7 @@ fn move_data(
         let new_data: Data = bytes
             .try_into()
             .expect("Data should fit within the allowed limits");
-        AccountStateDiff::new_claimed_if_default(
-            to_pre.clone(),
-            BalanceDiff::Add(0),
-            new_data,
-            Claim::Authorized,
-        )
+        AccountStateDiff::new(to_pre.clone(), BalanceDiff::Add(0), new_data)
     };
 
     vec![from_post, to_post]

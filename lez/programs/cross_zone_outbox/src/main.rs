@@ -1,8 +1,8 @@
-use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda, outbox_pda_seed};
+use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda};
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff},
+    account::{AccountWithMetadata, BalanceDiff},
     program::{
-        AccountStateDiff, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -63,13 +63,14 @@ fn main() {
     // This is the same predicate the state machine already requires of a first
     // write, so guest and host agree by construction rather than by coincidence.
     //
-    // It also means a slot can be denied to its intended writer: the ordinal is
-    // caller-chosen in a namespace every user of an emitter shares, and an
-    // emission needs no signature, so anyone can occupy one. A client must pick
-    // an ordinal the chain does not already hold rather than counting from zero.
-    assert_eq!(
-        outbox.account,
-        Account::default(),
+    // A slot can still be denied to its intended writer by a real emission: the
+    // ordinal is caller-chosen in a namespace every user of an emitter shares,
+    // and an emission needs no signature, so anyone can occupy one. A client must
+    // pick an ordinal the chain does not already hold rather than counting from
+    // zero. TODO(squatting): a foreign data write at the address denies the
+    // ordinal the same way, since whoever writes data first owns the account.
+    assert!(
+        outbox.account.data.is_empty(),
         "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
     );
 
@@ -85,13 +86,7 @@ fn main() {
     .try_into()
     .expect("OutboxRecord fits in account data");
 
-    // Unconditional, since the pre-state is provably default by the assert above.
-    let post = AccountStateDiff::new_claimed(
-        outbox,
-        BalanceDiff::Add(0),
-        new_data,
-        Claim::Pda(outbox_pda_seed(emitter, &target_zone, ordinal)),
-    );
+    let post = AccountStateDiff::new(outbox, BalanceDiff::Add(0), new_data);
 
     ProgramOutput::new(
         self_program_id,

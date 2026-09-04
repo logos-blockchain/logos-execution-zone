@@ -2,11 +2,11 @@ use std::num::NonZeroU128;
 
 use amm_core::{
     PoolDefinition, compute_liquidity_token_pda, compute_liquidity_token_pda_seed,
-    compute_pool_pda, compute_pool_pda_seed, compute_vault_pda, compute_vault_pda_seed,
+    compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
 };
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountStateDiff, ChainedCall, Claim, ProgramId},
+    account::{AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountStateDiff, ChainedCall, ProgramId},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -42,6 +42,9 @@ pub fn new_definition(
         definition_token_a_id != definition_token_b_id,
         "Cannot set up a swap for a token with itself"
     );
+    // TODO(squatting): the pool address is derivable from the token pair, so a
+    // program can own it before the first definition and brick that pair.
+    // Accepted: there is no reclaim path today.
     assert_eq!(
         pool.account_id,
         compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id),
@@ -65,7 +68,7 @@ pub fn new_definition(
 
     // TODO: return here
     // Verify that Pool Account is not active
-    let pool_account_data = if pool.account == Account::default() {
+    let pool_account_data = if pool.account.data.is_empty() {
         PoolDefinition::default()
     } else {
         PoolDefinition::try_from(&pool.account.data)
@@ -81,7 +84,7 @@ pub fn new_definition(
     let initial_lp = (token_a_amount.get() * token_b_amount.get()).isqrt();
 
     // Chain call for liquidity token (TokenLP definition -> User LP Holding)
-    let instruction = if pool.account == Account::default() {
+    let instruction = if pool.account.data.is_empty() {
         token_core::Instruction::NewFungibleDefinition {
             name: String::from("LP Token"),
             total_supply: initial_lp,
@@ -106,12 +109,10 @@ pub fn new_definition(
         active: true,
     };
 
-    let pool_pda_seed = compute_pool_pda_seed(definition_token_a_id, definition_token_b_id);
-    let pool_post = AccountStateDiff::new_claimed_if_default(
+    let pool_post = AccountStateDiff::new(
         pool.clone(),
         BalanceDiff::Add(0),
         Data::from(&pool_post_definition),
-        Claim::Pda(pool_pda_seed),
     );
 
     let token_program_id: lee_core::program::ProgramId =

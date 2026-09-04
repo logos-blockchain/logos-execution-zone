@@ -7,7 +7,7 @@
 
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountStateDiff, Claim},
+    program::AccountStateDiff,
 };
 use token_core::{
     MetadataStandard, NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding,
@@ -539,12 +539,16 @@ fn assert_data_diff(diff_output: &AccountStateDiff, expected: &AccountWithMetada
     assert_eq!(effective_data, expected.account.data);
 }
 
-#[should_panic(expected = "Definition target account must have default values")]
+#[should_panic(expected = "Definition target account must not already hold data")]
 #[test]
-fn new_definition_non_default_first_account_should_fail() {
+fn new_definition_data_bearing_first_account_should_fail() {
     let definition_account = AccountWithMetadata {
         account: Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
+            data: Data::from(&TokenDefinition::Fungible {
+                name: String::from("taken"),
+                total_supply: 1,
+                metadata_id: None,
+            }),
             ..Account::default()
         },
         is_authorized: true,
@@ -563,9 +567,9 @@ fn new_definition_non_default_first_account_should_fail() {
     );
 }
 
-#[should_panic(expected = "Holding target account must have default values")]
+#[should_panic(expected = "Holding target account must not already hold data")]
 #[test]
-fn new_definition_non_default_second_account_should_fail() {
+fn new_definition_data_bearing_second_account_should_fail() {
     let definition_account = AccountWithMetadata {
         account: Account::default(),
         is_authorized: true,
@@ -573,7 +577,10 @@ fn new_definition_non_default_second_account_should_fail() {
     };
     let holding_account = AccountWithMetadata {
         account: Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
+            data: Data::from(&TokenHolding::Fungible {
+                definition_id: AccountId::new([1; 32]),
+                balance: 1,
+            }),
             ..Account::default()
         },
         is_authorized: true,
@@ -584,6 +591,36 @@ fn new_definition_non_default_second_account_should_fail() {
         &holding_account,
         String::from("test"),
         10,
+    );
+}
+
+/// A definition address is derivable, and anyone may credit an unowned account.
+/// Creation must therefore turn on whether the address already holds data, not on
+/// whether it is pristine — otherwise one unit of balance bricks the address for ever.
+#[test]
+fn new_definition_succeeds_on_an_address_someone_credited() {
+    let mut definition_account = AccountForTests::definition_account_uninit();
+    definition_account.account.balance = 1;
+    let holding_account = AccountForTests::holding_account_uninit();
+
+    let post_diffs = new_fungible_definition(
+        &definition_account,
+        &holding_account,
+        String::from("test"),
+        BalanceForTests::init_supply(),
+    );
+
+    let [definition_post, _holding_post] = post_diffs.try_into().unwrap();
+    assert_eq!(
+        definition_post.post_balance_diff,
+        BalanceDiff::Add(0),
+        "the credit is left alone"
+    );
+    assert!(
+        definition_post
+            .post_data
+            .is_some_and(|data| !data.is_empty()),
+        "the definition is written"
     );
 }
 
@@ -848,7 +885,6 @@ fn mint_uninit_holding_success() {
 
     assert_data_diff(&def_post, &AccountForTests::definition_account_mint());
     assert_data_diff(&holding_post, &AccountForTests::init_mint());
-    assert_eq!(holding_post.post_claim, Some(Claim::Authorized));
 }
 
 #[test]
@@ -887,7 +923,7 @@ fn mint_cannot_mint_unmintable_tokens() {
     );
 }
 
-#[should_panic(expected = "Definition target account must have default values")]
+#[should_panic(expected = "Definition target account must not already hold data")]
 #[test]
 fn call_new_definition_metadata_with_init_definition() {
     let definition_account = AccountForTests::definition_account_auth();
@@ -919,7 +955,7 @@ fn call_new_definition_metadata_with_init_definition() {
     );
 }
 
-#[should_panic(expected = "Metadata target account must have default values")]
+#[should_panic(expected = "Metadata target account must not already hold data")]
 #[test]
 fn call_new_definition_metadata_with_init_metadata() {
     let definition_account = AccountWithMetadata {
@@ -951,7 +987,7 @@ fn call_new_definition_metadata_with_init_metadata() {
     );
 }
 
-#[should_panic(expected = "Holding target account must have default values")]
+#[should_panic(expected = "Holding target account must not already hold data")]
 #[test]
 fn call_new_definition_metadata_with_init_holding() {
     let definition_account = AccountWithMetadata {
@@ -991,7 +1027,7 @@ fn print_nft_master_account_must_be_authorized() {
     let _post_diffs = print_nft(&master_account, &printed_account);
 }
 
-#[should_panic(expected = "Printed Account must be uninitialized")]
+#[should_panic(expected = "Printed Account must not already hold data")]
 #[test]
 fn print_nft_print_account_initialized() {
     let master_account = AccountForTests::holding_account_master_nft();

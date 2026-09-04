@@ -11,8 +11,8 @@ use lee_core::program::{
 /// Instruction: `(pda_seed, simple_transfer_id, amount, is_withdraw)`.
 ///
 /// **Init** (`is_withdraw = false`, 1 pre-state `[pda]`):
-/// Chains to `simple_transfer` with `instruction=0` (init path) and `pda_seeds=[seed]`
-/// to initialize the PDA under `simple_transfer`'s ownership.
+/// Chains to `simple_transfer` with `instruction=0` (init path) and `pda_seeds=[seed]`,
+/// which echoes the PDA unchanged.
 ///
 /// **Withdraw** (`is_withdraw = true`, 2 pre-states `[pda, recipient]`):
 /// Chains to `simple_transfer` with the amount and `pda_seeds=[seed]` to authorize
@@ -82,7 +82,7 @@ fn main() {
         let pda_post = AccountStateDiff::unchanged(pda_pre.clone());
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
-        // to authorize the PDA. simple_transfer will claim it with Claim::Authorized.
+        // to authorize the PDA.
         let auth_call = ChainedCall::new(simple_transfer_id, vec![pda_pre.account_id], &amount)
             .with_pda_seeds(vec![pda_seed]);
 

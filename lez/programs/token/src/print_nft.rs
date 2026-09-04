@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountStateDiff, Claim},
+    account::{AccountWithMetadata, BalanceDiff, Data},
+    program::AccountStateDiff,
 };
 use token_core::TokenHolding;
 
@@ -14,10 +14,9 @@ pub fn print_nft(
         "Master NFT Account must be authorized"
     );
 
-    assert_eq!(
-        printed_account.account,
-        Account::default(),
-        "Printed Account must be uninitialized"
+    assert!(
+        printed_account.account.data.is_empty(),
+        "Printed Account must not already hold data"
     );
 
     let mut master_account_data =
@@ -45,14 +44,13 @@ pub fn print_nft(
         Data::from(&master_account_data),
     );
 
-    let printed_diff = AccountStateDiff::new_claimed(
+    let printed_diff = AccountStateDiff::new(
         printed_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&TokenHolding::NftPrintedCopy {
             definition_id,
             owned: true,
         }),
-        Claim::Authorized,
     );
 
     vec![master_diff, printed_diff]

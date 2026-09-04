@@ -23,9 +23,9 @@ use wallet::{cli::Command, config::WalletConfigOverrides};
 async fn deploy_and_execute_program() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let claimer = test_programs::claimer();
+    let deployed = test_programs::data_writer();
     let mut tempfile = tempfile::NamedTempFile::new()?;
-    tempfile.write_all(claimer.elf())?;
+    tempfile.write_all(deployed.elf())?;
 
     let binary_filepath = tempfile.path().to_owned();
 
@@ -38,14 +38,15 @@ async fn deploy_and_execute_program() -> Result<()> {
     let account_id = new_account(&mut ctx, false, None).await?;
 
     let nonces = ctx.wallet_mut().get_accounts_nonces(&[account_id]).await?;
+    let written: Vec<u8> = vec![9; 4];
     // Self-pay: the account being claimed is its own fee payer, authorizing with
     // its own signature. See the `#[ignore]` above — a fresh account holds
     // nothing to fund the reserve with.
     let message = lee::public_transaction::Message::try_new_with_fees(
-        claimer.id(),
+        deployed.id(),
         vec![account_id],
         nonces,
-        (),
+        written.clone(),
         lee::FeeDeclaration::new(account_id, 2_000_000, 0, 100_000_000),
     )?;
     let private_key = ctx
@@ -66,10 +67,9 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     let post_state_account = get_account(&ctx, account_id).await?;
 
-    let expected_data: &[u8] = &[];
-    assert_eq!(post_state_account.program_owner, claimer.id().into());
+    assert_eq!(post_state_account.program_owner, deployed.id().into());
     assert_eq!(post_state_account.balance, 0);
-    assert_eq!(post_state_account.data.as_ref(), expected_data);
+    assert_eq!(post_state_account.data.as_ref(), written.as_slice());
     assert_eq!(post_state_account.nonce.0, 1);
 
     log::info!("Successfully deployed and executed program");

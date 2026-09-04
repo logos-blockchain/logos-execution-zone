@@ -6,11 +6,11 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata, Cycles, apply_balance_diff},
+    account::{Account, AccountId, AccountWithMetadata, Cycles},
     program::{
-        CallKind, CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId,
-        TransactionEvent, compute_public_authorized_pdas, pre_states_match_accounts,
-        validate_execution,
+        CallKind, CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER, ProgramId, TransactionEvent,
+        compute_public_authorized_pdas, is_ownership_settled, post_state,
+        pre_states_match_accounts, validate_execution,
     },
 };
 use log::debug;
@@ -463,67 +463,12 @@ impl ValidatedStateDiff {
                 LeeError::OutOfValidityWindow
             );
 
+            // Update the state diff, acquiring ownership of every unowned account this call
+            // wrote data to.
             for diff in &program_output.state_diffs {
-                let pre = &diff.pre_state;
-                let account_id = pre.account_id;
-
-                let balance = apply_balance_diff(pre.account.balance, Some(diff.post_balance_diff))
+                let post = post_state(diff, chained_call.program_id)
                     .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-
-                let data = diff
-                    .post_data
-                    .clone()
-                    .unwrap_or_else(|| pre.account.data.clone());
-
-                // Owner is inherited unless a claim overrides it (AccountStateDiff carries no
-                // ownership).
-                let program_owner = if let Some(claim) = diff.post_claim {
-                    // The invoked program can only claim accounts with default program id.
-                    ensure!(
-                        pre.account.program_owner == DEFAULT_PROGRAM_OWNER,
-                        InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
-                    );
-
-                    match claim {
-                        Claim::Authorized => {
-                            // The program can only claim accounts that were authorized by the
-                            // signer.
-                            ensure!(
-                                pre.is_authorized,
-                                InvalidProgramBehaviorError::ClaimedUnauthorizedAccount {
-                                    account_id
-                                }
-                            );
-                        }
-                        Claim::Pda(seed) => {
-                            // The program can only claim accounts that correspond to the PDAs it
-                            // is authorized to claim. The public-execution path only sees public
-                            // accounts, so the public-PDA derivation is the correct formula here.
-                            let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
-                            ensure!(
-                                account_id == pda,
-                                InvalidProgramBehaviorError::MismatchedPdaClaim {
-                                    expected: pda,
-                                    actual: account_id
-                                }
-                            );
-                        }
-                    }
-
-                    AccountId::from(chained_call.program_id)
-                } else {
-                    pre.account.program_owner
-                };
-
-                state_diff.insert(
-                    account_id,
-                    Account {
-                        program_owner,
-                        balance,
-                        data,
-                        nonce: pre.account.nonce,
-                    },
-                );
+                state_diff.insert(diff.pre_state.account_id, post);
             }
 
             // Write all the output event data into a proper event struct,
@@ -571,7 +516,7 @@ impl ValidatedStateDiff {
                 .expect("we check the max depth at the beginning of the loop");
         }
 
-        // Check that all modified uninitialized accounts where claimed
+        // Check that all programs writing data to default accounts claimed ownership.
         for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
             let pre = state.get_account_by_id(*account_id);
             if pre.program_owner != DEFAULT_PROGRAM_OWNER {
@@ -583,8 +528,8 @@ impl ValidatedStateDiff {
             Some((*account_id, post))
         }) {
             ensure!(
-                post.program_owner != DEFAULT_PROGRAM_OWNER,
-                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
+                is_ownership_settled(post),
+                InvalidProgramBehaviorError::DataBearingUnownedAccount { account_id }
             );
         }
 

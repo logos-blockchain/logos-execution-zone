@@ -1,14 +1,11 @@
 use borsh::to_vec;
-use lee_core::{
-    account::AccountId,
-    program::{
-        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_call, respond_unsupported_call,
-    },
+use lee_core::program::{
+    AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
 };
 
-type Instruction = (ProgramId, ProgramId, AccountId, u128);
-// (faucet_program_id, vault_program_id, recipient_id, amount)
+type Instruction = (ProgramId, u128);
+// (faucet_program_id, amount)
 
 fn main() {
     let call = read_lee_call::<Instruction>();
@@ -17,7 +14,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: (faucet_program_id, vault_program_id, recipient_id, amount),
+            instruction: (faucet_program_id, amount),
         },
         instruction_data,
     ) = call
@@ -34,12 +31,7 @@ fn main() {
 
     let chained_calls = vec![ChainedCall {
         program_id: faucet_program_id,
-        instruction_data: to_vec(&faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
-            recipient_id,
-            amount,
-        })
-        .unwrap(),
+        instruction_data: to_vec(&faucet_core::Instruction::GenesisTransfer { amount }).unwrap(),
         pre_state_ids: vec![pre_states[0].account_id, pre_states[1].account_id],
         pda_seeds: vec![],
     }];

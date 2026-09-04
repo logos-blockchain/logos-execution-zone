@@ -103,12 +103,12 @@ async fn accept_transaction_within_limit() -> Result<()> {
 
 #[test]
 async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
-    let claimer = test_programs::claimer();
+    let deployed = test_programs::simple_balance_transfer();
     let chain_caller = test_programs::chain_caller();
 
     // Calculate block size to fit only one of the two transactions, leaving some room for headers
     // (e.g., 10 KiB)
-    let max_program_size = claimer.elf().len().max(chain_caller.elf().len());
+    let max_program_size = deployed.elf().len().max(chain_caller.elf().len());
     let block_size = ByteSize::b((max_program_size + 10 * 1024) as u64);
 
     let ctx = MultiZoneTestContextBuilder::default()
@@ -131,7 +131,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     ctx.sequencer_client()
         .send_transaction(LeeTransaction::ProgramDeployment(
             lee::ProgramDeploymentTransaction::new(
-                lee::program_deployment_transaction::Message::new(claimer.elf().to_owned()),
+                lee::program_deployment_transaction::Message::new(deployed.elf().to_owned()),
             ),
         ))
         .await?;
@@ -180,8 +180,8 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     );
     assert_eq!(
         block1_program_ids[0],
-        claimer.id(),
-        "Expected claimer program to be deployed in block 1"
+        deployed.id(),
+        "Expected the deployed program to be in block 1"
     );
 
     // Wait for second block

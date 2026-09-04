@@ -283,14 +283,6 @@ impl Case {
     }
 }
 
-fn authenticated_transfer_init() -> Vec<AccountWithMetadata> {
-    vec![AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
-    }]
-}
-
 fn authenticated_transfer_transfer() -> Vec<AccountWithMetadata> {
     let sender = AccountWithMetadata {
         account: Account {
@@ -504,13 +496,6 @@ fn main() -> Result<()> {
             programs::authenticated_transfer(),
             authenticated_transfer_transfer(),
             &authenticated_transfer_core::Instruction::Transfer { amount: 5_000 },
-        )?,
-        Case::new(
-            "authenticated_transfer",
-            "Initialize",
-            programs::authenticated_transfer(),
-            authenticated_transfer_init(),
-            &authenticated_transfer_core::Instruction::Initialize,
         )?,
         Case::new(
             "token",

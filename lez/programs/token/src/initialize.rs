@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountStateDiff, Claim},
+    account::{AccountWithMetadata, BalanceDiff, Data},
+    program::AccountStateDiff,
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -9,9 +9,8 @@ pub fn initialize_account(
     definition_account: &AccountWithMetadata,
     account_to_initialize: &AccountWithMetadata,
 ) -> Vec<AccountStateDiff> {
-    assert_eq!(
-        account_to_initialize.account,
-        Account::default(),
+    assert!(
+        account_to_initialize.account.data.is_empty(),
         "Only Uninitialized accounts can be initialized"
     );
 
@@ -24,11 +23,10 @@ pub fn initialize_account(
     let holding =
         TokenHolding::zeroized_from_definition(definition_account.account_id, &definition);
 
-    let holding_diff = AccountStateDiff::new_claimed(
+    let holding_diff = AccountStateDiff::new(
         account_to_initialize.clone(),
         BalanceDiff::Add(0),
         Data::from(&holding),
-        Claim::Authorized,
     );
 
     vec![

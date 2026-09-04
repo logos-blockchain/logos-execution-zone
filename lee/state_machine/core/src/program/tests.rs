@@ -157,26 +157,7 @@ fn program_output_try_with_block_validity_window_empty_range_fails() {
 }
 
 #[test]
-fn account_state_diff_new_claimed_constructor() {
-    let pre_state = AccountWithMetadata::new(Account::default(), true, AccountId::new([7; 32]));
-    let post_balance_diff = BalanceDiff::Add(1337);
-    let post_data: Data = vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap();
-
-    let diff = AccountStateDiff::new_claimed(
-        pre_state.clone(),
-        post_balance_diff,
-        post_data.clone(),
-        Claim::Authorized,
-    );
-
-    assert_eq!(diff.pre_state, pre_state);
-    assert_eq!(diff.post_balance_diff, post_balance_diff);
-    assert_eq!(diff.post_data, Some(post_data));
-    assert_eq!(diff.post_claim, Some(Claim::Authorized));
-}
-
-#[test]
-fn account_state_diff_new_constructor_has_no_claim() {
+fn account_state_diff_new_constructor() {
     let pre_state = AccountWithMetadata::new(Account::default(), true, AccountId::new([7; 32]));
     let post_balance_diff = BalanceDiff::Add(1337);
     let post_data: Data = vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap();
@@ -186,7 +167,6 @@ fn account_state_diff_new_constructor_has_no_claim() {
     assert_eq!(diff.pre_state, pre_state);
     assert_eq!(diff.post_balance_diff, post_balance_diff);
     assert_eq!(diff.post_data, Some(post_data));
-    assert_eq!(diff.post_claim, None);
 }
 
 // ---- validate_execution tests ----
@@ -201,7 +181,7 @@ fn validate_execution_rejects_insufficient_balance_even_if_globally_conserved() 
             balance: 5,
             ..Account::default()
         },
-        false,
+        true,
         account_id,
     );
     let state_diffs = [AccountStateDiff::new(
@@ -493,61 +473,5 @@ fn an_unowned_account_echoed_with_sub_zero_may_still_validate() {
     };
     let pre = AccountWithMetadata::new(account, true, account_id);
     let diff = AccountStateDiff::new(pre.clone(), BalanceDiff::Sub(0), pre.account.data);
-    assert!(validate_execution(&[diff], [9; 8]).is_ok());
-}
-
-/// Any modification of an unowned non-default account still needs ownership.
-#[test]
-fn modifying_an_unowned_account_with_history_is_still_refused() {
-    let account_id = AccountId::new([7; 32]);
-    let account = Account {
-        nonce: 1_u128.into(),
-        balance: 55,
-        ..Account::default()
-    };
-    let pre = AccountWithMetadata::new(account, true, account_id);
-    let diff = AccountStateDiff::new(pre.clone(), BalanceDiff::Add(1), pre.account.data);
-    assert!(matches!(
-        validate_execution(&[diff], [9; 8]),
-        Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id: id })
-            if id == account_id
-    ));
-}
-
-/// The echo exemption is claimless only: `Claim` is applied after this check,
-/// so a claimed echo would seize the account.
-#[test]
-fn a_claimed_echo_of_an_unowned_account_with_history_is_refused() {
-    let account_id = AccountId::new([7; 32]);
-    let account = Account {
-        nonce: 5_u128.into(),
-        balance: 1000,
-        ..Account::default()
-    };
-    let pre = AccountWithMetadata::new(account, true, account_id);
-    let diff = AccountStateDiff::new_claimed(
-        pre.clone(),
-        BalanceDiff::Add(0),
-        pre.account.data,
-        Claim::Authorized,
-    );
-    assert!(matches!(
-        validate_execution(&[diff], [9; 8]),
-        Err(ExecutionValidationError::NonDefaultAccountWithDefaultOwner { account_id: id })
-            if id == account_id
-    ));
-}
-
-/// A first claim of a fresh account passes: its pre is default.
-#[test]
-fn a_first_claim_of_a_fresh_account_still_passes() {
-    let account_id = AccountId::new([7; 32]);
-    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
-    let diff = AccountStateDiff::new_claimed(
-        pre.clone(),
-        BalanceDiff::Add(0),
-        pre.account.data,
-        Claim::Authorized,
-    );
     assert!(validate_execution(&[diff], [9; 8]).is_ok());
 }

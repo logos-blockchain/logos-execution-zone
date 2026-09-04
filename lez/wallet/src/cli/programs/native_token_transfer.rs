@@ -13,12 +13,6 @@ use crate::{
 /// Represents generic CLI subcommand for a wallet working with native token transfer program.
 #[derive(Subcommand, Debug, Clone)]
 pub enum AuthTransferSubcommand {
-    /// Initialize account under authenticated transfer program.
-    Init {
-        /// Either 32 byte base58 account id string with privacy prefix or a label.
-        #[arg(long)]
-        account_id: CliAccountMention,
-    },
     /// Send native tokens from one account to another with variable privacy.
     ///
     /// If receiver is private, then `to` and (`to_npk` , `to_vpk`) is a mutually exclusive
@@ -53,33 +47,6 @@ pub enum AuthTransferSubcommand {
 }
 
 impl AuthTransferSubcommand {
-    async fn handle_init(
-        account_id: CliAccountMention,
-        wallet_core: &mut WalletCore,
-    ) -> Result<SubcommandReturnValue> {
-        let resolved = account_id.resolve(wallet_core.storage())?;
-        match resolved {
-            AccountIdWithPrivacy::Public(pub_account_id) => {
-                let tx_hash = NativeTokenTransfer(wallet_core)
-                    .register_account(account_id.into_public_identity(pub_account_id, true))
-                    .await?;
-
-                wallet_core
-                    .poll_and_finalize_public_transaction(tx_hash)
-                    .await
-            }
-            AccountIdWithPrivacy::Private(account_id) => {
-                let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                    .register_account_private(account_id)
-                    .await?;
-
-                wallet_core
-                    .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret, account_id)])
-                    .await
-            }
-        }
-    }
-
     #[expect(
         clippy::too_many_arguments,
         reason = "extracted match arm with many destructured fields"
@@ -186,7 +153,6 @@ impl WalletSubcommand for AuthTransferSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::Init { account_id } => Self::handle_init(account_id, wallet_core).await,
             Self::Send {
                 from,
                 to,

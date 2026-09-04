@@ -96,11 +96,6 @@ pub struct CrossZoneConfig {
     /// ever be set at genesis and there is no rotation. One value seeds every
     /// target, including the ones that mint, and whoever holds it can authorize
     /// a source, so its compromise is theft rather than delay.
-    ///
-    /// Must be a fresh, never-used account: the first use has the target claim
-    /// it, renouncing seizes it the same way, whichever target acts first owns
-    /// it, and anything sent to it is frozen for good. An `AccountId` rather
-    /// than a key so a governance program's PDA can hold it later.
     #[serde(default)]
     pub source_authority: Option<AccountId>,
     /// Program allowed to act on the source authority's behalf through a chained
@@ -246,9 +241,7 @@ impl SeenShard {
 pub enum Instruction {
     /// Delivers a finalized peer message to its target program.
     Dispatch(CrossZoneMessage),
-    /// Initializes the inbox config account at genesis. Written once, into a
-    /// default (unclaimed) config PDA; the guest refuses a non-default pre-state,
-    /// so it cannot be re-run to overwrite the allowlists.
+    /// Initializes the inbox config account at genesis.
     InitConfig(InboxConfig),
 }
 
@@ -279,14 +272,18 @@ pub fn inbox_config_account_id(inbox_id: ProgramId) -> AccountId {
     AccountId::for_public_pda(&inbox_id, &inbox_config_seed())
 }
 
-/// Seed of the config PDA, exposed so the guest can claim the account when it
-/// initializes the config at genesis.
+/// Seed of the config PDA the guest initializes at genesis.
 #[must_use]
-pub const fn inbox_config_seed() -> PdaSeed {
+const fn inbox_config_seed() -> PdaSeed {
     PdaSeed::new(INBOX_CONFIG_SEED)
 }
 
 /// The seen-set shard for the peer block the message came from.
+///
+/// TODO(squatting): the address is derivable from `(src_zone, src_block_id)`,
+/// so a squatter can own a future shard first. The dispatch trusts a shard only
+/// when the inbox owns it, so delivery from that peer block then fails loudly
+/// rather than the squatter's bytes deciding what counts as delivered.
 #[must_use]
 pub fn inbox_seen_shard_account_id(
     inbox_id: ProgramId,
@@ -296,12 +293,12 @@ pub fn inbox_seen_shard_account_id(
     AccountId::for_public_pda(&inbox_id, &inbox_seen_shard_seed(src_zone, src_block_id))
 }
 
-/// Seed of the seen-shard PDA, exposed so the guest can claim the account.
+/// Seed of the seen-shard PDA.
 ///
 /// One shard per peer block, so a peer cannot accumulate deliveries from many
 /// blocks into one account.
 #[must_use]
-pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
+fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 72];

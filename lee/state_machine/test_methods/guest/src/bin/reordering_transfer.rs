@@ -1,7 +1,7 @@
 use lee_core::{
     account::BalanceDiff,
     program::{
-        AccountStateDiff, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -30,17 +30,15 @@ fn main() {
         return;
     };
 
-    let sender_diff = AccountStateDiff::new_claimed_if_default(
+    let sender_diff = AccountStateDiff::new(
         sender_pre.clone(),
         BalanceDiff::Sub(balance),
         sender_pre.account.data,
-        Claim::Authorized,
     );
-    let receiver_diff = AccountStateDiff::new_claimed_if_default(
+    let receiver_diff = AccountStateDiff::new(
         receiver_pre.clone(),
         BalanceDiff::Add(balance),
         receiver_pre.account.data,
-        Claim::Authorized,
     );
 
     ProgramOutput::new(

@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff},
-    program::{AccountStateDiff, ChainedCall, Claim, ProgramId},
+    account::AccountWithMetadata,
+    program::{AccountStateDiff, ChainedCall, ProgramId},
 };
 
 pub fn create_associated_token_account(
@@ -19,33 +19,19 @@ pub fn create_associated_token_account(
         ata_program_id,
     );
 
-    // Idempotent: already initialized → no-op
-    if ata_account.account != Account::default() {
-        return (
-            vec![
-                AccountStateDiff::new_claimed_if_default(
-                    owner.clone(),
-                    BalanceDiff::Add(0),
-                    owner.account.data.clone(),
-                    Claim::Authorized,
-                ),
-                AccountStateDiff::unchanged(token_definition.clone()),
-                AccountStateDiff::unchanged(ata_account.clone()),
-            ],
-            vec![],
-        );
-    }
-
     let post_diffs = vec![
-        AccountStateDiff::new_claimed_if_default(
-            owner.clone(),
-            BalanceDiff::Add(0),
-            owner.account.data.clone(),
-            Claim::Authorized,
-        ),
+        AccountStateDiff::unchanged(owner),
         AccountStateDiff::unchanged(token_definition.clone()),
         AccountStateDiff::unchanged(ata_account.clone()),
     ];
+
+    // Idempotent: already initialized → no-op
+    // TODO(squatting): the ATA address is derivable from (owner, mint) alone, so a
+    // program that writes data there first owns it and turns this into a silent
+    // no-op for ever. Accepted: there is no reclaim path today.
+    if !ata_account.account.data.is_empty() {
+        return (post_diffs, vec![]);
+    }
     let chained_call = ChainedCall::new(
         token_program_id,
         vec![token_definition.account_id, ata_account.account_id],

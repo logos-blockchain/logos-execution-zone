@@ -22,7 +22,6 @@ faucet_core.workspace = true
 authenticated_transfer_core.workspace = true
 fee_core.workspace = true
 bridge_core.workspace = true
-vault_core.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
 cross_zone.workspace = true
@@ -55,7 +54,6 @@ libp2p.workspace = true
 
 [features]
 default = []
-testnet = []
 # Generate mock external clients implementations for testing
 mock = []
 # Enable mDNS-based local peer discovery for gossip.

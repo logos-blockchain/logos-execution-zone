@@ -5,12 +5,13 @@ use std::{
 
 use lee_core::{
     Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
+    account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::{
-        AccountStateDiff, BlockValidityWindow, CallKind, CallerData, ChainedCall, Claim,
+        AccountStateDiff, BlockValidityWindow, CallKind, CallerData, ChainedCall,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
-        TimestampValidityWindow, pre_states_match_accounts, validate_execution,
+        TimestampValidityWindow, is_ownership_settled, post_state, pre_states_match_accounts,
+        validate_execution,
     },
 };
 use risc0_zkvm::guest::env;
@@ -24,13 +25,13 @@ pub struct ExecutionState {
     /// Positions (in `pre_states`) of private-PDA accounts whose supplied npk has been bound to
     /// their `AccountId` via a proven `AccountId::for_private_pda(program_id, seed, npk, vpk,
     /// identifier)` check.
-    /// Two proof paths populate this set: a `Claim::Pda(seed)` in a program's `post_state` on
-    /// that `pre_state`, or a caller's `ChainedCall.pda_seeds` entry matching that `pre_state`
-    /// under the private derivation. Binding is an idempotent property, not an event: the same
-    /// position can legitimately be bound through both paths in the same tx (e.g. a program
-    /// claims a private PDA and then delegates it to a callee), and the map uses `contains_key`,
-    /// not `assert!(insert)`. After the main loop, every private-PDA position must appear in this
-    /// map; otherwise the npk is unbound and the circuit rejects.
+    /// Two proof paths populate this set: a `WitnessKind::Pda { binding: Some((program, seed)) }`
+    /// on that `pre_state`'s identity, or a caller's `ChainedCall.pda_seeds` entry matching that
+    /// `pre_state` under the private derivation. Binding is an idempotent property, not an event:
+    /// the same position can legitimately be bound through both paths in the same tx (e.g. a
+    /// witness-bound private PDA that is then delegated to a callee), and the map uses
+    /// `contains_key`, not `assert!(insert)`. After the main loop, every private-PDA position must
+    /// appear in this map; otherwise the npk is unbound and the circuit rejects.
     /// The stored `(ProgramId, PdaSeed)` is the owner program and seed, used in
     /// `compute_circuit_output` to construct `PrivateAccountKind::Pda { program_id, seed,
     /// identifier }`.
@@ -39,14 +40,14 @@ pub struct ExecutionState {
     /// `AccountId`. A seed under a program can derive a family of accounts, one public PDA and
     /// one private PDA per distinct npk. Without this check, a single `pda_seeds: [S]` entry in
     /// a chained call could authorize multiple family members at once (different npks under the
-    /// same seed) and let a callee mix balances across them. Every claim and every
+    /// same seed) and let a callee mix balances across them. Every witness binding and every
     /// caller-authorization resolution is recorded here, either as a new `(program, seed)` →
     /// `AccountId` entry or as an equality check against the existing one, making the rule: one
     /// `(program, seed)` → one account per tx.
     pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
     /// Map from a private-PDA `pre_state`'s position in `account_identities` to the (npk, vpk,
     /// identifier) supplied for that position. Built once in `derive_from_outputs` by walking
-    /// `account_identities` and consulting `npk_vpk_if_private_pda`. Used later by the claim and
+    /// `account_identities` and consulting `npk_vpk_if_private_pda`. Used later by the witness and
     /// caller-seeds authorization paths to verify
     /// `AccountId::for_private_pda(program_id, seed, npk, vpk, identifier) ==
     /// pre_state.account_id`.
@@ -249,8 +250,8 @@ impl ExecutionState {
         );
 
         // Every private-PDA pre_state must have had its npk bound to its account_id, either via
-        // a `Claim::Pda(seed)` in some program's post_state or via a caller's `pda_seeds`
-        // matching the private derivation. An unbound private-PDA pre_state has no
+        // its own witness `binding` or via a caller's `pda_seeds` matching the private
+        // derivation. An unbound private-PDA pre_state has no
         // cryptographic link between the supplied npk and the account_id, and must be rejected.
         for (pos, account_identity) in account_identities.iter().enumerate() {
             if account_identity.is_private_pda() {
@@ -258,12 +259,13 @@ impl ExecutionState {
                     execution_state
                         .private_pda_bound_positions
                         .contains_key(&pos),
-                    "private PDA pre_state at position {pos} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds"
+                    "private PDA pre_state at position {pos} has no proven (seed, npk) binding via witness binding or caller pda_seeds"
                 );
             }
         }
 
-        // Check that all modified uninitialized accounts were claimed
+        // Backstop over every account that entered the transaction unowned and changed; see
+        // `is_ownership_settled`.
         for (account_id, post) in execution_state
             .pre_states
             .iter()
@@ -278,9 +280,9 @@ impl ExecutionState {
             .filter(|(pre_default, post)| pre_default.account != **post)
             .map(|(pre, post)| (pre.account_id, post))
         {
-            assert_ne!(
-                post.program_owner, DEFAULT_PROGRAM_OWNER,
-                "Account {account_id} was modified but not claimed"
+            assert!(
+                is_ownership_settled(post),
+                "Unowned account {account_id} carries data in its final state"
             );
         }
 
@@ -315,11 +317,11 @@ impl ExecutionState {
     ) -> HashSet<AccountId> {
         let mut authorized_output_accounts = Vec::new();
         for state_diff in output_state_diffs {
+            let post = post_state(&state_diff, program_id)
+                .expect("balance diff must be valid; validate_execution already checked it");
             let mut pre = state_diff.pre_state;
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
-            // `pre` is consumed by the match below, so capture what materialization needs now.
-            let pre_account = pre.account.clone();
             let post_states_entry = self.post_states.entry(pre.account_id);
             match &post_states_entry {
                 Entry::Occupied(occupied) => {
@@ -452,105 +454,7 @@ impl ExecutionState {
                 authorized_output_accounts.push(pre_account_id);
             }
 
-            let balance =
-                apply_balance_diff(pre_account.balance, Some(state_diff.post_balance_diff))
-                    .expect("balance diff must be valid; validate_execution already checked it");
-
-            let data = state_diff
-                .post_data
-                .clone()
-                .unwrap_or_else(|| pre_account.data.clone());
-
-            // Owner is inherited unless a claim overrides it (AccountStateDiff carries no
-            // ownership).
-            let post_program_owner = if let Some(claim) = state_diff.post_claim {
-                // The invoked program can only claim accounts with default program id.
-                assert_eq!(
-                    pre_account.program_owner, DEFAULT_PROGRAM_OWNER,
-                    "Cannot claim an initialized account {pre_account_id}"
-                );
-
-                let pre_state_position = self
-                    .pre_states
-                    .iter()
-                    .position(|acc| acc.account_id == pre_account_id)
-                    .expect("Pre state must exist at this point");
-
-                let account_identity = &account_identities[pre_state_position];
-                if account_identity.is_public() {
-                    match claim {
-                        Claim::Authorized => {
-                            // Note: no need to check authorized pdas because we have already
-                            // checked consistency of authorization above.
-                            assert!(
-                                pre_is_authorized,
-                                "Cannot claim unauthorized account {pre_account_id}"
-                            );
-                        }
-                        Claim::Pda(seed) => {
-                            let pda = AccountId::for_public_pda(&program_id, &seed);
-                            assert_eq!(
-                                pre_account_id, pda,
-                                "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
-                            );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                pre_account_id,
-                            );
-                        }
-                    }
-                } else {
-                    // Private accounts: don't enforce the claim semantics. Unauthorized private
-                    // claiming is intentionally allowed
-                    match claim {
-                        Claim::Authorized => {}
-                        Claim::Pda(seed) => {
-                            let (npk, vpk, identifier) = self
-                                .private_pda_by_position
-                                .get(&pre_state_position)
-                                .expect(
-                                    "private PDA pre_state must have an npk in the position map",
-                                );
-                            let pda = AccountId::for_private_pda(
-                                &program_id,
-                                &seed,
-                                npk,
-                                vpk,
-                                *identifier,
-                            );
-                            assert_eq!(
-                                pre_account_id, pda,
-                                "Invalid private PDA claim for account {pre_account_id}"
-                            );
-                            bind_private_pda_position(
-                                &mut self.private_pda_bound_positions,
-                                pre_state_position,
-                                program_id,
-                                seed,
-                            );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                pre_account_id,
-                            );
-                        }
-                    }
-                }
-
-                AccountId::from(program_id)
-            } else {
-                pre_account.program_owner
-            };
-
-            post_states_entry.insert_entry(Account {
-                program_owner: post_program_owner,
-                balance,
-                data,
-                nonce: pre_account.nonce,
-            });
+            post_states_entry.insert_entry(post);
         }
 
         let mut authorized_accounts = caller.authorized_accounts;
@@ -594,7 +498,7 @@ impl ExecutionState {
 }
 
 /// Record or re-verify the `(program_id, seed) → account_id` family binding for the
-/// transaction. Any claim or caller-seed authorization that resolves a `pre_state` under
+/// transaction. Any witness binding or caller-seed authorization that resolves a `pre_state` under
 /// `(program_id, seed)` must agree with every prior resolution of the same pair; otherwise a
 /// single `pda_seeds: [seed]` entry could authorize multiple private-PDA family members at
 /// once (different npks under the same seed) and let a callee mix balances across them. Free

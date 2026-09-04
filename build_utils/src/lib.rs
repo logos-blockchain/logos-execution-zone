@@ -4,6 +4,19 @@ use std::{env, fmt::Write as _, fs, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
+fn artifacts_dir(artifacts_sub_dir: &str) -> Result<PathBuf> {
+    // Resolved at build-script runtime from the invoking crate, not at compile
+    // time: `env!` would bake in the path of whichever checkout compiled this
+    // rlib first, and with a shared cargo target dir every other worktree then
+    // embeds that checkout's artifacts instead of its own.
+    let invoking_manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let workspace_root = invoking_manifest_dir
+        .ancestors()
+        .find(|dir| dir.join("artifacts").is_dir())
+        .context("no artifacts/ directory above the invoking crate")?;
+    Ok(workspace_root.join(format!("artifacts/{artifacts_sub_dir}/")))
+}
+
 /// Include artifact binaries as byte arrays and their corresponding image IDs as u32 arrays in a
 /// generated Rust module.
 ///
@@ -17,19 +30,10 @@ use anyhow::{Context as _, Result, bail};
 /// }
 /// ```
 pub fn include_artifacts(artifacts_sub_dir: &str) -> Result<()> {
-    // Resolved at build-script runtime from the invoking crate, not at compile
-    // time: `env!` would bake in the path of whichever checkout compiled this
-    // rlib first, and with a shared cargo target dir every other worktree then
-    // embeds that checkout's artifacts instead of its own.
-    let invoking_manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
-    let workspace_root = invoking_manifest_dir
-        .ancestors()
-        .find(|dir| dir.join("artifacts").is_dir())
-        .context("no artifacts/ directory above the invoking crate")?;
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     let mod_dir = out_dir.join(artifacts_sub_dir);
     let mod_file = mod_dir.join("mod.rs");
-    let artifacts_dir = workspace_root.join(format!("artifacts/{artifacts_sub_dir}/"));
+    let artifacts_dir = artifacts_dir(artifacts_sub_dir)?;
 
     println!("cargo:rerun-if-changed={}", artifacts_dir.display());
 
@@ -74,4 +78,31 @@ pub fn include_artifacts(artifacts_sub_dir: &str) -> Result<()> {
     println!("cargo:warning=Generated module at {}", mod_file.display());
 
     Ok(())
+}
+
+/// Emit `name`'s image id as `pub const <NAME>_IMAGE_ID: [u32; 8]` into
+/// `OUT_DIR/<name>_image_id.rs`, computed from `artifacts/<artifacts_sub_dir>/<name>.bin`; include
+/// it with `include!(concat!(env!("OUT_DIR"), "/<name>_image_id.rs"))`.
+pub fn include_image_id(artifacts_sub_dir: &str, name: &str) -> Result<()> {
+    let bin = artifacts_dir(artifacts_sub_dir)?.join(format!("{name}.bin"));
+    println!("cargo:rerun-if-changed={}", bin.display());
+    let bytecode = fs::read(&bin).with_context(|| {
+        format!(
+            "Failed to read {}: build that program's artifact first",
+            bin.display()
+        )
+    })?;
+    let image_id: [u32; 8] = risc0_binfmt::compute_image_id(&bytecode)
+        .with_context(|| format!("Failed to compute image ID for {}", bin.display()))?
+        .into();
+    let out_file = PathBuf::from(env::var("OUT_DIR")?).join(format!("{name}_image_id.rs"));
+    fs::write(
+        &out_file,
+        format!(
+            "#[expect(clippy::unreadable_literal, reason = \"Generated image IDs from risc0 are cryptographic hashes represented as u32 arrays\")]\n\
+             pub const {}_IMAGE_ID: [u32; 8] = {image_id:?};\n",
+            name.to_uppercase()
+        ),
+    )
+    .with_context(|| format!("Failed to write {}", out_file.display()))
 }

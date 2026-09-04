@@ -242,7 +242,6 @@ fn initial_programs(cross_zone: bool) -> Vec<Program> {
         programs::clock(),
         programs::fee(),
         programs::ata(),
-        programs::vault(),
         programs::faucet(),
         programs::bridge(),
         programs::sequencer_stake(),
@@ -272,23 +271,6 @@ pub fn initial_state(cross_zone: bool) -> V03State {
         .with_public_accounts(initial_public_accounts())
         .with_private_accounts(initial_private_accounts())
         .with_programs(initial_programs(cross_zone))
-}
-
-#[must_use]
-pub fn initial_state_testnet(cross_zone: bool) -> V03State {
-    let mut initial_public_accounts = initial_public_accounts();
-    initial_public_accounts.insert(
-        system_accounts::pinata_account_id(),
-        system_accounts::pinata_account(),
-    );
-
-    let mut programs = initial_programs(cross_zone);
-    programs.push(programs::pinata());
-
-    V03State::new()
-        .with_public_accounts(initial_public_accounts)
-        .with_private_accounts(initial_private_accounts())
-        .with_programs(programs)
 }
 
 #[cfg(test)]

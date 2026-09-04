@@ -1,7 +1,7 @@
 use lee_core::{
     account::BalanceDiff,
     program::{
-        AccountStateDiff, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -24,13 +24,7 @@ fn main() {
     };
 
     if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
-        let post_data = account_pre.account.data.clone();
-        let diff_output = AccountStateDiff::new_claimed_if_default(
-            account_pre,
-            BalanceDiff::Add(0),
-            post_data,
-            Claim::Authorized,
-        );
+        let diff_output = AccountStateDiff::unchanged(account_pre);
 
         ProgramOutput::new(
             self_program_id,
@@ -49,18 +43,10 @@ fn main() {
     let sender_post_data = sender_pre.account.data.clone();
     let receiver_post_data = receiver_pre.account.data.clone();
 
-    let sender_diff = AccountStateDiff::new_claimed_if_default(
-        sender_pre,
-        BalanceDiff::Sub(balance),
-        sender_post_data,
-        Claim::Authorized,
-    );
-    let receiver_diff = AccountStateDiff::new_claimed_if_default(
-        receiver_pre,
-        BalanceDiff::Add(balance),
-        receiver_post_data,
-        Claim::Authorized,
-    );
+    let sender_diff =
+        AccountStateDiff::new(sender_pre, BalanceDiff::Sub(balance), sender_post_data);
+    let receiver_diff =
+        AccountStateDiff::new(receiver_pre, BalanceDiff::Add(balance), receiver_post_data);
 
     ProgramOutput::new(
         self_program_id,

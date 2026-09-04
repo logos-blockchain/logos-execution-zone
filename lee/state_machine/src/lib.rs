@@ -90,6 +90,30 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn squatter() -> Program {
+        Program::new_unchecked(
+            test_methods::SQUATTER_ID,
+            Cow::Borrowed(test_methods::SQUATTER_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn acquire_and_forward() -> Program {
+        Program::new_unchecked(
+            test_methods::ACQUIRE_AND_FORWARD_ID,
+            Cow::Borrowed(test_methods::ACQUIRE_AND_FORWARD_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn acquire_then_fund() -> Program {
+        Program::new_unchecked(
+            test_methods::ACQUIRE_THEN_FUND_ID,
+            Cow::Borrowed(test_methods::ACQUIRE_THEN_FUND_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn burner() -> Program {
         Program::new_unchecked(
             test_methods::BURNER_ID,
@@ -130,22 +154,6 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn pda_claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::PDA_CLAIMER_ID,
-            Cow::Borrowed(test_methods::PDA_CLAIMER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn two_pda_claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::TWO_PDA_CLAIMER_ID,
-            Cow::Borrowed(test_methods::TWO_PDA_CLAIMER_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn noop() -> Program {
         Program::new_unchecked(test_methods::NOOP_ID, Cow::Borrowed(test_methods::NOOP_ELF))
     }
@@ -163,14 +171,6 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::EVENT_EMITTER_ID,
             Cow::Borrowed(test_methods::EVENT_EMITTER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn initialize_then_fund() -> Program {
-        Program::new_unchecked(
-            test_methods::INITIALIZE_THEN_FUND_ID,
-            Cow::Borrowed(test_methods::INITIALIZE_THEN_FUND_ELF),
         )
     }
 
@@ -219,22 +219,6 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::PDA_SPEND_PROXY_ID,
             Cow::Borrowed(test_methods::PDA_SPEND_PROXY_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::CLAIMER_ID,
-            Cow::Borrowed(test_methods::CLAIMER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn changer_claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::CHANGER_CLAIMER_ID,
-            Cow::Borrowed(test_methods::CHANGER_CLAIMER_ELF),
         )
     }
 

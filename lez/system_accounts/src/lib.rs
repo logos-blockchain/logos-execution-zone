@@ -1,9 +1,9 @@
 //! This crate provides system accounts used by LEZ.
 
-use std::{collections::BTreeMap, str::FromStr as _};
+use std::collections::BTreeMap;
 
 use clock_core::ClockAccountData;
-use lee_core::account::{Account, AccountId, Nonce};
+use lee_core::account::{Account, AccountId};
 
 // TODO: Replace with a real minimum value for testnet
 /// Minimum summed stake for a Bedrock sequencer key to be a committee candidate.
@@ -21,24 +21,6 @@ pub const DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD: u16 = 1;
 pub const DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD: u16 = 1;
 
 pub type Slots = u32;
-
-#[must_use]
-pub fn pinata_account_id() -> AccountId {
-    // TODO: Use derivation from a public key?
-    AccountId::from_str("EfQhKQAkX2FJiwNii2WFQsGndjvF1Mzd7RuVe7QdPLw7")
-        .expect("Pinata program id should be valid")
-}
-
-#[must_use]
-pub fn pinata_account() -> Account {
-    Account {
-        program_owner: programs::pinata().id().into(),
-        balance: 1_500_000,
-        // Difficulty: 3
-        data: vec![3; 33].try_into().expect("Should fit"),
-        nonce: Nonce::default(),
-    }
-}
 
 #[must_use]
 pub fn faucet_account_id() -> AccountId {
@@ -122,6 +104,11 @@ pub const fn clock_account_ids() -> [AccountId; 3] {
 #[must_use]
 pub fn sequencer_stake_config_account_id() -> AccountId {
     sequencer_stake_core::sequencer_stake_config_account_id(programs::sequencer_stake().id())
+}
+
+#[must_use]
+pub fn stake_funds_account_id(ownership_id: &AccountId) -> AccountId {
+    sequencer_stake_core::stake_funds_account_id(programs::sequencer_stake().id(), ownership_id)
 }
 
 /// Starts with no entries; every stake, including the bootstrap sequencer's

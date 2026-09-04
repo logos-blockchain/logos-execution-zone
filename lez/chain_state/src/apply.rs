@@ -327,7 +327,7 @@ pub fn settle_transaction(
     tx_index: u64,
     summary: &mut BlockFeeSummary,
 ) -> Result<Vec<TransactionEvent>, BlockIngestError> {
-    let class = classify(transaction, false, state).map_err(|err| match err {
+    let class = classify(transaction, false).map_err(|err| match err {
         ClassifyError::Unserializable(err) => BlockIngestError::InvalidFeeClass {
             tx_index,
             reason: format!("unserializable transaction: {err}"),

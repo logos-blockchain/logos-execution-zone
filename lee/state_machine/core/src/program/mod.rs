@@ -288,25 +288,6 @@ impl ChainedCall {
     }
 }
 
-/// A claim request for an account, indicating that the executing program intends to take ownership
-/// of the account.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
-)]
-pub enum Claim {
-    /// The program requests ownership of the account which was authorized by the signer.
-    ///
-    /// Note that it's possible to successfully execute a program outputting an
-    /// [`AccountStateDiff`] with `pre_state.is_authorized == false` and `post_claim ==
-    /// Some(Claim::Authorized)`. This will give no error if program had authorization in pre
-    /// state and may be useful if program decides to give up authorization for a chained call.
-    Authorized,
-    /// The program requests ownership of the account through a PDA. The program emits the
-    /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
-    /// account is public or private.
-    Pda(PdaSeed),
-}
-
 /// A single account's full pre-state paired with the diff a program's execution applies to it.
 #[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
@@ -316,7 +297,6 @@ pub struct AccountStateDiff {
     /// `None` means unchanged from `pre_state.account.data` — the common case, kept cheap by not
     /// carrying a second copy of data that's already available via `pre_state`.
     pub post_data: Option<Data>,
-    pub post_claim: Option<Claim>,
 }
 
 impl AccountStateDiff {
@@ -327,7 +307,6 @@ impl AccountStateDiff {
             pre_state,
             post_balance_diff: BalanceDiff::Add(0),
             post_data: None,
-            post_claim: None,
         }
     }
 
@@ -342,44 +321,6 @@ impl AccountStateDiff {
             pre_state,
             post_balance_diff,
             post_data,
-            post_claim: None,
-        }
-    }
-
-    #[must_use]
-    pub fn new_claimed(
-        pre_state: AccountWithMetadata,
-        post_balance_diff: BalanceDiff,
-        post_data: Data,
-        claim: Claim,
-    ) -> Self {
-        let post_data = (post_data != pre_state.account.data).then_some(post_data);
-        Self {
-            pre_state,
-            post_balance_diff,
-            post_data,
-            post_claim: Some(claim),
-        }
-    }
-
-    /// Like [`Self::new_claimed`], but only actually claims if `pre_state`'s owner is
-    /// [`DEFAULT_PROGRAM_OWNER`] — claiming an already-owned account is otherwise rejected by
-    /// [`validate_execution`], so this is a convenience for the common "claim if unowned, else
-    /// leave ownership alone" case.
-    #[must_use]
-    pub fn new_claimed_if_default(
-        pre_state: AccountWithMetadata,
-        post_balance_diff: BalanceDiff,
-        post_data: Data,
-        claim: Claim,
-    ) -> Self {
-        let is_default_owner = pre_state.account.program_owner == DEFAULT_PROGRAM_OWNER;
-        let post_data = (post_data != pre_state.account.data).then_some(post_data);
-        Self {
-            pre_state,
-            post_balance_diff,
-            post_data,
-            post_claim: is_default_owner.then_some(claim),
         }
     }
 }
@@ -669,14 +610,8 @@ pub enum ExecutionValidationError {
     #[error("Pre-state account IDs are not unique")]
     PreStateAccountIdsNotUnique,
 
-    #[error(
-        "Trying to decrease balance of account {account_id} owned by {owner_account_id:?} in a program {executing_program_id:?} which is not the owner"
-    )]
-    UnauthorizedBalanceDecrease {
-        account_id: AccountId,
-        owner_account_id: AccountId,
-        executing_program_id: ProgramId,
-    },
+    #[error("Trying to decrease balance of unauthorized account {account_id}")]
+    UnauthorizedBalanceDecrease { account_id: AccountId },
 
     #[error(
         "Unauthorized modification of data for account {account_id} which is not default and not owned by executing program {executing_program_id:?}"
@@ -695,11 +630,6 @@ pub enum ExecutionValidationError {
 
     #[error("Total balance across accounts overflowed 2^256 - 1")]
     BalanceSumOverflow,
-
-    #[error(
-        "Account {account_id} is non-default but left with the default owner by something other than a claimless byte-identical echo"
-    )]
-    NonDefaultAccountWithDefaultOwner { account_id: AccountId },
 
     #[error(
         "Total balance across accounts is not preserved: total added {total_added}, total subtracted {total_subbed}"
@@ -884,8 +814,8 @@ pub fn pre_states_match_accounts(
 
 /// Validates well-behaved program execution.
 ///
-/// The diff has no `nonce`/`program_owner` field, so a program can't forge either; ownership is
-/// checked separately, via claims.
+/// The diff has no `nonce`/`program_owner` field, so a program can't forge either; ownership
+/// follows from the data write, see [`acquire_ownership_on_data_write`].
 ///
 /// # Parameters
 /// - `state_diffs`: Each account's pre-state paired with the diff the program applied to it.
@@ -907,21 +837,21 @@ pub fn validate_execution(
         let pre = &diff.pre_state;
         let account_program_owner = pre.account.program_owner;
 
-        // 2. Decreasing balance only allowed if owned by executing program
+        // 2. Decreasing balance requires the account to be authorized
         if matches!(diff.post_balance_diff, BalanceDiff::Sub(amount) if amount > 0)
-            && account_program_owner != executing_account_id
+            && !pre.is_authorized
         {
             return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
                 account_id: pre.account_id,
-                owner_account_id: account_program_owner,
-                executing_program_id,
             });
         }
 
-        // 3. Data changes only allowed if owned by executing program or if account pre state has
-        //    default values
-        if diff.post_data.is_some()
-            && pre.account != Account::default()
+        // 3. Data changes only allowed if owned by executing program or if the account is unowned.
+        if diff
+            .post_data
+            .as_ref()
+            .is_some_and(|data| *data != pre.account.data)
+            && account_program_owner != DEFAULT_PROGRAM_OWNER
             && account_program_owner != executing_account_id
         {
             return Err(ExecutionValidationError::UnauthorizedDataModification {
@@ -937,30 +867,9 @@ pub fn validate_execution(
                 source,
             });
         }
-
-        // 5. A non-default account left with the default owner must be a claimless byte-identical
-        //    echo: a claim on it would seize an account that already has real history despite never
-        //    having been properly owned, so a `Claim` disqualifies the echo just as much as an
-        //    actual balance/data change would.
-        let post_owner_is_default = account_program_owner == DEFAULT_PROGRAM_OWNER;
-        if post_owner_is_default && pre.account != Account::default() {
-            let claimless_echo = diff.post_claim.is_none()
-                && matches!(
-                    diff.post_balance_diff,
-                    BalanceDiff::Add(0) | BalanceDiff::Sub(0)
-                )
-                && diff.post_data.is_none();
-            if !claimless_echo {
-                return Err(
-                    ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
-                        account_id: pre.account_id,
-                    },
-                );
-            }
-        }
     }
 
-    // 6. Total balance is preserved
+    // 5. Total balance is preserved
     let Some(total_added) =
         WrappedBalanceSum::from_balances(state_diffs.iter().filter_map(|diff| {
             match diff.post_balance_diff {
@@ -991,6 +900,36 @@ pub fn validate_execution(
     }
 
     Ok(())
+}
+
+/// Make any program that has changed the data of a default-owned account its owner.
+pub fn acquire_ownership_on_data_write(pre: &Account, post: &mut Account, program_id: ProgramId) {
+    if pre.program_owner == DEFAULT_PROGRAM_OWNER && post.data != pre.data {
+        post.program_owner = AccountId::from(program_id);
+    }
+}
+
+/// An account that ends a transaction unowned must carry no data.
+#[must_use]
+pub fn is_ownership_settled(post: &Account) -> bool {
+    post.program_owner != DEFAULT_PROGRAM_OWNER || post.data.is_empty()
+}
+
+/// The account a diff leaves behind: balance and data applied, ownership acquired by the
+/// executing program if it wrote data to an unowned account.
+pub fn post_state(
+    diff: &AccountStateDiff,
+    executing_program_id: ProgramId,
+) -> Result<Account, BalanceDiffError> {
+    let pre = &diff.pre_state.account;
+    let mut post = Account {
+        program_owner: pre.program_owner,
+        balance: apply_balance_diff(pre.balance, Some(diff.post_balance_diff))?,
+        data: diff.post_data.clone().unwrap_or_else(|| pre.data.clone()),
+        nonce: pre.nonce,
+    };
+    acquire_ownership_on_data_write(pre, &mut post, executing_program_id);
+    Ok(post)
 }
 
 fn validate_uniqueness_of_account_ids(state_diffs: &[AccountStateDiff]) -> bool {

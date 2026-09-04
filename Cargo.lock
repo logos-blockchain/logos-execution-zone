@@ -786,6 +786,8 @@ name = "authenticated_transfer_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "build_utils",
+ "lee_core",
 ]
 
 [[package]]
@@ -1267,6 +1269,7 @@ dependencies = [
 name = "bridge_lock_program"
 version = "0.1.0"
 dependencies = [
+ "authenticated_transfer_core",
  "borsh",
  "bridge_lock_core",
  "cross_zone_outbox_core",
@@ -1279,9 +1282,9 @@ dependencies = [
 name = "bridge_program"
 version = "0.1.0"
 dependencies = [
+ "authenticated_transfer_core",
  "bridge_core",
  "lee_core",
- "vault_core",
 ]
 
 [[package]]
@@ -1820,7 +1823,6 @@ dependencies = [
  "sha2 0.10.9",
  "system_accounts",
  "thiserror 2.0.18",
- "vault_core",
 ]
 
 [[package]]
@@ -3267,7 +3269,6 @@ dependencies = [
  "authenticated_transfer_core",
  "faucet_core",
  "lee_core",
- "vault_core",
 ]
 
 [[package]]
@@ -3294,6 +3295,7 @@ dependencies = [
 name = "fee_program"
 version = "0.1.0"
 dependencies = [
+ "authenticated_transfer_core",
  "fee_core",
  "lee_core",
 ]
@@ -4839,7 +4841,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
- "vault_core",
  "wallet",
  "wallet-ffi",
  "wrapped_token_core",
@@ -9136,23 +9137,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "pinata_program"
-version = "0.1.0"
-dependencies = [
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "pinata_token_program"
-version = "0.1.0"
-dependencies = [
- "lee_core",
- "risc0-zkvm",
- "token_core",
-]
-
-[[package]]
 name = "ping_core"
 version = "0.1.0"
 dependencies = [
@@ -9516,11 +9500,9 @@ dependencies = [
  "lee",
  "lee_core",
  "ping_core",
- "risc0-zkvm",
  "sequencer_stake_core",
  "token_core",
  "token_program",
- "vault_core",
  "wrapped_token_core",
 ]
 
@@ -11127,7 +11109,6 @@ dependencies = [
  "tokio-util",
  "trait-variant",
  "url",
- "vault_core",
 ]
 
 [[package]]
@@ -11261,6 +11242,7 @@ dependencies = [
 name = "sequencer_stake_program"
 version = "0.1.0"
 dependencies = [
+ "authenticated_transfer_core",
  "lee_core",
  "sequencer_stake_core",
 ]
@@ -13588,24 +13570,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
-name = "vault_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "vault_program"
-version = "0.1.0"
-dependencies = [
- "authenticated_transfer_core",
- "lee_core",
- "vault_core",
-]
-
-[[package]]
 name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13670,7 +13634,6 @@ dependencies = [
  "sequencer_service_rpc",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "system_accounts",
  "tempfile",
  "testnet_initial_state",
@@ -13678,7 +13641,6 @@ dependencies = [
  "token_core",
  "tokio",
  "url",
- "vault_core",
  "zeroize",
 ]
 
@@ -13695,7 +13657,6 @@ dependencies = [
  "programs",
  "serde_json",
  "tokio",
- "vault_core",
  "wallet",
 ]
 

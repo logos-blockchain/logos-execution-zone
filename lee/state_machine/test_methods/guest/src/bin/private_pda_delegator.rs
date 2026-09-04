@@ -1,18 +1,12 @@
 use borsh::to_vec;
-use lee_core::{
-    account::BalanceDiff,
-    program::{
-        AccountStateDiff, ChainedCall, Claim, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call, respond_unsupported_call,
-    },
+use lee_core::program::{
+    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
 };
 
-/// Claims the sole `pre_state` as a PDA with `claim_seed`, then chains to `callee_program_id`
-/// delegating authorization with `delegated_seed` in `pda_seeds`. When `claim_seed ==
-/// delegated_seed` this exercises the happy caller-seeds authorization path for mask-3 private
-/// PDAs; when they differ, the protocol resolves the callee's mask-3 `pre_state` as
-/// unauthorized, and the callee itself must reject it.
-type Instruction = (PdaSeed, PdaSeed, ProgramId);
+/// Echoes the sole `pre_state` and chains to `callee_program_id`, delegating authorization with
+/// `delegated_seed` in `pda_seeds`.
+type Instruction = (PdaSeed, ProgramId);
 
 fn main() {
     let call = read_lee_call::<Instruction>();
@@ -21,7 +15,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: (claim_seed, delegated_seed, callee_program_id),
+            instruction: (delegated_seed, callee_program_id),
         },
         instruction_data,
     ) = call
@@ -40,15 +34,11 @@ fn main() {
         pda_seeds: vec![delegated_seed],
     };
 
-    let post_data = pre.account.data.clone();
-    let claimed =
-        AccountStateDiff::new_claimed(pre, BalanceDiff::Add(0), post_data, Claim::Pda(claim_seed));
-
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![claimed],
+        vec![AccountStateDiff::unchanged(pre)],
     )
     .with_chained_calls(vec![chained_call])
     .write();

@@ -32,12 +32,12 @@ use crate::{
 };
 
 mod authenticated_transfer;
-mod changer_claimer;
+mod chained_calls;
 mod circuit;
-mod claiming;
 mod events;
 mod flash_swap;
 mod genesis;
+mod implicit_claiming;
 mod privacy_preserving;
 mod public_program_rules;
 mod validity_window;
@@ -51,23 +51,21 @@ impl V03State {
         self.insert_program(&crate::test_methods::data_changer());
         self.insert_program(&crate::test_methods::minter());
         self.insert_program(&crate::test_methods::burner());
+        self.insert_program(&crate::test_methods::squatter());
+        self.insert_program(&crate::test_methods::acquire_and_forward());
+        self.insert_program(&crate::test_methods::acquire_then_fund());
         self.insert_program(&crate::test_methods::auth_asserting_noop());
         self.insert_program(&crate::test_methods::private_pda_delegator());
-        self.insert_program(&crate::test_methods::pda_claimer());
-        self.insert_program(&crate::test_methods::two_pda_claimer());
         self.insert_program(&crate::test_methods::noop());
         self.insert_program(&crate::test_methods::chain_caller());
         self.insert_program(&crate::test_methods::non_delegating_forwarder());
         self.insert_program(&crate::test_methods::event_emitter());
-        self.insert_program(&crate::test_methods::initialize_then_fund());
         self.insert_program(&crate::test_methods::validity_window());
         self.insert_program(&crate::test_methods::flash_swap_initiator());
         self.insert_program(&crate::test_methods::flash_swap_callback());
         self.insert_program(&crate::test_methods::malicious_self_program_id());
         self.insert_program(&crate::test_methods::malicious_caller_program_id());
         self.insert_program(&crate::test_methods::pda_spend_proxy());
-        self.insert_program(&crate::test_methods::claimer());
-        self.insert_program(&crate::test_methods::changer_claimer());
         self.insert_program(&crate::test_methods::validity_window_chain_caller());
         self.insert_program(&crate::test_methods::simple_transfer_proxy());
         self.insert_program(&crate::test_methods::references_undeclared_account());
@@ -102,17 +100,6 @@ impl V03State {
             AccountId::new([253; 32]),
             account_with_default_values_except_data,
         );
-        self
-    }
-
-    #[must_use]
-    pub fn with_account_owned_by_burner_program(mut self) -> Self {
-        let account = Account {
-            program_owner: crate::test_methods::burner().id().into(),
-            balance: 100,
-            ..Default::default()
-        };
-        self.force_insert_account(AccountId::new([252; 32]), account);
         self
     }
 

@@ -1,13 +1,14 @@
 use lee_core::{
     account::BalanceDiff,
     program::{
-        AccountStateDiff, Claim, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
 
-type Instruction = PdaSeed;
+type Instruction = Vec<u8>;
 
+/// Writes the instruction bytes into the account's data.
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
@@ -15,7 +16,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: seed,
+            instruction: data,
         },
         instruction_data,
     ) = call
@@ -27,15 +28,16 @@ fn main() {
         return;
     };
 
-    let post_data = pre.account.data.clone();
-    let account_post =
-        AccountStateDiff::new_claimed(pre, BalanceDiff::Add(0), post_data, Claim::Pda(seed));
+    let post_data = data
+        .try_into()
+        .expect("provided data should fit into data limit");
+    let diff_output = AccountStateDiff::new(pre, BalanceDiff::Add(0), post_data);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_data,
-        vec![account_post],
+        vec![diff_output],
     )
     .write();
 }

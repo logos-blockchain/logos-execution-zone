@@ -4,10 +4,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
-    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
+    account::{Account, AccountId, AccountWithMetadata},
     from_frame,
     program::{
         ChainedCall, InstructionData, ProgramId, ProgramOutput, compute_public_authorized_pdas,
+        post_state,
     },
     to_frame,
 };
@@ -244,27 +245,11 @@ pub fn execute_and_prove_with_padded_inputs(
                     })
                 });
 
-            // A successful claim reassigns ownership; the guest doesn't write this into its own
-            // post_state, the circuit does it afterward, so predict it here too.
-            let program_owner = if diff.post_claim.is_some() {
-                AccountId::from(chained_call.program_id)
-            } else {
-                pre.account.program_owner
-            };
-            let balance = apply_balance_diff(pre.account.balance, Some(diff.post_balance_diff))
+            // A data write to an unowned account acquires it; the guest doesn't write this into
+            // its own post_state, the circuit does it afterward, so predict it here too.
+            let post = post_state(diff, chained_call.program_id)
                 .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-            materialized_state.insert(
-                account_id,
-                Account {
-                    program_owner,
-                    balance,
-                    data: diff
-                        .post_data
-                        .clone()
-                        .unwrap_or_else(|| pre.account.data.clone()),
-                    nonce: pre.account.nonce,
-                },
-            );
+            materialized_state.insert(account_id, post);
             if pre.is_authorized {
                 authorized_output_accounts.insert(account_id);
                 // Only a first-sighted, non-pda-matched account is a "regular account

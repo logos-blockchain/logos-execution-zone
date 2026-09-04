@@ -1,15 +1,12 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata, BalanceDiff},
+    account::{AccountWithMetadata, BalanceDiff},
     program::{
-        AccountStateDiff, Claim, DEFAULT_PROGRAM_OWNER, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call, respond_unsupported_call,
+        AccountStateDiff, ProgramCall, ProgramId, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
     },
 };
-use ping_core::{
-    ReceiverConfig, ReceiverInstruction, ping_record_pda, ping_record_seed,
-    receiver_config_account_id, receiver_config_seed,
-};
+use ping_core::{ReceiverConfig, ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 
 fn main() {
     let call = read_lee_call::<ReceiverInstruction>();
@@ -97,12 +94,7 @@ fn record(
     );
 
     let record_data = payload.try_into().expect("payload fits in account data");
-    let post = AccountStateDiff::new_claimed_if_default(
-        record,
-        BalanceDiff::Add(0),
-        record_data,
-        Claim::Pda(ping_record_seed()),
-    );
+    let post = AccountStateDiff::new(record, BalanceDiff::Add(0), record_data);
 
     ProgramOutput::new(
         self_program_id,
@@ -153,13 +145,6 @@ fn renounce_authority(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
-    // Claims apply after post-state validation, so a first use must find the
-    // account untouched; an unowned account with history is refused for good.
-    assert!(
-        authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
-        "the authority account must be untouched before its first use as one"
-    );
     assert!(
         authority.is_authorized,
         "the configured authority must authorize renouncing it"
@@ -177,14 +162,7 @@ fn renounce_authority(
         instruction_data,
         vec![
             AccountStateDiff::new(config, BalanceDiff::Add(0), config_data),
-            // Claimed on first use: the authority's own signature bumps its
-            // nonce, so merely echoing it would work once and never again.
-            AccountStateDiff::new_claimed_if_default(
-                authority.clone(),
-                BalanceDiff::Add(0),
-                authority.account.data,
-                Claim::Authorized,
-            ),
+            AccountStateDiff::unchanged(authority),
         ],
     )
     .write();
@@ -228,13 +206,6 @@ fn update_sources(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
-    // Claims apply after post-state validation, so a first use must find the
-    // account untouched; an unowned account with history is refused for good.
-    assert!(
-        authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
-        "the authority account must be untouched before its first use as one"
-    );
     assert!(
         authority.is_authorized,
         "the configured authority must authorize a source change"
@@ -252,14 +223,7 @@ fn update_sources(
         instruction_data,
         vec![
             AccountStateDiff::new(config, BalanceDiff::Add(0), config_data),
-            // Claimed on first use: the authority's own signature bumps its
-            // nonce, so merely echoing it would work once and never again.
-            AccountStateDiff::new_claimed_if_default(
-                authority.clone(),
-                BalanceDiff::Add(0),
-                authority.account.data,
-                Claim::Authorized,
-            ),
+            AccountStateDiff::unchanged(authority),
         ],
     )
     .write();
@@ -287,11 +251,11 @@ fn init_config(
         receiver_config_account_id(self_program_id),
         "account must be the receiver config PDA"
     );
-    // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned one must already hold exactly this, since genesis is
-    // replayed onto seeded state during multi-sequencer reconstruction.
-    // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
-    if config.account != Account::default() {
+    // Init-once, idempotent under genesis replay: an empty config is a first init;
+    // a written one must already hold exactly this, since genesis is replayed onto
+    // seeded state during multi-sequencer reconstruction. Implicit ownership alone
+    // would not stop a later self-owned rewrite.
+    if !config.account.data.is_empty() {
         assert_eq!(
             config.account.program_owner,
             self_program_id.into(),
@@ -308,12 +272,7 @@ fn init_config(
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
-    let config_post = AccountStateDiff::new_claimed_if_default(
-        config,
-        BalanceDiff::Add(0),
-        config_data,
-        Claim::Pda(receiver_config_seed()),
-    );
+    let config_post = AccountStateDiff::new(config, BalanceDiff::Add(0), config_data);
 
     ProgramOutput::new(
         self_program_id,
