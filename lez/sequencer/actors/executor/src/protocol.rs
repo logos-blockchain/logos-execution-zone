@@ -6,6 +6,8 @@ use lee_core::{
     BlockId, Commitment,
     account::{Account, AccountId},
 };
+use sequencer_service_protocol::AdmissionRejection;
+pub use sequencer_storage_actor::protocol::DeadLetterRequeue;
 
 /// The widest range a [`GetBlockRange`] may span.
 pub const MAX_BLOCK_RANGE_LEN: usize = 1024;
@@ -15,6 +17,25 @@ pub struct ProduceBlock;
 
 pub struct Transaction {
     pub transaction: LeeTransaction,
+}
+
+/// What fee admission decided about a submitted transaction.
+///
+/// A rejection is a reply, not an actor failure: the transaction was handled,
+/// and the verdict is the answer the RPC layer renders back to the client.
+#[derive(Debug, Reply)]
+pub enum SubmitOutcome {
+    /// Screened and pushed to the mempool.
+    Admitted,
+    /// Refused at the fee-admission door; never entered the mempool.
+    Rejected(AdmissionRejection),
+}
+
+pub struct GetFeeQuote;
+
+#[derive(Reply)]
+pub struct GetFeeQuoteReply {
+    pub quote: sequencer_service_protocol::FeeStateQuote,
 }
 
 pub struct GetBlock {
@@ -104,4 +125,13 @@ pub struct GetCrossZoneDeadLetters;
 pub struct GetCrossZoneDeadLettersReply {
     pub total_retired: u64,
     pub retained: Vec<sequencer_storage_actor::protocol::DeadLetterDispatchRecord>,
+}
+
+pub struct RequeueCrossZoneDeadLetter {
+    pub message_key: [u8; 32],
+}
+
+#[derive(Reply)]
+pub struct RequeueCrossZoneDeadLetterReply {
+    pub outcome: sequencer_storage_actor::protocol::DeadLetterRequeue,
 }

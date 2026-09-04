@@ -2,18 +2,19 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::AccountWithMetadata,
+    account::{AccountId, AccountWithMetadata, Cycles},
     from_frame,
-    program::{InstructionData, ProgramId, ProgramInput, ProgramOutput},
-    to_frame,
+    program::{CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
+    to_borsh_frame, to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor};
 
 use crate::error::LeeError;
 
-/// Maximum number of cycles for a public execution.
-/// TODO: Make this variable when fees are implemented.
-const MAX_NUM_CYCLES_PUBLIC_EXECUTION: u64 = 1024 * 1024 * 32; // 32M cycles
+/// The cycle budget applied to public execution paths that do not carry a
+/// transaction-specific budget; charged transactions supply their own
+/// `gas_limit` instead.
+pub const DEFAULT_PUBLIC_CYCLE_BUDGET: Cycles = 1024 * 1024 * 32; // 32M cycles
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Program {
@@ -56,15 +57,18 @@ impl Program {
 
     pub(crate) fn execute(
         &self,
-        caller_program_id: Option<ProgramId>,
+        self_account_id: AccountId,
+        caller_account_id: Option<AccountId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &InstructionData,
-    ) -> Result<ProgramOutput, LeeError> {
+        cycle_budget: Cycles,
+    ) -> Result<(ProgramOutput, Cycles), LeeError> {
         // Write inputs to the program
         let mut env_builder = ExecutorEnv::builder();
-        env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
+        env_builder.session_limit(Some(cycle_budget));
         self.write_inputs(
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             &mut env_builder,
@@ -72,10 +76,8 @@ impl Program {
         let env = env_builder.build().unwrap();
 
         // Execute the program (without proving)
-        let executor = default_executor();
-        let session_info = executor
-            .execute(env, self.elf())
-            .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+        let session_info = Self::execute_session(env, self.elf(), cycle_budget)?;
+        let cycles = session_info.cycles();
 
         // Get outputs
         let payload = from_frame(&session_info.journal.bytes).ok_or_else(|| {
@@ -84,21 +86,48 @@ impl Program {
         let program_output = borsh::from_slice(payload)
             .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
 
-        Ok(program_output)
+        Ok((program_output, cycles))
     }
 
-    /// Writes the guest's [`ProgramInput`] as a single length-prefixed borsh frame, the form
-    /// `read_lee_inputs` expects.
+    /// Runs the session, translating the executor's session-limit bail into the
+    /// typed [`LeeError::OutOfGas`]. The only place that error string is
+    /// recognized.
+    ///
+    /// FIXME: This is a brittle string match; the executor should provide a typed error.
+    fn execute_session(
+        env: ExecutorEnv<'_>,
+        elf: &[u8],
+        cycle_budget: Cycles,
+    ) -> Result<risc0_zkvm::SessionInfo, LeeError> {
+        default_executor().execute(env, elf).map_err(|e| {
+            // check for "Guest panicked" to prevent spoofing
+            // via `panic!("Session limit exceeded")` cases
+            let message = format!("{e:#}");
+            if message.contains("Session limit exceeded") && !message.contains("Guest panicked") {
+                LeeError::OutOfGas {
+                    budget: cycle_budget,
+                }
+            } else {
+                LeeError::ProgramExecutionFailed(e.to_string())
+            }
+        })
+    }
+
+    /// Writes a `CallKind::Execute` frame followed by the guest's `ProgramInput` as a single
+    /// length-prefixed borsh frame, the form `read_lee_call` expects.
     pub fn write_inputs(
         &self,
-        caller_program_id: Option<ProgramId>,
+        self_account_id: AccountId,
+        caller_account_id: Option<AccountId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &[u8],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
+        env_builder.write_slice(&to_borsh_frame(&CallKind::Execute));
+
         let input = ProgramInput {
-            self_program_id: self.id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states: pre_states.to_vec(),
             instruction: instruction_data.to_vec(),
         };

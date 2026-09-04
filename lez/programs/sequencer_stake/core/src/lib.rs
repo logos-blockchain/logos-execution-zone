@@ -2,15 +2,18 @@
 
 use std::collections::BTreeMap;
 
+pub use ed25519_dalek;
 pub use lee_core::program::PdaSeed;
-use lee_core::{
-    account::AccountId,
-    program::{InstructionData, ProgramId},
-};
+use lee_core::{account::AccountId, program::InstructionData};
 use serde::{Deserialize, Serialize};
+
+/// Approvals a `Slash` must carry. Raising it moves the program id.
+pub const SLASH_APPROVAL_THRESHOLD: usize = 1;
 
 const INVALID_KEY: &str = "invalid Ed25519 public key";
 const SEQUENCER_STAKE_CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/MinSequencerStake/0000";
+const SLASH_APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashApproval/00000000";
+const SLASH_SINK_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashedStakeSink/00000";
 
 /// The Bedrock sequencer identity a stake backs. Holds only a valid Ed25519
 /// public key.
@@ -67,12 +70,13 @@ impl borsh::BorshDeserialize for SequencerKey {
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum Instruction {
-    /// Locks `amount` into the ownership account for `sequencer_key`. First
-    /// use claims the account; later calls top up the same account.
+    /// Locks `amount` into the stake funds account of `sequencer_key`'s
+    /// ownership account. First use acquires the ownership account; the funds
+    /// PDA is balance-only and stays unowned.
     Stake {
         sequencer_key: SequencerKey,
         amount: u128,
-        mover_program_id: ProgramId,
+        mover_account_id: AccountId,
         mover_instruction_data: InstructionData,
     },
 
@@ -89,6 +93,24 @@ pub enum Instruction {
     /// Unsigned, permissionless: releases a pending `UnstakeRequest`.
     /// Block-inclusion validity is enforced outside this program.
     FinalizeUnstake,
+
+    /// Burns the key's whole stake to the sink and removes its entry.
+    ///
+    /// Only `approvals` authorize this. The reason for the offence is not checked.
+    Slash {
+        sequencer_key: SequencerKey,
+        /// `MsgId` of the offending inscription, raw to avoid Bedrock types.
+        inscription: [u8; 32],
+        approvals: Vec<SlashApproval>,
+    },
+}
+
+/// One accredited sequencer's signature over [`slash_approval_message`].
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct SlashApproval {
+    pub signer: SequencerKey,
+    /// Ed25519 signature bytes.
+    pub signature: Vec<u8>,
 }
 
 /// Tag written into a claimed ownership account: which key it backs, plus any pending unstake.
@@ -152,9 +174,8 @@ pub struct SequencerEntry {
 impl SequencerEntry {
     /// Stake still backing this key once every pending release has been
     /// finalized. Candidacy and every release check measure this, never the
-    /// ownership account's balance: only balance decreases require owning an
-    /// account, so anyone can credit one and push its balance above
-    /// `total_staked`.
+    /// stake funds account's balance: credits are free, so anyone can push
+    /// that balance above `total_staked`.
     #[must_use]
     pub const fn net_stake(&self) -> u128 {
         self.total_staked.saturating_sub(self.total_pending_unstake)
@@ -172,6 +193,27 @@ impl SequencerEntry {
     }
 }
 
+/// Bytes an approver signs. Naming the inscription keeps the approval single use.
+#[must_use]
+pub fn slash_approval_message(sequencer_key: SequencerKey, inscription: [u8; 32]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(96);
+    message.extend_from_slice(&SLASH_APPROVAL_DOMAIN);
+    message.extend_from_slice(&sequencer_key.to_bytes());
+    message.extend_from_slice(&inscription);
+    message
+}
+
+/// Seed of the PDA burned stakes move into. Nothing moves balance out of it.
+#[must_use]
+const fn slash_sink_seed() -> PdaSeed {
+    PdaSeed::new(SLASH_SINK_SEED_DOMAIN)
+}
+
+#[must_use]
+pub fn slash_sink_account_id(program_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&program_id, &slash_sink_seed())
+}
+
 /// Seed of the PDA holding the [`SequencerStakeConfig`].
 #[must_use]
 pub const fn sequencer_stake_config_seed() -> PdaSeed {
@@ -179,15 +221,25 @@ pub const fn sequencer_stake_config_seed() -> PdaSeed {
 }
 
 #[must_use]
-pub fn sequencer_stake_config_account_id(program_id: ProgramId) -> AccountId {
+pub fn sequencer_stake_config_account_id(program_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&program_id, &sequencer_stake_config_seed())
+}
+
+#[must_use]
+pub const fn stake_funds_seed(ownership_id: &AccountId) -> PdaSeed {
+    PdaSeed::new(ownership_id.to_bytes())
+}
+
+#[must_use]
+pub fn stake_funds_account_id(program_id: AccountId, ownership_id: &AccountId) -> AccountId {
+    AccountId::for_public_pda(&program_id, &stake_funds_seed(ownership_id))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const PROGRAM_ID: ProgramId = [9; 8];
+    const PROGRAM_ID: AccountId = AccountId::new([9; 32]);
 
     fn test_destination() -> AccountId {
         AccountId::new([3; 32])

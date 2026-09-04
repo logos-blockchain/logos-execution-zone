@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee::{AccountId, V03State, ValidatedStateDiff};
-use lee_core::{BlockId, Timestamp};
+use lee_core::{BlockId, Timestamp, program::TransactionEvent};
 use log::warn;
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,6 @@ use crate::HashType;
 pub enum LeeTransaction {
     Public(lee::PublicTransaction),
     PrivacyPreserving(lee::PrivacyPreservingTransaction),
-    ProgramDeployment(lee::ProgramDeploymentTransaction),
 }
 
 impl Serialize for LeeTransaction {
@@ -31,7 +30,6 @@ impl LeeTransaction {
         HashType(match self {
             Self::Public(tx) => tx.hash(),
             Self::PrivacyPreserving(tx) => tx.hash(),
-            Self::ProgramDeployment(tx) => tx.hash(),
         })
     }
 
@@ -40,14 +38,12 @@ impl LeeTransaction {
         match self {
             Self::Public(_) => TxKind::Public,
             Self::PrivacyPreserving(_) => TxKind::PrivacyPreserving,
-            Self::ProgramDeployment(_) => TxKind::ProgramDeployment,
         }
     }
 
     #[must_use]
     pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
         match self {
-            Self::ProgramDeployment(tx) => tx.affected_public_account_ids(),
             Self::Public(tx) => tx.affected_public_account_ids(),
             Self::PrivacyPreserving(tx) => tx.affected_public_account_ids(),
         }
@@ -71,7 +67,6 @@ impl LeeTransaction {
                     Err(TransactionMalformationError::InvalidSignature)
                 }
             }
-            Self::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx)),
         }
     }
 
@@ -88,22 +83,14 @@ impl LeeTransaction {
         timestamp: Timestamp,
     ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
         let diff = self.compute_state_diff(state, block_id, timestamp)?;
-
-        let restricted_modification_accounts = system_accounts::clock_account_ids()
-            .into_iter()
-            .chain(std::iter::once(system_accounts::faucet_account_id()));
-        for account_id in restricted_modification_accounts {
-            validate_doesnt_modify_account(state, &diff, account_id)?;
-        }
-
-        self.validate_bridge_account_modification(state, &diff)?;
-
+        validate_no_restricted_account_modification(state, &diff)?;
+        validate_bridge_account_modification(state, &diff, matches!(self, Self::Public(_)))?;
         Ok(diff)
     }
 
     /// Computes the validated state diff. Shared by [`Self::validate_on_state`]
     /// (which adds the system-account guards) and [`Self::execute_on_state`].
-    fn compute_state_diff(
+    pub fn compute_state_diff(
         &self,
         state: &V03State,
         block_id: BlockId,
@@ -116,9 +103,6 @@ impl LeeTransaction {
             Self::PrivacyPreserving(tx) => ValidatedStateDiff::from_privacy_preserving_transaction(
                 tx, state, block_id, timestamp,
             ),
-            Self::ProgramDeployment(tx) => {
-                ValidatedStateDiff::from_program_deployment_transaction(tx, state)
-            }
         }
     }
 
@@ -133,7 +117,7 @@ impl LeeTransaction {
         let diff = self
             .validate_on_state(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
-        state.apply_state_diff(diff);
+        drop(state.apply_state_diff(diff));
         Ok(self)
     }
 
@@ -142,51 +126,18 @@ impl LeeTransaction {
     ///
     /// The indexer replays blocks the sequencer already validated and inscribed on Bedrock,
     /// so it trusts those inscriptions and re-derives state without re-validating them.
+    ///
+    /// Returns the events the transaction emitted.
     pub fn execute_on_state(
-        self,
+        &self,
         state: &mut V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<Self, lee::error::LeeError> {
+    ) -> Result<Vec<TransactionEvent>, lee::error::LeeError> {
         let diff = self
             .compute_state_diff(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
-        state.apply_state_diff(diff);
-        Ok(self)
-    }
-
-    fn validate_bridge_account_modification(
-        &self,
-        state: &V03State,
-        diff: &ValidatedStateDiff,
-    ) -> Result<(), lee::error::LeeError> {
-        let bridge_account_id = system_accounts::bridge_account_id();
-        let pre = state.get_account_by_id(bridge_account_id);
-        let Some(post) = diff.public_diff().get(&bridge_account_id).cloned() else {
-            return Ok(());
-        };
-
-        let Self::Public(_) = self else {
-            return Err(lee::error::LeeError::InvalidInput(format!(
-                "Non-public transaction cannot modify system bridge account {bridge_account_id}"
-            )));
-        };
-
-        let only_balance_increased = {
-            let expected_pre = lee::Account {
-                balance: pre.balance,
-                ..post.clone()
-            };
-            (expected_pre == pre) && (pre.balance < post.balance)
-        };
-
-        if only_balance_increased {
-            Ok(())
-        } else {
-            Err(lee::error::LeeError::InvalidInput(format!(
-                "Transaction modifies restricted system bridge account {bridge_account_id}"
-            )))
-        }
+        Ok(state.apply_state_diff(diff))
     }
 }
 
@@ -202,19 +153,12 @@ impl From<lee::PrivacyPreservingTransaction> for LeeTransaction {
     }
 }
 
-impl From<lee::ProgramDeploymentTransaction> for LeeTransaction {
-    fn from(value: lee::ProgramDeploymentTransaction) -> Self {
-        Self::ProgramDeployment(value)
-    }
-}
-
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub enum TxKind {
     Public,
     PrivacyPreserving,
-    ProgramDeployment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
@@ -227,12 +171,24 @@ pub enum TransactionMalformationError {
     TransactionTooLarge { size: usize, max: usize },
 }
 
+/// A struct encoding a vector of transaction events alongside a fingerprint of a
+/// transaction which emitted it relative to the block it was in.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct TxEvents {
+    // Index of an emitting transaction in a block.
+    pub tx_index: u32,
+    // Hash of the emitting transaction.
+    pub tx_hash: HashType,
+    // Vector of events in the order of emission.
+    pub events: Vec<TransactionEvent>,
+}
+
 /// Returns the canonical Clock Program invocation transaction for the given block timestamp.
 /// Every valid block must end with exactly one occurrence of this transaction.
 #[must_use]
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
-        programs::clock().id(),
+        programs::clock().id().into(),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
         vec![],
         timestamp,
@@ -242,6 +198,199 @@ pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransa
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     )
+}
+
+/// Whether `tx` is a sequencer-injected or account-less system transaction.
+///
+/// Identified by shape: an empty witness set invoking the bridge deposit, the
+/// cross-zone inbox dispatch, or the `ping_sender` cross-zone send. Fee- and
+/// cap-exempt. Shared by the sequencer (build) and the transition (replay) so
+/// the two can never disagree.
+///
+/// Cross-zone traffic is exempt by design, not as a stopgap: an outbound send
+/// is account-less (there is no payer to charge) and an inbound dispatch is
+/// sequencer-injected, so neither can carry a fee.
+#[must_use]
+pub fn is_system_injection(tx: &LeeTransaction) -> bool {
+    let LeeTransaction::Public(public_tx) = tx else {
+        return false;
+    };
+    if !public_tx
+        .witness_set()
+        .signatures_and_public_keys()
+        .is_empty()
+    {
+        return false;
+    }
+    let message = public_tx.message();
+    if message.program_account_id == programs::bridge().id().into() {
+        return matches!(
+            borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data),
+            Ok(bridge_core::Instruction::Deposit { .. })
+        );
+    }
+    if message.program_account_id == programs::cross_zone_inbox().id().into() {
+        return matches!(
+            borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data),
+            Ok(cross_zone_inbox_core::Instruction::Dispatch(_))
+        );
+    }
+    if message.program_account_id == programs::ping_sender().id().into() {
+        return matches!(
+            borsh::from_slice::<ping_core::SenderInstruction>(&message.instruction_data),
+            Ok(ping_core::SenderInstruction::Send { .. })
+        );
+    }
+    false
+}
+
+/// Whether `tx` is a cross-zone outbound lock (`bridge_lock::Lock`).
+///
+/// Fee-exempt like the rest of the cross-zone traffic: the lock debits the
+/// holder's holding PDA and escrows it against a mint on the target zone, so
+/// there is no spendable account to charge without stranding the bridged
+/// balance. Signed (the holder authorizes the debit), so it is not caught by
+/// [`is_system_injection`]'s empty-witness shape.
+#[must_use]
+pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
+    let LeeTransaction::Public(public_tx) = tx else {
+        return false;
+    };
+    let message = public_tx.message();
+    if message.program_account_id != programs::bridge_lock().id().into() {
+        return false;
+    }
+    matches!(
+        borsh::from_slice::<bridge_lock_core::Instruction>(&message.instruction_data),
+        Ok(bridge_lock_core::Instruction::Lock { .. })
+    )
+}
+
+/// Whether `tx` invokes the sequencer-stake program.
+///
+/// Committee-lifecycle operations (stake, unstake, slash) are fee-exempt: a
+/// staker funds only the stake itself, and these transactions govern who may
+/// produce blocks rather than moving user value. Charging them would demand a
+/// separately funded payer no staker holds.
+#[must_use]
+pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
+    let LeeTransaction::Public(public_tx) = tx else {
+        return false;
+    };
+    public_tx.message().program_account_id == programs::sequencer_stake().id().into()
+}
+
+/// Returns the canonical Fee Program invocation transaction for the given block fee summary.
+///
+/// Every valid block must contain exactly one occurrence of this transaction as its
+/// second-to-last transaction, immediately before the clock invocation. The producer
+/// account rides as the fourth account so the guest can pay it.
+#[must_use]
+pub fn fee_invocation(
+    summary: fee_core::BlockFeeSummary,
+    producer: lee::AccountId,
+) -> lee::PublicTransaction {
+    let mut account_ids = system_accounts::fee_account_ids().to_vec();
+    account_ids.push(producer); // this is the 4th account
+    let message = lee::public_transaction::Message::try_new(
+        programs::fee().id().into(),
+        account_ids,
+        vec![],
+        fee_core::Instruction::Distribute(summary),
+    )
+    .expect("Fee invocation message should always be constructable");
+    lee::PublicTransaction::new(
+        message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    )
+}
+
+/// The producer account credited by [`fee_invocation`].
+#[must_use]
+pub fn fee_invocation_producer(fee_tx: &lee::PublicTransaction) -> Option<lee::AccountId> {
+    fee_tx
+        .message()
+        .account_ids
+        // get the 4th account, which is the producer
+        .get(system_accounts::fee_account_ids().len())
+        .copied()
+}
+
+/// Validates that the block reward target is not a restricted system account.
+///
+/// This is needed because the producer chooses its own payout account.
+pub fn validate_reward_target(target: AccountId) -> Result<(), String> {
+    let is_restricted = system_accounts::clock_account_ids()
+        .into_iter()
+        .chain(system_accounts::fee_account_ids())
+        .chain([
+            system_accounts::faucet_account_id(),
+            system_accounts::bridge_account_id(),
+        ])
+        .any(|id| id == target);
+    if is_restricted {
+        Err(format!(
+            "reward target {target} is a restricted system account"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// The fee reserve: hold `amount` from `payer` in the fee inbox.
+///
+/// Runs `authenticated_transfer` as a fee-settlement invocation authorized by
+/// the payer's fee declaration; the returned message carries only the program,
+/// accounts, and instruction the invocation needs.
+#[must_use]
+pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
+    // TODO: consider a stake-program like pattern where tx carries the program id & the instruction
+    // itself, instead of fixing the auth transfer program here
+    lee::public_transaction::Message::try_new(
+        programs::authenticated_transfer().id().into(),
+        vec![payer, system_accounts::fee_inbox_account_id()],
+        vec![],
+        authenticated_transfer_core::Instruction::Transfer { amount },
+    )
+    .expect("Fee reserve message should always be constructable")
+}
+
+/// The fee refund: return `amount` from the fee inbox to `payer`.
+///
+/// Runs the fee program as a fee-settlement invocation needing no authorization
+/// — the fee program owns the inbox it debits.
+#[must_use]
+pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
+    lee::public_transaction::Message::try_new(
+        programs::fee().id().into(),
+        vec![system_accounts::fee_inbox_account_id(), payer],
+        vec![],
+        fee_core::Instruction::Refund { amount },
+    )
+    .expect("Fee refund message should always be constructable")
+}
+
+/// Rejects a diff that modifies any always-restricted system account (the clock
+/// accounts, the faucet, or the fee subsystem's accounts).
+///
+/// These are written only by their sequencer-forced invocations, never by a user
+/// transaction. Enforcing this on the apply/settlement path as well as the
+/// builder is what stops a block author from draining the fee inbox/escrow with a
+/// user-section fee-program invocation that honest followers would otherwise
+/// apply. The bridge account has its own increase-only rule
+/// ([`validate_bridge_account_modification`]) and is not included here.
+pub fn validate_no_restricted_account_modification(
+    state: &V03State,
+    diff: &ValidatedStateDiff,
+) -> Result<(), lee::error::LeeError> {
+    let restricted_modification_accounts = system_accounts::clock_account_ids()
+        .into_iter()
+        .chain(std::iter::once(system_accounts::faucet_account_id()))
+        .chain(system_accounts::fee_account_ids());
+    for account_id in restricted_modification_accounts {
+        validate_doesnt_modify_account(state, diff, account_id)?;
+    }
+    Ok(())
 }
 
 fn validate_doesnt_modify_account(
@@ -262,15 +411,78 @@ fn validate_doesnt_modify_account(
     }
 }
 
+pub fn validate_bridge_account_modification(
+    state: &V03State,
+    diff: &ValidatedStateDiff,
+    is_public_tx: bool,
+) -> Result<(), lee::error::LeeError> {
+    let bridge_account_id = system_accounts::bridge_account_id();
+    let pre = state.get_account_by_id(bridge_account_id);
+    let Some(post) = diff.public_diff().get(&bridge_account_id).cloned() else {
+        return Ok(());
+    };
+
+    if !is_public_tx {
+        return Err(lee::error::LeeError::InvalidInput(format!(
+            "Non-public transaction cannot modify system bridge account {bridge_account_id}"
+        )));
+    }
+
+    if bridge_balance_only_increased(&pre, &post) {
+        Ok(())
+    } else {
+        Err(lee::error::LeeError::InvalidInput(format!(
+            "Transaction modifies restricted system bridge account {bridge_account_id}"
+        )))
+    }
+}
+
+/// Whether the bridge escrow went from `pre` to `post` by a pure balance
+/// increase (only bridge modification a public transaction may make).
+///
+/// Legit deposits debit the escrow, but they are sequencer-injected, never
+/// user-submitted, so a user transaction that fails this is a forgery attempt.
+#[must_use]
+pub fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
+    let expected_pre = lee::Account {
+        balance: pre.balance,
+        ..post.clone()
+    };
+    (expected_pre == *pre) && (pre.balance < post.balance)
+}
+
 #[cfg(test)]
 mod tests {
     use lee::{Account, AccountId, PrivateKey, PublicKey, V03State};
     use lee_core::account::Nonce;
 
-    use super::validate_doesnt_modify_account;
-    use crate::test_utils::{
-        any_public_transaction, create_transaction_native_token_transfer, state_and_diff,
+    use super::{
+        validate_bridge_account_modification, validate_doesnt_modify_account,
+        validate_reward_target,
     };
+    use crate::test_utils::{create_transaction_native_token_transfer, state_and_diff};
+
+    #[test]
+    fn a_restricted_system_account_is_not_a_valid_reward_target() {
+        // A plain account is a fine reward target, claimed or not — a producer
+        // picks its own payout account.
+        validate_reward_target(AccountId::new([1; 32]))
+            .expect("an ordinary account is a valid reward target");
+
+        // The restricted system accounts are rejected.
+        validate_reward_target(system_accounts::bridge_account_id())
+            .expect_err("the bridge is not a valid reward target");
+        validate_reward_target(system_accounts::faucet_account_id())
+            .expect_err("the faucet is not a valid reward target");
+        for fee_account in system_accounts::fee_account_ids() {
+            validate_reward_target(fee_account)
+                .expect_err("a fee account is not a valid reward target");
+        }
+        for clock_account in system_accounts::clock_account_ids() {
+            validate_reward_target(clock_account)
+                .expect_err("a clock account is not a valid reward target");
+        }
+    }
 
     #[test]
     fn bridge_guard_allows_balance_only_increase() {
@@ -288,10 +500,8 @@ mod tests {
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
-        let tx = any_public_transaction();
         assert!(
-            tx.validate_bridge_account_modification(&state, &diff)
-                .is_ok(),
+            validate_bridge_account_modification(&state, &diff, true).is_ok(),
             "a balance-only increase of the bridge account must be allowed",
         );
     }
@@ -313,10 +523,8 @@ mod tests {
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
-        let tx = any_public_transaction();
         assert!(
-            tx.validate_bridge_account_modification(&state, &diff)
-                .is_err(),
+            validate_bridge_account_modification(&state, &diff, true).is_err(),
             "modifying bridge account data must be rejected even if the balance increases",
         );
     }
@@ -334,11 +542,53 @@ mod tests {
         let post = pre.clone();
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
-        let tx = any_public_transaction();
         assert!(
-            tx.validate_bridge_account_modification(&state, &diff)
-                .is_err(),
+            validate_bridge_account_modification(&state, &diff, true).is_err(),
             "a bridge diff that does not strictly increase the balance must be rejected",
+        );
+    }
+
+    #[test]
+    fn bridge_guard_rejects_non_public_modification() {
+        // Only a public transaction may touch the bridge account at all; a
+        // non-public tx (private/deployment) that produces a bridge diff — even
+        // a balance-only increase — must be rejected.
+        let bridge_id = system_accounts::bridge_account_id();
+        let pre = Account {
+            balance: 500,
+            ..Account::default()
+        };
+        let post = Account {
+            balance: 600,
+            ..pre.clone()
+        };
+        let (state, diff) = state_and_diff(bridge_id, pre, post);
+
+        assert!(
+            validate_bridge_account_modification(&state, &diff, false).is_err(),
+            "a non-public transaction must not be allowed to modify the bridge account",
+        );
+    }
+
+    #[test]
+    fn bridge_guard_rejects_balance_decrease() {
+        // The drain: a diff that debits the bridge account. This is the attack a
+        // malicious block author would attempt, and the guard must reject it on
+        // the apply path so followers do not accept the drained state.
+        let bridge_id = system_accounts::bridge_account_id();
+        let pre = Account {
+            balance: 1_000,
+            ..Account::default()
+        };
+        let post = Account {
+            balance: 400,
+            ..pre.clone()
+        };
+        let (state, diff) = state_and_diff(bridge_id, pre, post);
+
+        assert!(
+            validate_bridge_account_modification(&state, &diff, true).is_err(),
+            "a debit of the bridge account (a drain) must be rejected",
         );
     }
 
@@ -378,6 +628,24 @@ mod tests {
         assert_ne!(faucet, AccountId::default());
         assert_ne!(bridge, AccountId::default());
         assert_ne!(faucet, bridge);
+    }
+
+    #[test]
+    fn validate_on_state_rejects_modifying_a_fee_account() {
+        // Fee accounts are restricted the same way clock accounts are: a native
+        // transfer crediting any of them must be rejected.
+        let sender_key = PrivateKey::try_new([5_u8; 32]).expect("valid key");
+        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+        let state = V03State::new().with_public_account_balances([(sender_id, 10_000)]);
+
+        for fee_id in system_accounts::fee_account_ids() {
+            let tx =
+                create_transaction_native_token_transfer(sender_id, 0, fee_id, 100, &sender_key);
+            assert!(
+                tx.validate_on_state(&state, 1, 0).is_err(),
+                "validate_on_state must reject a transfer that credits fee account {fee_id}",
+            );
+        }
     }
 
     #[test]

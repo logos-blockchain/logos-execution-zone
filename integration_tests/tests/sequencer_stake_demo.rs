@@ -72,29 +72,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .key_chain_mut()
         .add_imported_public_account(funding_private_key);
 
-    // Claim the genesis supply out of its vault.
-    let owner_vault_id = vault_core::compute_vault_account_id(programs::vault().id(), funding_id);
-    let claim_instruction_data = Program::serialize_instruction(vault_core::Instruction::Claim {
-        amount: FUNDING_BALANCE,
-    })
-    .context("Failed to serialize vault Claim instruction")?;
-    ctx.wallet()
-        .send_pub_tx(
-            vec![
-                AccountIdentity::Public(funding_id),
-                AccountIdentity::PublicNoSign(owner_vault_id),
-            ],
-            claim_instruction_data,
-            programs::vault().id(),
-        )
-        .await
-        .map_err(|err| {
-            anyhow::anyhow!(
-                "Failed to claim the demo funding account from its genesis vault: {err:?}"
-            )
-        })?;
-    info!("Waiting for the vault-claim transaction's block to land");
-    poll_until("vault claim to land", 30, || async {
+    info!("Waiting for the genesis supply to land on the funding account");
+    poll_until("genesis supply to land", 30, || async {
         Ok(account_balance(&ctx, funding_id).await? == FUNDING_BALANCE)
     })
     .await?;
@@ -105,6 +84,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .context("Failed to create a fresh stake ownership account")?;
     info!("Fresh stake ownership account: {ownership_id}");
 
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
+
     let mover_instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: FUNDING_BALANCE,
@@ -114,7 +95,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: demo_stake_key,
             amount: FUNDING_BALANCE,
-            mover_program_id: programs::authenticated_transfer().id(),
+            mover_account_id: programs::authenticated_transfer().id().into(),
             mover_instruction_data,
         })
         .context("Failed to serialize Stake instruction")?;
@@ -129,10 +110,11 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             vec![
                 AccountIdentity::Public(funding_id),
                 AccountIdentity::Public(ownership_id),
+                AccountIdentity::PublicNoSign(funds_id),
                 AccountIdentity::PublicNoSign(config_id),
             ],
             stake_instruction_data,
-            programs::sequencer_stake().id(),
+            programs::sequencer_stake().id().into(),
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
@@ -152,16 +134,16 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         programs::sequencer_stake().id().into(),
         "ownership account should now be owned by sequencer_stake"
     );
+    let staked_balance = account_balance(&ctx, funds_id).await?;
     assert_eq!(
-        ownership_account.balance, FUNDING_BALANCE,
-        "ownership account should hold the staked balance"
+        staked_balance, FUNDING_BALANCE,
+        "the funds PDA should hold the staked balance"
     );
     let record = sequencer_stake_core::StakeRecord::from_bytes(ownership_account.data.as_ref())
         .context("ownership account data did not decode as a StakeRecord")?;
     assert_eq!(record.sequencer_key, demo_stake_key);
     info!(
-        "Ownership account confirmed: {} staked for sequencer key {}",
-        ownership_account.balance,
+        "Ownership account confirmed: {staked_balance} staked for sequencer key {}",
         hex::encode(record.sequencer_key)
     );
 
@@ -260,10 +242,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // Exit flow: full UnstakeRequest, wait for the committee removal to land on
     // Bedrock, then check the sequencer's own FinalizeUnstake releases the stake.
     //
-    // FinalizeUnstake is unsigned/permissionless, so it can't claim a fresh
-    // destination account (that needs the owner's own signature, same as
-    // authenticated_transfer's Transfer). Reuse funding_id: already
-    // authenticated_transfer-owned, drained to 0 by the Stake above.
+    // Unstake recipient is freely chosen during the request.
     let destination_id = funding_id;
 
     let unstake_request_data =
@@ -279,7 +258,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 AccountIdentity::PublicNoSign(config_id),
             ],
             unstake_request_data,
-            programs::sequencer_stake().id(),
+            programs::sequencer_stake().id().into(),
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;
@@ -315,18 +294,18 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // Once removed, the sequencer injects FinalizeUnstake itself; this test
     // never submits one.
     poll_until(
-        "FinalizeUnstake to drain the ownership account",
+        "FinalizeUnstake to drain the stake funds account",
         90,
-        || async { Ok(get_account(&ctx, ownership_id).await?.balance == 0) },
+        || async { Ok(account_balance(&ctx, funds_id).await? == 0) },
     )
     .await?;
 
     let drained_ownership_account = get_account(&ctx, ownership_id)
         .await
-        .context("Failed to read the drained ownership account")?;
+        .context("Failed to read the ownership account after the release")?;
     assert_eq!(
         drained_ownership_account.balance, 0,
-        "ownership account should be fully drained"
+        "the ownership account never custodies the stake"
     );
     let drained_record =
         sequencer_stake_core::StakeRecord::from_bytes(drained_ownership_account.data.as_ref())

@@ -9,13 +9,14 @@ use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
-        CleanPendingBlocksUpTo, DeadLetterDispatchRecord, DeleteBlock, DeleteZoneCheckpoint,
-        DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetBlock,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, GetZoneAnchor, GetZoneCheckpointBytes,
-        MarkBlockAsFinalized, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RaisePublishedHighWater, RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending,
+        CleanPendingBlocksUpTo, DeadLetterDispatchRecord, DeadLetterRequeue, DeleteBlock,
+        DeleteZoneCheckpoint, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
+        GetAllBlocks, GetBlock, GetChannelCursor, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, GetZoneAnchor, GetZoneCheckpointBytes, MarkBlockAsFinalized,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
+        RecordDispatchFailure, RecordNewBlock, RequeueDeadLetterDispatch, ResetAllBlocksToPending,
         SetZoneAnchor, SetZoneCheckpointBytes, WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
@@ -79,6 +80,7 @@ impl<S: StorageActorTrait> SequencerStore<S> {
     pub async fn record_new_block(
         &mut self,
         block: Block,
+        channel_cursor: Option<[u8; 32]>,
         withdrawals: Vec<WithdrawalReconciliationKey>,
         state: Arc<V03State>,
         checkpoint_bytes: Option<Vec<u8>>,
@@ -86,6 +88,7 @@ impl<S: StorageActorTrait> SequencerStore<S> {
         self.storage_ref
             .ask(RecordNewBlock {
                 block,
+                channel_cursor,
                 withdrawals,
                 state,
                 checkpoint_bytes,
@@ -179,6 +182,15 @@ impl<S: StorageActorTrait> SequencerStore<S> {
             .map_err(Into::into)
     }
 
+    /// The `MsgId` of the newest channel inscription processed, or `None` if
+    /// none was recorded.
+    pub async fn channel_cursor(&self) -> Result<Option<[u8; 32]>> {
+        self.storage_ref
+            .ask(GetChannelCursor)
+            .await
+            .map_err(Into::into)
+    }
+
     /// Raises the published high water mark to `block_id`, never lowering it.
     pub async fn raise_published_high_water(&self, block_id: u64) -> Result<()> {
         self.storage_ref
@@ -263,6 +275,18 @@ impl<S: StorageActorTrait> SequencerStore<S> {
             .map_err(Into::into)
     }
 
+    /// Restores a retained dead-lettered delivery to the pending list, with a
+    /// clean attempt count.
+    pub async fn requeue_dead_letter_dispatch(
+        &self,
+        message_key: [u8; 32],
+    ) -> Result<DeadLetterRequeue> {
+        self.storage_ref
+            .ask(RequeueDeadLetterDispatch { message_key })
+            .await
+            .map_err(Into::into)
+    }
+
     /// The handle to the actor behind this store, for the paths that hold no
     /// store of their own: the publisher's follow sink and the cross-zone
     /// watchers, each of which outlives any one caller.
@@ -310,8 +334,9 @@ mod tests {
         storage_ref
             .ask(RecordNewBlock {
                 block: genesis.clone(),
+                channel_cursor: None,
                 withdrawals: vec![],
-                state: Arc::new(testnet_initial_state::initial_state()),
+                state: Arc::new(testnet_initial_state::initial_state(true)),
                 checkpoint_bytes: None,
             })
             .await
@@ -350,7 +375,7 @@ mod tests {
         let block_hash = block.header.hash;
 
         store
-            .record_new_block(block.clone(), vec![], Arc::new(V03State::new()), None)
+            .record_new_block(block.clone(), None, vec![], Arc::new(V03State::new()), None)
             .await
             .unwrap();
 
@@ -376,7 +401,7 @@ mod tests {
         let block_id = block.header.block_id;
 
         store
-            .record_new_block(block.clone(), vec![], Arc::new(V03State::new()), None)
+            .record_new_block(block.clone(), None, vec![], Arc::new(V03State::new()), None)
             .await
             .unwrap();
 

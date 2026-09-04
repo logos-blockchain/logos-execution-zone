@@ -232,4 +232,21 @@ pub fn dashboard() -> Dashboard {
                     ),
             ],
         )
+        .row(
+            8,
+            [
+                // 1 while that peer's watcher is suspended on the committee
+                // floor; recorded dispatches keep draining meanwhile.
+                Panel::timeseries("Peer watchers suspended on the committee floor")
+                    .width(12)
+                    .unit(Unit::Short)
+                    .min(0.0)
+                    .target(
+                        Target::new(
+                            sequencer_core_metrics::names::CROSS_ZONE_PEER_COMMITTEE_SUSPENDED,
+                        )
+                        .legend("peer {{peer}}"),
+                    ),
+            ],
+        )
 }

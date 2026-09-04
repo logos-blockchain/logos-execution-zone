@@ -5,7 +5,10 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
     account::{Account, AccountId, Data},
-    program::{PROGRAM_STORAGE_OWNER, ProgramId},
+    program::{
+        PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment, TransactionEvent,
+        get_program_via,
+    },
 };
 
 use crate::{
@@ -13,7 +16,6 @@ use crate::{
     merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
     program::Program,
-    program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
     validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
@@ -193,24 +195,53 @@ impl V03State {
         self
     }
 
+    /// Seeds a builtin as a loader-owned header pointing at one segment holding its whole ELF —
+    /// the same shape a live `program_loader` deploy produces, just written directly rather than
+    /// through a transaction. The header keeps living at the bijection address
+    /// (`AccountId::from(program.id())`) so existing call sites addressing builtins by `ProgramId`
+    /// keep working; the segment's address is this function's own internal convention, never
+    /// independently recomputed elsewhere.
     pub(crate) fn insert_program(&mut self, program: &Program) {
-        let account_id = AccountId::from(program.id());
-        let account = Account {
-            program_owner: PROGRAM_STORAGE_OWNER,
-            data: Data::try_from(program.elf().to_vec())
-                .expect("elf must fit under DATA_MAX_LENGTH"),
+        let header_account_id = AccountId::from(program.id());
+        let segment_account_id = genesis_segment_account_id(header_account_id);
+
+        let segment = Account {
+            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+            data: Data::try_from(
+                ProgramSegment {
+                    bytecode: program.elf().to_vec(),
+                    next_segment: None,
+                }
+                .to_bytes(),
+            )
+            .expect("elf must fit under DATA_MAX_LENGTH"),
             ..Account::default()
         };
-        self.public_state.insert(account_id, account);
+        let header = Account {
+            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+            data: Data::try_from(
+                ProgramHeader {
+                    image_id: program.id(),
+                    program_first_segment: segment_account_id,
+                    immutable: true,
+                }
+                .to_bytes(),
+            )
+            .expect("program header fits under DATA_MAX_LENGTH"),
+            ..Account::default()
+        };
+        self.public_state.insert(segment_account_id, segment);
+        self.public_state.insert(header_account_id, header);
     }
 
-    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
+    #[must_use]
+    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) -> Vec<TransactionEvent> {
         let StateDiff {
             signer_account_ids,
             public_diff,
             new_commitments,
             new_nullifiers,
-            program,
+            events,
         } = diff.into_state_diff();
         #[expect(
             clippy::iter_over_hash_type,
@@ -226,9 +257,7 @@ impl V03State {
         }
         self.private_state.0.extend(&new_commitments);
         self.private_state.1.extend(&new_nullifiers);
-        if let Some(program) = program {
-            self.insert_program(&program);
-        }
+        events
     }
 
     pub fn transition_from_public_transaction(
@@ -236,10 +265,9 @@ impl V03State {
         tx: &PublicTransaction,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<(), LeeError> {
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
         let diff = ValidatedStateDiff::from_public_transaction(tx, self, block_id, timestamp)?;
-        self.apply_state_diff(diff);
-        Ok(())
+        Ok(self.apply_state_diff(diff))
     }
 
     pub fn transition_from_privacy_preserving_transaction(
@@ -250,16 +278,7 @@ impl V03State {
     ) -> Result<(), LeeError> {
         let diff =
             ValidatedStateDiff::from_privacy_preserving_transaction(tx, self, block_id, timestamp)?;
-        self.apply_state_diff(diff);
-        Ok(())
-    }
-
-    pub fn transition_from_program_deployment_transaction(
-        &mut self,
-        tx: &ProgramDeploymentTransaction,
-    ) -> Result<(), LeeError> {
-        let diff = ValidatedStateDiff::from_program_deployment_transaction(tx, self)?;
-        self.apply_state_diff(diff);
+        drop(self.apply_state_diff(diff));
         Ok(())
     }
 
@@ -281,16 +300,28 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
-    /// Looks up a deployed program's storage account by its `ProgramId`, verifying it is
-    /// actually owned by [`PROGRAM_STORAGE_OWNER`].
+    /// Looks up a program deployed at its bijection address (`AccountId::from(program_id)`),
+    /// reconstructing its bytecode from its header and segment chain.
     ///
-    /// An account at `AccountId::from(program_id)` that lacks this ownership isn't a deployed
-    /// program, whatever its contents — this is the single place that distinction is enforced,
-    /// so callers never have to remember to re-check it themselves.
+    /// Only meaningful for programs deployed at their bijection address — genesis-seeded
+    /// builtins, or anything created through the (removed) `ProgramDeploymentTransaction`.
+    /// A program deployed through `program_loader` at an arbitrary address must be resolved
+    /// through [`get_program_via`] with the real address instead.
     #[must_use]
-    pub fn get_program(&self, program_id: ProgramId) -> Option<&Account> {
-        let account = self.get_account_by_id_ref(AccountId::from(program_id))?;
-        (account.program_owner == PROGRAM_STORAGE_OWNER).then_some(account)
+    pub fn get_program(&self, program_id: ProgramId) -> Option<(ProgramId, Vec<u8>)> {
+        get_program_via(AccountId::from(program_id), |account_id| {
+            self.get_account_by_id(account_id)
+        })
+    }
+
+    /// The real `image_id` of whatever program is deployed at `account_id`, or `None` if there
+    /// isn't one — used to anchor a private transaction's [`ProgramImageClaim`]s to real chain
+    /// state rather than trusting the prover's own claim.
+    ///
+    /// [`ProgramImageClaim`]: lee_core::ProgramImageClaim
+    #[must_use]
+    pub fn get_program_image_id(&self, account_id: AccountId) -> Option<ProgramId> {
+        get_program_via(account_id, |id| self.get_account_by_id(id)).map(|(image_id, _)| image_id)
     }
 
     #[must_use]
@@ -378,6 +409,21 @@ impl V03State {
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert(account_id, account);
     }
+}
+
+/// The deterministic `AccountId` a genesis-seeded builtin's single segment lives at, derived
+/// from the header's own bijection address.
+///
+/// Only `insert_program` needs this — a live `program_loader` deploy has a real signer and picks
+/// its own segment addresses instead, since genesis has no signer to ask.
+fn genesis_segment_account_id(header_account_id: AccountId) -> AccountId {
+    use sha2::{Digest as _, Sha256};
+    const GENESIS_SEGMENT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/GenesisSeg/\x00";
+
+    let mut hasher = Sha256::new();
+    hasher.update(GENESIS_SEGMENT_ID_PREFIX);
+    hasher.update(header_account_id.as_ref());
+    AccountId::new(hasher.finalize().into())
 }
 
 #[cfg(test)]

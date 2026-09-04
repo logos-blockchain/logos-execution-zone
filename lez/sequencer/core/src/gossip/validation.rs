@@ -5,10 +5,12 @@
 
 use common::transaction::LeeTransaction;
 
-/// Reserve ~200 bytes for block header overhead, mirroring the RPC check.
-const BLOCK_HEADER_OVERHEAD: u64 = 200;
+use crate::config::BLOCK_OVERHEAD;
 
 #[derive(Debug)]
+// `Accept` is intentionally left unboxed: it is the common outcome and the enum
+// is short-lived per gossiped message, so boxing it would only add a heap
+// allocation on the hot validation path.
 pub enum TxEvaluation {
     /// Structurally valid and authenticated; forward and admit.
     Accept(LeeTransaction),
@@ -23,7 +25,7 @@ pub enum TxEvaluation {
 #[must_use]
 pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     let tx_size = u64::try_from(data.len()).unwrap_or(u64::MAX);
-    let max_tx_size = max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
+    let max_tx_size = max_block_size.saturating_sub(BLOCK_OVERHEAD);
     if tx_size > max_tx_size {
         return TxEvaluation::Reject(format!("transaction too large: {tx_size} > {max_tx_size}"));
     }
@@ -39,7 +41,7 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     };
 
     if let LeeTransaction::Public(public_tx) = &authenticated
-        && crate::is_sequencer_only_program(public_tx.message().program_id)
+        && crate::is_sequencer_only_program(public_tx.message().program_account_id)
     {
         return TxEvaluation::Reject("sequencer-only program".to_owned());
     }

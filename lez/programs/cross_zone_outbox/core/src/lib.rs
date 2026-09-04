@@ -1,8 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{
-    account::AccountId,
-    program::{PdaSeed, ProgramId},
-};
+use lee_core::{account::AccountId, program::PdaSeed};
 
 /// Versions the seed layout: bump on any change to its field list or offsets,
 /// so slots under an old layout can never be re-derived. Redundant with the
@@ -25,7 +22,7 @@ pub enum Instruction {
     /// - Outbox PDA account
     Emit {
         target_zone: ZoneId,
-        target_program_id: ProgramId,
+        target_account_id: AccountId,
         /// Accounts the destination inbox must hand to the target program's
         /// chained call. The emitter specifies them; the watcher forwards them
         /// verbatim so the inbox stays target-agnostic.
@@ -47,10 +44,10 @@ pub struct OutboxRecord {
     /// Cross-zone discovery names the top-level program instead, so joining a
     /// record against a delivery is only sound while every emitter refuses to be
     /// called by another program.
-    pub emitter: ProgramId,
+    pub emitter: AccountId,
     pub target_zone: ZoneId,
     pub ordinal: u32,
-    pub target_program_id: ProgramId,
+    pub target_account_id: AccountId,
     pub target_accounts: Vec<[u8; 32]>,
     pub payload: Vec<u8>,
 }
@@ -76,24 +73,22 @@ impl OutboxRecord {
 /// address two programs share a slot and one overwrites the other.
 #[must_use]
 pub fn outbox_pda(
-    outbox_id: ProgramId,
-    emitter: ProgramId,
+    outbox_id: AccountId,
+    emitter: AccountId,
     target_zone: &ZoneId,
     ordinal: u32,
 ) -> AccountId {
     AccountId::for_public_pda(&outbox_id, &outbox_pda_seed(emitter, target_zone, ordinal))
 }
 
-/// Seed of an outbox message PDA, exposed so the guest can claim the account.
+/// Seed of an outbox message PDA.
 #[must_use]
-pub fn outbox_pda_seed(emitter: ProgramId, target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
+fn outbox_pda_seed(emitter: AccountId, target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 100];
     bytes[..32].copy_from_slice(&OUTBOX_SEED_DOMAIN);
-    for (word, chunk) in emitter.iter().zip(bytes[32..64].chunks_exact_mut(4)) {
-        chunk.copy_from_slice(&word.to_le_bytes());
-    }
+    bytes[32..64].copy_from_slice(emitter.as_ref());
     bytes[64..96].copy_from_slice(target_zone);
     bytes[96..].copy_from_slice(&ordinal.to_le_bytes());
 
@@ -108,8 +103,8 @@ pub fn outbox_pda_seed(emitter: ProgramId, target_zone: &ZoneId, ordinal: u32) -
 mod tests {
     use super::*;
 
-    const OUTBOX: ProgramId = [3; 8];
-    const EMITTER: ProgramId = [4; 8];
+    const OUTBOX: AccountId = AccountId::new([3; 32]);
+    const EMITTER: AccountId = AccountId::new([4; 32]);
 
     #[test]
     fn outbox_pda_is_unique_per_zone_and_ordinal() {
@@ -135,7 +130,7 @@ mod tests {
     #[test]
     fn outbox_pda_is_unique_per_emitter() {
         let zone = [1; 32];
-        let other: ProgramId = [5; 8];
+        let other = AccountId::new([5; 32]);
 
         assert_ne!(
             outbox_pda(OUTBOX, EMITTER, &zone, 0),
@@ -149,7 +144,7 @@ mod tests {
             emitter: EMITTER,
             target_zone: [1; 32],
             ordinal: 7,
-            target_program_id: [6; 8],
+            target_account_id: AccountId::new([6; 32]),
             target_accounts: vec![[9; 32]],
             payload: b"payload".to_vec(),
         };

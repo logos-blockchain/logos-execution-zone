@@ -362,13 +362,10 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
 
     // Sequencer B: the cold-start backfill finalizes A's chain into its store.
     let (seq_b, mempool_b) = start_sequencer(setup_sequencer_config()).await;
-    let mut finalized: Vec<(MsgId, Block)> = Vec::new();
+    let mut finalized: Vec<(Block, Slot)> = Vec::new();
     for id in seq_b.block_store().genesis_id()..=tip_a.id {
         let block = seq_a.block_store().block_at_id(id).await.unwrap().unwrap();
-        finalized.push((
-            MsgId::from([u8::try_from(id).expect("should be u8"); 32]),
-            block,
-        ));
+        finalized.push((block, Slot::from(0)));
     }
     apply_follow_update(
         seq_b.block_store().storage_ref(),
@@ -469,7 +466,7 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
         &seq_b.chain(),
         &mempool_b,
         FollowUpdate {
-            adopted: vec![(MsgId::from([7_u8; 32]), competitor)],
+            adopted: vec![competitor],
             ..empty_follow_update()
         },
     )
@@ -573,6 +570,9 @@ fn deposit_event_record(
 //     crate::withdrawal_reconciliation_key(&note_id)
 // }
 
+// TODO(withdrawals): "re-mints the vault" predates the vault deletion — a
+// replayed deposit now re-credits the recipient directly; the receipt-PDA
+// idempotence reasoning still stands.
 // /// Cold-start backfill re-records an already-finalized deposit event as a
 // /// pending record before reconstruction replays the same deposit block.
 // /// Reconstruction must drop that record — its mint is permanently reflected in
@@ -811,16 +811,15 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         .await
         .expect("reconstruct");
 
-    // The mint was applied exactly once.
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
+    // The mint was applied exactly once, on top of the recipient's genesis supply.
     assert_eq!(
         chain_b
             .lock()
             .await
             .head_state()
-            .get_account_by_id(vault_id)
+            .get_account_by_id(recipient)
             .balance,
-        u128::from(deposit_amount),
+        initial_public_user_accounts()[0].balance + u128::from(deposit_amount),
         "already-finished deposit must be applied exactly once"
     );
 
@@ -876,8 +875,16 @@ async fn reconstructed_delivery_settles_its_pending_record() {
     let channel_id = config_a.bedrock_config.channel_id;
 
     // Sequencer B holds the same record, as its own watcher would after reading
-    // the peer block, and reconstructs A's chain from a fresh store.
-    let (mut seq_b, _mempool_b) = start_sequencer(cross_zone_test_config()).await;
+    // the peer block, and reconstructs A's chain from a fresh store. It rebuilds
+    // the same node's chain, so it must carry A's staked identity: copy A's
+    // bedrock and stake keys into B's home so its seeded genesis matches A's and
+    // its own key resolves to the reconstructed stake entry when it produces.
+    let config_b = cross_zone_test_config();
+    std::fs::create_dir_all(&config_b.home).unwrap();
+    for key_file in ["bedrock_signing_key", "sequencer_stake_signing_key"] {
+        std::fs::copy(config_a.home.join(key_file), config_b.home.join(key_file)).unwrap();
+    }
+    let (mut seq_b, _mempool_b) = start_sequencer(config_b).await;
     assert_eq!(
         seq_b
             .block_store()
@@ -919,7 +926,7 @@ async fn reconstructed_delivery_settles_its_pending_record() {
     );
 
     // The delivery landed exactly once, and the next turn does not re-emit it.
-    let record_id = ping_record_pda(programs::ping_receiver().id());
+    let record_id = ping_record_pda(programs::ping_receiver().id().into());
     assert_eq!(
         seq_b
             .with_state(|state| state.get_account_by_id(record_id).data.into_inner())

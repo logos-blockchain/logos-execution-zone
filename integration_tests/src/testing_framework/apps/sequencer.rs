@@ -129,7 +129,10 @@ impl SequencerApp {
         async move {
             let public_accounts = config::default_public_accounts_for_wallet();
             let private_accounts = config::default_private_accounts_for_wallet();
-            let genesis = config::genesis_from_accounts(&public_accounts, &private_accounts);
+            let genesis = config::genesis_from_accounts(
+                &public_accounts,
+                config::private_total(&private_accounts),
+            );
             // If the sequencer moves to a separate process, create a `LocalProcessApp`
             // with its `LaunchSpec` here so TF owns the process lifecycle.
             let setup = SequencerSetup::new(self.config, self.bedrock_addr).with_genesis(genesis);

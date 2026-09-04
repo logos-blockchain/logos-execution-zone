@@ -9,13 +9,13 @@ use crate::{
     error::DbError,
     sequencer::{
         CF_LEE_STATE_NAME, DB_FINAL_BLOCK_META_KEY, DB_FINAL_LEE_STATE_KEY, DB_LEE_STATE_KEY,
-        DB_META_CROSS_ZONE_PEER_FLOOR_KEY, DB_META_CROSS_ZONE_PEER_TIP_KEY,
-        DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCH_COUNT_KEY,
+        DB_META_CHANNEL_CURSOR_KEY, DB_META_CROSS_ZONE_PEER_FLOOR_KEY,
+        DB_META_CROSS_ZONE_PEER_TIP_KEY, DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCH_COUNT_KEY,
         DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCHES_KEY, DB_META_LAST_FINALIZED_BLOCK_ID,
         DB_META_LATEST_BLOCK_META_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCH_COUNT_KEY,
         DB_META_PENDING_CROSS_ZONE_DISPATCH_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY,
         DB_META_PENDING_DEPOSIT_EVENTS_KEY, DB_META_PUBLISHED_HIGH_WATER_KEY,
-        DB_META_UNSEEN_WITHDRAW_COUNT_KEY, DB_META_ZONE_CURSOR_KEY,
+        DB_META_SLASH_RECORD_KEY, DB_META_UNSEEN_WITHDRAW_COUNT_KEY, DB_META_ZONE_CURSOR_KEY,
         DB_META_ZONE_SDK_CHECKPOINT_KEY,
     },
 };
@@ -139,7 +139,7 @@ impl SimpleWritableCell for LastFinalizedBlockIdCell {
     }
 }
 
-/// The highest block id ever inscribed on the channel by this sequencer.
+/// The highest block id this sequencer must not inscribe on the channel again.
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
 pub struct PublishedHighWaterCell(pub u64);
 
@@ -159,6 +159,28 @@ impl SimpleWritableCell for PublishedHighWaterCell {
                 err,
                 Some("Failed to serialize published high water mark".to_owned()),
             )
+        })
+    }
+}
+
+/// The `MsgId` of the newest channel inscription processed, block or not —
+/// the parent the next produced block is pinned on.
+#[derive(Debug, BorshSerialize, BorshDeserialize)]
+pub struct ChannelCursorCell(pub [u8; 32]);
+
+impl SimpleStorableCell for ChannelCursorCell {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_CHANNEL_CURSOR_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for ChannelCursorCell {}
+
+impl SimpleWritableCell for ChannelCursorCell {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize channel cursor".to_owned()))
         })
     }
 }
@@ -224,6 +246,40 @@ impl SimpleWritableCell for ZoneSdkCheckpointCellRef<'_> {
             DbError::borsh_cast_message(
                 err,
                 Some("Failed to serialize zone-sdk checkpoint cell".to_owned()),
+            )
+        })
+    }
+}
+
+/// The slashing record as opaque bytes. `sequencer_core` owns the encoding.
+#[derive(BorshDeserialize)]
+pub struct SlashRecordCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for SlashRecordCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_SLASH_RECORD_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for SlashRecordCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct SlashRecordCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for SlashRecordCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_SLASH_RECORD_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for SlashRecordCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize slash record cell".to_owned()),
             )
         })
     }
@@ -431,10 +487,10 @@ pub struct DispatchOrigin {
 /// A dispatch that fails execution is left out of the block, so nothing on chain
 /// records that it was attempted; this is the only durable trace.
 ///
-/// It identifies the message rather than carrying it: the peer block and index
-/// are enough to read it back off the channel, and the encoded transaction is
-/// peer-chosen and can exceed a whole block, which would leave the list bounded
-/// in entries but unbounded in bytes.
+/// It carries the encoded transaction, not just its size: a requeue has to
+/// restore the delivery without re-reading the peer channel, and the retained
+/// list is bounded to far fewer entries than the pending list that held the
+/// same bytes moments before.
 ///
 /// Giving up is this node's decision, not the network's, so an entry is dropped
 /// again if another sequencer carries the same delivery.
@@ -445,9 +501,9 @@ pub struct DeadLetterDispatchRecord {
     /// Attempts made before giving up, so the record carries the policy that was
     /// in force at the time.
     pub failed_attempts: u32,
-    /// Size of the delivery transaction that would not execute, the diagnostic
-    /// for size-related failures.
-    pub transaction_bytes: u32,
+    /// The borsh-encoded dispatch transaction, kept so a requeue can restore
+    /// the delivery. Its length is the diagnostic for size-related failures.
+    pub transaction: Vec<u8>,
 }
 
 #[derive(BorshDeserialize)]

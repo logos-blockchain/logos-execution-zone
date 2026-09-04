@@ -1,4 +1,4 @@
-use std::{io::Write as _, path::PathBuf, str::FromStr};
+use std::{io::Write as _, str::FromStr};
 
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
@@ -22,8 +22,8 @@ use crate::{
         network::NetworkAlias,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
-            native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
-            token::TokenProgramAgnosticSubcommand, vault::VaultSubcommand,
+            native_token_transfer::AuthTransferSubcommand, program_loader::ProgramLoaderSubcommand,
+            token::TokenProgramAgnosticSubcommand,
         },
         statistics::StatisticsSubcommand,
     },
@@ -58,9 +58,6 @@ pub enum Command {
     /// Account view and sync subcommand.
     #[command(subcommand)]
     Account(AccountSubcommand),
-    /// Pinata program interaction subcommand.
-    #[command(subcommand)]
-    Pinata(PinataProgramAgnosticSubcommand),
     /// Token program interaction subcommand.
     #[command(subcommand)]
     Token(TokenProgramAgnosticSubcommand),
@@ -70,12 +67,12 @@ pub enum Command {
     /// Associated Token Account program interaction subcommand.
     #[command(subcommand)]
     Ata(AtaSubcommand),
-    /// Vault program interaction subcommand.
-    #[command(subcommand)]
-    Vault(VaultSubcommand),
     /// Bridge program interaction subcommand.
     #[command(subcommand)]
     Bridge(BridgeSubcommand),
+    /// `program_loader` program interaction subcommand (deploy/update a program).
+    #[command(subcommand)]
+    ProgramLoader(ProgramLoaderSubcommand),
     /// Group key management (create, invite, join, derive keys).
     #[command(subcommand)]
     Group(GroupSubcommand),
@@ -98,8 +95,6 @@ pub enum Command {
         /// Indicates, how deep in tree accounts may be. Affects command complexity.
         depth: u32,
     },
-    /// Deploy a program.
-    DeployProgram { binary_filepath: PathBuf },
     /// Keycard hardware wallet management.
     #[command(subcommand)]
     Keycard(KeycardSubcommand),
@@ -232,9 +227,6 @@ pub async fn execute_subcommand(
         Command::Account(account_subcommand) => {
             account_subcommand.handle_subcommand(wallet_core).await?
         }
-        Command::Pinata(pinata_subcommand) => {
-            pinata_subcommand.handle_subcommand(wallet_core).await?
-        }
         Command::CheckHealth => {
             let remote_program_ids = wallet_core
                 .get_program_ids()
@@ -277,9 +269,13 @@ pub async fn execute_subcommand(
         Command::Token(token_subcommand) => token_subcommand.handle_subcommand(wallet_core).await?,
         Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
         Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
-        Command::Vault(vault_subcommand) => vault_subcommand.handle_subcommand(wallet_core).await?,
         Command::Bridge(bridge_subcommand) => {
             bridge_subcommand.handle_subcommand(wallet_core).await?
+        }
+        Command::ProgramLoader(program_loader_subcommand) => {
+            program_loader_subcommand
+                .handle_subcommand(wallet_core)
+                .await?
         }
         Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
         Command::Keycard(keycard_subcommand) => {
@@ -309,21 +305,6 @@ pub async fn execute_subcommand(
             execute_keys_restoration(wallet_core, depth).await?;
 
             SubcommandReturnValue::Empty
-        }
-        Command::DeployProgram { binary_filepath } => {
-            let bytecode: Vec<u8> = std::fs::read(&binary_filepath).context(format!(
-                "Failed to read program binary at {}",
-                binary_filepath.display()
-            ))?;
-            let response = wallet_core
-                .send_program_deployment_transaction(bytecode)
-                .await
-                .context("Transaction submission error")?;
-
-            wallet_core
-                .poll_and_finalize_public_transaction(response)
-                .await
-                .context("Transaction finalization error")?
         }
         Command::Statistics(statistics_subcommand) => {
             statistics_subcommand.handle_subcommand(wallet_core).await?

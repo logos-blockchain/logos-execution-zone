@@ -72,10 +72,9 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     };
 
     let expected_recipient_post = Account {
-        program_owner: program.id().into(),
         balance: balance_to_move,
         nonce: Nonce::private_account_nonce_init(&recipient_account_id),
-        data: Data::default(),
+        ..Account::default()
     };
 
     let expected_sender_pre = sender.clone();
@@ -171,7 +170,6 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
         ..Default::default()
     };
     let expected_private_account_2 = Account {
-        program_owner: program.id().into(),
         balance: balance_to_move,
         nonce: Nonce::private_account_nonce_init(&recipient_account_id),
         ..Default::default()
@@ -380,8 +378,9 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     .unwrap();
 
     let program_with_deps = ProgramWithDependencies::new(
-        validity_window_chain_caller,
-        [(validity_window.id(), validity_window)].into(),
+        validity_window_chain_caller.clone(),
+        validity_window_chain_caller.id().into(),
+        [(validity_window.id().into(), validity_window)].into(),
     );
 
     let result = execute_and_prove(
@@ -405,17 +404,22 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
 
-/// A private PDA claimed with a non-default identifier produces a ciphertext that decrypts
+/// A private PDA bound with a non-default identifier produces a ciphertext that decrypts
 /// to `PrivateAccountKind::Pda` carrying the correct `(program_id, seed, identifier)`.
 #[test]
-fn private_pda_claim_with_custom_identifier_encrypts_correct_kind() {
-    let program = crate::test_methods::pda_claimer();
+fn private_pda_with_custom_identifier_encrypts_correct_kind() {
+    let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
     let identifier: u128 = 99;
-    let account_id =
-        AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), identifier);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(program.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        identifier,
+    );
     let init_nonce = Nonce::private_account_nonce_init(&account_id);
     let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &init_nonce);
     let shared_secret = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
@@ -424,12 +428,14 @@ fn private_pda_claim_with_custom_identifier_encrypts_correct_kind() {
 
     let (output, _proof) = execute_and_prove(
         vec![pre_state],
-        Program::serialize_instruction(seed).unwrap(),
+        Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
             identifier,
-            kind: WitnessKind::Pda { binding: None },
+            kind: WitnessKind::Pda {
+                binding: Some((program.id().into(), seed)),
+            },
             nullifier: NullifierWitness::Init {
                 npk,
                 commitment_root: DUMMY_COMMITMENT_HASH,
@@ -442,7 +448,7 @@ fn private_pda_claim_with_custom_identifier_encrypts_correct_kind() {
     assert_eq!(
         decrypt_kind(&output, &shared_secret, 0),
         PrivateAccountKind::Pda {
-            program_id: program.id(),
+            account_id: program.id().into(),
             seed,
             identifier
         },
@@ -460,12 +466,16 @@ fn private_pda_init() {
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
     // PDA (new, private PDA)
-    let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 0);
+    let pda_id =
+        AccountId::for_private_pda(&AccountId::from(program.id()), &seed, &npk, &keys.vpk(), 0);
     let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
 
-    let auth_id = simple_transfer.id();
-    let program_with_deps =
-        ProgramWithDependencies::new(program, [(auth_id, simple_transfer)].into());
+    let auth_id: AccountId = simple_transfer.id().into();
+    let program_with_deps = ProgramWithDependencies::new(
+        program.clone(),
+        program.id().into(),
+        [(auth_id, simple_transfer)].into(),
+    );
 
     // is_withdraw=false triggers init path (1 pre-state)
     let instruction = Program::serialize_instruction((seed, auth_id, 0_u128, false)).unwrap();
@@ -492,7 +502,8 @@ fn private_pda_withdraw() {
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
     // PDA (new, private PDA)
-    let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 0);
+    let pda_id =
+        AccountId::for_private_pda(&AccountId::from(program.id()), &seed, &npk, &keys.vpk(), 0);
     let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
 
     // Recipient (public)
@@ -507,9 +518,12 @@ fn private_pda_withdraw() {
         recipient_id,
     );
 
-    let auth_id = simple_transfer.id();
-    let program_with_deps =
-        ProgramWithDependencies::new(program, [(auth_id, simple_transfer)].into());
+    let auth_id: AccountId = simple_transfer.id().into();
+    let program_with_deps = ProgramWithDependencies::new(
+        program.clone(),
+        program.id().into(),
+        [(auth_id, simple_transfer)].into(),
+    );
 
     // is_withdraw=true, amount=0 (PDA has no balance yet)
     let instruction = Program::serialize_instruction((seed, auth_id, 0_u128, true)).unwrap();
@@ -590,7 +604,7 @@ fn shared_account_receives_via_simple_transfer() {
 /// identifier.
 #[test]
 fn private_authorized_init_encrypts_regular_kind_with_identifier() {
-    let program = crate::test_methods::claimer();
+    let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
     let identifier: u128 = 99;
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
@@ -632,7 +646,7 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
 /// carrying the correct identifier.
 #[test]
 fn private_foreign_init_encrypts_regular_kind_with_identifier() {
-    let program = crate::test_methods::claimer();
+    let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
     let identifier: u128 = 99;
     let recipient_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
@@ -834,7 +848,7 @@ fn regular_update_with_wrong_ask_nsk_is_rejected() {
 /// An `ask` that does not derive this account's `npk` is not a credential for it.
 #[test]
 fn regular_init_with_non_chaining_ask_npk_is_rejected() {
-    let program = crate::test_methods::claimer();
+    let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
     let foreign = test_private_account_keys_2();
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
@@ -859,46 +873,6 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-#[test]
-fn unauthorized_private_init_can_be_claimed() {
-    let program = crate::test_methods::claimer();
-    let program_id = program.id();
-    let keys = test_private_account_keys_1();
-    let recipient_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
-    let recipient = AccountWithMetadata::new(Account::default(), false, recipient_id);
-    let esk = EphemeralSecretKey::new(
-        &recipient_id,
-        &[0; 32],
-        &Nonce::private_account_nonce_init(&recipient_id),
-    );
-    let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
-
-    let (output, _) = execute_and_prove(
-        vec![recipient],
-        Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::Private(PrivateWitness {
-            vpk: keys.vpk(),
-            random_seed: [0; 32],
-            identifier: 0,
-            kind: WitnessKind::Regular { ask: None },
-            nullifier: NullifierWitness::Init {
-                npk: keys.npk(),
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
-        })],
-        &program.into(),
-    )
-    .unwrap();
-
-    let (_, claimed) = EncryptionScheme::decrypt(
-        &output.private_actions[0].encrypted_post_state.ciphertext,
-        &ssk,
-        &output.private_actions[0].nullifier,
-    )
-    .unwrap();
-    assert_eq!(claimed.program_owner, program_id.into());
 }
 
 /// A program that asserts authorization over its pre-states rejects a regular private account
@@ -940,16 +914,16 @@ fn pda_update_attempt(
     let simple_transfer = crate::test_methods::simple_balance_transfer();
     let keys = test_private_account_keys_1();
     let seed = PdaSeed::new([42; 32]);
-    let simple_transfer_id = simple_transfer.id();
+    let simple_transfer_id: AccountId = simple_transfer.id().into();
     let pda_id = AccountId::for_private_pda(
-        &program.id(),
+        &AccountId::from(program.id()),
         &seed,
         &keys.npk(),
         &keys.vpk(),
         derivation_identifier,
     );
     let pda_account = Account {
-        program_owner: simple_transfer_id.into(),
+        program_owner: simple_transfer_id,
         balance: 1,
         ..Account::default()
     };
@@ -960,8 +934,11 @@ fn pda_update_attempt(
     let pda_pre = AccountWithMetadata::new(pda_account, declare_authorized, pda_id);
     let recipient_pre = AccountWithMetadata::new(Account::default(), true, AccountId::new([0; 32]));
 
-    let program_with_deps =
-        ProgramWithDependencies::new(program, [(simple_transfer_id, simple_transfer)].into());
+    let program_with_deps = ProgramWithDependencies::new(
+        program.clone(),
+        program.id().into(),
+        [(simple_transfer_id, simple_transfer)].into(),
+    );
 
     execute_and_prove(
         vec![pda_pre, recipient_pre],
@@ -989,7 +966,7 @@ fn pda_update_attempt(
 /// to `PrivateAccountKind::Pda` carrying the correct `(program_id, seed, identifier)`.
 #[test]
 fn private_pda_update_encrypts_pda_kind_with_identifier() {
-    let program_id = crate::test_methods::pda_spend_proxy().id();
+    let program_id: AccountId = crate::test_methods::pda_spend_proxy().id().into();
     let keys = test_private_account_keys_1();
     let seed = PdaSeed::new([42; 32]);
     let identifier: u128 = 99;
@@ -1008,7 +985,7 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
     assert_eq!(
         decrypt_kind(&output, &ssk, 0),
         PrivateAccountKind::Pda {
-            program_id,
+            account_id: program_id,
             seed,
             identifier
         },
@@ -1024,17 +1001,22 @@ fn private_pda_update_at_root_call_may_not_declare_authorization() {
 
 #[test]
 fn private_pda_init_identifier_mismatch_fails() {
-    let program = crate::test_methods::pda_claimer();
+    let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
-    let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 5);
+    let account_id =
+        AccountId::for_private_pda(&AccountId::from(program.id()), &seed, &npk, &keys.vpk(), 5);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let result = execute_and_prove(
         vec![pre_state],
-        Program::serialize_instruction(seed).unwrap(),
-        vec![init_pda_witness(&keys, 99, None)],
+        Program::serialize_instruction(()).unwrap(),
+        vec![init_pda_witness(
+            &keys,
+            99,
+            Some((program.id().into(), seed)),
+        )],
         &program.into(),
     );
 
@@ -1043,23 +1025,30 @@ fn private_pda_init_identifier_mismatch_fails() {
 
 #[test]
 fn private_pda_init_at_root_call_may_not_declare_authorization() {
-    let program = crate::test_methods::pda_claimer();
+    let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
     let identifier: u128 = 5;
-    let account_id =
-        AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), identifier);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(program.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        identifier,
+    );
     let pre_state = AccountWithMetadata::new(Account::default(), true, account_id);
 
     let result = execute_and_prove(
         vec![pre_state],
-        Program::serialize_instruction(seed).unwrap(),
+        Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
             identifier,
-            kind: WitnessKind::Pda { binding: None },
+            kind: WitnessKind::Pda {
+                binding: Some((program.id().into(), seed)),
+            },
             nullifier: NullifierWitness::Init {
                 npk,
                 commitment_root: DUMMY_COMMITMENT_HASH,

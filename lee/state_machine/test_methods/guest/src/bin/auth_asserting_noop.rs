@@ -1,21 +1,28 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{
+    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    respond_unsupported_call,
+};
 
 /// A variant of `noop` that asserts every `pre_state.is_authorized == true` before echoing
-/// the `post_states`. Any unauthorized `pre_state` panics the guest, failing the whole
+/// the `post_diffs`. Any unauthorized `pre_state` panics the guest, failing the whole
 /// circuit proof. Used as a callee in private-PDA delegation tests to actually exercise the
 /// authorization propagated through `ChainedCall.pda_seeds`.
 type Instruction = ();
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             ..
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     for pre in &pre_states {
         assert!(
@@ -25,16 +32,15 @@ fn main() {
         );
     }
 
-    let post_states = pre_states
+    let state_diffs = pre_states
         .iter()
-        .map(|account| AccountPostState::new(account.account.clone()))
+        .map(|account| AccountStateDiff::unchanged(account.clone()))
         .collect();
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        pre_states,
-        post_states,
+        state_diffs,
     )
     .write();
 }

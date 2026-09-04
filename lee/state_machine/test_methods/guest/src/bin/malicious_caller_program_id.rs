@@ -1,34 +1,38 @@
 use lee_core::program::{
-    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, DEFAULT_PROGRAM_ID, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    respond_unsupported_call,
 };
 
 type Instruction = ();
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id: _, // ignore the actual caller
+            self_account_id,
+            caller_account_id: _, // ignore the actual caller
             pre_states,
             instruction: (),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
-    let post_states = pre_states
+    let state_diffs = pre_states
         .iter()
-        .map(|a| AccountPostState::new(a.account.clone()))
+        .map(|a| AccountStateDiff::unchanged(a.clone()))
         .collect();
 
-    // Deliberately output wrong caller_program_id.
-    // A real caller_program_id is None for a top-level call, so we spoof Some(DEFAULT_PROGRAM_ID)
+    // Deliberately output wrong caller_account_id.
+    // A real caller_account_id is None for a top-level call, so we spoof Some(DEFAULT_PROGRAM_ID)
     // to simulate a program claiming it was invoked by another program when it was not.
     ProgramOutput::new(
-        self_program_id,
-        Some(DEFAULT_PROGRAM_ID), // WRONG: should be None for a top-level call
+        self_account_id,
+        Some(DEFAULT_PROGRAM_ID.into()), // WRONG: should be None for a top-level call
         instruction_data,
-        pre_states,
-        post_states,
+        state_diffs,
     )
     .write();
 }

@@ -1,5 +1,6 @@
 use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
 };
 
 /// PDA authorization program that delegates balance operations to `simple_transfer`.
@@ -10,8 +11,8 @@ use lee_core::program::{
 /// Instruction: `(pda_seed, simple_transfer_id, amount, is_withdraw)`.
 ///
 /// **Init** (`is_withdraw = false`, 1 pre-state `[pda]`):
-/// Chains to `simple_transfer` with `instruction=0` (init path) and `pda_seeds=[seed]`
-/// to initialize the PDA under `simple_transfer`'s ownership.
+/// Chains to `simple_transfer` with `instruction=0` (init path) and `pda_seeds=[seed]`,
+/// which echoes the PDA unchanged.
 ///
 /// **Withdraw** (`is_withdraw = true`, 2 pre-states `[pda, recipient]`):
 /// Chains to `simple_transfer` with the amount and `pda_seeds=[seed]` to authorize
@@ -30,15 +31,19 @@ type Instruction = (PdaSeed, ProgramId, u128, bool);
     reason = "clones needed in non-test compilation"
 )]
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (pda_seed, simple_transfer_id, amount, is_withdraw),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     if is_withdraw {
         let Ok([pda_pre, recipient_pre]) = <[_; 2]>::try_from(pre_states.clone()) else {
@@ -47,26 +52,23 @@ fn main() {
 
         // Post-states stay unchanged in this program. The actual balance transfer
         // happens in the chained call to simple_transfer.
-        let pda_post = AccountPostState::new(pda_pre.account.clone());
-        let recipient_post = AccountPostState::new(recipient_pre.account.clone());
+        let pda_post = AccountStateDiff::unchanged(pda_pre.clone());
+        let recipient_post = AccountStateDiff::unchanged(recipient_pre.clone());
 
         // Chain to simple_transfer with pda_seeds to authorize the PDA.
         // The circuit's assert_authorization_and_record_bindings establishes the
         // private PDA (seed, npk) binding when pda_seeds match the private PDA derivation.
-        let mut auth_pda_pre = pda_pre;
-        auth_pda_pre.is_authorized = true;
         let auth_call = ChainedCall::new(
-            simple_transfer_id,
-            vec![auth_pda_pre, recipient_pre],
+            simple_transfer_id.into(),
+            vec![pda_pre.account_id, recipient_pre.account_id],
             &amount,
         )
         .with_pda_seeds(vec![pda_seed]);
 
         ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             instruction_data,
-            pre_states,
             vec![pda_post, recipient_post],
         )
         .with_chained_calls(vec![auth_call])
@@ -77,20 +79,18 @@ fn main() {
             panic!("expected exactly 1 pre_state for init: [pda]");
         };
 
-        let pda_post = AccountPostState::new(pda_pre.account.clone());
+        let pda_post = AccountStateDiff::unchanged(pda_pre.clone());
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
-        // to authorize the PDA. simple_transfer will claim it with Claim::Authorized.
-        let mut auth_pda_pre = pda_pre;
-        auth_pda_pre.is_authorized = true;
-        let auth_call = ChainedCall::new(simple_transfer_id, vec![auth_pda_pre], &amount)
-            .with_pda_seeds(vec![pda_seed]);
+        // to authorize the PDA.
+        let auth_call =
+            ChainedCall::new(simple_transfer_id.into(), vec![pda_pre.account_id], &amount)
+                .with_pda_seeds(vec![pda_seed]);
 
         ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             instruction_data,
-            pre_states,
             vec![pda_post],
         )
         .with_chained_calls(vec![auth_call])

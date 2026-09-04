@@ -4,8 +4,8 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::AccountId,
-    program::{PdaSeed, ProgramId},
+    account::{AccountId, Balance},
+    program::PdaSeed,
 };
 
 /// The most one mint may credit.
@@ -21,7 +21,7 @@ use lee_core::{
 pub const MAX_MINT_AMOUNT: u128 = 0xFFFF_FFFF_FFFF_FFFF;
 
 const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenConfig/00/";
-const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenHold/00000";
+const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenHold/0000/";
 /// Raw 32-byte zone (channel) id, matching the inbox's.
 pub type ZoneId = [u8; 32];
 
@@ -42,8 +42,14 @@ pub enum Instruction {
     /// Replaces the authorized sources. Refused unless the config names an
     /// authority and that account authorized the transaction.
     ///
+    /// Each entry carries policy only; the guest carries the mint counter over
+    /// for a source that stays on the list, so an update cannot reset spent
+    /// allowance, and a source removed and later re-added starts at zero. To
+    /// pause a source without forgetting its counter, keep it listed with
+    /// `mint_cap: Some(0)` rather than removing it.
+    ///
     /// Required accounts (2): the config PDA, then the authority account.
-    UpdateSources { sources: Vec<(ZoneId, ProgramId)> },
+    UpdateSources { sources: Vec<SourcePolicy> },
     /// Gives up the authority, leaving the source list fixed for good. Refused
     /// unless the config names an authority and that account authorized it.
     ///
@@ -64,14 +70,14 @@ pub enum Instruction {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WrappedTokenConfig {
     /// The program allowed to call `Mint`: the cross-zone inbox.
-    pub minter: ProgramId,
+    pub minter: AccountId,
     /// The program allowed to reach `UpdateSources` and `RenounceAuthority`
     /// through a chained call, or `None` for top-level only.
     ///
     /// Exists because a PDA cannot sign: a program-held authority acts only by
     /// its own program delegating it on a chained call. Unset closes the ambient
     /// path where any program the authority signed for could rewrite the list.
-    pub governance: Option<ProgramId>,
+    pub governance: Option<AccountId>,
     /// The account allowed to change `sources`, or `None` for a list fixed at
     /// genesis.
     ///
@@ -80,9 +86,35 @@ pub struct WrappedTokenConfig {
     /// is a governance program worth pointing it at. An `AccountId` rather than
     /// a key, so a PDA of such a program can hold it and act by delegation.
     pub authority: Option<AccountId>,
-    /// The `(src_zone, src_program_id)` pairs a mint may originate from. Empty on
-    /// a zone with no peers, which authorizes nothing.
-    pub sources: Vec<(ZoneId, ProgramId)>,
+    /// The peer sources a mint may originate from, each with its mint policy
+    /// and counter. Empty on a zone with no peers, which authorizes nothing.
+    pub sources: Vec<SourceEntry>,
+}
+
+/// One source's policy as an authority supplies it: identity and allowance,
+/// without the counter, which the guest owns.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SourcePolicy {
+    /// The peer zone the emission came from.
+    pub src_zone: ZoneId,
+    /// The program on that zone that emitted it.
+    pub src_account_id: AccountId,
+    /// Lifetime mint allowance for this source; `None` is uncapped.
+    ///
+    /// Lifetime rather than windowed: the guest has no clock in the dispatch
+    /// account list, and the authority can raise the cap as honest volume
+    /// grows, which serves the same purpose without new plumbing.
+    pub mint_cap: Option<Balance>,
+}
+
+/// One authorized peer source: its policy, and the counter the guest owns.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SourceEntry {
+    /// The source's identity and allowance as the authority supplied them.
+    pub policy: SourcePolicy,
+    /// Lifetime total minted for this source. State, not policy: zero at
+    /// genesis, advanced by every mint, never caller-supplied.
+    pub minted: Balance,
 }
 
 impl WrappedTokenConfig {
@@ -100,23 +132,23 @@ impl WrappedTokenConfig {
 /// PDA holding the authorized minter program id (the cross-zone inbox), seeded at
 /// genesis so the guest can pin its caller without importing the inbox image id.
 #[must_use]
-pub fn config_account_id(wrapped_token_id: ProgramId) -> AccountId {
+pub fn config_account_id(wrapped_token_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&wrapped_token_id, &config_seed())
 }
 
 #[must_use]
-pub const fn config_seed() -> PdaSeed {
+const fn config_seed() -> PdaSeed {
     PdaSeed::new(CONFIG_SEED_DOMAIN)
 }
 
 /// PDA holding one recipient's wrapped-token balance.
 #[must_use]
-pub fn holding_account_id(wrapped_token_id: ProgramId, recipient: &[u8; 32]) -> AccountId {
+pub fn holding_account_id(wrapped_token_id: AccountId, recipient: &[u8; 32]) -> AccountId {
     AccountId::for_public_pda(&wrapped_token_id, &holding_seed(recipient))
 }
 
 #[must_use]
-pub fn holding_seed(recipient: &[u8; 32]) -> PdaSeed {
+fn holding_seed(recipient: &[u8; 32]) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 64];
@@ -150,10 +182,27 @@ mod tests {
     #[test]
     fn config_round_trips() {
         let config = WrappedTokenConfig {
-            minter: [1, 2, 3, 4, 5, 6, 7, 8],
-            governance: Some([2; 8]),
+            minter: AccountId::new([1; 32]),
+            governance: Some(AccountId::new([2; 32])),
             authority: Some(AccountId::new([5; 32])),
-            sources: vec![([7; 32], [9; 8]), ([8; 32], [4; 8])],
+            sources: vec![
+                SourceEntry {
+                    policy: SourcePolicy {
+                        src_zone: [7; 32],
+                        src_account_id: AccountId::new([9; 32]),
+                        mint_cap: Some(1_000),
+                    },
+                    minted: 7,
+                },
+                SourceEntry {
+                    policy: SourcePolicy {
+                        src_zone: [8; 32],
+                        src_account_id: AccountId::new([4; 32]),
+                        mint_cap: None,
+                    },
+                    minted: 0,
+                },
+            ],
         };
         assert_eq!(
             WrappedTokenConfig::from_bytes(&config.to_bytes()),
@@ -188,7 +237,7 @@ mod tests {
 
     #[test]
     fn holding_is_unique_per_recipient() {
-        let id: ProgramId = [9; 8];
+        let id = AccountId::new([9; 32]);
         assert_ne!(
             holding_account_id(id, &[1; 32]),
             holding_account_id(id, &[2; 32])

@@ -36,7 +36,7 @@ runs:
           MAX_CUCUMBER_CONCURRENT_SCENARIOS=${{ inputs.max_concurrent_scenarios }}
 
         # The pinned Logos TF revision has no matching downloadable node binary.
-        # Until #773, unset CI markers so TF uses its source-build provider.
+        # Until #793, unset CI markers so TF uses its source-build provider.
         run: >-
           env -u GITHUB_ACTIONS -u CI
           cargo test -p integration_tests --features cucumber

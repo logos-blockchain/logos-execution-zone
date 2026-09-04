@@ -2,24 +2,24 @@ use std::num::NonZeroU128;
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall},
+    account::{AccountId, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountStateDiff, ChainedCall},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn remove_liquidity(
-    pool: AccountWithMetadata,
-    vault_a: AccountWithMetadata,
-    vault_b: AccountWithMetadata,
-    pool_definition_lp: AccountWithMetadata,
-    user_holding_a: AccountWithMetadata,
-    user_holding_b: AccountWithMetadata,
-    user_holding_lp: AccountWithMetadata,
+    pool: &AccountWithMetadata,
+    vault_a: &AccountWithMetadata,
+    vault_b: &AccountWithMetadata,
+    pool_definition_lp: &AccountWithMetadata,
+    user_holding_a: &AccountWithMetadata,
+    user_holding_b: &AccountWithMetadata,
+    user_holding_lp: &AccountWithMetadata,
     remove_liquidity_amount: NonZeroU128,
     min_amount_to_remove_token_a: u128,
     min_amount_to_remove_token_b: u128,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let remove_liquidity_amount: u128 = remove_liquidity_amount.into();
 
     // 1. Fetch Pool state
@@ -39,14 +39,6 @@ pub fn remove_liquidity(
         vault_b.account_id, pool_def_data.vault_b_id,
         "Vault B was not provided"
     );
-
-    // Vault addresses do not need to be checked with PDA
-    // calculation for setting authorization since stored
-    // in the Pool Definition.
-    let mut running_vault_a = vault_a.clone();
-    let mut running_vault_b = vault_b.clone();
-    running_vault_a.is_authorized = true;
-    running_vault_b.is_authorized = true;
 
     assert!(
         min_amount_to_remove_token_a != 0,
@@ -102,7 +94,6 @@ pub fn remove_liquidity(
     let active: bool = pool_def_data.liquidity_pool_supply - delta_lp != 0;
 
     // 5. Update pool account
-    let mut pool_post = pool.account;
     let pool_post_definition = PoolDefinition {
         liquidity_pool_supply: pool_def_data.liquidity_pool_supply - delta_lp,
         reserve_a: pool_def_data.reserve_a - withdraw_amount_a,
@@ -111,15 +102,12 @@ pub fn remove_liquidity(
         ..pool_def_data
     };
 
-    pool_post.data = Data::from(&pool_post_definition);
-
-    let token_program_id: lee_core::program::ProgramId =
-        user_holding_a.account.program_owner.into();
+    let token_program_id: AccountId = user_holding_a.account.program_owner;
 
     // Chaincall for Token A withdraw
     let call_token_a = ChainedCall::new(
         token_program_id,
-        vec![running_vault_a, user_holding_a.clone()],
+        vec![vault_a.account_id, user_holding_a.account_id],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_a,
         },
@@ -131,7 +119,7 @@ pub fn remove_liquidity(
     // Chaincall for Token B withdraw
     let call_token_b = ChainedCall::new(
         token_program_id,
-        vec![running_vault_b, user_holding_b.clone()],
+        vec![vault_b.account_id, user_holding_b.account_id],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_b,
         },
@@ -141,11 +129,9 @@ pub fn remove_liquidity(
         pool_def_data.definition_token_b_id,
     )]);
     // Chaincall for LP adjustment
-    let mut pool_definition_lp_auth = pool_definition_lp.clone();
-    pool_definition_lp_auth.is_authorized = true;
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_definition_lp_auth, user_holding_lp.clone()],
+        vec![pool_definition_lp.account_id, user_holding_lp.account_id],
         &token_core::Instruction::Burn {
             amount_to_burn: delta_lp,
         },
@@ -154,15 +140,19 @@ pub fn remove_liquidity(
 
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
-    let post_states = vec![
-        AccountPostState::new(pool_post),
-        AccountPostState::new(vault_a.account),
-        AccountPostState::new(vault_b.account),
-        AccountPostState::new(pool_definition_lp.account),
-        AccountPostState::new(user_holding_a.account),
-        AccountPostState::new(user_holding_b.account),
-        AccountPostState::new(user_holding_lp.account),
+    let post_diffs = vec![
+        AccountStateDiff::new(
+            pool.clone(),
+            BalanceDiff::Add(0),
+            Data::from(&pool_post_definition),
+        ),
+        AccountStateDiff::unchanged(vault_a.clone()),
+        AccountStateDiff::unchanged(vault_b.clone()),
+        AccountStateDiff::unchanged(pool_definition_lp.clone()),
+        AccountStateDiff::unchanged(user_holding_a.clone()),
+        AccountStateDiff::unchanged(user_holding_b.clone()),
+        AccountStateDiff::unchanged(user_holding_lp.clone()),
     ];
 
-    (post_states, chained_calls)
+    (post_diffs, chained_calls)
 }

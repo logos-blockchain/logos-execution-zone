@@ -10,8 +10,9 @@ use kameo::actor::ActorRef;
 use log::{error, warn};
 use sequencer_core::{block_publisher::BlockPublisherTrait, gossip::GossipTxPublisher};
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
-    CrossZoneDeadLetter, CrossZoneDeadLetterReport, HashType, MembershipProof, Nonce, ProgramId,
+    Account, AccountId, AdmissionRejection, Block, BlockId, ChannelId, Commitment,
+    CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
+    CrossZoneDeadLetterRequeue, FeeStateQuote, HashType, MembershipProof, Nonce, ProgramId,
 };
 
 pub struct Service<BP: BlockPublisherTrait + Send + Sync + 'static> {
@@ -46,9 +47,6 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         let tx_hash = tx.hash();
 
         let res = async move {
-            // Reserve ~200 bytes for block header overhead
-            const BLOCK_HEADER_OVERHEAD: u64 = 200;
-
             let encoded_tx =
                 borsh::to_vec(&tx).expect("Transaction borsh serialization should not fail");
             let tx_size =
@@ -57,7 +55,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             let max_tx_size = self
                 .max_block_size
                 .as_u64()
-                .saturating_sub(BLOCK_HEADER_OVERHEAD);
+                .saturating_sub(sequencer_core::config::BLOCK_OVERHEAD);
 
             if tx_size > max_tx_size {
                 return Err(ErrorObjectOwned::owned(
@@ -83,7 +81,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             // an inbound cross-zone delivery. Chained user calls are already rejected
             // by the inbox guest's caller-is-none assertion.
             if let LeeTransaction::Public(public_tx) = &authenticated_tx
-                && sequencer_core::is_sequencer_only_program(public_tx.message().program_id)
+                && sequencer_core::is_sequencer_only_program(public_tx.message().program_account_id)
             {
                 return Err(ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
@@ -102,20 +100,39 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             error!("Transaction failed before reaching mempool: {err:#?}");
         })?;
 
-        // Publish to the gossip mesh before the local mempool admission so a
-        // full mempool doesn't delay propagation.
-        if let Some(publisher) = &self.gossip_tx_publisher {
-            publisher.publish(authenticated_tx.clone());
-        }
-
-        self.executor_ref
+        // The executor screens the transaction against the head state (fee
+        // admission) before pushing it to the mempool; a rejection comes back
+        // as a verdict, not an actor failure.
+        let outcome = self
+            .executor_ref
             .ask(sequencer_executor_actor::protocol::Transaction {
-                transaction: authenticated_tx,
+                transaction: authenticated_tx.clone(),
             })
             .await
             .map_err(internal_error)?;
+        if let sequencer_executor_actor::protocol::SubmitOutcome::Rejected(rejection) = outcome {
+            sequencer_rpc_server_actor_metrics::increment_before_mempool_failed_transactions_total(
+            );
+            warn!("Transaction refused at fee admission: {rejection}");
+            return Err(rejection_error(&rejection));
+        }
+
+        // Published only once admitted, so peers are not fed what the door
+        // refused. (A full local mempool has already errored above, so a
+        // publish cannot be lost to it either.)
+        if let Some(publisher) = &self.gossip_tx_publisher {
+            publisher.publish(authenticated_tx);
+        }
 
         Ok(tx_hash)
+    }
+
+    async fn get_fee_state(&self) -> Result<FeeStateQuote, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetFeeQuote)
+            .await
+            .map(|reply| reply.quote)
+            .map_err(internal_error)
     }
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
@@ -208,7 +225,6 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             programs::authenticated_transfer().id(),
         );
         program_ids.insert("token".to_owned(), programs::token().id());
-        program_ids.insert("pinata".to_owned(), programs::pinata().id());
         program_ids.insert("amm".to_owned(), programs::amm().id());
         program_ids.insert(
             "privacy_preserving_circuit".to_owned(),
@@ -247,13 +263,44 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
                     src_block_id: record.origin.src_block_id,
                     src_tx_index: record.origin.src_tx_index,
                     failed_attempts: record.failed_attempts,
-                    transaction_bytes: record.transaction_bytes,
+                    transaction_bytes: u32::try_from(record.transaction.len()).unwrap_or(u32::MAX),
                 })
                 .collect(),
+        })
+    }
+
+    async fn requeue_cross_zone_dead_letter(
+        &self,
+        message_key: HashType,
+    ) -> Result<CrossZoneDeadLetterRequeue, ErrorObjectOwned> {
+        use sequencer_executor_actor::protocol::DeadLetterRequeue;
+
+        let reply = self
+            .executor_ref
+            .ask(
+                sequencer_executor_actor::protocol::RequeueCrossZoneDeadLetter {
+                    message_key: message_key.0,
+                },
+            )
+            .await
+            .map_err(internal_error)?;
+
+        Ok(match reply.outcome {
+            DeadLetterRequeue::Requeued => CrossZoneDeadLetterRequeue::Requeued,
+            DeadLetterRequeue::AlreadyPending => CrossZoneDeadLetterRequeue::AlreadyPending,
+            DeadLetterRequeue::NotFound => CrossZoneDeadLetterRequeue::NotFound,
+            DeadLetterRequeue::NotRetained => CrossZoneDeadLetterRequeue::NotRetained,
         })
     }
 }
 
 fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+}
+
+/// The JSON-RPC error a fee-admission rejection is returned as: its own code,
+/// the rendered reason, and the structured rejection in `data` for a client
+/// that would rather not parse prose.
+fn rejection_error(rejection: &AdmissionRejection) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(rejection.code(), rejection.to_string(), Some(rejection))
 }

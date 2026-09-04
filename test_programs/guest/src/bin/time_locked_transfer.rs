@@ -10,21 +10,31 @@
 //!   2 - clock account (read-only, e.g. `CLOCK_01`).
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
 
 /// (`amount`, `deadline_timestamp`).
 type Instruction = (u128, u64);
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (amount, deadline),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([sender_pre, receiver_pre, clock_pre]) = <[_; 3]>::try_from(pre_states) else {
         panic!("Expected exactly 3 input accounts: sender, receiver, clock");
@@ -42,30 +52,23 @@ fn main() {
         clock_data.timestamp,
     );
 
-    let mut sender_post = sender_pre.account.clone();
-    let mut receiver_post = receiver_pre.account.clone();
-
-    sender_post.balance = sender_post
-        .balance
-        .checked_sub(amount)
-        .expect("Insufficient balance");
-    receiver_post.balance = receiver_post
-        .balance
-        .checked_add(amount)
-        .expect("Balance overflow");
-
-    // Clock account is read-only: post state equals pre state.
-    let clock_post = clock_pre.account.clone();
-
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![sender_pre, receiver_pre, clock_pre],
         vec![
-            AccountPostState::new(sender_post),
-            AccountPostState::new(receiver_post),
-            AccountPostState::new(clock_post),
+            AccountStateDiff::new(
+                sender_pre.clone(),
+                BalanceDiff::Sub(amount),
+                sender_pre.account.data,
+            ),
+            AccountStateDiff::new(
+                receiver_pre.clone(),
+                BalanceDiff::Add(amount),
+                receiver_pre.account.data,
+            ),
+            // Clock account is read-only: post state equals pre state.
+            AccountStateDiff::unchanged(clock_pre),
         ],
     )
     .write();

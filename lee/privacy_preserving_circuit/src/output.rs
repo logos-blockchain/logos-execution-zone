@@ -2,7 +2,7 @@ use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
     EphemeralSecretKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateAccountKind,
-    PrivateAction, PrivateWitness, PublicAction, SharedSecretKey, WitnessKind,
+    PrivateAction, PrivateWitness, ProgramImageClaim, PublicAction, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
@@ -14,6 +14,7 @@ pub fn compute_circuit_output(
     execution_state: ExecutionState,
     account_identities: &[InputAccountIdentity],
     dummy_inputs: Vec<DummyInput>,
+    program_image_claims: Vec<ProgramImageClaim>,
 ) -> PrivacyPreservingCircuitOutput {
     let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
         execution_state.into_parts();
@@ -22,6 +23,7 @@ pub fn compute_circuit_output(
         private_actions: Vec::new(),
         block_validity_window,
         timestamp_validity_window,
+        program_image_claims,
     };
 
     assert_eq!(
@@ -58,7 +60,7 @@ pub fn compute_circuit_output(
                         derived
                     }
                     // The npk-to-account_id binding is established upstream in
-                    // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
+                    // `validate_and_sync_states` via the witness `binding` or a caller `pda_seeds`
                     // match. Here we only enforce the lifecycle pre-conditions. The supplied npk
                     // on the witness has been recorded into `private_pda_by_position` and used
                     // for the binding check; we use `pre_state.account_id` directly for nullifier
@@ -129,11 +131,11 @@ pub fn compute_circuit_output(
                 let account_kind = match kind {
                     WitnessKind::Regular { .. } => PrivateAccountKind::Regular(*identifier),
                     WitnessKind::Pda { .. } => {
-                        let (authority_program_id, seed) = pda_seed_by_position
+                        let (authority_account_id, seed) = pda_seed_by_position
                             .get(&pos)
                             .expect("private PDA position must be in pda_seed_by_position");
                         PrivateAccountKind::Pda {
-                            program_id: *authority_program_id,
+                            account_id: *authority_account_id,
                             seed: *seed,
                             identifier: *identifier,
                         }

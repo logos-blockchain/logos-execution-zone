@@ -5,12 +5,14 @@
 
 use anyhow::{Context as _, Result};
 use integration_tests::{
-    TestContext, private_mention,
+    TestContext,
+    config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+    private_mention,
     utils::{get_account, new_account},
 };
 use key_protocol::key_management::KeyChain;
 use lee::Data;
-use lee_core::account::Nonce;
+use lee_core::{account::Nonce, program::DEFAULT_PROGRAM_OWNER};
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -27,13 +29,13 @@ async fn get_existing_account() -> Result<()> {
 
     let account = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
 
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id().into()
-    );
-    assert_eq!(account.balance, 10000);
+    // Genesis credits the account.
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
+    assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
+    // No data is appended.
     assert!(account.data.is_empty());
-    assert_eq!(account.nonce.0, 1);
+    // It also gets used as a funder for private accounts on genesis twice.
+    assert_eq!(account.nonce.0, 2);
 
     log::info!("Successfully retrieved account with correct details");
 

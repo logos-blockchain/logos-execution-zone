@@ -25,9 +25,8 @@ use crate::{
     config::{InitialPrivateAccountForWallet, MultiNodeTestContextConfig, SequencerPartialConfig},
     indexer_client::IndexerClient,
     setup::{
-        SequencerSetup, setup_bedrock_node, setup_indexer,
-        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
-        setup_wallet, sync_wallet_from_prebuilt,
+        SequencerSetup, fund_private_accounts, setup_bedrock_node, setup_indexer, setup_wallet,
+        sync_wallet_from_prebuilt,
     },
 };
 
@@ -718,6 +717,12 @@ impl ZoneTestContextBuilder {
             .await
             .context("Encountered an error while waiting for genesis to be published")?;
 
+        // Followers must not start before the channel exists on Bedrock, or
+        // they race a second channel-create.
+        wait_until_channel_exists(bedrock_addr, mn_config.bedrock_channel)
+            .await
+            .context("Encountered an error while waiting for the channel to land on Bedrock")?;
+
         log::info!("Passed wait untill genesis");
 
         sequencer_addrs.push(leader_addr);
@@ -756,18 +761,18 @@ impl ZoneTestContextBuilder {
 
             if use_prebuilt {
                 // Funds already exist on-chain in the prebuilt blocks; sync instead of
-                // claiming live.
+                // funding live.
                 sync_wallet_from_prebuilt(&mut wallet)
                     .await
                     .context("Failed to sync wallet from prebuilt database")?;
             } else {
-                setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
-                    .await
-                    .context("Failed to initialize public accounts in wallet")?;
-
-                setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
-                    .await
-                    .context("Failed to initialize private accounts in wallet")?;
+                fund_private_accounts(
+                    &mut wallet,
+                    &initial_public_accounts,
+                    &initial_private_accounts,
+                )
+                .await
+                .context("Failed to fund private accounts in wallet")?;
             }
 
             Some(WalletComponents {
@@ -1000,10 +1005,6 @@ pub const fn private_mention(account_id: AccountId) -> CliAccountMention {
     CliAccountMention::Id(AccountIdWithPrivacy::Private(account_id))
 }
 
-#[expect(
-    clippy::wildcard_enum_match_arm,
-    reason = "We want the code to panic if the transaction type is not PrivacyPreserving"
-)]
 pub async fn fetch_privacy_preserving_tx(
     seq_client: &SequencerClient,
     tx_hash: HashType,
@@ -1014,7 +1015,7 @@ pub async fn fetch_privacy_preserving_tx(
         LeeTransaction::PrivacyPreserving(privacy_preserving_transaction) => {
             privacy_preserving_transaction
         }
-        _ => panic!("Invalid tx type"),
+        LeeTransaction::Public(_) => panic!("Invalid tx type"),
     }
 }
 
@@ -1073,6 +1074,32 @@ async fn wait_until_genesis(client: &SequencerClient) -> Result<()> {
         .with_context(|| "Timed out waiting for genesis")?
 }
 
+async fn wait_until_channel_exists(bedrock_addr: SocketAddr, channel_id: ChannelId) -> Result<()> {
+    log::info!("Waiting for the channel to land on Bedrock");
+
+    let bedrock_config = sequencer_core::config::BedrockConfig {
+        channel_id,
+        node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
+        funding_key: config::bedrock_funding_key(),
+        auth: None,
+        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+    };
+    let wait = async {
+        loop {
+            if sequencer_core::block_publisher::read_channel_state(&bedrock_config)
+                .await?
+                .is_some()
+            {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(360), wait)
+        .await
+        .with_context(|| "Timed out waiting for the channel to land on Bedrock")?
+}
+
 #[expect(clippy::too_many_arguments, reason = "No need to repackage fields")]
 async fn build_sequencer_components(
     partial_config: SequencerPartialConfig,
@@ -1090,12 +1117,13 @@ async fn build_sequencer_components(
     let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
 
     let genesis_actions = if enable_wallet {
-        // Wallet genesis must always be present so that
-        // setup_public/private_accounts_with_initial_supply can claim from the vault
-        // PDAs. When a test supplies custom genesis, merge rather
-        // than replace.
-        let wallet_genesis =
-            config::genesis_from_accounts(initial_public_accounts, initial_private_accounts);
+        // Wallet genesis must always be present so the wallet's accounts hold
+        // their supply and `fund_private_accounts` can draw from the funder.
+        // When a test supplies custom genesis, merge rather than replace.
+        let wallet_genesis = config::genesis_from_accounts(
+            initial_public_accounts,
+            config::private_total(initial_private_accounts),
+        );
         match genesis_transactions {
             Some(mut custom) => {
                 custom.extend(wallet_genesis);

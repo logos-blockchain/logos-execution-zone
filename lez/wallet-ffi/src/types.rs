@@ -716,7 +716,7 @@ mod tests {
             &npk,
             &vpk,
             &PrivateAccountKind::Pda {
-                program_id: [46; 8],
+                account_id: AccountId::new([46; 32]),
                 seed: PdaSeed::new([47; 32]),
                 identifier,
             },

@@ -3,9 +3,10 @@
     reason = "We prefer to group methods by functionality rather than by type for encoding"
 )]
 
+pub use fees::{FeeDeclaration, SignedMessage, is_fee_authorized};
 pub use lee_core::{
     GENESIS_BLOCK_ID, SharedSecretKey,
-    account::{Account, AccountId, Balance, Data},
+    account::{Account, AccountId, Balance, Cycles, Data, Fee, Gas},
     encryption::EphemeralPublicKey,
     program::ProgramId,
 };
@@ -15,18 +16,17 @@ pub use privacy_preserving_circuit::{
 pub use privacy_preserving_transaction::{
     PrivacyPreservingTransaction, circuit::execute_and_prove,
 };
-pub use program_deployment_transaction::ProgramDeploymentTransaction;
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::V03State;
-pub use validated_state_diff::ValidatedStateDiff;
+pub use validated_state_diff::{ExecutionOutcome, ValidatedStateDiff};
 
 pub mod encoding;
 pub mod error;
+pub mod fees;
 mod merkle_tree;
 pub mod privacy_preserving_transaction;
 pub mod program;
-pub mod program_deployment_transaction;
 pub mod public_transaction;
 mod signature;
 mod state;
@@ -64,42 +64,10 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn nonce_changer() -> Program {
-        Program::new_unchecked(
-            test_methods::NONCE_CHANGER_ID,
-            Cow::Borrowed(test_methods::NONCE_CHANGER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn extra_output() -> Program {
-        Program::new_unchecked(
-            test_methods::EXTRA_OUTPUT_ID,
-            Cow::Borrowed(test_methods::EXTRA_OUTPUT_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn missing_output() -> Program {
-        Program::new_unchecked(
-            test_methods::MISSING_OUTPUT_ID,
-            Cow::Borrowed(test_methods::MISSING_OUTPUT_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn dropped_account() -> Program {
         Program::new_unchecked(
             test_methods::DROPPED_ACCOUNT_ID,
             Cow::Borrowed(test_methods::DROPPED_ACCOUNT_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn program_owner_changer() -> Program {
-        Program::new_unchecked(
-            test_methods::PROGRAM_OWNER_CHANGER_ID,
-            Cow::Borrowed(test_methods::PROGRAM_OWNER_CHANGER_ELF),
         )
     }
 
@@ -116,6 +84,30 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::MINTER_ID,
             Cow::Borrowed(test_methods::MINTER_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn squatter() -> Program {
+        Program::new_unchecked(
+            test_methods::SQUATTER_ID,
+            Cow::Borrowed(test_methods::SQUATTER_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn acquire_and_forward() -> Program {
+        Program::new_unchecked(
+            test_methods::ACQUIRE_AND_FORWARD_ID,
+            Cow::Borrowed(test_methods::ACQUIRE_AND_FORWARD_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn acquire_then_fund() -> Program {
+        Program::new_unchecked(
+            test_methods::ACQUIRE_THEN_FUND_ID,
+            Cow::Borrowed(test_methods::ACQUIRE_THEN_FUND_ELF),
         )
     }
 
@@ -152,34 +144,10 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn undeclaring_pda_delegator() -> Program {
-        Program::new_unchecked(
-            test_methods::UNDECLARING_PDA_DELEGATOR_ID,
-            Cow::Borrowed(test_methods::UNDECLARING_PDA_DELEGATOR_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn non_delegating_forwarder() -> Program {
         Program::new_unchecked(
             test_methods::NON_DELEGATING_FORWARDER_ID,
             Cow::Borrowed(test_methods::NON_DELEGATING_FORWARDER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn pda_claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::PDA_CLAIMER_ID,
-            Cow::Borrowed(test_methods::PDA_CLAIMER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn two_pda_claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::TWO_PDA_CLAIMER_ID,
-            Cow::Borrowed(test_methods::TWO_PDA_CLAIMER_ELF),
         )
     }
 
@@ -197,18 +165,10 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn modified_transfer_program() -> Program {
+    pub const fn event_emitter() -> Program {
         Program::new_unchecked(
-            test_methods::MODIFIED_TRANSFER_ID,
-            Cow::Borrowed(test_methods::MODIFIED_TRANSFER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn malicious_authorization_changer() -> Program {
-        Program::new_unchecked(
-            test_methods::MALICIOUS_AUTHORIZATION_CHANGER_ID,
-            Cow::Borrowed(test_methods::MALICIOUS_AUTHORIZATION_CHANGER_ELF),
+            test_methods::EVENT_EMITTER_ID,
+            Cow::Borrowed(test_methods::EVENT_EMITTER_ELF),
         )
     }
 
@@ -261,22 +221,6 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::CLAIMER_ID,
-            Cow::Borrowed(test_methods::CLAIMER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn changer_claimer() -> Program {
-        Program::new_unchecked(
-            test_methods::CHANGER_CLAIMER_ID,
-            Cow::Borrowed(test_methods::CHANGER_CLAIMER_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn validity_window_chain_caller() -> Program {
         Program::new_unchecked(
             test_methods::VALIDITY_WINDOW_CHAIN_CALLER_ID,
@@ -294,18 +238,42 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn malicious_injector() -> Program {
+    pub const fn references_undeclared_account() -> Program {
         Program::new_unchecked(
-            test_methods::MALICIOUS_INJECTOR_ID,
-            Cow::Borrowed(test_methods::MALICIOUS_INJECTOR_ELF),
+            test_methods::REFERENCES_UNDECLARED_ACCOUNT_ID,
+            Cow::Borrowed(test_methods::REFERENCES_UNDECLARED_ACCOUNT_ELF),
         )
     }
 
     #[must_use]
-    pub const fn malicious_launderer() -> Program {
+    pub const fn injects_undeclared_pre_state() -> Program {
         Program::new_unchecked(
-            test_methods::MALICIOUS_LAUNDERER_ID,
-            Cow::Borrowed(test_methods::MALICIOUS_LAUNDERER_ELF),
+            test_methods::INJECTS_UNDECLARED_PRE_STATE_ID,
+            Cow::Borrowed(test_methods::INJECTS_UNDECLARED_PRE_STATE_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn reorders_and_forwards() -> Program {
+        Program::new_unchecked(
+            test_methods::REORDERS_AND_FORWARDS_ID,
+            Cow::Borrowed(test_methods::REORDERS_AND_FORWARDS_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn asserts_specific_account_authorized() -> Program {
+        Program::new_unchecked(
+            test_methods::ASSERTS_SPECIFIC_ACCOUNT_AUTHORIZED_ID,
+            Cow::Borrowed(test_methods::ASSERTS_SPECIFIC_ACCOUNT_AUTHORIZED_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn reordering_transfer() -> Program {
+        Program::new_unchecked(
+            test_methods::REORDERING_TRANSFER_ID,
+            Cow::Borrowed(test_methods::REORDERING_TRANSFER_ELF),
         )
     }
 }

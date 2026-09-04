@@ -8,5 +8,6 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+authenticated_transfer_core = { workspace = true, features = ["image_id"] }
 sequencer_stake_core.workspace = true
 lee_core.workspace = true

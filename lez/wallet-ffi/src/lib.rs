@@ -48,12 +48,10 @@ pub mod generic_transaction;
 pub mod keys;
 pub mod label;
 pub mod pda;
-pub mod pinata;
 pub mod program_deployment;
 pub mod sync;
 pub mod transfer;
 pub mod types;
-pub mod vault;
 pub mod wallet;
 
 static TOKIO_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -90,6 +88,10 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
     reason = "We want to catch all errors for future proofing"
 )]
 pub(crate) fn map_execution_error(e: ExecutionFailureKind) -> FfiError {
+    if let Some(::wallet::AdmissionRejection::PayerCannotFund { .. }) = e.fee_admission_rejection()
+    {
+        return FfiError::PayerCannotFund;
+    }
     match e {
         ExecutionFailureKind::InsufficientFundsError => FfiError::InsufficientFunds,
         ExecutionFailureKind::KeyNotFoundError => FfiError::KeyNotFound,

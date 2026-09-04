@@ -1,26 +1,27 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee_core::account::AccountId;
 pub use lee_core::program::PdaSeed;
-use lee_core::{account::AccountId, program::ProgramId};
+
+pub mod event;
 
 const BRIDGE_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/BridgeSeed/0000000000/";
 const DEPOSIT_RECEIPT_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeDepositReceipt/0";
 
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
-    /// Transfers native tokens from the bridge PDA account to a recipient vault,
+    /// Transfers native tokens from the bridge PDA account to a recipient,
     /// exactly once per `l1_deposit_op_id`.
     ///
     /// Required accounts (3):
     /// - Bridge PDA account
-    /// - Recipient vault PDA account
-    /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`. Its existence records that
-    ///   this op id was already minted; a second application of the same op id finds it present and
-    ///   transfers nothing.
+    /// - Recipient account
+    /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`. Bridge ownership of it
+    ///   records that this op id was already minted; a second application of the same op id finds
+    ///   it owned and transfers nothing.
     Deposit {
         /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
         /// Deposit Event on L1.
         l1_deposit_op_id: [u8; 32],
-        vault_program_id: ProgramId,
         recipient_id: AccountId,
         amount: u64,
     },
@@ -45,14 +46,14 @@ pub const fn compute_bridge_seed() -> PdaSeed {
 }
 
 #[must_use]
-pub fn compute_bridge_account_id(bridge_program_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&bridge_program_id, &compute_bridge_seed())
+pub fn compute_bridge_account_id(bridge_program_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&bridge_program_account_id, &compute_bridge_seed())
 }
 
-/// Seed of the deposit-receipt PDA for `l1_deposit_op_id`, exposed so the guest
-/// can claim the account. Domain-separated from [`compute_bridge_seed`].
+/// Seed of the deposit-receipt PDA for `l1_deposit_op_id`. Domain-separated from
+/// [`compute_bridge_seed`].
 #[must_use]
-pub fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
+fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 64];
@@ -66,20 +67,23 @@ pub fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
     PdaSeed::new(seed)
 }
 
-/// The deposit-receipt PDA whose existence marks `l1_deposit_op_id` as minted.
+/// The deposit-receipt PDA whose bridge ownership marks `l1_deposit_op_id` as minted.
 #[must_use]
 pub fn deposit_receipt_account_id(
-    bridge_program_id: ProgramId,
+    bridge_program_account_id: AccountId,
     l1_deposit_op_id: [u8; 32],
 ) -> AccountId {
-    AccountId::for_public_pda(&bridge_program_id, &deposit_receipt_seed(l1_deposit_op_id))
+    AccountId::for_public_pda(
+        &bridge_program_account_id,
+        &deposit_receipt_seed(l1_deposit_op_id),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const BRIDGE_ID: ProgramId = [7; 8];
+    const BRIDGE_ID: AccountId = AccountId::new([7; 32]);
 
     #[test]
     fn receipt_id_is_deterministic_per_op_id() {

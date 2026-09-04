@@ -344,11 +344,11 @@ mod tests {
     /// pattern from `for_private_pda_matches_pinned_value` in `lee_core`.
     #[test]
     fn pinned_end_to_end_derivation_for_private_pda() {
-        use lee_core::{account::AccountId, program::ProgramId};
+        use lee_core::account::AccountId;
 
         let gms = [42_u8; 32];
         let seed = PdaSeed::new([1; 32]);
-        let program_id: ProgramId = [9; 8];
+        let program_id = AccountId::new([9; 32]);
 
         let holder = GroupKeyHolder::from_gms(gms);
         let keys = holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
@@ -545,7 +545,7 @@ mod tests {
 
         let alice_holder = GroupKeyHolder::new();
         let pda_seed = PdaSeed::new([42_u8; 32]);
-        let program_id: lee_core::program::ProgramId = [1; 8];
+        let program_id = AccountId::new([1; 32]);
 
         let alice_keys = alice_holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &pda_seed);
         let alice_npk = alice_keys.generate_nullifier_public_key();

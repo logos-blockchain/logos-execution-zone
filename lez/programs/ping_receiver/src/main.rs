@@ -1,51 +1,52 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{AccountId, AccountWithMetadata, BalanceDiff},
     program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
     },
 };
-use ping_core::{
-    ReceiverConfig, ReceiverInstruction, ping_record_pda, ping_record_seed,
-    receiver_config_account_id, receiver_config_seed,
-};
+use ping_core::{ReceiverConfig, ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 
 fn main() {
-    let (
+    let call = read_lee_call::<ReceiverInstruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<ReceiverInstruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     match instruction {
         ReceiverInstruction::Record { payload } => record(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             payload,
         ),
         ReceiverInstruction::InitConfig(config) => init_config(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             &config,
         ),
         ReceiverInstruction::RenounceAuthority => renounce_authority(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
         ),
         ReceiverInstruction::UpdateSources { sources } => update_sources(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             sources,
@@ -54,8 +55,8 @@ fn main() {
 }
 
 fn record(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     payload: Vec<u8>,
@@ -66,45 +67,42 @@ fn record(
 
     assert_eq!(
         config.account_id,
-        receiver_config_account_id(self_program_id),
+        receiver_config_account_id(self_account_id),
         "second account must be the receiver config PDA"
     );
     let cfg = ReceiverConfig::from_bytes(&config.account.data)
         .expect("config account holds a receiver config");
     assert_eq!(
-        caller_program_id,
+        caller_account_id,
         Some(cfg.deliverer),
         "Record is only callable by the authorized deliverer (the cross-zone inbox)"
     );
     // Which peer sent it is this program's own business. Without this the record
     // says only that some program on some configured peer wrote it.
     assert!(
-        cfg.sources.iter().any(|(src_zone, src_program_id)| {
+        cfg.sources.iter().any(|(src_zone, src_account_id)| {
             marker.account_id
-                == inbox_source_marker_account_id(cfg.deliverer, src_zone, *src_program_id)
+                == inbox_source_marker_account_id(cfg.deliverer, src_zone, *src_account_id)
         }),
         "Record is only callable for a peer source this receiver authorizes"
     );
 
     assert_eq!(
         record.account_id,
-        ping_record_pda(self_program_id),
+        ping_record_pda(self_account_id),
         "third account must be the ping record PDA"
     );
 
-    let mut post_account = record.account.clone();
-    post_account.data = payload.try_into().expect("payload fits in account data");
-    let post =
-        AccountPostState::new_claimed_if_default(post_account, Claim::Pda(ping_record_seed()));
+    let record_data = payload.try_into().expect("payload fits in account data");
+    let post = AccountStateDiff::new(record, BalanceDiff::Add(0), record_data);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![marker.clone(), config.clone(), record],
         vec![
-            AccountPostState::new(marker.account),
-            AccountPostState::new(config.account),
+            AccountStateDiff::unchanged(marker),
+            AccountStateDiff::unchanged(config),
             post,
         ],
     )
@@ -113,8 +111,8 @@ fn record(
 
 /// Gives up the authority, freezing the source list for good.
 fn renounce_authority(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
 ) {
@@ -125,7 +123,7 @@ fn renounce_authority(
         .expect("RenounceAuthority requires the config account");
     assert_eq!(
         config_meta.account_id,
-        receiver_config_account_id(self_program_id),
+        receiver_config_account_id(self_account_id),
         "first account must be the receiver config PDA"
     );
     let mut cfg = ReceiverConfig::from_bytes(&config_meta.account.data)
@@ -133,7 +131,7 @@ fn renounce_authority(
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
     assert!(
-        caller_program_id.is_none() || caller_program_id == cfg.governance,
+        caller_account_id.is_none() || caller_account_id == cfg.governance,
         "the authority acts at top level, or through the configured governance program"
     );
 
@@ -147,35 +145,24 @@ fn renounce_authority(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
-    // Claims apply after post-state validation, so a first use must find the
-    // account untouched; an unowned account with history is refused for good.
-    assert!(
-        authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
-        "the authority account must be untouched before its first use as one"
-    );
     assert!(
         authority.is_authorized,
         "the configured authority must authorize renouncing it"
     );
 
     cfg.authority = None;
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
+    let config_data = cfg
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![config, authority.clone()],
         vec![
-            AccountPostState::new(config_account),
-            // Claimed on first use: the authority's own signature bumps its
-            // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
+            AccountStateDiff::new(config, BalanceDiff::Add(0), config_data),
+            AccountStateDiff::unchanged(authority),
         ],
     )
     .write();
@@ -184,11 +171,11 @@ fn renounce_authority(
 /// Replaces the authorized sources, if the config names an authority and that
 /// account authorized this transaction.
 fn update_sources(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
-    sources: Vec<([u8; 32], ProgramId)>,
+    sources: Vec<([u8; 32], AccountId)>,
 ) {
     // The config is read before the account list is validated, so who may call
     // is decided first; an inbox-delivered call fails here on its prepended marker.
@@ -197,7 +184,7 @@ fn update_sources(
         .expect("UpdateSources requires the config account");
     assert_eq!(
         config_meta.account_id,
-        receiver_config_account_id(self_program_id),
+        receiver_config_account_id(self_account_id),
         "first account must be the receiver config PDA"
     );
     let mut cfg = ReceiverConfig::from_bytes(&config_meta.account.data)
@@ -205,7 +192,7 @@ fn update_sources(
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
     assert!(
-        caller_program_id.is_none() || caller_program_id == cfg.governance,
+        caller_account_id.is_none() || caller_account_id == cfg.governance,
         "the authority acts at top level, or through the configured governance program"
     );
 
@@ -219,35 +206,24 @@ fn update_sources(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
-    // Claims apply after post-state validation, so a first use must find the
-    // account untouched; an unowned account with history is refused for good.
-    assert!(
-        authority.account == Account::default()
-            || authority.account.program_owner != DEFAULT_PROGRAM_OWNER,
-        "the authority account must be untouched before its first use as one"
-    );
     assert!(
         authority.is_authorized,
         "the configured authority must authorize a source change"
     );
 
     cfg.sources = sources;
-    let mut config_account = config.account.clone();
-    config_account.data = cfg
+    let config_data = cfg
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![config, authority.clone()],
         vec![
-            AccountPostState::new(config_account),
-            // Claimed on first use: the authority's own signature bumps its
-            // nonce, so merely echoing it would work once and never again.
-            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
+            AccountStateDiff::new(config, BalanceDiff::Add(0), config_data),
+            AccountStateDiff::unchanged(authority),
         ],
     )
     .write();
@@ -256,14 +232,14 @@ fn update_sources(
 /// Writes the deliverer and the authorized peer sources into the config PDA
 /// exactly once at genesis.
 fn init_config(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     config_value: &ReceiverConfig,
 ) {
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "InitConfig is a top-level genesis transaction"
     );
 
@@ -272,17 +248,16 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        receiver_config_account_id(self_program_id),
+        receiver_config_account_id(self_account_id),
         "account must be the receiver config PDA"
     );
-    // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned one must already hold exactly this, since genesis is
-    // replayed onto seeded state during multi-sequencer reconstruction.
-    // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
-    if config.account != Account::default() {
+    // Init-once, idempotent under genesis replay: an empty config is a first init;
+    // a written one must already hold exactly this, since genesis is replayed onto
+    // seeded state during multi-sequencer reconstruction. Implicit ownership alone
+    // would not stop a later self-owned rewrite.
+    if !config.account.data.is_empty() {
         assert_eq!(
-            config.account.program_owner,
-            self_program_id.into(),
+            config.account.program_owner, self_account_id,
             "receiver config PDA is owned by another program"
         );
         assert_eq!(
@@ -292,21 +267,16 @@ fn init_config(
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = config_value
+    let config_data = config_value
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
-    let config_post = AccountPostState::new_claimed_if_default(
-        config_account,
-        Claim::Pda(receiver_config_seed()),
-    );
+    let config_post = AccountStateDiff::new(config, BalanceDiff::Add(0), config_data);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![config],
         vec![config_post],
     )
     .write();

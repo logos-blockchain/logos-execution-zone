@@ -1,30 +1,35 @@
+use authenticated_transfer_core::custody_transfer;
 use bridge_lock_core::{
-    Instruction, config_account_id, config_bytes, config_seed, escrow_account_id, escrow_seed,
-    read_config,
+    Instruction, config_account_id, config_bytes, escrow_account_id, holding_account_id,
+    holding_seed, read_config,
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{AccountId, AccountWithMetadata, BalanceDiff},
     program::{
-        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
     },
 };
 use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "bridge_lock is only invoked as a top-level user transaction"
     );
 
@@ -32,32 +37,32 @@ fn main() {
         Instruction::Lock {
             amount,
             target_zone,
-            target_program_id,
+            target_account_id,
             target_accounts,
             payload,
             ordinal,
         } => lock(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             amount,
             target_zone,
-            target_program_id,
+            target_account_id,
             target_accounts,
             payload,
             ordinal,
         ),
         Instruction::InitConfig {
-            outbox_program_id,
-            target_program_id,
+            outbox_account_id,
+            target_account_id,
         } => init_config(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
-            outbox_program_id,
-            target_program_id,
+            outbox_account_id,
+            target_account_id,
         ),
     }
 }
@@ -67,29 +72,31 @@ fn main() {
     reason = "the emission fields are passed through verbatim"
 )]
 fn lock(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     amount: u128,
     target_zone: [u8; 32],
-    target_program_id: ProgramId,
+    target_account_id: AccountId,
     target_accounts: Vec<[u8; 32]>,
     payload: Vec<u8>,
     ordinal: u32,
 ) {
-    // pre_states: [config PDA, holder holding (authorized), escrow PDA, outbox PDA].
-    let [config, holder, escrow, outbox] = <[AccountWithMetadata; 4]>::try_from(pre_states)
-        .expect("Lock requires config, holder, escrow, and outbox accounts");
+    // pre_states: [config PDA, holder (authorized, echoed), holding PDA,
+    // escrow PDA, outbox PDA].
+    let [config, holder, holding, escrow, outbox] =
+        <[AccountWithMetadata; 5]>::try_from(pre_states)
+            .expect("Lock requires config, holder, holding, escrow, and outbox accounts");
 
     // Pinned rather than caller-named: chaining elsewhere would debit the escrow
     // and leave no record of what it was for.
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "first account must be the bridge-lock config PDA"
     );
-    let (outbox_program_id, pinned_target) = read_config(&config.account.data)
+    let (outbox_account_id, pinned_target) = read_config(&config.account.data)
         .expect("config account holds an outbox and a mint target");
 
     // Value conservation: the forwarded payload must mint exactly what is locked.
@@ -109,7 +116,7 @@ fn lock(
     // destination refuses is a burn. `target_zone` is not checkable here, so a
     // lock aimed at a zone that will not route it still burns.
     assert_eq!(
-        target_program_id, pinned_target,
+        target_account_id, pinned_target,
         "bridge_lock only mints through the wrapped token it is pinned to"
     );
     assert_eq!(
@@ -124,124 +131,111 @@ fn lock(
         amount <= MAX_MINT_AMOUNT,
         "locked amount exceeds what the wrapped token will mint"
     );
+    // A zero lock would emit a real dispatch and zero-mint into any
+    // recipient's wrapped holding.
+    assert!(amount > 0, "locked amount must be positive");
 
     assert!(holder.is_authorized, "holder must authorize the lock");
-    // The holder holding is bridge_lock-owned, so bridge_lock may debit its native
-    // balance directly (state-machine rule 5). This also pins the transfer to a
-    // genuine holding: a caller cannot substitute an account owned by some other
-    // program to emit the mint without an actual lock.
+    // The signature gates the debit; the derivation pins the debit target to a
+    // genuine bridge-lock holding.
     assert_eq!(
-        holder.account.program_owner,
-        self_program_id.into(),
-        "holder account must be a bridge_lock holding"
+        holding.account_id,
+        holding_account_id(self_account_id, &holder.account_id.into_value()),
+        "third account must be the holder's bridge-lock holding PDA"
     );
     assert_eq!(
         escrow.account_id,
-        escrow_account_id(self_program_id),
-        "third account must be the escrow PDA"
+        escrow_account_id(self_account_id),
+        "fourth account must be the escrow PDA"
     );
 
-    // Move the real native balance holder -> escrow. bridge_lock owns both accounts,
-    // so it debits the holder and credits the escrow directly; conservation holds
-    // because the same amount moves between them.
-    let holder_new = holder
-        .account
-        .balance
-        .checked_sub(amount)
-        .expect("insufficient balance to lock");
-    let escrow_new = escrow
-        .account
-        .balance
-        .checked_add(amount)
-        .expect("escrow balance overflow");
+    // The balance moves in a chained authenticated_transfer call.
+    let move_call = custody_transfer(
+        holding.account_id,
+        holding_seed(&holder.account_id.into_value()),
+        escrow.account_id,
+        amount,
+    );
 
-    let mut holder_account = holder.account.clone();
-    holder_account.balance = holder_new;
-    let holder_post = AccountPostState::new(holder_account);
-
-    let mut escrow_account = escrow.account.clone();
-    escrow_account.balance = escrow_new;
-    let escrow_post =
-        AccountPostState::new_claimed_if_default(escrow_account, Claim::Pda(escrow_seed()));
-
-    let call = ChainedCall::new(
-        outbox_program_id,
-        vec![outbox.clone()],
+    let emit_call = ChainedCall::new(
+        outbox_account_id,
+        vec![outbox.account_id],
         &OutboxInstruction::Emit {
             target_zone,
-            target_program_id,
+            target_account_id,
             target_accounts,
             payload,
             ordinal,
         },
     );
 
-    let config_post = AccountPostState::new(config.account.clone());
+    let config_post = AccountStateDiff::unchanged(config);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![config, holder, escrow, outbox.clone()],
         vec![
             config_post,
-            holder_post,
-            escrow_post,
-            AccountPostState::new(outbox.account),
+            // The holder only signs, its account is echoed untouched, as are
+            // the holding and escrow.
+            AccountStateDiff::unchanged(holder),
+            AccountStateDiff::unchanged(holding),
+            AccountStateDiff::unchanged(escrow),
+            AccountStateDiff::unchanged(outbox),
         ],
     )
-    .with_chained_calls(vec![call])
+    .with_chained_calls(vec![move_call, emit_call])
     .write();
 }
 
 /// Writes the outbox program and the mint target into the config PDA exactly once
 /// at genesis.
 fn init_config(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
-    outbox_program_id: ProgramId,
-    target_program_id: ProgramId,
+    outbox_account_id: AccountId,
+    target_account_id: AccountId,
 ) {
     // pre_states: [config PDA].
     let [config] = <[AccountWithMetadata; 1]>::try_from(pre_states)
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id),
         "account must be the bridge-lock config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
     // init; an already-owned one must already pin exactly these programs, since
     // genesis is replayed onto seeded state during multi-sequencer reconstruction.
-    // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
-    if config.account != Account::default() {
+    // Acquiring it on the data write alone would not stop a later self-owned rewrite.
+    if !config.account.data.is_empty() {
         assert_eq!(
-            config.account.program_owner,
-            self_program_id.into(),
+            config.account.program_owner, self_account_id,
             "bridge-lock config PDA is owned by another program"
         );
         assert_eq!(
             *config.account.data,
-            config_bytes(outbox_program_id, target_program_id),
+            config_bytes(outbox_account_id, target_account_id),
             "bridge-lock config already pins a different outbox or mint target"
         );
     }
 
-    let mut config_account = config.account.clone();
-    config_account.data = config_bytes(outbox_program_id, target_program_id)
-        .to_vec()
-        .try_into()
-        .expect("pinned ids fit in account data");
-    let config_post =
-        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
+    let config_post = AccountStateDiff::new(
+        config,
+        BalanceDiff::Add(0),
+        config_bytes(outbox_account_id, target_account_id)
+            .to_vec()
+            .try_into()
+            .expect("pinned ids fit in account data"),
+    );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![config],
         vec![config_post],
     )
     .write();

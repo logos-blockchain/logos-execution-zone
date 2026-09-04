@@ -3,19 +3,21 @@
 
 #![expect(clippy::print_stdout, reason = "It's normal in this small cli")]
 
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use kameo::actor::Spawn as _;
 use sequencer_storage_actor::{
     StorageActor,
-    protocol::{DeleteZoneCheckpoint, DumpDb, ResetAllBlocksToPending},
+    protocol::{
+        ApplyStoreUpdate, DeleteZoneCheckpoint, DumpDb, GetLatestBlockMeta, GetLeeState,
+        ResetAllBlocksToPending,
+    },
 };
 use test_fixtures::{
     config,
     setup::{
-        SequencerSetup, prebuilt_sequencer_db_dump_path, setup_bedrock_node,
-        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
+        SequencerSetup, fund_private_accounts, prebuilt_sequencer_db_dump_path, setup_bedrock_node,
         setup_wallet,
     },
 };
@@ -39,8 +41,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run a real sequencer with the default accounts, apply genesis + claim the initial supply
-/// (genesis block + claim block), then strip the checkpoint and reset blocks to `Pending` so the
+/// Run a real sequencer with the default accounts, apply genesis + fund the private accounts
+/// (genesis block + funding block), then strip the checkpoint and reset blocks to `Pending` so the
 /// dump replays cleanly against a fresh Bedrock. Writes the dump to `dest`.
 async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let (_bedrock_compose, bedrock_addr) = setup_bedrock_node()
@@ -49,8 +51,10 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
 
     let initial_public_accounts = config::default_public_accounts_for_wallet();
     let initial_private_accounts = config::default_private_accounts_for_wallet();
-    let genesis =
-        config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts);
+    let genesis = config::genesis_from_accounts(
+        &initial_public_accounts,
+        config::private_total(&initial_private_accounts),
+    );
 
     let (sequencer_handle, temp_sequencer_dir) =
         SequencerSetup::new(config::SequencerPartialConfig::default(), bedrock_addr)
@@ -69,12 +73,13 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     .await
     .context("Failed to setup wallet for fixture generation")?;
 
-    setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
-        .await
-        .context("Failed to initialize public accounts for fixture generation")?;
-    setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
-        .await
-        .context("Failed to initialize private accounts for fixture generation")?;
+    fund_private_accounts(
+        &mut wallet,
+        &initial_public_accounts,
+        &initial_private_accounts,
+    )
+    .await
+    .context("Failed to fund private accounts for fixture generation")?;
 
     // Shut down gracefully to release the rocksdb lock before reopening the store.
     drop(wallet);
@@ -94,6 +99,46 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         .ask(ResetAllBlocksToPending)
         .await
         .context("Failed to reset fixture blocks to pending")?;
+
+    // Stamp the final snapshot at the tip so restore replays no fixture blocks.
+    // The dump is generated under RISC0_DEV_MODE, so its privacy proofs are
+    // fake receipts that cannot verify in a real-proof run if they land after
+    // the finalized tip
+    //
+    // TODO: once Bedrock communication lives in its own mockable actor, mock it
+    // here to finalize immediately and drop this direct storage manipulation.
+    let state = storage_ref
+        .ask(GetLeeState)
+        .await
+        .context("Failed to read the fixture head state")?
+        .context("Fixture store has no persisted head state")?;
+    let tip = storage_ref
+        .ask(GetLatestBlockMeta)
+        .await
+        .context("Failed to read the fixture tip block meta")?
+        .context("Fixture store has no blocks")?;
+    let state = Arc::new(state);
+    storage_ref
+        .ask(ApplyStoreUpdate {
+            checkpoint: None,
+            blocks: vec![],
+            channel_cursor: None,
+            head_tip: Some(tip.clone()),
+            head_state: Arc::clone(&state),
+            final_snapshot: Some((state, tip)),
+            // Blocks must stay Pending for the re-publish; only the snapshot moves.
+            finalized_up_to: None,
+            new_deposit_events: vec![],
+            remove_deposit_records: vec![],
+            remove_dispatch_records: vec![],
+            consumed_withdrawals: vec![],
+            new_withdraw_intents: vec![],
+            zone_anchor: None,
+            lower_published_high_water: None,
+        })
+        .await
+        .context("Failed to stamp the fixture final snapshot at the tip")?;
+
     let dump = storage_ref
         .ask(DumpDb)
         .await

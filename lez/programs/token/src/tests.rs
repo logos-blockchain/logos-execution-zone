@@ -6,8 +6,8 @@
 )]
 
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data},
-    program::Claim,
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiff, Data},
+    program::AccountStateDiff,
 };
 use token_core::{
     MetadataStandard, NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding,
@@ -529,12 +529,26 @@ impl IdForTests {
     }
 }
 
-#[should_panic(expected = "Definition target account must have default values")]
+/// Asserts the diff leaves the native balance untouched and sets data to exactly `expected`'s.
+fn assert_data_diff(diff_output: &AccountStateDiff, expected: &AccountWithMetadata) {
+    assert_eq!(diff_output.post_balance_diff, BalanceDiff::Add(0));
+    let effective_data = diff_output
+        .post_data
+        .clone()
+        .unwrap_or_else(|| diff_output.pre_state.account.data.clone());
+    assert_eq!(effective_data, expected.account.data);
+}
+
+#[should_panic(expected = "Definition target account must not already hold data")]
 #[test]
-fn new_definition_non_default_first_account_should_fail() {
+fn new_definition_data_bearing_first_account_should_fail() {
     let definition_account = AccountWithMetadata {
         account: Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
+            data: Data::from(&TokenDefinition::Fungible {
+                name: String::from("taken"),
+                total_supply: 1,
+                metadata_id: None,
+            }),
             ..Account::default()
         },
         is_authorized: true,
@@ -545,17 +559,17 @@ fn new_definition_non_default_first_account_should_fail() {
         is_authorized: true,
         account_id: AccountId::new([2; 32]),
     };
-    let _post_states = new_fungible_definition(
-        definition_account,
-        holding_account,
+    let _post_diffs = new_fungible_definition(
+        &definition_account,
+        &holding_account,
         String::from("test"),
         10,
     );
 }
 
-#[should_panic(expected = "Holding target account must have default values")]
+#[should_panic(expected = "Holding target account must not already hold data")]
 #[test]
-fn new_definition_non_default_second_account_should_fail() {
+fn new_definition_data_bearing_second_account_should_fail() {
     let definition_account = AccountWithMetadata {
         account: Account::default(),
         is_authorized: true,
@@ -563,17 +577,50 @@ fn new_definition_non_default_second_account_should_fail() {
     };
     let holding_account = AccountWithMetadata {
         account: Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
+            data: Data::from(&TokenHolding::Fungible {
+                definition_id: AccountId::new([1; 32]),
+                balance: 1,
+            }),
             ..Account::default()
         },
         is_authorized: true,
         account_id: AccountId::new([2; 32]),
     };
-    let _post_states = new_fungible_definition(
-        definition_account,
-        holding_account,
+    let _post_diffs = new_fungible_definition(
+        &definition_account,
+        &holding_account,
         String::from("test"),
         10,
+    );
+}
+
+/// A definition address is derivable, and anyone may credit an unowned account.
+/// Creation must therefore turn on whether the address already holds data, not on
+/// whether it is pristine — otherwise one unit of balance bricks the address for ever.
+#[test]
+fn new_definition_succeeds_on_an_address_someone_credited() {
+    let mut definition_account = AccountForTests::definition_account_uninit();
+    definition_account.account.balance = 1;
+    let holding_account = AccountForTests::holding_account_uninit();
+
+    let post_diffs = new_fungible_definition(
+        &definition_account,
+        &holding_account,
+        String::from("test"),
+        BalanceForTests::init_supply(),
+    );
+
+    let [definition_post, _holding_post] = post_diffs.try_into().unwrap();
+    assert_eq!(
+        definition_post.post_balance_diff,
+        BalanceDiff::Add(0),
+        "the credit is left alone"
+    );
+    assert!(
+        definition_post
+            .post_data
+            .is_some_and(|data| !data.is_empty()),
+        "the definition is written"
     );
 }
 
@@ -582,22 +629,21 @@ fn new_definition_with_valid_inputs_succeeds() {
     let definition_account = AccountForTests::definition_account_uninit();
     let holding_account = AccountForTests::holding_account_uninit();
 
-    let post_states = new_fungible_definition(
-        definition_account,
-        holding_account,
+    let post_diffs = new_fungible_definition(
+        &definition_account,
+        &holding_account,
         String::from("test"),
         BalanceForTests::init_supply(),
     );
 
-    let [definition_account, holding_account] = post_states.try_into().unwrap();
-    assert_eq!(
-        *definition_account.account(),
-        AccountForTests::definition_account_unclaimed().account
+    let [definition_account, holding_account] = post_diffs.try_into().unwrap();
+    assert_data_diff(
+        &definition_account,
+        &AccountForTests::definition_account_unclaimed(),
     );
-
-    assert_eq!(
-        *holding_account.account(),
-        AccountForTests::holding_account_unclaimed().account
+    assert_data_diff(
+        &holding_account,
+        &AccountForTests::holding_account_unclaimed(),
     );
 }
 
@@ -606,7 +652,7 @@ fn new_definition_with_valid_inputs_succeeds() {
 fn transfer_with_different_definition_ids_should_fail() {
     let sender = AccountForTests::holding_same_definition_with_authorization();
     let recipient = AccountForTests::holding_different_definition();
-    let _post_states = transfer(sender, recipient, 10);
+    let _post_diffs = transfer(&sender, &recipient, 10);
 }
 
 #[should_panic(expected = "Insufficient balance")]
@@ -615,7 +661,7 @@ fn transfer_with_insufficient_balance_should_fail() {
     let sender = AccountForTests::holding_same_definition_with_authorization();
     let recipient = AccountForTests::holding_account_same_definition_mint();
     // Attempt to transfer more than balance
-    let _post_states = transfer(sender, recipient, BalanceForTests::burn_insufficient());
+    let _post_diffs = transfer(&sender, &recipient, BalanceForTests::burn_insufficient());
 }
 
 #[should_panic(expected = "Sender authorization is missing")]
@@ -623,23 +669,23 @@ fn transfer_with_insufficient_balance_should_fail() {
 fn transfer_without_sender_authorization_should_fail() {
     let sender = AccountForTests::holding_same_definition_without_authorization();
     let recipient = AccountForTests::holding_account_uninit();
-    let _post_states = transfer(sender, recipient, 37);
+    let _post_diffs = transfer(&sender, &recipient, 37);
 }
 
 #[test]
 fn transfer_with_valid_inputs_succeeds() {
     let sender = AccountForTests::holding_account_init();
     let recipient = AccountForTests::holding_account2_init();
-    let post_states = transfer(sender, recipient, BalanceForTests::transfer_amount());
-    let [sender_post, recipient_post] = post_states.try_into().unwrap();
+    let post_diffs = transfer(&sender, &recipient, BalanceForTests::transfer_amount());
+    let [sender_post, recipient_post] = post_diffs.try_into().unwrap();
 
-    assert_eq!(
-        *sender_post.account(),
-        AccountForTests::holding_account_init_post_transfer().account
+    assert_data_diff(
+        &sender_post,
+        &AccountForTests::holding_account_init_post_transfer(),
     );
-    assert_eq!(
-        *recipient_post.account(),
-        AccountForTests::holding_account2_init_post_transfer().account
+    assert_data_diff(
+        &recipient_post,
+        &AccountForTests::holding_account2_init_post_transfer(),
     );
 }
 
@@ -648,7 +694,7 @@ fn transfer_with_valid_inputs_succeeds() {
 fn transfer_with_master_nft_invalid_balance() {
     let sender = AccountForTests::holding_account_master_nft();
     let recipient = AccountForTests::holding_account_uninit();
-    let _post_states = transfer(sender, recipient, BalanceForTests::transfer_amount());
+    let _post_diffs = transfer(&sender, &recipient, BalanceForTests::transfer_amount());
 }
 
 #[should_panic(expected = "Invalid balance in recipient account for NFT transfer")]
@@ -656,23 +702,23 @@ fn transfer_with_master_nft_invalid_balance() {
 fn transfer_with_master_nft_invalid_recipient_balance() {
     let sender = AccountForTests::holding_account_master_nft();
     let recipient = AccountForTests::holding_account_with_master_nft_transferred_to();
-    let _post_states = transfer(sender, recipient, BalanceForTests::printable_copies());
+    let _post_diffs = transfer(&sender, &recipient, BalanceForTests::printable_copies());
 }
 
 #[test]
 fn transfer_with_master_nft_success() {
     let sender = AccountForTests::holding_account_master_nft();
     let recipient = AccountForTests::holding_account_uninit();
-    let post_states = transfer(sender, recipient, BalanceForTests::printable_copies());
-    let [sender_post, recipient_post] = post_states.try_into().unwrap();
+    let post_diffs = transfer(&sender, &recipient, BalanceForTests::printable_copies());
+    let [sender_post, recipient_post] = post_diffs.try_into().unwrap();
 
-    assert_eq!(
-        *sender_post.account(),
-        AccountForTests::holding_account_master_nft_post_transfer().account
+    assert_data_diff(
+        &sender_post,
+        &AccountForTests::holding_account_master_nft_post_transfer(),
     );
-    assert_eq!(
-        *recipient_post.account(),
-        AccountForTests::holding_account_with_master_nft_transferred_to().account
+    assert_data_diff(
+        &recipient_post,
+        &AccountForTests::holding_account_with_master_nft_transferred_to(),
     );
 }
 
@@ -680,16 +726,16 @@ fn transfer_with_master_nft_success() {
 fn token_initialize_account_succeeds() {
     let sender = AccountForTests::holding_account_init();
     let recipient = AccountForTests::holding_account2_init();
-    let post_states = transfer(sender, recipient, BalanceForTests::transfer_amount());
-    let [sender_post, recipient_post] = post_states.try_into().unwrap();
+    let post_diffs = transfer(&sender, &recipient, BalanceForTests::transfer_amount());
+    let [sender_post, recipient_post] = post_diffs.try_into().unwrap();
 
-    assert_eq!(
-        *sender_post.account(),
-        AccountForTests::holding_account_init_post_transfer().account
+    assert_data_diff(
+        &sender_post,
+        &AccountForTests::holding_account_init_post_transfer(),
     );
-    assert_eq!(
-        *recipient_post.account(),
-        AccountForTests::holding_account2_init_post_transfer().account
+    assert_data_diff(
+        &recipient_post,
+        &AccountForTests::holding_account2_init_post_transfer(),
     );
 }
 
@@ -698,9 +744,9 @@ fn token_initialize_account_succeeds() {
 fn burn_mismatch_def() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_different_definition();
-    let _post_states = burn(
-        definition_account,
-        holding_account,
+    let _post_diffs = burn(
+        &definition_account,
+        &holding_account,
         BalanceForTests::burn_success(),
     );
 }
@@ -710,9 +756,9 @@ fn burn_mismatch_def() {
 fn burn_missing_authorization() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_without_authorization();
-    let _post_states = burn(
-        definition_account,
-        holding_account,
+    let _post_diffs = burn(
+        &definition_account,
+        &holding_account,
         BalanceForTests::burn_success(),
     );
 }
@@ -722,9 +768,9 @@ fn burn_missing_authorization() {
 fn burn_insufficient_balance() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_with_authorization();
-    let _post_states = burn(
-        definition_account,
-        holding_account,
+    let _post_diffs = burn(
+        &definition_account,
+        &holding_account,
         BalanceForTests::burn_insufficient(),
     );
 }
@@ -735,9 +781,9 @@ fn burn_total_supply_underflow() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account =
         AccountForTests::holding_same_definition_with_authorization_and_large_balance();
-    let _post_states = burn(
-        definition_account,
-        holding_account,
+    let _post_diffs = burn(
+        &definition_account,
+        &holding_account,
         BalanceForTests::mint_overflow(),
     );
 }
@@ -746,22 +792,16 @@ fn burn_total_supply_underflow() {
 fn burn_success() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_with_authorization();
-    let post_states = burn(
-        definition_account,
-        holding_account,
+    let post_diffs = burn(
+        &definition_account,
+        &holding_account,
         BalanceForTests::burn_success(),
     );
 
-    let [def_post, holding_post] = post_states.try_into().unwrap();
+    let [def_post, holding_post] = post_diffs.try_into().unwrap();
 
-    assert_eq!(
-        *def_post.account(),
-        AccountForTests::definition_account_post_burn().account
-    );
-    assert_eq!(
-        *holding_post.account(),
-        AccountForTests::holding_account_post_burn().account
-    );
+    assert_data_diff(&def_post, &AccountForTests::definition_account_post_burn());
+    assert_data_diff(&holding_post, &AccountForTests::holding_account_post_burn());
 }
 
 #[test]
@@ -769,9 +809,9 @@ fn burn_success() {
 fn mint_not_valid_holding_account() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::definition_account_without_auth();
-    let _post_states = mint(
-        definition_account,
-        holding_account,
+    let _post_diffs = mint(
+        &definition_account,
+        &holding_account,
         BalanceForTests::mint_success(),
     );
 }
@@ -781,9 +821,9 @@ fn mint_not_valid_holding_account() {
 fn mint_not_valid_definition_account() {
     let definition_account = AccountForTests::holding_same_definition_with_authorization();
     let holding_account = AccountForTests::holding_same_definition_without_authorization();
-    let _post_states = mint(
-        definition_account,
-        holding_account,
+    let _post_diffs = mint(
+        &definition_account,
+        &holding_account,
         BalanceForTests::mint_success(),
     );
 }
@@ -793,9 +833,9 @@ fn mint_not_valid_definition_account() {
 fn mint_missing_authorization() {
     let definition_account = AccountForTests::definition_account_without_auth();
     let holding_account = AccountForTests::holding_same_definition_without_authorization();
-    let _post_states = mint(
-        definition_account,
-        holding_account,
+    let _post_diffs = mint(
+        &definition_account,
+        &holding_account,
         BalanceForTests::mint_success(),
     );
 }
@@ -805,9 +845,9 @@ fn mint_missing_authorization() {
 fn mint_mismatched_token_definition() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_different_definition();
-    let _post_states = mint(
-        definition_account,
-        holding_account,
+    let _post_diffs = mint(
+        &definition_account,
+        &holding_account,
         BalanceForTests::mint_success(),
     );
 }
@@ -816,21 +856,18 @@ fn mint_mismatched_token_definition() {
 fn mint_success() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_without_authorization();
-    let post_states = mint(
-        definition_account,
-        holding_account,
+    let post_diffs = mint(
+        &definition_account,
+        &holding_account,
         BalanceForTests::mint_success(),
     );
 
-    let [def_post, holding_post] = post_states.try_into().unwrap();
+    let [def_post, holding_post] = post_diffs.try_into().unwrap();
 
-    assert_eq!(
-        *def_post.account(),
-        AccountForTests::definition_account_mint().account
-    );
-    assert_eq!(
-        *holding_post.account(),
-        AccountForTests::holding_account_same_definition_mint().account
+    assert_data_diff(&def_post, &AccountForTests::definition_account_mint());
+    assert_data_diff(
+        &holding_post,
+        &AccountForTests::holding_account_same_definition_mint(),
     );
 }
 
@@ -838,23 +875,16 @@ fn mint_success() {
 fn mint_uninit_holding_success() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_account_uninit();
-    let post_states = mint(
-        definition_account,
-        holding_account,
+    let post_diffs = mint(
+        &definition_account,
+        &holding_account,
         BalanceForTests::mint_success(),
     );
 
-    let [def_post, holding_post] = post_states.try_into().unwrap();
+    let [def_post, holding_post] = post_diffs.try_into().unwrap();
 
-    assert_eq!(
-        *def_post.account(),
-        AccountForTests::definition_account_mint().account
-    );
-    assert_eq!(
-        *holding_post.account(),
-        AccountForTests::init_mint().account
-    );
-    assert_eq!(holding_post.required_claim(), Some(Claim::Authorized));
+    assert_data_diff(&def_post, &AccountForTests::definition_account_mint());
+    assert_data_diff(&holding_post, &AccountForTests::init_mint());
 }
 
 #[test]
@@ -862,9 +892,9 @@ fn mint_uninit_holding_success() {
 fn mint_total_supply_overflow() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_without_authorization();
-    let _post_states = mint(
-        definition_account,
-        holding_account,
+    let _post_diffs = mint(
+        &definition_account,
+        &holding_account,
         BalanceForTests::mint_overflow(),
     );
 }
@@ -874,9 +904,9 @@ fn mint_total_supply_overflow() {
 fn mint_holding_account_overflow() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_without_authorization_overflow();
-    let _post_states = mint(
-        definition_account,
-        holding_account,
+    let _post_diffs = mint(
+        &definition_account,
+        &holding_account,
         BalanceForTests::mint_overflow(),
     );
 }
@@ -886,14 +916,14 @@ fn mint_holding_account_overflow() {
 fn mint_cannot_mint_unmintable_tokens() {
     let definition_account = AccountForTests::definition_account_with_authorization_nonfungible();
     let holding_account = AccountForTests::holding_account_master_nft();
-    let _post_states = mint(
-        definition_account,
-        holding_account,
+    let _post_diffs = mint(
+        &definition_account,
+        &holding_account,
         BalanceForTests::mint_success(),
     );
 }
 
-#[should_panic(expected = "Definition target account must have default values")]
+#[should_panic(expected = "Definition target account must not already hold data")]
 #[test]
 fn call_new_definition_metadata_with_init_definition() {
     let definition_account = AccountForTests::definition_account_auth();
@@ -916,16 +946,16 @@ fn call_new_definition_metadata_with_init_definition() {
         uri: "test_uri".to_owned(),
         creators: "test_creators".to_owned(),
     };
-    let _post_states = new_definition_with_metadata(
-        definition_account,
-        metadata_account,
-        holding_account,
+    let _post_diffs = new_definition_with_metadata(
+        &definition_account,
+        &metadata_account,
+        &holding_account,
         new_definition,
         metadata,
     );
 }
 
-#[should_panic(expected = "Metadata target account must have default values")]
+#[should_panic(expected = "Metadata target account must not already hold data")]
 #[test]
 fn call_new_definition_metadata_with_init_metadata() {
     let definition_account = AccountWithMetadata {
@@ -948,16 +978,16 @@ fn call_new_definition_metadata_with_init_metadata() {
         uri: "test_uri".to_owned(),
         creators: "test_creators".to_owned(),
     };
-    let _post_states = new_definition_with_metadata(
-        definition_account,
-        holding_account,
-        metadata_account,
+    let _post_diffs = new_definition_with_metadata(
+        &definition_account,
+        &holding_account,
+        &metadata_account,
         new_definition,
         metadata,
     );
 }
 
-#[should_panic(expected = "Holding target account must have default values")]
+#[should_panic(expected = "Holding target account must not already hold data")]
 #[test]
 fn call_new_definition_metadata_with_init_holding() {
     let definition_account = AccountWithMetadata {
@@ -980,10 +1010,10 @@ fn call_new_definition_metadata_with_init_holding() {
         uri: "test_uri".to_owned(),
         creators: "test_creators".to_owned(),
     };
-    let _post_states = new_definition_with_metadata(
-        definition_account,
-        holding_account,
-        metadata_account,
+    let _post_diffs = new_definition_with_metadata(
+        &definition_account,
+        &holding_account,
+        &metadata_account,
         new_definition,
         metadata,
     );
@@ -994,15 +1024,15 @@ fn call_new_definition_metadata_with_init_holding() {
 fn print_nft_master_account_must_be_authorized() {
     let master_account = AccountForTests::holding_account_uninit();
     let printed_account = AccountForTests::holding_account_uninit();
-    let _post_states = print_nft(master_account, printed_account);
+    let _post_diffs = print_nft(&master_account, &printed_account);
 }
 
-#[should_panic(expected = "Printed Account must be uninitialized")]
+#[should_panic(expected = "Printed Account must not already hold data")]
 #[test]
 fn print_nft_print_account_initialized() {
     let master_account = AccountForTests::holding_account_master_nft();
     let printed_account = AccountForTests::holding_account_init();
-    let _post_states = print_nft(master_account, printed_account);
+    let _post_diffs = print_nft(&master_account, &printed_account);
 }
 
 #[should_panic(expected = "Invalid Token Holding data")]
@@ -1010,7 +1040,7 @@ fn print_nft_print_account_initialized() {
 fn print_nft_master_nft_invalid_token_holding() {
     let master_account = AccountForTests::definition_account_auth();
     let printed_account = AccountForTests::holding_account_uninit();
-    let _post_states = print_nft(master_account, printed_account);
+    let _post_diffs = print_nft(&master_account, &printed_account);
 }
 
 #[should_panic(expected = "Invalid Token Holding provided as NFT Master Account")]
@@ -1018,7 +1048,7 @@ fn print_nft_master_nft_invalid_token_holding() {
 fn print_nft_master_nft_not_nft_master_account() {
     let master_account = AccountForTests::holding_account_init();
     let printed_account = AccountForTests::holding_account_uninit();
-    let _post_states = print_nft(master_account, printed_account);
+    let _post_diffs = print_nft(&master_account, &printed_account);
 }
 
 #[should_panic(expected = "Insufficient balance to print another NFT copy")]
@@ -1026,23 +1056,23 @@ fn print_nft_master_nft_not_nft_master_account() {
 fn print_nft_master_nft_insufficient_balance() {
     let master_account = AccountForTests::holding_account_master_nft_insufficient_balance();
     let printed_account = AccountForTests::holding_account_uninit();
-    let _post_states = print_nft(master_account, printed_account);
+    let _post_diffs = print_nft(&master_account, &printed_account);
 }
 
 #[test]
 fn print_nft_success() {
     let master_account = AccountForTests::holding_account_master_nft();
     let printed_account = AccountForTests::holding_account_uninit();
-    let post_states = print_nft(master_account, printed_account);
+    let post_diffs = print_nft(&master_account, &printed_account);
 
-    let [post_master_nft, post_printed] = post_states.try_into().unwrap();
+    let [post_master_nft, post_printed] = post_diffs.try_into().unwrap();
 
-    assert_eq!(
-        *post_master_nft.account(),
-        AccountForTests::holding_account_master_nft_after_print().account
+    assert_data_diff(
+        &post_master_nft,
+        &AccountForTests::holding_account_master_nft_after_print(),
     );
-    assert_eq!(
-        *post_printed.account(),
-        AccountForTests::holding_account_printed_nft().account
+    assert_data_diff(
+        &post_printed,
+        &AccountForTests::holding_account_printed_nft(),
     );
 }

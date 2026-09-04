@@ -1,7 +1,8 @@
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use borsh::to_vec;
 use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
 };
 
 type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
@@ -11,15 +12,19 @@ type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
 /// The `ProgramId` in the instruction must be the `program_id` of the authenticated transfers
 /// program.
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (balance, auth_transfer_id, num_chain_calls, pda_seed),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([recipient_pre, sender_pre]) = <[_; 2]>::try_from(pre_states) else {
         return;
@@ -28,43 +33,25 @@ fn main() {
     let call_instruction_data =
         to_vec(&AuthTransferInstruction::Transfer { amount: balance }).unwrap();
 
-    let mut running_recipient_pre = recipient_pre.clone();
-    let mut running_sender_pre = sender_pre.clone();
-
-    if pda_seed.is_some() {
-        running_sender_pre.is_authorized = true;
-    }
-
     let mut chained_calls = Vec::new();
     for _i in 0..num_chain_calls {
         let new_chained_call = ChainedCall {
-            program_id: auth_transfer_id,
+            program_account_id: auth_transfer_id.into(),
             instruction_data: call_instruction_data.clone(),
-            pre_states: vec![running_sender_pre.clone(), running_recipient_pre.clone()], /* <- Account order permutation here */
+            // Account order permuted here (sender before recipient).
+            pre_state_ids: vec![sender_pre.account_id, recipient_pre.account_id],
             pda_seeds: pda_seed.iter().copied().collect(),
         };
         chained_calls.push(new_chained_call);
-
-        running_sender_pre.account.balance =
-            match running_sender_pre.account.balance.checked_sub(balance) {
-                Some(new_balance) => new_balance,
-                None => return,
-            };
-        running_recipient_pre.account.balance =
-            match running_recipient_pre.account.balance.checked_add(balance) {
-                Some(new_balance) => new_balance,
-                None => return,
-            };
     }
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![sender_pre.clone(), recipient_pre.clone()],
         vec![
-            AccountPostState::new(sender_pre.account),
-            AccountPostState::new(recipient_pre.account),
+            AccountStateDiff::unchanged(sender_pre),
+            AccountStateDiff::unchanged(recipient_pre),
         ],
     )
     .with_chained_calls(chained_calls)

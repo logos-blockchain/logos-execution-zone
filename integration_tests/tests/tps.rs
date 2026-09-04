@@ -33,6 +33,17 @@ use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
 };
 use tokio::test;
+use wallet::DEFAULT_MAX_FEE;
+
+/// Genesis supply per TPS account: enough to cover one transfer's fee reserve
+/// (`gas_limit x base_fee` ≈ 0.8M at genesis fees) with ample headroom.
+const TPS_ACCOUNT_SUPPLY: u128 = 10_000_000;
+
+/// Declared execution gas per transfer. A metered native transfer runs
+/// ~82k cycles; the declared limit gates how many transfers the builder packs
+/// per block (`MAX_GAS_EXEC` over the limit), so it is kept tight — at 100k the block
+/// carries ~100 transfers, which is what makes the 8 TPS target reachable.
+const TPS_TRANSFER_GAS_LIMIT: u64 = 100_000;
 
 pub(crate) struct TpsTestManager {
     public_keypairs: Vec<(PrivateKey, AccountId)>,
@@ -68,64 +79,7 @@ impl TpsTestManager {
         Duration::from_secs_f64(number_transactions as f64 / self.target_tps as f64)
     }
 
-    /// Claim funds from each account's vault PDA into the account itself.
-    ///
-    /// `GenesisAction::SupplyAccount` funds vault PDAs (not accounts directly), so this step is
-    /// required before sending `authenticated_transfer` transactions from these accounts.
-    /// All claim transactions are submitted at once and then confirmed sequentially.
-    /// After this call every account has nonce 1, so `build_public_txs` must be called after it.
-    pub async fn claim_vault_funds(
-        &self,
-        sequencer_client: &sequencer_service_rpc::SequencerClient,
-    ) -> Result<()> {
-        let vault_program_id = programs::vault().id();
-
-        let mut tx_hashes = Vec::with_capacity(self.public_keypairs.len());
-        for (private_key, account_id) in &self.public_keypairs {
-            let owner_vault_id =
-                vault_core::compute_vault_account_id(vault_program_id, *account_id);
-            let message = putx::Message::try_new(
-                vault_program_id,
-                vec![*account_id, owner_vault_id],
-                vec![Nonce(0_u128)],
-                vault_core::Instruction::Claim { amount: 10 },
-            )
-            .context("Failed to build vault claim message")?;
-            let witness_set =
-                lee::public_transaction::WitnessSet::for_message(&message, &[private_key]);
-            let tx = PublicTransaction::new(message, witness_set);
-            let hash = sequencer_client
-                .send_transaction(LeeTransaction::Public(tx))
-                .await
-                .context("Failed to submit vault claim")?;
-            tx_hashes.push(hash);
-        }
-
-        let deadline = Instant::now() + Duration::from_mins(5);
-        for (i, tx_hash) in tx_hashes.iter().enumerate() {
-            loop {
-                anyhow::ensure!(
-                    Instant::now() < deadline,
-                    "Vault claims timed out after 5 minutes ({i}/{} confirmed)",
-                    tx_hashes.len()
-                );
-                let found = sequencer_client
-                    .get_transaction(*tx_hash)
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some();
-                if found {
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Build a batch of public transactions to submit to the node.
-    ///
-    /// Must be called after `claim_vault_funds`, which sets each account's nonce to 1.
     pub fn build_public_txs(&self) -> Vec<PublicTransaction> {
         // Create valid public transactions
         let program = programs::authenticated_transfer();
@@ -134,11 +88,15 @@ impl TpsTestManager {
             .windows(2)
             .map(|pair| {
                 let amount: u128 = 1;
-                let message = putx::Message::try_new(
-                    program.id(),
+                let message = putx::Message::try_new_with_fees(
+                    program.id().into(),
                     [pair[0].1, pair[1].1].to_vec(),
-                    [Nonce(1_u128)].to_vec(),
+                    [Nonce(0_u128)].to_vec(),
                     authenticated_transfer_core::Instruction::Transfer { amount },
+                    // A generous max_fee (a ceiling, not the fee paid) so the
+                    // base-fee rise this test's own sustained load causes cannot
+                    // push the reserve past it and drop later txs.
+                    lee::FeeDeclaration::new(pair[0].1, TPS_TRANSFER_GAS_LIMIT, 0, DEFAULT_MAX_FEE),
                 )
                 .unwrap();
                 let witness_set =
@@ -158,7 +116,7 @@ impl TpsTestManager {
             .iter()
             .map(|(_, account_id)| GenesisAction::SupplyAccount {
                 account_id: *account_id,
-                balance: 10,
+                balance: TPS_ACCOUNT_SUPPLY,
             })
             .collect()
     }
@@ -166,10 +124,11 @@ impl TpsTestManager {
     const fn generate_sequencer_partial_config() -> SequencerPartialConfig {
         SequencerPartialConfig {
             max_num_tx_in_block: 300,
-            max_block_size: ByteSize::mb(500),
+            // The largest block Bedrock can carry as one inscription.
+            max_block_size: ByteSize::b(sequencer_core::config::MAX_PUBLISHABLE_BLOCK_SIZE),
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(12),
-            priority_fee: sequencer_core::config::default_priority_fee(),
+            priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
         }
     }
 }
@@ -190,12 +149,6 @@ pub async fn tps_test() -> Result<()> {
         )
         .build()
         .await?;
-
-    // Genesis funds vault PDAs, not accounts directly. Claim into accounts before measuring.
-    tps_test
-        .claim_vault_funds(ctx.sequencer_client())
-        .await
-        .context("Failed to claim vault funds for TPS accounts")?;
 
     let target_time = tps_test.target_time();
     log::info!(
@@ -248,6 +201,26 @@ pub async fn tps_test() -> Result<()> {
     assert!(
         time_elapsed <= target_time.as_secs(),
         "Elapsed time {time_elapsed:?} exceeded target time {target_time:?}"
+    );
+
+    // Guard against silent revert-keeps-fee false passes: an OutOfGas-reverted
+    // transfer is still INCLUDED (fee charged, nonce burned), so `get_transaction`
+    // returning does not prove the transfer executed. The last keypair is a pure
+    // recipient in the chained transfers (never a sender, so never charged a fee),
+    // making its post-state deterministic: it must have gained exactly the
+    // transferred amount (1) over its genesis supply. If the chain reverted instead
+    // of executing, it would still sit at its untouched genesis supply.
+    let last_recipient = tps_test.public_keypairs.last().unwrap().1;
+    let last_recipient_balance = ctx
+        .sequencer_client()
+        .get_account_balance(last_recipient)
+        .await
+        .context("Failed to fetch last recipient balance")?;
+    assert_eq!(
+        last_recipient_balance,
+        TPS_ACCOUNT_SUPPLY + 1,
+        "Last recipient balance mismatch: transfers were included but did not execute \
+         (revert-keeps-fee), so no funds actually moved"
     );
 
     log::info!("TPS test finished successfully");

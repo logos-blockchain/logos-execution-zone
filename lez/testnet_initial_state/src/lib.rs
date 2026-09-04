@@ -27,11 +27,13 @@ const SSK_PRIV_ACC_B: [u8; 32] = [
     180, 43, 120, 55, 151, 50, 21, 113, 22, 254, 83, 148, 56,
 ];
 
-const PUB_ACC_A_INITIAL_BALANCE: u128 = 10000;
-const PUB_ACC_B_INITIAL_BALANCE: u128 = 20000;
+// LGO-scale balances (10^9 atomic units per LGO): once transactions pay real
+// fees, the pre-fee 10_000/20_000 could not afford a single reservation.
+const PUB_ACC_A_INITIAL_BALANCE: u128 = 10_000_000_000_000;
+const PUB_ACC_B_INITIAL_BALANCE: u128 = 20_000_000_000_000;
 
-const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10000;
-const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20000;
+const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10_000_000_000_000;
+const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20_000_000_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicAccountPublicInitialData {
@@ -215,56 +217,60 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             system_accounts::sequencer_stake_config_account_id(),
             system_accounts::sequencer_stake_config_account(),
         )])
+        .chain([
+            (
+                system_accounts::fee_state_account_id(),
+                system_accounts::fee_state_account(),
+            ),
+            (
+                system_accounts::fee_escrow_account_id(),
+                system_accounts::fee_account(),
+            ),
+            (
+                system_accounts::fee_inbox_account_id(),
+                system_accounts::fee_account(),
+            ),
+        ])
         .collect()
 }
 
-fn initial_programs() -> Vec<Program> {
-    vec![
+fn initial_programs(cross_zone: bool) -> Vec<Program> {
+    let mut programs = vec![
         programs::authenticated_transfer(),
         programs::token(),
         programs::amm(),
         programs::clock(),
+        programs::fee(),
         programs::ata(),
-        programs::vault(),
         programs::faucet(),
         programs::bridge(),
         programs::sequencer_stake(),
-        // Cross-zone programs are builtins: their bytecode is baked into every node,
-        // so registering them in the base state (rather than shipping ELFs through
-        // the genesis block, which exceeds the inscription size limit) keeps the two
-        // nodes in lock-step with nothing to desync.
-        programs::cross_zone_inbox(),
-        programs::cross_zone_outbox(),
-        programs::ping_sender(),
-        programs::ping_receiver(),
-        programs::bridge_lock(),
-        programs::wrapped_token(),
-    ]
+    ];
+    if cross_zone {
+        // Builtins baked into every node (genesis-block ELFs would exceed the
+        // inscription size limit); registered only on cross_zone zones, fixed at
+        // genesis.
+        programs.extend([
+            programs::cross_zone_inbox(),
+            programs::cross_zone_outbox(),
+            programs::ping_sender(),
+            programs::ping_receiver(),
+            programs::bridge_lock(),
+            programs::wrapped_token(),
+        ]);
+    }
+    programs
 }
 
+/// The pre-genesis state. `cross_zone` selects whether the six cross-zone
+/// builtins are registered; ids are content-derived, so only membership
+/// changes. Not defaulted: every caller states the choice.
 #[must_use]
-pub fn initial_state() -> V03State {
+pub fn initial_state(cross_zone: bool) -> V03State {
     lee::V03State::new()
         .with_public_accounts(initial_public_accounts())
         .with_private_accounts(initial_private_accounts())
-        .with_programs(initial_programs())
-}
-
-#[must_use]
-pub fn initial_state_testnet() -> V03State {
-    let mut initial_public_accounts = initial_public_accounts();
-    initial_public_accounts.insert(
-        system_accounts::pinata_account_id(),
-        system_accounts::pinata_account(),
-    );
-
-    let mut programs = initial_programs();
-    programs.push(programs::pinata());
-
-    V03State::new()
-        .with_public_accounts(initial_public_accounts)
-        .with_private_accounts(initial_private_accounts())
-        .with_programs(programs)
+        .with_programs(initial_programs(cross_zone))
 }
 
 #[cfg(test)]
@@ -412,6 +418,46 @@ mod tests {
     }
 
     #[test]
+    fn genesis_fee_accounts_are_registered_and_owned() {
+        let state = initial_state(true);
+        let fee_program_id = programs::fee().id();
+
+        let ids = system_accounts::fee_account_ids();
+        // state, escrow, inbox — all distinct, all non-default.
+        for (i, id) in ids.iter().enumerate() {
+            assert_ne!(*id, AccountId::default());
+            for other in &ids[i + 1..] {
+                assert_ne!(id, other);
+            }
+            let account = state.get_account_by_id(*id);
+            assert_eq!(account.program_owner, fee_program_id.into());
+            assert_eq!(account.balance, 0);
+        }
+
+        // The fee-state account carries the genesis market state; escrow and
+        // inbox start empty.
+        let fee_state = fee_core::state::FeeState::from_bytes(
+            &state
+                .get_account_by_id(system_accounts::fee_state_account_id())
+                .data
+                .into_inner(),
+        );
+        assert_eq!(fee_state, fee_core::state::FeeState::genesis());
+        for empty_id in [
+            system_accounts::fee_escrow_account_id(),
+            system_accounts::fee_inbox_account_id(),
+        ] {
+            assert!(
+                state
+                    .get_account_by_id(empty_id)
+                    .data
+                    .into_inner()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
     fn genesis_system_accounts_have_expected_contents() {
         // System-account IDs must be distinct and non-default, and the genesis
         // faucet/bridge accounts must carry their expected field values.  Catches
@@ -423,7 +469,7 @@ mod tests {
         assert_ne!(bridge_id, AccountId::default());
         assert_ne!(faucet_id, bridge_id);
 
-        let state = initial_state();
+        let state = initial_state(true);
         let default_owner = Account::default().program_owner;
 
         let faucet = state.get_account_by_id(faucet_id);
@@ -438,5 +484,28 @@ mod tests {
             bridge.program_owner, default_owner,
             "bridge must have a non-default program_owner"
         );
+    }
+
+    /// Gating changes membership only: no other program moves.
+    #[test]
+    fn cross_zone_builtins_register_only_when_declared() {
+        let cross_zone_ids = [
+            programs::cross_zone_inbox().id(),
+            programs::cross_zone_outbox().id(),
+            programs::ping_sender().id(),
+            programs::ping_receiver().id(),
+            programs::bridge_lock().id(),
+            programs::wrapped_token().id(),
+        ];
+        let with = initial_state(true);
+        let without = initial_state(false);
+        for id in cross_zone_ids {
+            assert!(with.get_program(id).is_some(), "registered when declared");
+            assert!(
+                without.get_program(id).is_none(),
+                "absent when not declared"
+            );
+        }
+        assert!(without.get_program(programs::faucet().id()).is_some());
     }
 }

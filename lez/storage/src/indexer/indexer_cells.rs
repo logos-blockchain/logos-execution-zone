@@ -1,4 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use common::transaction::TxEvents;
 use lee::V03State;
 
 use crate::{
@@ -6,8 +7,9 @@ use crate::{
     cells::{SimpleReadableCell, SimpleStorableCell, SimpleWritableCell},
     error::DbError,
     indexer::{
-        ACC_NUM_CELL_NAME, BLOCK_HASH_CELL_NAME, BREAKPOINT_CELL_NAME, CF_ACC_META,
-        CF_BREAKPOINT_NAME, CF_HASH_TO_ID, CF_TX_TO_ID, DB_META_CROSS_ZONE_HALT_KEY,
+        ACC_NUM_CELL_NAME, BLOCK_EVENTS_CELL_NAME, BLOCK_HASH_CELL_NAME, BREAKPOINT_CELL_NAME,
+        CF_ACC_META, CF_BREAKPOINT_NAME, CF_EVENTS, CF_HASH_TO_ID, CF_TX_TO_ID,
+        DB_META_CROSS_ZONE_HALT_KEY, DB_META_EVENT_FILTER_SEGMENTS_KEY,
         DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, DB_META_STALL_REASON_KEY,
         DB_META_TIP_SLOT_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY, TX_HASH_CELL_NAME,
     },
@@ -122,6 +124,60 @@ impl SimpleWritableCell for BlockHashToBlockIdMapCell {
     }
 }
 
+#[derive(BorshDeserialize)]
+pub struct BlockEventsCellOwned(pub Vec<TxEvents>);
+
+impl SimpleStorableCell for BlockEventsCellOwned {
+    type KeyParams = u64;
+
+    const CELL_NAME: &'static str = BLOCK_EVENTS_CELL_NAME;
+    const CF_NAME: &'static str = CF_EVENTS;
+
+    fn key_constructor(params: Self::KeyParams) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&params).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some(format!(
+                    "Failed to serialize {:?} key params",
+                    Self::CELL_NAME
+                )),
+            )
+        })
+    }
+}
+
+impl SimpleReadableCell for BlockEventsCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct BlockEventsCellRef<'events>(pub &'events [TxEvents]);
+
+impl SimpleStorableCell for BlockEventsCellRef<'_> {
+    type KeyParams = u64;
+
+    const CELL_NAME: &'static str = BLOCK_EVENTS_CELL_NAME;
+    const CF_NAME: &'static str = CF_EVENTS;
+
+    fn key_constructor(params: Self::KeyParams) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&params).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some(format!(
+                    "Failed to serialize {:?} key params",
+                    Self::CELL_NAME
+                )),
+            )
+        })
+    }
+}
+
+impl SimpleWritableCell for BlockEventsCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize block events".to_owned()))
+        })
+    }
+}
+
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
 pub struct TxHashToBlockIdMapCell(pub u64);
 
@@ -223,6 +279,40 @@ impl SimpleStorableCell for ZoneSdkIndexerCursorCellOwned {
 }
 
 impl SimpleReadableCell for ZoneSdkIndexerCursorCellOwned {}
+
+/// The caller serializes via `borsh` (the segment list type lives in `indexer_core`).
+#[derive(BorshDeserialize)]
+pub struct EventFilterSegmentsCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for EventFilterSegmentsCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_EVENT_FILTER_SEGMENTS_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for EventFilterSegmentsCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct EventFilterSegmentsCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for EventFilterSegmentsCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_EVENT_FILTER_SEGMENTS_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for EventFilterSegmentsCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize event-filter segments cell".to_owned()),
+            )
+        })
+    }
+}
 
 #[derive(BorshSerialize)]
 pub struct ZoneSdkIndexerCursorCellRef<'bytes>(pub &'bytes [u8]);

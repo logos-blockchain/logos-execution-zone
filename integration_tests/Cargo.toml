@@ -14,12 +14,11 @@ test_fixtures.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 lee.workspace = true
 authenticated_transfer_core.workspace = true
-sequencer_core = { workspace = true, features = ["default", "testnet"] }
+sequencer_core.workspace = true
 wallet.workspace = true
 common.workspace = true
 key_protocol.workspace = true
 serde_json.workspace = true
-vault_core.workspace = true
 faucet_core.workspace = true
 bridge_core.workspace = true
 ping_core.workspace = true
@@ -40,6 +39,7 @@ sequencer_stake_core.workspace = true
 programs.workspace = true
 test_programs.workspace = true
 testnet_initial_state.workspace = true
+program_loader_core.workspace = true
 
 logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
@@ -64,6 +64,9 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+sequencer_core = { workspace = true, features = ["test-utils"] }
 
 [features]
 cucumber = ["dep:cucumber"]

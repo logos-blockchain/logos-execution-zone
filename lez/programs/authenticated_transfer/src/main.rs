@@ -1,99 +1,69 @@
 use authenticated_transfer_core::Instruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{AccountWithMetadata, BalanceDiff},
     program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
     },
 };
-
-/// Initializes a default account under the ownership of this program.
-fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
-    let account_to_claim = AccountPostState::new_claimed(pre_state.account, Claim::Authorized);
-
-    // Continue only if the account to claim has default values
-    assert!(
-        account_to_claim.account() == &Account::default(),
-        "Account must be uninitialized"
-    );
-
-    account_to_claim
-}
 
 /// Transfers `balance_to_move` native balance from `sender` to `recipient`.
 fn transfer(
     sender: AccountWithMetadata,
     recipient: AccountWithMetadata,
     balance_to_move: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountStateDiff> {
     // Continue only if the sender has authorized this operation.
     assert!(sender.is_authorized, "Sender must be authorized");
 
-    // Create accounts post states, with updated balances
-    let sender_post = {
-        // Modify sender's balance
-        let mut sender_post_account = sender.account;
-        sender_post_account.balance = sender_post_account
-            .balance
-            .checked_sub(balance_to_move)
-            .expect("Sender has insufficient balance");
-        AccountPostState::new(sender_post_account)
-    };
+    let sender_diff_output = AccountStateDiff::new(
+        sender.clone(),
+        BalanceDiff::Sub(balance_to_move),
+        sender.account.data.clone(),
+    );
 
-    let recipient_post = {
-        // Modify recipient's balance
-        let mut recipient_post_account = recipient.account;
-        recipient_post_account.balance = recipient_post_account
-            .balance
-            .checked_add(balance_to_move)
-            .expect("Recipient balance overflow");
+    // TODO(squatting): the credit leaves the recipient unowned, and unowned is takeable — the first
+    // program to write data there owns it, on a plain key account as much as on a derivable PDA.
+    // Accepted: no reclaim path today.
+    let recipient_diff_output = AccountStateDiff::new(
+        recipient.clone(),
+        BalanceDiff::Add(balance_to_move),
+        recipient.account.data.clone(),
+    );
 
-        // Claim recipient account if it has default program owner
-        if recipient_post_account.program_owner == DEFAULT_PROGRAM_OWNER {
-            AccountPostState::new_claimed(recipient_post_account, Claim::Authorized)
-        } else {
-            AccountPostState::new(recipient_post_account)
-        }
-    };
-
-    vec![sender_post, recipient_post]
+    vec![sender_diff_output, recipient_diff_output]
 }
 
 /// A transfer of balance program.
 /// To be used both in public and private contexts.
 fn main() {
     // Read input accounts.
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
-            instruction,
+            instruction:
+                Instruction::Transfer {
+                    amount: balance_to_move,
+                },
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
-
-    let post_states = match instruction {
-        Instruction::Initialize => {
-            let [account_to_claim] = <[_; 1]>::try_from(pre_states.clone())
-                .expect("Initialize requires exactly 1 account");
-            vec![initialize_account(account_to_claim)]
-        }
-        Instruction::Transfer {
-            amount: balance_to_move,
-        } => {
-            let [sender, recipient] = <[_; 2]>::try_from(pre_states.clone())
-                .expect("Transfer requires exactly 2 accounts");
-            transfer(sender, recipient, balance_to_move)
-        }
+    ) = call
+    else {
+        respond_unsupported_call(call);
     };
 
+    let [sender, recipient] =
+        <[_; 2]>::try_from(pre_states).expect("Transfer requires exactly 2 accounts");
+    let post_diffs = transfer(sender, recipient, balance_to_move);
+
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        pre_states,
-        post_states,
+        post_diffs,
     )
     .write();
 }

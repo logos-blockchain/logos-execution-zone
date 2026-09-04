@@ -1,33 +1,34 @@
 use lee_core::program::{
-    AccountPostState, BlockValidityWindow, ProgramInput, ProgramOutput, TimestampValidityWindow,
-    read_lee_inputs,
+    AccountStateDiff, BlockValidityWindow, ProgramCall, ProgramInput, ProgramOutput,
+    TimestampValidityWindow, read_lee_call, respond_unsupported_call,
 };
 
 type Instruction = (BlockValidityWindow, TimestampValidityWindow);
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (block_validity_window, timestamp_validity_window),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let post = pre.account.clone();
-
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![pre],
-        vec![AccountPostState::new(post)],
+        vec![AccountStateDiff::unchanged(pre)],
     )
     .with_block_validity_window(block_validity_window)
     .with_timestamp_validity_window(timestamp_validity_window)

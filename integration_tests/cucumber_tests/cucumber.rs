@@ -100,7 +100,7 @@ async fn async_main() -> anyhow::Result<()> {
 
     if let Some(retries) = get_retries()? {
         // Makes failed Scenarios being retried the specified number of times.
-        world = world.retries(retries.get());
+        world = world.retries(retries);
     }
 
     let teardown_failure_flag = Arc::clone(&teardown_failed);

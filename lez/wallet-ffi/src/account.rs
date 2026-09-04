@@ -69,8 +69,7 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
 ///
 /// This is the private-account equivalent of `wallet_ffi_create_account_public`.
 /// It generates a key node, assigns a random identifier, and inserts a default
-/// account record so the account can immediately be used with
-/// `wallet_ffi_register_private_account`.
+/// account record so the account can immediately be used.
 ///
 /// The identifier is chosen at random and is not encoded in the mnemonic seed.
 /// Once the account is initialized, the identifier is embedded in the encrypted

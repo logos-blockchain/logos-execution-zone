@@ -57,12 +57,13 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         node_url: config::addr_to_url(config::UrlProtocol::Http, ctx.bedrock_addr())?,
         funding_key: config::bedrock_funding_key(),
         auth: None,
-        priority_fee: sequencer_core::config::default_priority_fee(),
+        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
     };
 
     // B's genesis stake sits on an account only this key can sign for.
     let owner_b = config::founding_stake_owner_key(1)?;
     let ownership_b = AccountId::from(&PublicKey::new_from_private_key(&owner_b));
+    let funds_b = system_accounts::stake_funds_account_id(&ownership_b);
     ctx.wallet_mut()
         .storage_mut()
         .key_chain_mut()
@@ -110,7 +111,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B removed from the Bedrock committee");
 
     wait_until("B's stake to be released", || async {
-        Ok(get_account(&ctx, ownership_b).await?.balance == 0)
+        Ok(get_account(&ctx, funds_b).await?.balance == 0)
     })
     .await?;
     ensure!(
@@ -134,12 +135,13 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         vec![
             AccountIdentity::Public(settlement),
             AccountIdentity::Public(ownership_b),
+            AccountIdentity::PublicNoSign(funds_b),
             AccountIdentity::PublicNoSign(config_id),
         ],
         &sequencer_stake_core::Instruction::Stake {
             sequencer_key: stake_key_b,
             amount: STAKE,
-            mover_program_id: programs::authenticated_transfer().id(),
+            mover_account_id: programs::authenticated_transfer().id().into(),
             mover_instruction_data,
         },
     )
@@ -147,7 +149,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     .context("Failed to submit B's re-stake")?;
 
     wait_until("B's re-stake to land", || async {
-        Ok(get_account(&ctx, ownership_b).await?.balance == STAKE)
+        Ok(get_account(&ctx, funds_b).await?.balance == STAKE)
     })
     .await?;
     info!("B staked again");
@@ -193,7 +195,7 @@ async fn send_stake_tx(
     let data = Program::serialize_instruction(instruction.clone())
         .context("Failed to serialize the sequencer_stake instruction")?;
     ctx.wallet()
-        .send_pub_tx(accounts, data, programs::sequencer_stake().id())
+        .send_pub_tx(accounts, data, programs::sequencer_stake().id().into())
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit sequencer_stake transaction: {err:?}"))?;
     Ok(())

@@ -19,7 +19,6 @@ use integration_tests::{
     indexer_client::IndexerClient,
 };
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
-use lee_core::program::ProgramId;
 use ping_core::{
     ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
@@ -27,7 +26,8 @@ use ping_core::{
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
-    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{MultiNodeTestContextConfig, source_only_cross_zone},
 };
 use tokio::test;
 
@@ -42,15 +42,17 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     let zone_a: [u8; 32] = *channel_a.as_ref();
     let zone_b: [u8; 32] = *channel_b.as_ref();
 
-    let receiver_id = programs::ping_receiver().id();
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
             allowed_routes: vec![CrossZoneRoute {
-                src_program_id: programs::ping_sender().id(),
-                target_program_id: receiver_id,
+                src_account_id: programs::ping_sender().id().into(),
+                target_account_id: receiver_id,
+                mint_cap: None,
             }],
             expected_block_signing_pubkeys: Vec::new(),
+            min_committee_size: 0,
         }],
         source_authority: None,
         source_governance: None,
@@ -64,7 +66,8 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
             })
             .disable_wallet()
             .with_sequencer_partial_config(partial)
-            .with_genesis(vec![]),
+            .with_genesis(vec![])
+            .with_cross_zone(Some(source_only_cross_zone())),
         )
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
@@ -106,8 +109,8 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     Ok(())
 }
 
-fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransaction {
-    let outbox_id = programs::cross_zone_outbox().id();
+fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransaction {
+    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
     let ordinal = 0;
 
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
@@ -117,7 +120,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
 
     let send = SenderInstruction::Send {
         target_zone,
-        target_program_id: receiver_id,
+        target_account_id: receiver_id,
         target_accounts: vec![
             receiver_config_account_id(receiver_id).into_value(),
             ping_record_pda(receiver_id).into_value(),
@@ -126,7 +129,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
         ordinal,
     };
 
-    let sender_id = programs::ping_sender().id();
+    let sender_id: AccountId = programs::ping_sender().id().into();
     let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
     let message = Message::try_new(
         sender_id,

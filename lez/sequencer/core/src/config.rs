@@ -17,6 +17,20 @@ use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+/// Bytes reserved out of `max_block_size` for the block header plus the forced
+/// fee and clock tail transactions; RPC and gossip cap a single transaction at
+/// `max_block_size - BLOCK_OVERHEAD`.
+pub const BLOCK_OVERHEAD: u64 = 2_048;
+
+/// The largest usable `max_block_size`: an L2 block is published to Bedrock as
+/// a single inscription, which the L1 caps at this many bytes.
+#[expect(
+    clippy::as_conversions,
+    reason = "usize::try_from is not const & usize fits u64 on every supported target"
+)]
+pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
+    logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
+
 /// A transaction to be applied at genesis to supply initial balances.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -28,7 +42,8 @@ pub enum GenesisAction {
     SupplyBridgeAccount {
         balance: Balance,
     },
-    /// Seeds a bridge-lock holder's initial bridgeable balance into genesis state.
+    /// Funds a holder's holding PDA at genesis with one replayable faucet
+    /// credit; the balance-only PDA needs no claim.
     SupplyBridgeLockHolding {
         holder: AccountId,
         amount: Balance,
@@ -80,7 +95,9 @@ pub struct SequencerConfig {
     /// Genesis configuration.
     #[serde(default)]
     pub genesis: Vec<GenesisAction>,
-    /// Cross-zone messaging configuration. `None` disables the watcher.
+    /// Presence selects the genesis program set, must match the indexer's, and
+    /// cannot change on an existing chain. A source-only zone declares
+    /// `"cross_zone": {}`.
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,
     /// Address the Prometheus metrics exporter binds to.
@@ -100,8 +117,8 @@ pub struct BedrockConfig {
     /// Bedrock auth.
     pub auth: Option<BasicAuth>,
     pub funding_key: ZkPublicKey,
-    #[serde(default = "default_priority_fee")]
-    pub priority_fee: u64,
+    #[serde(default = "default_priority_fee_percent")]
+    pub priority_fee_percent: u64,
 }
 
 impl SequencerConfig {
@@ -142,9 +159,9 @@ const fn default_metrics_address() -> Option<SocketAddr> {
     Some(SequencerConfig::DEFAULT_METRICS_ADDRESS)
 }
 
-/// Extra fee added to every funded Bedrock transaction, covering a gas price
-/// rise before it is mined.
+/// Percentage of the mandatory fee reserved on every funded Bedrock
+/// transaction, covering a gas price rise before it is mined.
 #[must_use]
-pub const fn default_priority_fee() -> u64 {
-    10_000
+pub const fn default_priority_fee_percent() -> u64 {
+    12
 }

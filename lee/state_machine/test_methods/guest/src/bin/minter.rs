@@ -1,35 +1,40 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
 
 type Instruction = ();
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             ..
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let account_pre = &pre.account;
-    let mut account_post = account_pre.clone();
-    account_post.balance = account_post
-        .balance
-        .checked_add(1)
-        .expect("Balance overflow");
+    let post_data = pre.account.data.clone();
+    let diff = AccountStateDiff::new(pre, BalanceDiff::Add(1), post_data);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![pre],
-        vec![AccountPostState::new(account_post)],
+        vec![diff],
     )
     .write();
 }

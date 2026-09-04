@@ -7,7 +7,6 @@ const fn transaction_type_info(tx: &Transaction) -> (&'static str, &'static str)
     match tx {
         Transaction::Public(_) => ("Public", "tx-type-public"),
         Transaction::PrivacyPreserving(_) => ("Privacy-Preserving", "tx-type-private"),
-        Transaction::ProgramDeployment(_) => ("Program Deployment", "tx-type-deployment"),
     }
 }
 
@@ -43,10 +42,6 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
                 message.public_actions.len(),
                 message.private_actions.len()
             )
-        }
-        Transaction::ProgramDeployment(tx) => {
-            let indexer_service_protocol::ProgramDeploymentTransaction { hash: _, message } = tx;
-            format!("{} bytes", message.bytecode.len())
         }
     };
 

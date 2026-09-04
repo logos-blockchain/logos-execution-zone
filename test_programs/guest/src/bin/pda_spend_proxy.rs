@@ -1,6 +1,7 @@
 use borsh::to_vec;
 use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
 };
 
 /// Proxy for spending from a private PDA via `auth_transfer`.
@@ -10,39 +11,39 @@ use lee_core::program::{
 type Instruction = (PdaSeed, u128, ProgramId);
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (seed, amount, auth_transfer_id),
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([first, second]) = <[_; 2]>::try_from(pre_states) else {
         return;
     };
 
-    let first_post = AccountPostState::new(first.account.clone());
-    let second_post = AccountPostState::new(second.account.clone());
-
-    let mut first_for_callee = first.clone();
-    first_for_callee.is_authorized = true;
+    let first_post = AccountStateDiff::unchanged(first.clone());
+    let second_post = AccountStateDiff::unchanged(second.clone());
 
     let chained_call = ChainedCall {
-        program_id: auth_transfer_id,
+        program_account_id: auth_transfer_id.into(),
         instruction_data: to_vec(&authenticated_transfer_core::Instruction::Transfer { amount })
             .unwrap(),
-        pre_states: vec![first_for_callee, second.clone()],
+        pre_state_ids: vec![first.account_id, second.account_id],
         pda_seeds: vec![seed],
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![first, second],
         vec![first_post, second_post],
     )
     .with_chained_calls(vec![chained_call])

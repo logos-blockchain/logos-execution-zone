@@ -13,8 +13,11 @@ use clock_core::{
     ClockAccountData, Instruction,
 };
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountWithMetadata, BalanceDiff},
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 fn update_if_multiple(
@@ -22,30 +25,32 @@ fn update_if_multiple(
     divisor: u64,
     current_block_id: u64,
     updated_data: &[u8],
-) -> (AccountWithMetadata, AccountPostState) {
+) -> AccountStateDiff {
     if current_block_id.is_multiple_of(divisor) {
-        let mut post_account = pre.account.clone();
-        post_account.data = updated_data
+        let new_data = updated_data
             .to_vec()
             .try_into()
             .expect("Clock account data should fit in account data");
-        (pre, AccountPostState::new(post_account))
+        AccountStateDiff::new(pre, BalanceDiff::Add(0), new_data)
     } else {
-        let post = AccountPostState::new(pre.account.clone());
-        (pre, post)
+        AccountStateDiff::unchanged(pre)
     }
 }
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: timestamp,
         },
         instruction_data,
-    ) = read_lee_inputs::<Instruction>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([pre_01, pre_10, pre_50]) = <[_; 3]>::try_from(pre_states) else {
         panic!("Invalid number of input accounts");
@@ -60,7 +65,6 @@ fn main() {
     }
 
     // Verify all clock accounts are owned by this program (assigned at genesis).
-    let self_account_id: lee_core::account::AccountId = self_program_id.into();
     if pre_01.account.program_owner != self_account_id
         || pre_10.account.program_owner != self_account_id
         || pre_50.account.program_owner != self_account_id
@@ -80,16 +84,15 @@ fn main() {
     }
     .to_bytes();
 
-    let (pre_01, post_01) = update_if_multiple(pre_01, 1, current_block_id, &updated_data);
-    let (pre_10, post_10) = update_if_multiple(pre_10, 10, current_block_id, &updated_data);
-    let (pre_50, post_50) = update_if_multiple(pre_50, 50, current_block_id, &updated_data);
+    let diff_01 = update_if_multiple(pre_01, 1, current_block_id, &updated_data);
+    let diff_10 = update_if_multiple(pre_10, 10, current_block_id, &updated_data);
+    let diff_50 = update_if_multiple(pre_50, 50, current_block_id, &updated_data);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![pre_01, pre_10, pre_50],
-        vec![post_01, post_10, post_50],
+        vec![diff_01, diff_10, diff_50],
     )
     .write();
 }

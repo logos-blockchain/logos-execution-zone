@@ -35,7 +35,7 @@ use lee::program::Program;
 use lee_core::{
     Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Data},
-    program::{InstructionData, ProgramId},
+    program::InstructionData,
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
@@ -203,7 +203,8 @@ impl Case {
             pre_states,
             instruction_data,
         } = self;
-        let caller_program_id: Option<ProgramId> = None;
+        let self_account_id: AccountId = program.id().into();
+        let caller_account_id: Option<AccountId> = None;
 
         // One warmup pass discarded, then `exec_iters` samples. The executor has
         // large per-call setup overhead (ELF parsing, env init); reporting both
@@ -214,7 +215,8 @@ impl Case {
         for iter in 0..total {
             let mut env_builder = ExecutorEnv::builder();
             program.write_inputs(
-                caller_program_id,
+                self_account_id,
+                caller_account_id,
                 &pre_states,
                 &instruction_data,
                 &mut env_builder,
@@ -241,7 +243,8 @@ impl Case {
         if prove {
             let mut env_builder = ExecutorEnv::builder();
             program.write_inputs(
-                caller_program_id,
+                self_account_id,
+                caller_account_id,
                 &pre_states,
                 &instruction_data,
                 &mut env_builder,
@@ -281,14 +284,6 @@ impl Case {
             prove_segments,
         })
     }
-}
-
-fn authenticated_transfer_init() -> Vec<AccountWithMetadata> {
-    vec![AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
-    }]
 }
 
 fn authenticated_transfer_transfer() -> Vec<AccountWithMetadata> {
@@ -406,19 +401,27 @@ fn amm_token_b_def_id() -> AccountId {
 }
 fn amm_pool_id() -> AccountId {
     compute_pool_pda(
-        programs::amm().id(),
+        programs::amm().id().into(),
         amm_token_a_def_id(),
         amm_token_b_def_id(),
     )
 }
 fn amm_vault_a_id() -> AccountId {
-    compute_vault_pda(programs::amm().id(), amm_pool_id(), amm_token_a_def_id())
+    compute_vault_pda(
+        programs::amm().id().into(),
+        amm_pool_id(),
+        amm_token_a_def_id(),
+    )
 }
 fn amm_vault_b_id() -> AccountId {
-    compute_vault_pda(programs::amm().id(), amm_pool_id(), amm_token_b_def_id())
+    compute_vault_pda(
+        programs::amm().id().into(),
+        amm_pool_id(),
+        amm_token_b_def_id(),
+    )
 }
 fn amm_lp_def_id() -> AccountId {
-    compute_liquidity_token_pda(programs::amm().id(), amm_pool_id())
+    compute_liquidity_token_pda(programs::amm().id().into(), amm_pool_id())
 }
 
 /// Pool seeded with reserves `1_000` / `500`, lp supply `sqrt(1000*500) = 707`.
@@ -480,7 +483,7 @@ fn ata_create_pre_states() -> Vec<AccountWithMetadata> {
     };
     let token_def = token_definition(definition_id, 100_000, false);
     let seed = compute_ata_seed(owner_id, definition_id);
-    let ata_id = get_associated_token_account_id(&programs::ata().id(), &seed);
+    let ata_id = get_associated_token_account_id(&programs::ata().id().into(), &seed);
     let ata_account = AccountWithMetadata {
         account: Account::default(),
         is_authorized: false,
@@ -504,13 +507,6 @@ fn main() -> Result<()> {
             programs::authenticated_transfer(),
             authenticated_transfer_transfer(),
             &authenticated_transfer_core::Instruction::Transfer { amount: 5_000 },
-        )?,
-        Case::new(
-            "authenticated_transfer",
-            "Initialize",
-            programs::authenticated_transfer(),
-            authenticated_transfer_init(),
-            &authenticated_transfer_core::Instruction::Initialize,
         )?,
         Case::new(
             "token",
@@ -574,7 +570,7 @@ fn main() -> Result<()> {
             programs::ata(),
             ata_create_pre_states(),
             &associated_token_account_core::Instruction::Create {
-                ata_program_id: programs::ata().id(),
+                ata_program_id: programs::ata().id().into(),
             },
         )?,
     ];

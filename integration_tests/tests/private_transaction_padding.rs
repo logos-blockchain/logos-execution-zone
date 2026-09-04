@@ -4,9 +4,8 @@
 )]
 
 use anyhow::Result;
-use integration_tests::{
-    TestContext, fetch_privacy_preserving_tx, private_mention, utils::new_account,
-};
+use integration_tests::{TestContext, fetch_privacy_preserving_tx, private_mention};
+use lee::AccountId;
 use tokio::test;
 use wallet::cli::{
     Command, SubcommandReturnValue, programs::native_token_transfer::AuthTransferSubcommand,
@@ -16,11 +15,19 @@ use wallet::cli::{
 async fn private_transaction_pads_notes_to_max() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let account_id = new_account(&mut ctx, true, None).await?;
+    let from: AccountId = ctx.existing_private_accounts()[0];
+    let to: AccountId = ctx.existing_private_accounts()[1];
 
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: private_mention(account_id),
+    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
+        from: private_mention(from),
+        to: Some(private_mention(to)),
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_identifier: None,
+        amount: 100,
     });
+
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::TransactionExecuted { tx_hash } = result else {
         anyhow::bail!("Expected TransactionExecuted return value");

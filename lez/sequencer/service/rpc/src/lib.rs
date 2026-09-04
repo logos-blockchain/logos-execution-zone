@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
 
 use jsonrpsee::proc_macros::rpc;
-#[cfg(feature = "server")]
-use jsonrpsee::types::ErrorObjectOwned;
+pub use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
+pub use sequencer_service_protocol::AdmissionRejection;
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
-    CrossZoneDeadLetterReport, HashType, LeeTransaction, MembershipProof, Nonce, ProgramId,
+    CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote, HashType, LeeTransaction,
+    MembershipProof, Nonce, ProgramId,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -38,6 +39,11 @@ pub type SequencerClient = jsonrpsee::http_client::HttpClient;
 pub trait Rpc {
     #[method(name = "sendTransaction")]
     async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, ErrorObjectOwned>;
+
+    /// The head fee market: current base fees and the band the next block's
+    /// can move within, for sizing `max_fee` at submission time.
+    #[method(name = "getFeeState")]
+    async fn get_fee_state(&self) -> Result<FeeStateQuote, ErrorObjectOwned>;
 
     // TODO: expand healthcheck response into some kind of report
     #[method(name = "checkHealth")]
@@ -99,4 +105,20 @@ pub trait Rpc {
     async fn get_cross_zone_dead_letters(
         &self,
     ) -> Result<CrossZoneDeadLetterReport, ErrorObjectOwned>;
+
+    /// Restores a dead-lettered cross-zone delivery to the pending list, with a
+    /// clean attempt count.
+    ///
+    /// The operator move once the cause of the failures has cleared: a raised
+    /// mint cap, a fixed target program. A delivery that fails again is
+    /// dead-lettered again.
+    ///
+    /// Like the rest of this surface it carries no authentication, so anyone
+    /// who can reach the RPC can requeue; the blast radius is bounded to
+    /// re-attempting deliveries this node already accepted from a peer.
+    #[method(name = "requeueCrossZoneDeadLetter")]
+    async fn requeue_cross_zone_dead_letter(
+        &self,
+        message_key: HashType,
+    ) -> Result<CrossZoneDeadLetterRequeue, ErrorObjectOwned>;
 }
