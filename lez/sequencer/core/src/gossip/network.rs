@@ -17,11 +17,14 @@ use libp2p::{
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+#[cfg(test)]
 use mempool::MemPoolHandle;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::{TransactionOrigin, config::GossipConfig, gossip::seen_cache::SeenCache};
+#[cfg(test)]
+use crate::TransactionOrigin;
+use crate::{config::GossipConfig, gossip::seen_cache::SeenCache};
 
 /// How long to wait for the first listen address before failing startup.
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -530,6 +533,7 @@ pub(crate) fn peer_id_from_ed25519(
 
 /// An [`IngestSubmit`] that pushes straight into `mempool` unscreened; for
 /// tests.
+#[cfg(test)]
 #[must_use]
 pub fn unscreened_mempool_submit(
     mempool: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
