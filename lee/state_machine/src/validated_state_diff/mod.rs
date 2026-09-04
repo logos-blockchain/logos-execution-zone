@@ -704,8 +704,8 @@ impl ValidatedStateDiff {
 ///
 /// `program_loader_core`'s functions panic on malformed input, mirroring the assert-based style
 /// every other `*_core` crate uses under its guest's sandbox. There is no zkVM sandbox here, so
-/// `catch_unwind` stands in for it: a panic becomes a chargeable [`LeeError::ProgramExecutionFailed`]
-/// instead of taking down the caller.
+/// `catch_unwind` stands in for it: a panic becomes a chargeable
+/// [`LeeError::ProgramExecutionFailed`] instead of taking down the caller.
 fn execute_program_loader(
     self_account_id: AccountId,
     caller_account_id: Option<AccountId>,
