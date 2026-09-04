@@ -119,14 +119,20 @@ impl std::fmt::Display for UrlProtocol {
 #[derive(Debug, Clone, Copy)]
 /// Config for test context in multi-node case.
 pub struct MultiNodeTestContextConfig {
-    pub num_nodes: usize,
+    /// How much nodes will be run ion setup.
+    pub num_nodes_to_build: usize,
+    /// How much __additional__ slots for nodes available.
+    /// 
+    /// Useful in cases where you want to add nodes during runtime.
+    pub add_num_nodes_vacant: usize,
     pub bedrock_channel: ChannelId,
 }
 
 impl Default for MultiNodeTestContextConfig {
     fn default() -> Self {
         Self {
-            num_nodes: 1,
+            num_nodes_to_build: 1,
+            add_num_nodes_vacant: 0,
             bedrock_channel: bedrock_channel_id(),
         }
     }

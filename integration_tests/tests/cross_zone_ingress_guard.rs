@@ -33,7 +33,8 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
-                num_nodes: 1,
+                num_nodes_to_build: 1,
+                add_num_nodes_vacant: 0,
                 bedrock_channel: channel,
             })
             .disable_indexer()
