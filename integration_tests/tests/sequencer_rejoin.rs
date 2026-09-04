@@ -39,7 +39,8 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     let mut ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
-                num_nodes: 2,
+                num_nodes_to_build: 2,
+                add_num_nodes_vacant: 0,
                 bedrock_channel: channel,
             })
             .with_sequencer_partial_config(partial),

@@ -45,7 +45,8 @@ async fn modify_config_field() -> Result<()> {
 async fn modify_config_field_multiseq() -> Result<()> {
     let mut ctx = MultiZoneTestContextBuilder::default()
         .with_zone(ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
-            num_nodes: 2,
+            num_nodes_to_build: 2,
+            add_num_nodes_vacant: 0,
             bedrock_channel: bedrock_channel_id(),
         }))
         .build()

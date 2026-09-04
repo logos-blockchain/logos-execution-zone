@@ -78,7 +78,8 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
-                num_nodes: 2,
+                num_nodes_to_build: 2,
+                add_num_nodes_vacant: 0,
                 bedrock_channel: channel,
             })
             .disable_wallet()

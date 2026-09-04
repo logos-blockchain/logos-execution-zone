@@ -629,14 +629,17 @@ impl ZoneTestContextBuilder {
 
         debug!("Test context setup");
 
+        // Number of vacant nodes, not every one of them may be built
+        let vacancies_num = mn_config.num_nodes_to_build + mn_config.add_num_nodes_vacant;
+
         let mut sequencer_keys = vec![config::SEQUENCER_SIGNING_KEY];
-        sequencer_keys.extend((1..mn_config.num_nodes).map(|i| {
+        sequencer_keys.extend((1..vacancies_num).map(|i| {
             config::sequencer_signing_key_from_seed(
                 u32::try_from(i).expect("Not being able to fit is realistically impossible"),
             )
         }));
 
-        let genesis_transactions = if mn_config.num_nodes == 1 {
+        let genesis_transactions = if mn_config.num_nodes_to_build == 1 {
             genesis_transactions
         } else {
             let mut actions = config::genesis_sequencer_stakes(&sequencer_keys)
@@ -730,7 +733,7 @@ impl ZoneTestContextBuilder {
         sequencer_components.push(leader_components);
 
         // Followers are already accredited by their genesis stakes.
-        for sequencer_key in sequencer_keys.into_iter().skip(1) {
+        for sequencer_key in sequencer_keys.into_iter().take(mn_config.num_nodes_to_build).skip(1) {
             let (sequencer_addr, sequencer_component) = build_sequencer_components(
                 follower_sequencer_partial_config.unwrap_or(partial_config),
                 bedrock_addr,
