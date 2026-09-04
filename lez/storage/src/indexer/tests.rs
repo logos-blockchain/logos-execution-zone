@@ -235,31 +235,15 @@ fn put_block_stores_breakpoint_in_same_batch() {
     let temp_dir = tempdir().unwrap();
     let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
 
-    let from = acc1();
-    let to = acc2();
-    let sign_key = acc1_sign_key();
-
     // Chain blocks 1..=BREAKPOINT_INTERVAL. The snapshot is scheduled internally
     // by put_block at the boundary block; every call passes the same recognizable
     // marker state (the initial one), proving it's stored verbatim rather than
-    // recomputed.
-    let mut build_state = initial_state.clone();
+    // recomputed. put_block never settles, so dummy (unsettleable) blocks keep
+    // this test off the zkVM entirely.
+    let mut prev_hash = None;
     for i in 1..=BREAKPOINT_INTERVAL {
-        let prev_hash = dbio.get_meta_last_block_id_in_db().unwrap().map(|last_id| {
-            let last_block = dbio.get_block(last_id).unwrap().unwrap();
-            last_block.header.hash
-        });
-
-        let transfer_tx = common::test_utils::create_transaction_native_token_transfer(
-            from,
-            (i - 1).into(),
-            to,
-            1,
-            &sign_key,
-        );
-        let block = settled_block_opt(i.into(), prev_hash, vec![transfer_tx], &build_state);
-        chain_state::apply::apply_block_to_state(&block, &mut build_state).expect("builds");
-
+        let block = produce_dummy_block(i.into(), prev_hash, vec![]);
+        prev_hash = Some(block.header.hash);
         dbio.put_block(&block, [i; 32], 0, &initial_state, &[])
             .unwrap();
     }
