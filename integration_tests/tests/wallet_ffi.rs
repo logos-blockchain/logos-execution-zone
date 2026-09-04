@@ -31,9 +31,9 @@ use lee::{
 };
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
-    FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
-    FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult, FfiU128,
-    WalletHandle, error,
+    FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
+    FfiBytes32, FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult,
+    FfiU128, WalletHandle, error,
     generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
     label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
@@ -198,8 +198,8 @@ unsafe extern "C" {
 
     fn wallet_ffi_send_generic_public_transaction(
         handle: *mut WalletHandle,
-        account_identities: *const FfiAccountIdentity,
-        account_identities_size: usize,
+        account_mentions: *const FfiAccountMention,
+        account_mentions_size: usize,
         instruction_data: *const u8,
         instruction_data_size: usize,
         program_id: FfiProgramId,
@@ -214,8 +214,8 @@ unsafe extern "C" {
 
     fn wallet_ffi_send_generic_private_transaction(
         handle: *mut WalletHandle,
-        account_identities: *const FfiAccountIdentity,
-        account_identities_size: usize,
+        account_mentions: *const FfiAccountMention,
+        account_mentions_size: usize,
         instruction_data: *const u8,
         instruction_data_size: usize,
         program_with_dependencies: *const FfiProgramWithDependencies,
@@ -1516,6 +1516,15 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
 //     Ok(())
 // }
 
+/// A mention that names no program's record: what a caller passes when only the balance moves.
+fn balance_only_mention(identity: FfiAccountIdentity) -> FfiAccountMention {
+    FfiAccountMention {
+        identity,
+        namespace: FfiBytes32::default(),
+        has_namespace: false,
+    }
+}
+
 #[test]
 fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let ctx = BlockingTestContext::new_default()?;
@@ -1544,10 +1553,13 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
         wallet_ffi_resolve_public_account(to, true, &raw mut to_account_identity).unwrap();
     }
 
-    let ffi_accs = vec![from_account_identity, to_account_identity];
-    let account_identities_size = ffi_accs.len();
-    let account_identities =
-        Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountIdentity;
+    // A native transfer moves balance only, so neither mention names a program's record.
+    let ffi_accs = vec![
+        balance_only_mention(from_account_identity),
+        balance_only_mention(to_account_identity),
+    ];
+    let account_mentions_size = ffi_accs.len();
+    let account_mentions = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountMention;
 
     let instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
@@ -1562,8 +1574,8 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     unsafe {
         wallet_ffi_send_generic_public_transaction(
             wallet_ffi_handle,
-            account_identities,
-            account_identities_size,
+            account_mentions,
+            account_mentions_size,
             instruction_data_ptr,
             instruction_data_size,
             program_id.into(),
@@ -1596,9 +1608,9 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     );
 
     unsafe {
-        let account_identities_mut = account_identities.cast_mut();
-        wallet_ffi_free_account_identity(account_identities_mut);
-        wallet_ffi_free_account_identity(account_identities_mut.add(1));
+        let mentions = account_mentions.cast_mut();
+        wallet_ffi_free_account_identity(&raw mut (*mentions).identity);
+        wallet_ffi_free_account_identity(&raw mut (*mentions.add(1)).identity);
 
         let instruction_data =
             std::slice::from_raw_parts_mut(instruction_data_ptr.cast_mut(), instruction_data_size);
@@ -1638,10 +1650,13 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
             .unwrap();
     }
 
-    let ffi_accs = vec![from_account_identity, to_account_identity];
-    let account_identities_size = ffi_accs.len();
-    let account_identities =
-        Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountIdentity;
+    // A native transfer moves balance only, so neither mention names a program's record.
+    let ffi_accs = vec![
+        balance_only_mention(from_account_identity),
+        balance_only_mention(to_account_identity),
+    ];
+    let account_mentions_size = ffi_accs.len();
+    let account_mentions = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountMention;
 
     let instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
@@ -1657,8 +1672,8 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
     unsafe {
         wallet_ffi_send_generic_private_transaction(
             wallet_ffi_handle,
-            account_identities,
-            account_identities_size,
+            account_mentions,
+            account_mentions_size,
             instruction_data_ptr,
             instruction_data_size,
             &raw const program_with_dependencies,
@@ -1705,9 +1720,9 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
     assert_eq!(to_balance, 20100);
 
     unsafe {
-        let account_identities_mut = account_identities.cast_mut();
-        wallet_ffi_free_account_identity(account_identities_mut);
-        wallet_ffi_free_account_identity(account_identities_mut.add(1));
+        let mentions = account_mentions.cast_mut();
+        wallet_ffi_free_account_identity(&raw mut (*mentions).identity);
+        wallet_ffi_free_account_identity(&raw mut (*mentions.add(1)).identity);
 
         let instruction_data =
             std::slice::from_raw_parts_mut(instruction_data_ptr.cast_mut(), instruction_data_size);
