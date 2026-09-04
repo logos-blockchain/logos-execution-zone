@@ -6,6 +6,7 @@ use lee_core::{
     BlockId, Commitment,
     account::{Account, AccountId},
 };
+use sequencer_core::TransactionOrigin;
 use sequencer_service_protocol::AdmissionRejection;
 pub use sequencer_storage_actor::protocol::DeadLetterRequeue;
 
@@ -15,8 +16,13 @@ pub const MAX_BLOCK_RANGE_LEN: usize = 1024;
 #[derive(Copy, Clone)]
 pub struct ProduceBlock;
 
+/// A transaction submitted for fee admission and, if admitted, the mempool.
+///
+/// The single admission door for both RPC (`origin: User`) and gossip
+/// (`origin: Gossip`) submissions.
 pub struct Transaction {
     pub transaction: LeeTransaction,
+    pub origin: TransactionOrigin,
 }
 
 /// What fee admission decided about a submitted transaction.

@@ -9,6 +9,9 @@ use lee_core::account::{Fee, Gas};
 
 pub const TARGET_GAS_EXEC: Gas = 5_000_000;
 /// The ±12.5% controller bound and elasticity framing assume `MAX = 2·TARGET`.
+///
+/// This caps the *action-phase* gas only: the per-transaction reserve/refund
+/// settlement invocations and the per-block fee/clock tail run unmetered.
 pub const MAX_GAS_EXEC: Gas = 2 * TARGET_GAS_EXEC;
 pub const D_EXEC: u64 = 8;
 pub const BASE_FEE_EXEC_MIN: Fee = 8;

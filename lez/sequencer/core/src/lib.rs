@@ -1030,6 +1030,14 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             // Gossiped transactions arrive from untrusted peers, same as
             // user-submitted ones, so they get the same full state validation.
             TransactionOrigin::User | TransactionOrigin::Gossip => {
+                // The cheap admission screen first: an unfundable or fee-invalid
+                // candidate is dropped before paying for the scratch clone and
+                // the settlement's guest executions.
+                if let Err(rejection) = fees::screen(tx, state) {
+                    log::debug!("Dropping candidate {tx_hash:?} at the fee screen: {rejection}");
+                    return false;
+                }
+
                 // Settle on a scratch clone: settlement is the single validation
                 // and charging pass (restricted- and bridge-account guards
                 // included), so a transaction that cannot pay, breaches a cap, or

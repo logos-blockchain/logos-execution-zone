@@ -289,7 +289,10 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
     for _ in 0..mempool_max_size {
         let tx = test_transaction();
         let outcome = executor
-            .ask(protocol::Transaction { transaction: tx })
+            .ask(protocol::Transaction {
+                transaction: tx,
+                origin: sequencer_core::TransactionOrigin::User,
+            })
             .await?;
         assert!(
             matches!(outcome, protocol::SubmitOutcome::Admitted),
@@ -301,7 +304,10 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
     let tx = test_transaction();
     assert!(matches!(
         executor
-            .ask(protocol::Transaction { transaction: tx })
+            .ask(protocol::Transaction {
+                transaction: tx,
+                origin: sequencer_core::TransactionOrigin::User
+            })
             .await
             .map_err(SendError::err),
         Err(Some(crate::error::Error::MempoolIsFull))
@@ -417,7 +423,10 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let tx: LeeTransaction = PublicTransaction::new(message, witness_set).into();
 
     let outcome = executor
-        .ask(protocol::Transaction { transaction: tx })
+        .ask(protocol::Transaction {
+            transaction: tx,
+            origin: sequencer_core::TransactionOrigin::User,
+        })
         .await?;
     assert!(
         matches!(
