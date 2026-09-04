@@ -28,7 +28,7 @@ fn program_transaction<T: borsh::BorshSerialize>(
 ) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
         program_account_id,
-        vec![account_id],
+        vec![Position::balance_only(account_id)],
         vec![],
         instruction,
     )
@@ -135,16 +135,7 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     state.force_insert_account(
         vault_id,
         Account {
-            program_owner: token.id().into(),
             balance: 1000,
-            ..Account::default()
-        },
-    );
-    state.force_insert_account(
-        receiver_id,
-        Account {
-            program_owner: token.id().into(),
-            balance: 0,
             ..Account::default()
         },
     );
@@ -270,28 +261,33 @@ fn events_are_filterable_by_selector_and_decodable() {
 fn event_emitting_program_proves_and_validates_on_the_private_path() {
     let keys = test_private_account_keys_1();
     let emitter = crate::test_methods::event_emitter();
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
 
-    let pre = AccountWithMetadata::new(Account::default(), true, (&keys.npk(), &keys.vpk(), 0));
-
-    let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
-        vec![pre],
-        Program::serialize_instruction(EmitterInstruction {
-            events: vec![emitted(0), emitted(1)],
-            chain: vec![],
-        })
-        .unwrap(),
-        vec![InputAccountIdentity::Private(PrivateWitness {
-            vpk: keys.vpk(),
-            random_seed: [0; 32],
-            identifier: 0,
-            kind: WitnessKind::Regular {
-                ask: Some(keys.ask),
-            },
-            nullifier: NullifierWitness::Init {
-                npk: keys.npk(),
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
-        })],
+    let (output, proof) = execute_and_prove(
+        ProvingInput {
+            positions: vec![Position::balance_only(account_id)],
+            signers: HashSet::new(),
+            public_accounts: HashMap::new(),
+            private_witnesses: vec![PrivateWitness {
+                account: Account::default(),
+                vpk: keys.vpk(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular {
+                    ask: Some(keys.ask),
+                },
+                nullifier: NullifierWitness::Init {
+                    npk: keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }],
+            instruction_data: Program::serialize_instruction(EmitterInstruction {
+                events: vec![emitted(0), emitted(1)],
+                chain: vec![],
+            })
+            .unwrap(),
+            dummy_inputs: Vec::new(),
+        },
         &emitter.clone().into(),
     )
     .expect("emitting guest must prove on the private path");

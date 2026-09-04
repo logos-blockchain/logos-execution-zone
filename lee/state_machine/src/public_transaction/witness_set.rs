@@ -56,6 +56,8 @@ impl WitnessSet {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::account::Position;
+
     use super::*;
     use crate::AccountId;
 
@@ -71,7 +73,7 @@ mod tests {
         let instruction = vec![1, 2, 3, 4];
         let message = Message::try_new(
             AccountId::from([0; 8]),
-            vec![addr1, addr2],
+            vec![Position::balance_only(addr1), Position::balance_only(addr2)],
             nonces,
             instruction,
         )
