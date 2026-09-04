@@ -159,6 +159,7 @@ impl BlockPublisherTrait for MockBlockPublisher {
         &self,
         block: &Block,
         _keys: Vec<Ed25519PublicKey>,
+        _channel_params: crate::config::ChannelParams,
     ) -> Result<PublishOutcome> {
         self.publish_block(block, Vec::new()).await
     }
@@ -169,7 +170,11 @@ impl BlockPublisherTrait for MockBlockPublisher {
         Ok(self.tip_slot.map(|_| (Vec::new(), MsgId::root())))
     }
 
-    async fn submit_channel_config(&self, _new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
+    async fn submit_channel_config(
+        &self,
+        _new_keys: Vec<Ed25519PublicKey>,
+        _channel_params: crate::config::ChannelParams,
+    ) -> Result<()> {
         Ok(())
     }
 

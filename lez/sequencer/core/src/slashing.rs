@@ -235,7 +235,11 @@ mod tests {
         let config = Account {
             program_owner: programs::sequencer_stake().id().into(),
             data: SequencerStakeConfig {
-                minimum_sequencer_stake: 1,
+                channel_params: Some(sequencer_stake_core::ChannelParams {
+                    minimum_sequencer_stake: 1,
+                    posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+                    posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+                }),
                 entries: [(
                     key,
                     SequencerEntry {

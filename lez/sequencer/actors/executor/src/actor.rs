@@ -17,8 +17,8 @@ use lee_core::{
 use log::{info, warn};
 use mempool::MemPoolHandle;
 use sequencer_core::{
-    SequencerCore, TransactionOrigin,
-    block_publisher::{BlockPublisherTrait, Ed25519Key},
+    PinBehindTip, SequencerCore, TransactionOrigin,
+    block_publisher::{BlockPublisherTrait, MsgId},
     config::SequencerConfig,
     task_group::TaskGroup,
 };
@@ -41,6 +41,9 @@ use crate::{
 /// How many block lookups a single [`GetBlockRange`] keeps in flight.
 const BLOCK_RANGE_CONCURRENCY: usize = 16;
 
+/// Skips behind an unchanging tip past which this is a stuck pin, not catch-up.
+const BLOCKED_ATTEMPTS_BEFORE_WEDGED: u32 = 4;
+
 // TODO: Remove `BP` once this part is moved to a separate actor
 pub struct ExecutorActor<BP: BlockPublisherTrait, S: StorageActorTrait = StorageActor> {
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
@@ -55,6 +58,39 @@ pub struct ExecutorActor<BP: BlockPublisherTrait, S: StorageActorTrait = Storage
     /// handle owns no reference to the core itself, so without these there is
     /// nothing to wait on: aborting the main loop only starts the teardown.
     background_tasks: Vec<TaskGroup>,
+    blocked_attempts: BlockedAttempts,
+    /// Consecutive production turns that failed outright. A run of these looks
+    /// exactly like an idle node in every other signal, so it gets its own.
+    failed_attempts: u32,
+}
+
+/// Consecutive production attempts skipped because the pin trailed the tip.
+/// The run restarts on a new tip, so its length separates catching up from
+/// being stuck.
+#[derive(Default)]
+pub(crate) struct BlockedAttempts {
+    count: u32,
+    behind: Option<MsgId>,
+}
+
+impl BlockedAttempts {
+    /// Counts a skipped attempt and returns the run's new length.
+    pub(crate) fn record(&mut self, tip: MsgId) -> u32 {
+        if self.behind == Some(tip) {
+            self.count = self.count.saturating_add(1);
+        } else {
+            self.behind = Some(tip);
+            self.count = 1;
+        }
+        self.count
+    }
+
+    /// Ends the run, reporting whether there was one to end.
+    pub(crate) fn clear(&mut self) -> bool {
+        let blocked = self.behind.is_some();
+        *self = Self::default();
+        blocked
+    }
 }
 
 impl<BP: BlockPublisherTrait + Send + 'static, S: StorageActorTrait> ExecutorActor<BP, S> {
@@ -81,6 +117,8 @@ impl<BP: BlockPublisherTrait + Send + 'static, S: StorageActorTrait> ExecutorAct
                 storage_ref,
                 driver_cancellation,
                 background_tasks,
+                blocked_attempts: BlockedAttempts::default(),
+                failed_attempts: 0,
             }
         }
     }
@@ -142,6 +180,15 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Acto
     }
 }
 
+impl<BP: BlockPublisherTrait, S: StorageActorTrait> ExecutorActor<BP, S> {
+    /// Ends a blocked run, reporting the drop to zero only if there was one.
+    fn clear_blocked_attempts(&mut self) {
+        if self.blocked_attempts.clear() {
+            sequencer_core_metrics::record_publish_blocked_attempts(0);
+        }
+    }
+}
+
 impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<ProduceBlock>
     for ExecutorActor<BP, S>
 {
@@ -152,9 +199,12 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
         ProduceBlock: ProduceBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        // Only produce on our turn.
+        // Only produce on our turn. Losing the seat ends any blocked run: a node
+        // dropped from the committee is not wedged, and would otherwise hold the
+        // gauge non-zero forever.
         if !self.sequencer.is_our_turn() {
             info!("Not our turn to produce a block, skipping");
+            self.clear_blocked_attempts();
             return Ok(());
         }
 
@@ -166,28 +216,58 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
                  waiting for the channel to restore it",
                 self.sequencer.next_block_height().await.saturating_sub(1),
             );
+            // The count is only for skips behind a frozen pin, so keeping it
+            // here would warn about the wrong problem.
+            self.clear_blocked_attempts();
             return Ok(());
         }
 
         // The channel moved past our pin, so every publish this turn would be refused.
-        if let Some(tip) = self.sequencer.pin_behind_channel_tip().await {
-            info!("Skipping turn: channel tip {tip:?} moved past our pin; catching up first");
+        if let Some(PinBehindTip { pin, tip }) = self.sequencer.pin_behind_channel_tip().await {
+            let attempts = self.blocked_attempts.record(tip);
+            sequencer_core_metrics::record_publish_blocked_attempts(attempts);
+            if attempts >= BLOCKED_ATTEMPTS_BEFORE_WEDGED {
+                warn!(
+                    "Skipped {attempts} production attempts behind an unchanging channel tip \
+                     {tip}: our pin {pin} is frozen and cannot recover on its own. Land any \
+                     inscription on the channel to trigger recovery, or reset the store.",
+                );
+            } else {
+                info!(
+                    "Skipping turn: channel tip {tip} moved past our pin {pin}; catching up first"
+                );
+            }
             return Ok(());
         }
+        self.clear_blocked_attempts();
 
         info!("Our turn: producing a block and any committee update");
-        let id = self
-            .sequencer
-            .run_production_turn()
-            .await
-            .map_err(Error::BlockProductionFailed)?;
-
-        let author_identity = hex::encode(
-            Ed25519Key::from_bytes(&self.sequencer.sequencer_config().signing_key)
-                .public_key()
-                .as_bytes(),
-        );
-        log::info!("Block with id {id} created by {author_identity:?}");
+        // A failed turn costs this block only. Returning the error would stop
+        // this actor, and the scheduler's interval task gives up for good the
+        // first time it finds us not running — the node then looks healthy and
+        // never produces again.
+        match self.sequencer.run_production_turn().await {
+            Ok(id) => {
+                // The count is how many turns failed in a row, so a success
+                // clears it and the gauge drops to zero, unless it was zero
+                // already.
+                if std::mem::take(&mut self.failed_attempts) != 0 {
+                    sequencer_core_metrics::record_production_failed_attempts(0);
+                }
+                log::info!(
+                    "Block with id {id} created by {}",
+                    self.sequencer.bedrock_public_key_hex()
+                );
+            }
+            Err(err) => {
+                self.failed_attempts = self.failed_attempts.saturating_add(1);
+                sequencer_core_metrics::record_production_failed_attempts(self.failed_attempts);
+                warn!(
+                    "Skipping turn: block production failed ({} in a row): {err:#}",
+                    self.failed_attempts
+                );
+            }
+        }
 
         Ok(())
     }

@@ -19,6 +19,8 @@ pub fn committee_update(
     live_accredited_keys: &[SequencerKey],
 ) -> Option<Vec<SequencerKey>> {
     let config = read_config(state)?;
+    // Absent only before genesis, which no committee update can precede.
+    let minimum_sequencer_stake = config.channel_params?.minimum_sequencer_stake;
 
     // Sorted by key bytes so the list is deterministic across calls: a
     // `ChannelConfigOp`'s `keys` field must reproduce the same order every
@@ -27,7 +29,7 @@ pub fn committee_update(
     let mut desired: Vec<SequencerKey> = config
         .entries
         .iter()
-        .filter(|(_, entry)| entry.net_stake() >= config.minimum_sequencer_stake)
+        .filter(|(_, entry)| entry.net_stake() >= minimum_sequencer_stake)
         .map(|(key, _)| *key)
         .collect();
     desired.sort_unstable();
@@ -117,6 +119,12 @@ pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig>
     config
 }
 
+/// Channel posting params from the config account. `None` before genesis set
+/// them, which a live chain rules out.
+pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::ChannelParams> {
+    read_config(state)?.channel_params
+}
+
 /// The `StakeRecord` an ownership account carries: which key it backs, plus
 /// whatever release is pending against it.
 fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<StakeRecord> {
@@ -201,7 +209,11 @@ mod tests {
         let config = Account {
             program_owner: programs::sequencer_stake().id().into(),
             data: SequencerStakeConfig {
-                minimum_sequencer_stake: MINIMUM,
+                channel_params: Some(sequencer_stake_core::ChannelParams {
+                    minimum_sequencer_stake: MINIMUM,
+                    posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+                    posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+                }),
                 entries: stakes
                     .iter()
                     .map(|staked| {
