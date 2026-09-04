@@ -357,22 +357,6 @@ mod tests {
         screen(&tx, &state).expect("private transactions are uncharged and unscreened");
     }
 
-    /// Deployments are exempt *and* uncapped in the delivered interim policy
-    /// (they contribute nothing to the block gas totals), so even one larger
-    /// than the storage cap passes — a deliberate divergence from the
-    /// reference design, where uncharged transactions were still capped.
-    /// The block size limit at ingest is what bounds it.
-    #[test]
-    fn an_oversized_deployment_is_admitted_unscreened() {
-        let state = initial_state(true);
-        let bytecode = vec![0_u8; usize::try_from(market::MAX_GAS_STOR).expect("fits") + 1];
-        let tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-            lee::program_deployment_transaction::Message::new(bytecode),
-        ));
-
-        screen(&tx, &state).expect("deployments are uncharged and uncapped today");
-    }
-
     /// SPECS §Overview worked example: at the genesis base fees of 8/8 the
     /// next block's fees can only stay at the minimum or rise by the
     /// guaranteed +1 step.

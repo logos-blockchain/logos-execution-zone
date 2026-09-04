@@ -43,7 +43,7 @@ async fn fund_private_pda(
     vpk: ViewingPublicKey,
     identifier: u128,
     seed: PdaSeed,
-    authority_program_id: ProgramId,
+    authority_program_id: AccountId,
     amount: u128,
     auth_transfer: &ProgramWithDependencies,
 ) -> Result<()> {
@@ -161,14 +161,21 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let proxy = test_programs::pda_spend_proxy();
     let auth_transfer = programs::authenticated_transfer();
-    let proxy_id = proxy.id();
-    let auth_transfer_id = auth_transfer.id();
+    let proxy_id: AccountId = proxy.id().into();
+    // Kept as a `ProgramId`: the `pda_spend_proxy` guest's instruction carries the delegate's
+    // bytecode identity, converting to `AccountId` only at its own `ChainedCall` dispatch site.
+    let auth_transfer_id: ProgramId = auth_transfer.id();
+    let auth_transfer_account_id: AccountId = auth_transfer_id.into();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
-    let auth_transfer_program = ProgramWithDependencies::new(auth_transfer.clone(), [].into());
-    let spend_program =
-        ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer)].into());
+    let auth_transfer_program =
+        ProgramWithDependencies::new(auth_transfer.clone(), auth_transfer_account_id, [].into());
+    let spend_program = ProgramWithDependencies::new(
+        proxy,
+        proxy_id,
+        [(auth_transfer_account_id, auth_transfer)].into(),
+    );
 
     let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 0);
     let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 1);

@@ -95,7 +95,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: demo_stake_key,
             amount: FUNDING_BALANCE,
-            mover_program_id: programs::authenticated_transfer().id(),
+            mover_account_id: programs::authenticated_transfer().id().into(),
             mover_instruction_data,
         })
         .context("Failed to serialize Stake instruction")?;
@@ -114,7 +114,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 AccountIdentity::PublicNoSign(config_id),
             ],
             stake_instruction_data,
-            programs::sequencer_stake().id(),
+            programs::sequencer_stake().id().into(),
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
@@ -258,7 +258,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 AccountIdentity::PublicNoSign(config_id),
             ],
             unstake_request_data,
-            programs::sequencer_stake().id(),
+            programs::sequencer_stake().id().into(),
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;

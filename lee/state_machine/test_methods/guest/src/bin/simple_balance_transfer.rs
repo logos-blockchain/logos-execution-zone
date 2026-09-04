@@ -12,8 +12,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: balance,
         },
@@ -27,8 +27,8 @@ fn main() {
         let diff_output = AccountStateDiff::unchanged(account_pre);
 
         ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             instruction_data,
             vec![diff_output],
         )
@@ -49,8 +49,8 @@ fn main() {
         AccountStateDiff::new(receiver_pre, BalanceDiff::Add(balance), receiver_post_data);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![sender_diff, receiver_diff],
     )

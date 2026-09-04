@@ -41,7 +41,7 @@ fn public_diff_reflects_a_successful_transfer() {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id = crate::test_methods::simple_balance_transfer().id();
+    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
     let message =
         Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
@@ -104,6 +104,7 @@ fn privacy_garbage_proof_is_rejected() {
         }],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        program_image_claims: vec![],
     };
 
     // Garbage proof bytes: not a valid borsh-encoded `InnerReceipt`.
@@ -131,7 +132,7 @@ fn metering_transfer_fixture() -> (V03State, crate::PublicTransaction) {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id = crate::test_methods::simple_balance_transfer().id();
+    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
     let message =
         Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
@@ -189,7 +190,7 @@ fn chained_calls_share_one_budget() {
     );
     // The chain_caller program permutes the account order in the chain call.
     let message = Message::try_new(
-        chain_caller.id(),
+        chain_caller.id().into(),
         vec![to, from],
         vec![Nonce(0)],
         instruction,
@@ -245,7 +246,7 @@ fn metered_guest_panic_is_charged_the_full_budget() {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id = crate::test_methods::simple_balance_transfer().id();
+    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
     let message = Message::try_new(
         program_id,
         vec![from, to],

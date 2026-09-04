@@ -503,7 +503,7 @@ pub unsafe extern "C" fn query_events(
                     indexer.core().store.filter_segments(),
                     block_id,
                     block_id,
-                    program_id.map(|id| id.0),
+                    program_id.map(|id| id.0.into()),
                     selector.map(|s| s.0),
                 ) {
                     log::error!(
@@ -552,7 +552,7 @@ pub unsafe extern "C" fn query_events(
             indexer.core().store.filter_segments(),
             from_block,
             to_block,
-            program_id.map(|id| id.0),
+            program_id.map(|id| id.0.into()),
             selector.map(|s| s.0),
         ) {
             log::error!(

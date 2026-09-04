@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 lee_core = { workspace = true, features = ["host"] }
+program_loader_core.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true

@@ -194,7 +194,6 @@ pub struct BlockBody {
 pub enum Transaction {
     Public(PublicTransaction),
     PrivacyPreserving(PrivacyPreservingTransaction),
-    ProgramDeployment(ProgramDeploymentTransaction),
 }
 
 impl Transaction {
@@ -205,7 +204,6 @@ impl Transaction {
         match self {
             Self::Public(tx) => &tx.hash,
             Self::PrivacyPreserving(tx) => &tx.hash,
-            Self::ProgramDeployment(tx) => &tx.hash,
         }
     }
 }
@@ -290,12 +288,6 @@ pub struct EncryptedAccountData {
     pub view_tag: ViewTag,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ProgramDeploymentTransaction {
-    pub hash: HashType,
-    pub message: ProgramDeploymentMessage,
-}
-
 pub type ViewTag = u8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -359,13 +351,6 @@ pub struct CommitmentSetDigest(
     #[schemars(with = "String", description = "base64-encoded commitment set digest")]
     pub [u8; 32],
 );
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ProgramDeploymentMessage {
-    #[serde(with = "base64")]
-    #[schemars(with = "String", description = "base64-encoded program bytecode")]
-    pub bytecode: Vec<u8>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Data(

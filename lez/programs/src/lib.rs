@@ -127,11 +127,11 @@ mod inner {
 
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
             let message = public_transaction::Message::try_new(
-                bridge().id(),
+                bridge().id().into(),
                 vec![
-                    bridge_core::compute_bridge_account_id(bridge().id()),
+                    bridge_core::compute_bridge_account_id(bridge().id().into()),
                     recipient_id,
-                    bridge_core::deposit_receipt_account_id(bridge().id(), op_id),
+                    bridge_core::deposit_receipt_account_id(bridge().id().into(), op_id),
                 ],
                 vec![],
                 bridge_core::Instruction::Deposit {
@@ -155,7 +155,7 @@ mod inner {
             let amount = 1_000;
             let mut state = V03State::new()
                 .with_public_accounts([(
-                    bridge_core::compute_bridge_account_id(bridge().id()),
+                    bridge_core::compute_bridge_account_id(bridge().id().into()),
                     Account {
                         program_owner: authenticated_transfer().id().into(),
                         balance: u128::from(amount),
@@ -168,7 +168,7 @@ mod inner {
             let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
             assert_eq!(events.len(), 1);
-            assert_eq!(events[0].program_id, bridge().id());
+            assert_eq!(events[0].account_id, AccountId::from(bridge().id()));
             assert_eq!(
                 events[0].event.selector,
                 bridge_core::event::Deposit::SELECTOR

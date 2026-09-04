@@ -161,7 +161,7 @@ pub(crate) fn build_slash_tx(
     inscription: [u8; 32],
     approvals: Vec<SlashApproval>,
 ) -> Result<LeeTransaction> {
-    let program_id = programs::sequencer_stake().id();
+    let program_id: AccountId = programs::sequencer_stake().id().into();
     let message = Message::try_new(
         program_id,
         vec![

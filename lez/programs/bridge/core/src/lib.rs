@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee_core::account::AccountId;
 pub use lee_core::program::PdaSeed;
-use lee_core::{account::AccountId, program::ProgramId};
 
 pub mod event;
 
@@ -46,8 +46,8 @@ pub const fn compute_bridge_seed() -> PdaSeed {
 }
 
 #[must_use]
-pub fn compute_bridge_account_id(bridge_program_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&bridge_program_id, &compute_bridge_seed())
+pub fn compute_bridge_account_id(bridge_program_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&bridge_program_account_id, &compute_bridge_seed())
 }
 
 /// Seed of the deposit-receipt PDA for `l1_deposit_op_id`. Domain-separated from
@@ -70,17 +70,20 @@ fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
 /// The deposit-receipt PDA whose bridge ownership marks `l1_deposit_op_id` as minted.
 #[must_use]
 pub fn deposit_receipt_account_id(
-    bridge_program_id: ProgramId,
+    bridge_program_account_id: AccountId,
     l1_deposit_op_id: [u8; 32],
 ) -> AccountId {
-    AccountId::for_public_pda(&bridge_program_id, &deposit_receipt_seed(l1_deposit_op_id))
+    AccountId::for_public_pda(
+        &bridge_program_account_id,
+        &deposit_receipt_seed(l1_deposit_op_id),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const BRIDGE_ID: ProgramId = [7; 8];
+    const BRIDGE_ID: AccountId = AccountId::new([7; 32]);
 
     #[test]
     fn receipt_id_is_deterministic_per_op_id() {

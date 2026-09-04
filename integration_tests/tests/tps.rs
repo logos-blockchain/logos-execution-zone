@@ -89,7 +89,7 @@ impl TpsTestManager {
             .map(|pair| {
                 let amount: u128 = 1;
                 let message = putx::Message::try_new_with_fees(
-                    program.id(),
+                    program.id().into(),
                     [pair[0].1, pair[1].1].to_vec(),
                     [Nonce(0_u128)].to_vec(),
                     authenticated_transfer_core::Instruction::Transfer { amount },

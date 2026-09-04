@@ -12,8 +12,8 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, execute_and_prove, privacy_preserving_transaction::circuit::ProgramWithDependencies,
-    program::Program,
+    AccountId, PrivateKey, PublicKey, execute_and_prove,
+    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
     DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierWitness,
@@ -22,6 +22,7 @@ use lee_core::{
     encryption::ViewingPublicKey,
 };
 use sequencer_service_rpc::RpcClient as _;
+use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
 use wallet::{
     account::Label,
@@ -512,8 +513,58 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let ctx = TestContext::new().await?;
 
     let faucet_chain_caller = test_programs::faucet_chain_caller();
-    let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-        lee::program_deployment_transaction::Message::new(faucet_chain_caller.elf().to_owned()),
+    let faucet_chain_caller_id: AccountId = faucet_chain_caller.id().into();
+
+    // Deploy through `program_loader`, at `faucet_chain_caller`'s own bijection address: a
+    // `WriteSegment` claiming a fresh segment account, then a `CreateHeader` naming
+    // `faucet_chain_caller_id` as the header — no signature needed from either, since claiming
+    // an unowned account is permissionless (the write is the claim); a funded genesis account
+    // signs and pays the fee for both, since neither freshly-claimed account holds anything to
+    // self-pay with.
+    let payer = &initial_pub_accounts_private_keys()[0];
+    let segment_key = PrivateKey::try_new([210; 32]).unwrap();
+    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
+
+    let segment_message = lee::public_transaction::Message::try_new_with_fees(
+        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+        vec![segment_id],
+        vec![lee_core::account::Nonce(0)],
+        program_loader_core::Instruction::WriteSegment {
+            bytecode: faucet_chain_caller.elf().to_vec(),
+            next_segment: None,
+        },
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )
+    .expect("WriteSegment instruction data should always be serializable");
+    let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
+        &segment_message,
+        &[&segment_key, &payer.pub_sign_key],
+    );
+    let segment_tx = LeeTransaction::Public(lee::PublicTransaction::new(
+        segment_message,
+        segment_witness_set,
+    ));
+    ctx.sequencer_client().send_transaction(segment_tx).await?;
+
+    log::info!("Waiting for segment block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let header_message = lee::public_transaction::Message::try_new_with_fees(
+        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+        vec![faucet_chain_caller_id, segment_id],
+        vec![lee_core::account::Nonce(1)],
+        program_loader_core::Instruction::CreateHeader {
+            first_segment: segment_id,
+            immutable: true,
+        },
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )
+    .expect("CreateHeader instruction data should always be serializable");
+    let header_witness_set =
+        lee::public_transaction::WitnessSet::for_message(&header_message, &[&payer.pub_sign_key]);
+    let deploy_tx = LeeTransaction::Public(lee::PublicTransaction::new(
+        header_message,
+        header_witness_set,
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 
@@ -521,8 +572,8 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let faucet_account_id = system_accounts::faucet_account_id();
-    let faucet_program_id = programs::faucet().id();
-    let auth_transfer_program_id = programs::authenticated_transfer().id();
+    let faucet_program_id: AccountId = programs::faucet().id().into();
+    let auth_transfer_program_id: AccountId = programs::authenticated_transfer().id().into();
     let ask = lee_core::AuthorizationSecretKey([3; 32]);
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
@@ -543,6 +594,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
 
     let program_with_deps = ProgramWithDependencies::new(
         faucet_chain_caller,
+        faucet_chain_caller_id,
         [
             (faucet_program_id, programs::faucet()),
             (auth_transfer_program_id, programs::authenticated_transfer()),

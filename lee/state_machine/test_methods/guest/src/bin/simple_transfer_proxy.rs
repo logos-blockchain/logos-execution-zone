@@ -34,8 +34,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (pda_seed, simple_transfer_id, amount, is_withdraw),
         },
@@ -59,15 +59,15 @@ fn main() {
         // The circuit's assert_authorization_and_record_bindings establishes the
         // private PDA (seed, npk) binding when pda_seeds match the private PDA derivation.
         let auth_call = ChainedCall::new(
-            simple_transfer_id,
+            simple_transfer_id.into(),
             vec![pda_pre.account_id, recipient_pre.account_id],
             &amount,
         )
         .with_pda_seeds(vec![pda_seed]);
 
         ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             instruction_data,
             vec![pda_post, recipient_post],
         )
@@ -83,12 +83,13 @@ fn main() {
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
         // to authorize the PDA.
-        let auth_call = ChainedCall::new(simple_transfer_id, vec![pda_pre.account_id], &amount)
-            .with_pda_seeds(vec![pda_seed]);
+        let auth_call =
+            ChainedCall::new(simple_transfer_id.into(), vec![pda_pre.account_id], &amount)
+                .with_pda_seeds(vec![pda_seed]);
 
         ProgramOutput::new(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             instruction_data,
             vec![pda_post],
         )

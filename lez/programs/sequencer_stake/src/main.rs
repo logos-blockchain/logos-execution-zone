@@ -5,7 +5,7 @@ use lee_core::{
     account::{AccountId, AccountWithMetadata, BalanceDiff, Data},
     program::{
         AccountStateDiff, ChainedCall, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramCall,
-        ProgramId, ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
+        ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
     },
 };
 use sequencer_stake_core::{
@@ -20,8 +20,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -35,19 +35,19 @@ fn main() {
         Instruction::Stake {
             sequencer_key,
             amount,
-            mover_program_id,
+            mover_account_id,
             mover_instruction_data,
         } => {
             assert!(
-                caller_program_id.is_none(),
+                caller_account_id.is_none(),
                 "Stake is only invoked as a top-level user transaction"
             );
             stake(
-                self_program_id,
+                self_account_id,
                 pre_states,
                 sequencer_key,
                 amount,
-                mover_program_id,
+                mover_account_id,
                 mover_instruction_data,
             )
         }
@@ -55,8 +55,8 @@ fn main() {
             expected_balance_after,
         } => {
             assert_eq!(
-                caller_program_id,
-                Some(self_program_id),
+                caller_account_id,
+                Some(self_account_id),
                 "ConfirmStake can only be invoked as a self-chained call"
             );
             let post = confirm_stake(pre_states, expected_balance_after);
@@ -67,18 +67,18 @@ fn main() {
             destination,
         } => {
             assert!(
-                caller_program_id.is_none(),
+                caller_account_id.is_none(),
                 "UnstakeRequest is only invoked as a top-level user transaction"
             );
-            let post = unstake_request(self_program_id, pre_states, amount, destination);
+            let post = unstake_request(self_account_id, pre_states, amount, destination);
             (post, Vec::new())
         }
         Instruction::FinalizeUnstake => {
             assert!(
-                caller_program_id.is_none(),
+                caller_account_id.is_none(),
                 "FinalizeUnstake is only invoked as a top-level user transaction"
             );
-            finalize_unstake(self_program_id, pre_states)
+            finalize_unstake(self_account_id, pre_states)
         }
         Instruction::Slash {
             sequencer_key,
@@ -86,11 +86,11 @@ fn main() {
             approvals,
         } => {
             assert!(
-                caller_program_id.is_none(),
+                caller_account_id.is_none(),
                 "Slash is only invoked as a top-level user transaction"
             );
             slash(
-                self_program_id,
+                self_account_id,
                 pre_states,
                 sequencer_key,
                 inscription,
@@ -100,8 +100,8 @@ fn main() {
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         post_diffs,
     )
@@ -111,18 +111,17 @@ fn main() {
 
 fn decode_config(
     config_account: &AccountWithMetadata,
-    self_program_id: ProgramId,
+    self_account_id: lee_core::account::AccountId,
 ) -> SequencerStakeConfig {
     // By id, not just by owner: every ownership account is owned by this
     // program too, and its data is caller-influenced.
     assert_eq!(
         config_account.account_id,
-        sequencer_stake_config_account_id(self_program_id),
+        sequencer_stake_config_account_id(self_account_id),
         "not the sequencer_stake config account"
     );
     assert_eq!(
-        config_account.account.program_owner,
-        self_program_id.into(),
+        config_account.account.program_owner, self_account_id,
         "config account is not owned by sequencer_stake"
     );
     SequencerStakeConfig::from_bytes(config_account.account.data.as_ref())
@@ -130,23 +129,23 @@ fn decode_config(
 }
 
 fn assert_funds_account(
-    self_program_id: ProgramId,
+    self_account_id: lee_core::account::AccountId,
     ownership: &AccountWithMetadata,
     funds: &AccountWithMetadata,
 ) {
     assert_eq!(
         funds.account_id,
-        stake_funds_account_id(self_program_id, &ownership.account_id),
+        stake_funds_account_id(self_account_id, &ownership.account_id),
         "not the stake funds account of this ownership account"
     );
 }
 
 fn stake(
-    self_program_id: ProgramId,
+    self_account_id: lee_core::account::AccountId,
     pre_states: Vec<AccountWithMetadata>,
     sequencer_key: SequencerKey,
     amount: u128,
-    mover_program_id: ProgramId,
+    mover_account_id: lee_core::account::AccountId,
     mover_instruction_data: InstructionData,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let [funding_account, ownership_account, funds_account, config_account] =
@@ -159,9 +158,9 @@ fn stake(
         "must sign for the ownership account"
     );
 
-    assert_funds_account(self_program_id, &ownership_account, &funds_account);
+    assert_funds_account(self_account_id, &ownership_account, &funds_account);
 
-    let mut config = decode_config(&config_account, self_program_id);
+    let mut config = decode_config(&config_account, self_account_id);
     let minimum_sequencer_stake = config.minimum_sequencer_stake;
 
     let balance_before = funds_account.account.balance;
@@ -174,8 +173,7 @@ fn stake(
     let is_claimed = ownership_account.account.program_owner != DEFAULT_PROGRAM_OWNER;
     if is_claimed {
         assert_eq!(
-            ownership_account.account.program_owner,
-            self_program_id.into(),
+            ownership_account.account.program_owner, self_account_id,
             "not a sequencer_stake ownership account"
         );
         let record = StakeRecord::from_bytes(ownership_account.account.data.as_ref())
@@ -250,14 +248,14 @@ fn stake(
     );
 
     let mover_call = ChainedCall {
-        program_id: mover_program_id,
+        program_account_id: mover_account_id,
         pre_state_ids: vec![funding_account.account_id, funds_account.account_id],
         instruction_data: mover_instruction_data,
         pda_seeds: Vec::new(),
     };
 
     let confirm_call = ChainedCall::new(
-        self_program_id,
+        self_account_id,
         vec![funds_account.account_id],
         &Instruction::ConfirmStake {
             expected_balance_after,
@@ -291,7 +289,7 @@ fn confirm_stake(
 }
 
 fn unstake_request(
-    self_program_id: ProgramId,
+    self_account_id: lee_core::account::AccountId,
     pre_states: Vec<AccountWithMetadata>,
     amount: u128,
     destination: AccountId,
@@ -304,8 +302,7 @@ fn unstake_request(
         "must sign for the ownership account"
     );
     assert_eq!(
-        ownership_account.account.program_owner,
-        self_program_id.into(),
+        ownership_account.account.program_owner, self_account_id,
         "not a sequencer_stake ownership account"
     );
 
@@ -316,7 +313,7 @@ fn unstake_request(
         "an unstake request is already pending"
     );
 
-    let mut config = decode_config(&config_account, self_program_id);
+    let mut config = decode_config(&config_account, self_account_id);
     let minimum_sequencer_stake = config.minimum_sequencer_stake;
     let entry = config
         .entries
@@ -405,7 +402,7 @@ fn verify_approvals(
 }
 
 fn slash(
-    self_program_id: ProgramId,
+    self_account_id: lee_core::account::AccountId,
     pre_states: Vec<AccountWithMetadata>,
     sequencer_key: SequencerKey,
     inscription: [u8; 32],
@@ -417,14 +414,13 @@ fn slash(
         );
 
     assert_eq!(
-        ownership_account.account.program_owner,
-        self_program_id.into(),
+        ownership_account.account.program_owner, self_account_id,
         "not a sequencer_stake ownership account"
     );
-    assert_funds_account(self_program_id, &ownership_account, &funds_account);
+    assert_funds_account(self_account_id, &ownership_account, &funds_account);
     assert_eq!(
         sink_account.account_id,
-        slash_sink_account_id(self_program_id),
+        slash_sink_account_id(self_account_id),
         "third account must be the slash sink PDA"
     );
 
@@ -435,7 +431,7 @@ fn slash(
         "ownership account backs a different sequencer key"
     );
 
-    let mut config = decode_config(&config_account, self_program_id);
+    let mut config = decode_config(&config_account, self_account_id);
     // The approvals are the whole authorization.
     verify_approvals(&config, sequencer_key, inscription, approvals);
 
@@ -488,7 +484,7 @@ fn slash(
 }
 
 fn finalize_unstake(
-    self_program_id: ProgramId,
+    self_account_id: lee_core::account::AccountId,
     pre_states: Vec<AccountWithMetadata>,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let [ownership_account, funds_account, destination_account, config_account] =
@@ -497,11 +493,10 @@ fn finalize_unstake(
         );
 
     assert_eq!(
-        ownership_account.account.program_owner,
-        self_program_id.into(),
+        ownership_account.account.program_owner, self_account_id,
         "not a sequencer_stake ownership account"
     );
-    assert_funds_account(self_program_id, &ownership_account, &funds_account);
+    assert_funds_account(self_account_id, &ownership_account, &funds_account);
 
     let mut record = StakeRecord::from_bytes(ownership_account.account.data.as_ref())
         .expect("ownership account should decode as StakeRecord");
@@ -524,7 +519,7 @@ fn finalize_unstake(
             .expect("StakeRecord should fit in account data"),
     );
 
-    let mut config = decode_config(&config_account, self_program_id);
+    let mut config = decode_config(&config_account, self_account_id);
     let entry = config
         .entries
         .get_mut(&record.sequencer_key)

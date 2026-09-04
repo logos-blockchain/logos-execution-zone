@@ -19,7 +19,7 @@ impl NativeTokenTransfer<'_> {
             .send_pub_tx_with_pre_check(
                 vec![from, to],
                 instruction_data,
-                program.id(),
+                program.id().into(),
                 tx_pre_check,
             )
             .await

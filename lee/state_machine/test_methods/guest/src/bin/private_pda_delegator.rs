@@ -12,8 +12,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (delegated_seed, callee_program_id),
         },
@@ -28,15 +28,15 @@ fn main() {
     };
 
     let chained_call = ChainedCall {
-        program_id: callee_program_id,
+        program_account_id: callee_program_id.into(),
         instruction_data: to_vec(&()).unwrap(),
         pre_state_ids: vec![pre.account_id],
         pda_seeds: vec![delegated_seed],
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![AccountStateDiff::unchanged(pre)],
     )

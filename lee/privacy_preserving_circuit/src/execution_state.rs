@@ -4,7 +4,8 @@ use std::{
 };
 
 use lee_core::{
-    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
+    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, ProgramImageClaim,
+    WitnessKind,
     account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::{
@@ -35,7 +36,7 @@ pub struct ExecutionState {
     /// The stored `(ProgramId, PdaSeed)` is the owner program and seed, used in
     /// `compute_circuit_output` to construct `PrivateAccountKind::Pda { program_id, seed,
     /// identifier }`.
-    private_pda_bound_positions: HashMap<usize, (ProgramId, PdaSeed)>,
+    private_pda_bound_positions: HashMap<usize, (AccountId, PdaSeed)>,
     /// Across the whole transaction, each `(program_id, seed)` pair may resolve to at most one
     /// `AccountId`. A seed under a program can derive a family of accounts, one public PDA and
     /// one private PDA per distinct npk. Without this check, a single `pda_seeds: [S]` entry in
@@ -44,7 +45,7 @@ pub struct ExecutionState {
     /// caller-authorization resolution is recorded here, either as a new `(program, seed)` →
     /// `AccountId` entry or as an equality check against the existing one, making the rule: one
     /// `(program, seed)` → one account per tx.
-    pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
+    pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
     /// Map from a private-PDA `pre_state`'s position in `account_identities` to the (npk, vpk,
     /// identifier) supplied for that position. Built once in `derive_from_outputs` by walking
     /// `account_identities` and consulting `npk_vpk_if_private_pda`. Used later by the witness and
@@ -61,10 +62,20 @@ impl ExecutionState {
     /// Validate program outputs and derive the overall execution state.
     pub fn derive_from_outputs(
         account_identities: &[InputAccountIdentity],
-        program_id: ProgramId,
+        program_account_id: AccountId,
         program_outputs: Vec<ProgramOutput>,
         initial_pre_states: &[AccountId],
+        program_image_claims: &[ProgramImageClaim],
     ) -> Self {
+        // Untrusted claims supplied by the prover: `env::verify` needs a real image id, not an
+        // arbitrary dispatch address. The circuit does not check these against real chain state —
+        // the sequencer does that independently (`V03State::get_program_image_id`) before
+        // accepting the proof, which fails naturally if a claim is a lie (the receipt's actually
+        // committed bytes won't match the reconstructed output). See `ProgramImageClaim`.
+        let image_id_by_account_id: HashMap<AccountId, ProgramId> = program_image_claims
+            .iter()
+            .map(|claim| (claim.account_id, claim.image_id))
+            .collect();
         // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
         // in `account_identities`. The vec is documented as 1:1 with the program's pre_state
         // order, so position here matches `pre_state_position` used downstream in
@@ -126,7 +137,7 @@ impl ExecutionState {
         // `pre_state_ids` is never read below (every check uses `program_output` instead) —
         // this synthetic call only bootstraps the loop's first iteration.
         let initial_call = ChainedCall {
-            program_id,
+            program_account_id,
             instruction_data: first_output.instruction_data.clone(),
             pre_state_ids: first_output
                 .state_diffs
@@ -136,7 +147,7 @@ impl ExecutionState {
             pda_seeds: Vec::new(),
         };
         let initial_caller_data = CallerData {
-            program_id: None,
+            account_id: None,
             authorized_accounts: HashSet::new(),
         };
         let mut chained_calls =
@@ -164,7 +175,7 @@ impl ExecutionState {
             // Check accounts used are exactly those the call was performed with.
             assert!(
                 // If the call is top-level, nothing to check.
-                caller_data.program_id.is_none()
+                caller_data.account_id.is_none()
                     // Else, match.
                     || pre_states_match_accounts(
                         &chained_call.pre_state_ids,
@@ -178,52 +189,58 @@ impl ExecutionState {
             );
 
             // Check that `program_output` is consistent with the execution of the corresponding
-            // program.
+            // program. `env::verify` needs the invoked program's real image id, not its dispatch
+            // address — resolved from the prover-supplied (and independently, externally
+            // verified) claims. See `ProgramImageClaim`.
+            let image_id = image_id_by_account_id
+                .get(&chained_call.program_account_id)
+                .copied()
+                .expect("no image_id claim supplied for invoked program account");
             let program_output_frame = lee_core::to_borsh_frame(&program_output);
-            env::verify(chained_call.program_id, &program_output_frame).unwrap_or_else(
-                |_: Infallible| unreachable!("Infallible error is never constructed"),
-            );
+            env::verify(image_id, &program_output_frame).unwrap_or_else(|_: Infallible| {
+                unreachable!("Infallible error is never constructed")
+            });
 
-            // Verify that the program output's self_program_id matches the expected program ID.
+            // Verify that the program output's self_account_id matches the expected program ID.
             // This ensures the proof commits to which program produced the output.
             assert_eq!(
-                program_output.self_program_id, chained_call.program_id,
-                "Program output self_program_id does not match chained call program_id"
+                program_output.self_account_id, chained_call.program_account_id,
+                "Program output self_account_id does not match chained call program_account_id"
             );
 
-            // Verify that the program output's caller_program_id matches the actual caller.
+            // Verify that the program output's caller_account_id matches the actual caller.
             // This prevents a malicious user from privately executing an internal function
-            // by spoofing caller_program_id (e.g. passing caller_program_id = self_program_id
+            // by spoofing caller_account_id (e.g. passing caller_account_id = self_account_id
             // to bypass access control checks).
             assert_eq!(
-                program_output.caller_program_id, caller_data.program_id,
-                "Program output caller_program_id does not match actual caller"
+                program_output.caller_account_id, caller_data.account_id,
+                "Program output caller_account_id does not match actual caller"
             );
 
             // Only a top-level call may legitimately be a no-op; a chained call must execute.
-            if caller_data.program_id.is_some() {
+            if caller_data.account_id.is_some() {
                 assert_eq!(
                     program_output.call_kind,
                     CallKind::Execute,
                     "Chained call to {:?} did not execute",
-                    chained_call.program_id
+                    chained_call.program_account_id
                 );
             }
 
             // Check that the program is well behaved.
             // See the # Programs section for the definition of the `validate_execution` method.
             let validated_execution =
-                validate_execution(&program_output.state_diffs, chained_call.program_id);
+                validate_execution(&program_output.state_diffs, chained_call.program_account_id);
             if let Err(err) = validated_execution {
                 panic!(
                     "Invalid program behavior in program {:?}: {err}",
-                    chained_call.program_id
+                    chained_call.program_account_id
                 );
             }
 
             let authorized_accounts = execution_state.validate_and_sync_states(
                 account_identities,
-                chained_call.program_id,
+                chained_call.program_account_id,
                 caller_data,
                 &chained_call.pda_seeds,
                 program_output.state_diffs,
@@ -234,7 +251,7 @@ impl ExecutionState {
                 chained_calls.push_front((
                     next_call,
                     CallerData {
-                        program_id: Some(chained_call.program_id),
+                        account_id: Some(chained_call.program_account_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
@@ -310,14 +327,14 @@ impl ExecutionState {
     fn validate_and_sync_states(
         &mut self,
         account_identities: &[InputAccountIdentity],
-        program_id: ProgramId,
+        program_account_id: AccountId,
         caller: CallerData,
         caller_pda_seeds: &[PdaSeed],
         output_state_diffs: Vec<AccountStateDiff>,
     ) -> HashSet<AccountId> {
         let mut authorized_output_accounts = Vec::new();
         for state_diff in output_state_diffs {
-            let post = post_state(&state_diff, program_id)
+            let post = post_state(&state_diff, program_account_id)
                 .expect("balance diff must be valid; validate_execution already checked it");
             let mut pre = state_diff.pre_state;
             let pre_account_id = pre.account_id;
@@ -475,7 +492,7 @@ impl ExecutionState {
     ) -> (
         BlockValidityWindow,
         TimestampValidityWindow,
-        HashMap<usize, (ProgramId, PdaSeed)>,
+        HashMap<usize, (AccountId, PdaSeed)>,
         impl ExactSizeIterator<Item = (AccountWithMetadata, Account)>,
     ) {
         let block_validity_window = self.block_validity_window;
@@ -505,12 +522,12 @@ impl ExecutionState {
 /// function so callers can pass `&mut self.pda_family_binding` without holding a borrow on
 /// the surrounding struct's other fields.
 fn assert_family_binding(
-    bindings: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
-    program_id: ProgramId,
+    bindings: &mut HashMap<(AccountId, PdaSeed), AccountId>,
+    program_account_id: AccountId,
     seed: PdaSeed,
     account_id: AccountId,
 ) {
-    match bindings.entry((program_id, seed)) {
+    match bindings.entry((program_account_id, seed)) {
         Entry::Vacant(e) => {
             e.insert(account_id);
         }
@@ -526,19 +543,19 @@ fn assert_family_binding(
 }
 
 fn bind_private_pda_position(
-    map: &mut HashMap<usize, (ProgramId, PdaSeed)>,
+    map: &mut HashMap<usize, (AccountId, PdaSeed)>,
     position: usize,
-    program_id: ProgramId,
+    program_account_id: AccountId,
     seed: PdaSeed,
 ) {
     match map.entry(position) {
         Entry::Occupied(e) => assert_eq!(
             *e.get(),
-            (program_id, seed),
+            (program_account_id, seed),
             "Duplicate binding at position {position}: conflicting (program_id, seed)"
         ),
         Entry::Vacant(e) => {
-            e.insert((program_id, seed));
+            e.insert((program_account_id, seed));
         }
     }
 }
@@ -549,12 +566,12 @@ fn match_caller_seed_as_public_pda(
     caller: &CallerData,
     caller_pda_seeds: &[PdaSeed],
     account_id: AccountId,
-) -> Option<(PdaSeed, ProgramId)> {
-    let caller_program_id = caller.program_id?;
+) -> Option<(PdaSeed, AccountId)> {
+    let caller_account_id = caller.account_id?;
     // Costy for calls with multiple seeds in one call.
     caller_pda_seeds.iter().find_map(|seed| {
-        if AccountId::for_public_pda(&caller_program_id, seed) == account_id {
-            return Some((*seed, caller_program_id));
+        if AccountId::for_public_pda(&caller_account_id, seed) == account_id {
+            return Some((*seed, caller_account_id));
         }
         None
     })
@@ -569,14 +586,14 @@ fn match_caller_seed_as_private_pda(
     caller_pda_seeds: &[PdaSeed],
     account_id: AccountId,
     pre_state_position: usize,
-) -> Option<(PdaSeed, ProgramId)> {
+) -> Option<(PdaSeed, AccountId)> {
     let (npk, vpk, identifier) = private_pda_by_position.get(&pre_state_position)?;
-    let caller_program_id = caller.program_id?;
+    let caller_account_id = caller.account_id?;
     // Costy for calls with multiple seeds in one call.
     caller_pda_seeds.iter().find_map(|seed| {
-        if AccountId::for_private_pda(&caller_program_id, seed, npk, vpk, *identifier) == account_id
+        if AccountId::for_private_pda(&caller_account_id, seed, npk, vpk, *identifier) == account_id
         {
-            return Some((*seed, caller_program_id));
+            return Some((*seed, caller_account_id));
         }
         None
     })
@@ -588,21 +605,21 @@ fn match_caller_seed_as_private_pda(
 /// it is a regular account. For PDAs, we assert the family bindings. For regular accounts,
 /// add to global authorization set.
 fn authorize_first_sight_without_pda_witness(
-    pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
+    pda_family_binding: &mut HashMap<(AccountId, PdaSeed), AccountId>,
     globally_authorized: &mut HashSet<AccountId>,
     caller: &CallerData,
     caller_pda_seeds: &[PdaSeed],
     pre_account_id: AccountId,
     pre_is_authorized: bool,
 ) -> bool {
-    if let Some((seed, caller_program_id)) =
+    if let Some((seed, caller_account_id)) =
         match_caller_seed_as_public_pda(caller, caller_pda_seeds, pre_account_id)
     {
         assert!(
             pre_is_authorized,
             "Caller-seeded public PDA must be declared authorized at first sight: {pre_account_id}"
         );
-        assert_family_binding(pda_family_binding, caller_program_id, seed, pre_account_id);
+        assert_family_binding(pda_family_binding, caller_account_id, seed, pre_account_id);
         true
     } else {
         // If an authorized account is a non-PDA one, it is globally authorized.
@@ -622,8 +639,8 @@ fn authorize_first_sight_without_pda_witness(
     reason = "breaking out a context struct does not buy us anything here"
 )]
 fn assert_authorization_and_record_bindings(
-    pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
-    private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
+    pda_family_binding: &mut HashMap<(AccountId, PdaSeed), AccountId>,
+    private_pda_bound_positions: &mut HashMap<usize, (AccountId, PdaSeed)>,
     private_pda_by_position: &HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
     globally_authorized: &HashSet<AccountId>,
     caller: &CallerData,
@@ -632,9 +649,9 @@ fn assert_authorization_and_record_bindings(
     pre_state_position: usize,
     pre_is_authorized: bool,
 ) {
-    let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> =
+    let matched_caller_seed: Option<(PdaSeed, bool, AccountId)> =
         match_caller_seed_as_public_pda(caller, caller_pda_seeds, pre_account_id)
-            .map(|(seed, caller_program_id)| (seed, false, caller_program_id))
+            .map(|(seed, caller_account_id)| (seed, false, caller_account_id))
             .or_else(|| {
                 match_caller_seed_as_private_pda(
                     private_pda_by_position,
@@ -643,16 +660,16 @@ fn assert_authorization_and_record_bindings(
                     pre_account_id,
                     pre_state_position,
                 )
-                .map(|(seed, caller_program_id)| (seed, true, caller_program_id))
+                .map(|(seed, caller_account_id)| (seed, true, caller_account_id))
             });
 
-    if let Some((seed, is_private_form, caller_program_id)) = matched_caller_seed {
-        assert_family_binding(pda_family_binding, caller_program_id, seed, pre_account_id);
+    if let Some((seed, is_private_form, caller_account_id)) = matched_caller_seed {
+        assert_family_binding(pda_family_binding, caller_account_id, seed, pre_account_id);
         if is_private_form {
             bind_private_pda_position(
                 private_pda_bound_positions,
                 pre_state_position,
-                caller_program_id,
+                caller_account_id,
                 seed,
             );
         }

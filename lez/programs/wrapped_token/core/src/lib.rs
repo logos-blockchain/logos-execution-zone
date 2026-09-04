@@ -5,7 +5,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Balance},
-    program::{PdaSeed, ProgramId},
+    program::PdaSeed,
 };
 
 /// The most one mint may credit.
@@ -70,14 +70,14 @@ pub enum Instruction {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WrappedTokenConfig {
     /// The program allowed to call `Mint`: the cross-zone inbox.
-    pub minter: ProgramId,
+    pub minter: AccountId,
     /// The program allowed to reach `UpdateSources` and `RenounceAuthority`
     /// through a chained call, or `None` for top-level only.
     ///
     /// Exists because a PDA cannot sign: a program-held authority acts only by
     /// its own program delegating it on a chained call. Unset closes the ambient
     /// path where any program the authority signed for could rewrite the list.
-    pub governance: Option<ProgramId>,
+    pub governance: Option<AccountId>,
     /// The account allowed to change `sources`, or `None` for a list fixed at
     /// genesis.
     ///
@@ -98,7 +98,7 @@ pub struct SourcePolicy {
     /// The peer zone the emission came from.
     pub src_zone: ZoneId,
     /// The program on that zone that emitted it.
-    pub src_program_id: ProgramId,
+    pub src_account_id: AccountId,
     /// Lifetime mint allowance for this source; `None` is uncapped.
     ///
     /// Lifetime rather than windowed: the guest has no clock in the dispatch
@@ -132,7 +132,7 @@ impl WrappedTokenConfig {
 /// PDA holding the authorized minter program id (the cross-zone inbox), seeded at
 /// genesis so the guest can pin its caller without importing the inbox image id.
 #[must_use]
-pub fn config_account_id(wrapped_token_id: ProgramId) -> AccountId {
+pub fn config_account_id(wrapped_token_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&wrapped_token_id, &config_seed())
 }
 
@@ -143,7 +143,7 @@ const fn config_seed() -> PdaSeed {
 
 /// PDA holding one recipient's wrapped-token balance.
 #[must_use]
-pub fn holding_account_id(wrapped_token_id: ProgramId, recipient: &[u8; 32]) -> AccountId {
+pub fn holding_account_id(wrapped_token_id: AccountId, recipient: &[u8; 32]) -> AccountId {
     AccountId::for_public_pda(&wrapped_token_id, &holding_seed(recipient))
 }
 
@@ -182,14 +182,14 @@ mod tests {
     #[test]
     fn config_round_trips() {
         let config = WrappedTokenConfig {
-            minter: [1, 2, 3, 4, 5, 6, 7, 8],
-            governance: Some([2; 8]),
+            minter: AccountId::new([1; 32]),
+            governance: Some(AccountId::new([2; 32])),
             authority: Some(AccountId::new([5; 32])),
             sources: vec![
                 SourceEntry {
                     policy: SourcePolicy {
                         src_zone: [7; 32],
-                        src_program_id: [9; 8],
+                        src_account_id: AccountId::new([9; 32]),
                         mint_cap: Some(1_000),
                     },
                     minted: 7,
@@ -197,7 +197,7 @@ mod tests {
                 SourceEntry {
                     policy: SourcePolicy {
                         src_zone: [8; 32],
-                        src_program_id: [4; 8],
+                        src_account_id: AccountId::new([4; 32]),
                         mint_cap: None,
                     },
                     minted: 0,
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn holding_is_unique_per_recipient() {
-        let id: ProgramId = [9; 8];
+        let id = AccountId::new([9; 32]);
         assert_ne!(
             holding_account_id(id, &[1; 32]),
             holding_account_id(id, &[2; 32])

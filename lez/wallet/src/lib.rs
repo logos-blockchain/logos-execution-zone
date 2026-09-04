@@ -19,7 +19,7 @@ use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, ProgramDeploymentTransaction, ProgramId,
+    Account, AccountId, PrivacyPreservingTransaction, ProgramId,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies,
         message::{EncryptedAccountData, Message},
@@ -103,6 +103,8 @@ pub enum ExecutionFailureKind {
     InsufficientFundsError,
     #[error("Account {0} data is invalid")]
     AccountDataError(AccountId),
+    #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
+    SegmentCountMismatch { expected: usize, actual: usize },
     #[error("Failed to build transaction: {0}")]
     TransactionBuildError(#[from] lee::error::LeeError),
     #[error("Failed to sign transaction: {0}")]
@@ -525,7 +527,13 @@ impl WalletCore {
         let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_private_pda(&program_id, &pda_seed, &npk, &vpk, identifier);
+        let account_id = AccountId::for_private_pda(
+            &AccountId::from(program_id),
+            &pda_seed,
+            &npk,
+            &vpk,
+            identifier,
+        );
 
         self.register_shared_account(
             account_id,
@@ -856,9 +864,9 @@ impl WalletCore {
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program_id: ProgramId,
+        program_account_id: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_id, |_| Ok(()))
+        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_account_id, |_| Ok(()))
             .await
     }
 
@@ -866,7 +874,7 @@ impl WalletCore {
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program_id: ProgramId,
+        program_account_id: AccountId,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
@@ -898,7 +906,7 @@ impl WalletCore {
         })?;
 
         let message = lee::public_transaction::Message::new_preserialized(
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
@@ -927,15 +935,18 @@ impl WalletCore {
         )
     }
 
-    pub async fn send_program_deployment_transaction(&self, bytecode: Vec<u8>) -> Result<HashType> {
-        let message = lee::program_deployment_transaction::Message::new(bytecode);
-        let transaction = ProgramDeploymentTransaction::new(message);
-
-        Ok(first_success_or_error(
+    /// Submits an already-built public transaction directly, for callers that need to construct
+    /// their own [`FeeDeclaration`] (e.g. a facade taking a separate fee payer) instead of going
+    /// through [`Self::send_pub_tx`]'s self-pay selection.
+    pub(crate) async fn submit_public_transaction(
+        &self,
+        tx: lee::public_transaction::PublicTransaction,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        first_success_or_error(
             self.multi_sequencer_client
-                .metered_send_transaction(LeeTransaction::ProgramDeployment(transaction))
+                .metered_send_transaction(LeeTransaction::Public(tx))
                 .await,
-        )?)
+        )
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {

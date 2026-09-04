@@ -160,7 +160,9 @@ impl EventFilterConfig {
                 }
             };
             ensure!(
-                sources.insert(source.program_id.0, selectors).is_none(),
+                sources
+                    .insert(AccountId::from(source.program_id.0), selectors)
+                    .is_none(),
                 "event_filter declares program {} twice",
                 source.program_id
             );
@@ -220,8 +222,11 @@ mod tests {
         ));
 
         let expected = EventFilter::Sources(HashMap::from([
-            ([1; 8], SelectorFilter::All),
-            ([2; 8], SelectorFilter::Only(HashSet::from([[3; 8]]))),
+            (AccountId::from([1_u32; 8]), SelectorFilter::All),
+            (
+                AccountId::from([2_u32; 8]),
+                SelectorFilter::Only(HashSet::from([[3; 8]])),
+            ),
         ]));
         assert_eq!(config.to_filter().unwrap(), expected);
     }

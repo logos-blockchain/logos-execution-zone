@@ -44,3 +44,4 @@ tempfile.workspace = true
 ping_core.workspace = true
 test_methods.workspace = true
 bridge_core.workspace = true
+program_loader_core.workspace = true

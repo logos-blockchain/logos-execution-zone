@@ -10,11 +10,12 @@ use anyhow::Result;
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::SequencerPartialConfig};
-use lee::program::Program;
+use lee::{AccountId, PrivateKey, PublicKey};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
 };
+use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
 
 #[test]
@@ -33,19 +34,31 @@ async fn reject_oversized_transaction() -> Result<()> {
         .build()
         .await?;
 
-    // Create a transaction that's definitely too large
-    // Block size is 1 MiB (1,048,576 bytes), minus ~200 bytes for header = ~1,048,376 bytes max tx
-    // Create a 1.1 MiB binary to ensure it exceeds the limit
+    // Create a transaction that's definitely too large. Block size is 1 MiB (1,048,576 bytes),
+    // minus ~200 bytes for header = ~1,048,376 bytes max tx. Create a 1.1 MiB binary to ensure
+    // it exceeds the limit. The size check runs before any signature/fee check (see
+    // `gossip::validation::evaluate_transaction`), so an unsigned, unfunded `WriteSegment` is
+    // enough to exercise it.
     let oversized_binary = vec![0_u8; 1100 * 1024]; // 1.1 MiB binary
-
-    let message = lee::program_deployment_transaction::Message::new(oversized_binary);
-    let tx = lee::ProgramDeploymentTransaction::new(message);
+    let segment_id = AccountId::from(&PublicKey::new_from_private_key(
+        &PrivateKey::try_new([220; 32]).unwrap(),
+    ));
+    let message = lee::public_transaction::Message::try_new(
+        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+        vec![segment_id],
+        vec![lee_core::account::Nonce(0)],
+        program_loader_core::Instruction::WriteSegment {
+            bytecode: oversized_binary,
+            next_segment: None,
+        },
+    )?;
+    let tx = LeeTransaction::Public(lee::PublicTransaction::new(
+        message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ));
 
     // Try to submit the transaction and expect an error
-    let result = ctx
-        .sequencer_client()
-        .send_transaction(LeeTransaction::ProgramDeployment(tx))
-        .await;
+    let result = ctx.sequencer_client().send_transaction(tx).await;
 
     assert!(
         result.is_err(),
@@ -80,17 +93,31 @@ async fn accept_transaction_within_limit() -> Result<()> {
         .build()
         .await?;
 
-    // Create a small program deployment that should fit
+    // Create a small `WriteSegment` that should fit well within the limit, this time signed and
+    // fee-paying so admission accepts it outright rather than just clearing the size check.
     let small_binary = vec![0_u8; 1024]; // 1 KiB binary
+    let payer = &initial_pub_accounts_private_keys()[0];
+    let segment_key = PrivateKey::try_new([221; 32]).unwrap();
+    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
 
-    let message = lee::program_deployment_transaction::Message::new(small_binary);
-    let tx = lee::ProgramDeploymentTransaction::new(message);
+    let message = lee::public_transaction::Message::try_new_with_fees(
+        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+        vec![segment_id],
+        vec![lee_core::account::Nonce(0)],
+        program_loader_core::Instruction::WriteSegment {
+            bytecode: small_binary,
+            next_segment: None,
+        },
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )?;
+    let witness_set = lee::public_transaction::WitnessSet::for_message(
+        &message,
+        &[&segment_key, &payer.pub_sign_key],
+    );
+    let tx = LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set));
 
     // This should succeed
-    let result = ctx
-        .sequencer_client()
-        .send_transaction(LeeTransaction::ProgramDeployment(tx))
-        .await;
+    let result = ctx.sequencer_client().send_transaction(tx).await;
 
     assert!(
         result.is_ok(),
@@ -103,13 +130,17 @@ async fn accept_transaction_within_limit() -> Result<()> {
 
 #[test]
 async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
-    let deployed = test_programs::simple_balance_transfer();
-    let chain_caller = test_programs::chain_caller();
+    // Two `WriteSegment` payloads, distinguished by fill byte rather than by being real
+    // programs: this test is only about block-size-driven packing/deferral, not about a
+    // segment ever resolving into a real deployed program, so a same-sized synthetic filler
+    // under `program_loader_core::MAX_SEGMENT_DATA_LEN` stands in for "a program deployment".
+    let filler_len = 40 * 1024; // 40 KiB, comfortably under the 96 KiB segment cap
+    let filler_a = vec![0xAA_u8; filler_len];
+    let filler_b = vec![0xBB_u8; filler_len];
 
-    // Calculate block size to fit only one of the two transactions, leaving some room for headers
-    // (e.g., 10 KiB)
-    let max_program_size = deployed.elf().len().max(chain_caller.elf().len());
-    let block_size = ByteSize::b((max_program_size + 10 * 1024) as u64);
+    // Calculate block size to fit only one of the two transactions, leaving some room for
+    // headers (e.g., 10 KiB).
+    let block_size = ByteSize::b((filler_len + 10 * 1024) as u64);
 
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
@@ -127,21 +158,37 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
 
     let initial_block_height = ctx.sequencer_client().get_last_block_id().await?;
 
-    // Submit both program deployments
-    ctx.sequencer_client()
-        .send_transaction(LeeTransaction::ProgramDeployment(
-            lee::ProgramDeploymentTransaction::new(
-                lee::program_deployment_transaction::Message::new(deployed.elf().to_owned()),
-            ),
-        ))
-        .await?;
+    let payer = &initial_pub_accounts_private_keys()[0];
+    let segment_key_a = PrivateKey::try_new([222; 32]).unwrap();
+    let segment_id_a = AccountId::from(&PublicKey::new_from_private_key(&segment_key_a));
+    let segment_key_b = PrivateKey::try_new([223; 32]).unwrap();
+    let segment_id_b = AccountId::from(&PublicKey::new_from_private_key(&segment_key_b));
 
+    let build_tx = |segment_key: &PrivateKey, segment_id: AccountId, bytecode: Vec<u8>| {
+        let message = lee::public_transaction::Message::try_new_with_fees(
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            vec![segment_id],
+            vec![lee_core::account::Nonce(0)],
+            program_loader_core::Instruction::WriteSegment {
+                bytecode,
+                next_segment: None,
+            },
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )
+        .expect("WriteSegment instruction data should always be serializable");
+        let witness_set = lee::public_transaction::WitnessSet::for_message(
+            &message,
+            &[segment_key, &payer.pub_sign_key],
+        );
+        LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
+    };
+
+    // Submit both segment writes back to back.
     ctx.sequencer_client()
-        .send_transaction(LeeTransaction::ProgramDeployment(
-            lee::ProgramDeploymentTransaction::new(
-                lee::program_deployment_transaction::Message::new(chain_caller.elf().to_owned()),
-            ),
-        ))
+        .send_transaction(build_tx(&segment_key_a, segment_id_a, filler_a.clone()))
+        .await?;
+    ctx.sequencer_client()
+        .send_transaction(build_tx(&segment_key_b, segment_id_b, filler_b.clone()))
         .await?;
 
     // Wait for first block
@@ -153,35 +200,43 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         .await?
         .unwrap();
 
-    // Check which program is in block 1
-    let get_program_ids = |block: &common::block::Block| -> Vec<lee::ProgramId> {
+    // Which segment-write landed in a given block, identified by its target account id.
+    let segment_ids_in_block = |block: &common::block::Block| -> Vec<AccountId> {
         block
             .body
             .transactions
             .iter()
             .filter_map(|tx| {
-                if let LeeTransaction::ProgramDeployment(deployment) = tx {
-                    let bytecode = deployment.message.clone().into_bytecode();
-                    Program::new(bytecode.into()).ok().map(|p| p.id())
-                } else {
-                    None
+                let LeeTransaction::Public(public_tx) = tx else {
+                    return None;
+                };
+                if public_tx.message.program_account_id
+                    != lee_core::program::PROGRAM_LOADER_ACCOUNT_ID
+                {
+                    return None;
                 }
+                let instruction: program_loader_core::Instruction =
+                    borsh::from_slice(&public_tx.message.instruction_data).ok()?;
+                matches!(
+                    instruction,
+                    program_loader_core::Instruction::WriteSegment { .. }
+                )
+                .then(|| public_tx.message.account_ids[0])
             })
             .collect()
     };
 
-    let block1_program_ids = get_program_ids(&block1);
+    let block1_segment_ids = segment_ids_in_block(&block1);
 
-    // First program should be in block 1, but not both due to block size limit
+    // The first segment write should be in block 1, but not both due to block size limit.
     assert_eq!(
-        block1_program_ids.len(),
+        block1_segment_ids.len(),
         1,
-        "Expected exactly one program deployment in block 1"
+        "Expected exactly one segment write in block 1"
     );
     assert_eq!(
-        block1_program_ids[0],
-        deployed.id(),
-        "Expected the deployed program to be in block 1"
+        block1_segment_ids[0], segment_id_a,
+        "Expected the first segment write to be in block 1"
     );
 
     // Wait for second block
@@ -192,18 +247,17 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         .get_block(initial_block_height + 2)
         .await?
         .unwrap();
-    let block2_program_ids = get_program_ids(&block2);
+    let block2_segment_ids = segment_ids_in_block(&block2);
 
-    // The other program should be in block 2
+    // The other segment write should be in block 2.
     assert_eq!(
-        block2_program_ids.len(),
+        block2_segment_ids.len(),
         1,
-        "Expected exactly one program deployment in block 2"
+        "Expected exactly one segment write in block 2"
     );
     assert_eq!(
-        block2_program_ids[0],
-        chain_caller.id(),
-        "Expected chain_caller program to be deployed in block 2"
+        block2_segment_ids[0], segment_id_b,
+        "Expected the second segment write to be deferred to block 2"
     );
 
     Ok(())

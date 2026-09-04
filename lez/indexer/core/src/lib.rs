@@ -757,14 +757,14 @@ mod tests {
     /// An inbox dispatch transaction with fixed source coordinates, so blocks
     /// in these tests carry a decodable dispatch key.
     fn dispatch_tx() -> common::transaction::LeeTransaction {
-        let receiver_id = programs::ping_receiver().id();
+        let receiver_id: lee::AccountId = programs::ping_receiver().id().into();
         common::transaction::LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
             &cross_zone::EmissionSource {
                 src_zone: [2; 32],
                 src_block_id: 5,
                 src_block_hash: [3; 32],
                 src_tx_index: 0,
-                src_program_id: programs::ping_sender().id(),
+                src_account_id: programs::ping_sender().id().into(),
             },
             receiver_id,
             &[

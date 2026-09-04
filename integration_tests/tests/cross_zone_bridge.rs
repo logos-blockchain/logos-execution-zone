@@ -52,13 +52,13 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
 
-    let wrapped_token_id = programs::wrapped_token().id();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: *channel_a.as_ref(),
             allowed_routes: vec![CrossZoneRoute {
-                src_program_id: programs::bridge_lock().id(),
-                target_program_id: wrapped_token_id,
+                src_account_id: programs::bridge_lock().id().into(),
+                target_account_id: wrapped_token_id,
                 mint_cap: None,
             }],
             expected_block_signing_pubkeys: Vec::new(),
@@ -124,7 +124,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // Conservation: the mint on B must be backed by an equal lock on A. The lock
     // has already landed (it preceded delivery), so zone A reflects the debit and
     // escrow now.
-    let escrow_id = bridge_lock_core::escrow_account_id(programs::bridge_lock().id());
+    let escrow_id = bridge_lock_core::escrow_account_id(programs::bridge_lock().id().into());
     let escrowed = seq_client_a.get_account(escrow_id).await?.balance;
     assert_eq!(
         escrowed, LOCK_AMOUNT,
@@ -132,7 +132,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     );
     let remaining = seq_client_a
         .get_account(bridge_lock_core::holding_account_id(
-            programs::bridge_lock().id(),
+            programs::bridge_lock().id().into(),
             &holder_id.into_value(),
         ))
         .await?
@@ -149,7 +149,10 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let ind_client_a = ctx.indexer_client_zone(channel_a).unwrap();
     wait_for_balance(
         ind_client_a,
-        bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder_id.into_value()),
+        bridge_lock_core::holding_account_id(
+            programs::bridge_lock().id().into(),
+            &holder_id.into_value(),
+        ),
         INITIAL_BALANCE - LOCK_AMOUNT,
     )
     .await
@@ -167,9 +170,9 @@ fn build_lock_tx(
     holder_id: AccountId,
     target_zone: [u8; 32],
 ) -> LeeTransaction {
-    let bridge_lock_id = programs::bridge_lock().id();
-    let wrapped_token_id = programs::wrapped_token().id();
-    let outbox_id = programs::cross_zone_outbox().id();
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
     let ordinal = 0;
 
     let mint = wrapped_token_core::Instruction::Mint {
@@ -185,7 +188,7 @@ fn build_lock_tx(
     let lock = bridge_lock_core::Instruction::Lock {
         amount: LOCK_AMOUNT,
         target_zone,
-        target_program_id: wrapped_token_id,
+        target_account_id: wrapped_token_id,
         target_accounts,
         payload,
         ordinal,
@@ -194,7 +197,10 @@ fn build_lock_tx(
     let accounts = vec![
         bridge_lock_core::config_account_id(bridge_lock_id),
         holder_id,
-        bridge_lock_core::holding_account_id(programs::bridge_lock().id(), &holder_id.into_value()),
+        bridge_lock_core::holding_account_id(
+            programs::bridge_lock().id().into(),
+            &holder_id.into_value(),
+        ),
         bridge_lock_core::escrow_account_id(bridge_lock_id),
         outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
     ];

@@ -435,7 +435,13 @@ fn private_pda_witness_binding_succeeds() {
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
 
-    let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), u128::MAX);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(program.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        u128::MAX,
+    );
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let result = execute_and_prove(
@@ -444,7 +450,7 @@ fn private_pda_witness_binding_succeeds() {
         vec![init_pda_witness(
             &keys,
             u128::MAX,
-            Some((program.id(), seed)),
+            Some((program.id().into(), seed)),
         )],
         &program.into(),
     );
@@ -469,8 +475,13 @@ fn private_pda_npk_mismatch_fails() {
     // `account_id` is derived from `npk_a`, but `npk_b` is supplied for this pre_state.
     // `AccountId::for_private_pda(program, seed, npk_b) != account_id`, so the witness-binding
     // check in the circuit must reject.
-    let account_id =
-        AccountId::for_private_pda(&program.id(), &seed, &npk_a, &keys_a.vpk(), u128::MAX);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(program.id()),
+        &seed,
+        &npk_a,
+        &keys_a.vpk(),
+        u128::MAX,
+    );
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let result = execute_and_prove(
@@ -479,7 +490,7 @@ fn private_pda_npk_mismatch_fails() {
         vec![init_pda_witness(
             &keys_b,
             u128::MAX,
-            Some((program.id(), seed)),
+            Some((program.id().into(), seed)),
         )],
         &program.into(),
     );
@@ -500,12 +511,21 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
     let npk = keys.npk();
     let seed = PdaSeed::new([77; 32]);
 
-    let account_id =
-        AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), u128::MAX);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(delegator.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        u128::MAX,
+    );
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
+    let callee_id = callee.id().into();
+    let program_with_deps = ProgramWithDependencies::new(
+        delegator.clone(),
+        delegator.id().into(),
+        [(callee_id, callee)].into(),
+    );
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -533,7 +553,7 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
     let wrong_delegated_seed = PdaSeed::new([88; 32]);
 
     let account_id = AccountId::for_private_pda(
-        &delegator.id(),
+        &AccountId::from(delegator.id()),
         &derivation_seed,
         &npk,
         &keys.vpk(),
@@ -541,8 +561,12 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
     );
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
+    let callee_id = callee.id().into();
+    let program_with_deps = ProgramWithDependencies::new(
+        delegator.clone(),
+        delegator.id().into(),
+        [(callee_id, callee)].into(),
+    );
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -565,11 +589,21 @@ fn caller_seeds_bind_a_private_pda_first_seen_in_the_callee() {
     let npk = keys.npk();
     let seed = PdaSeed::new([77; 32]);
 
-    let account_id = AccountId::for_private_pda(&forwarder.id(), &seed, &npk, &keys.vpk(), 0);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(forwarder.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        0,
+    );
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let callee_id = callee.id().into();
+    let program_with_deps = ProgramWithDependencies::new(
+        forwarder.clone(),
+        forwarder.id().into(),
+        [(callee_id, callee)].into(),
+    );
 
     execute_and_prove(
         vec![pre_state],
@@ -596,13 +630,17 @@ fn delegated_private_pda_first_seen_in_callee_is_authorized() {
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
     let seed = PdaSeed::new([77; 32]);
-    let forwarder_id = forwarder.id();
+    let forwarder_id = forwarder.id().into();
 
     let account_id = AccountId::for_private_pda(&forwarder_id, &seed, &npk, &keys.vpk(), 0);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let callee_id = callee.id().into();
+    let program_with_deps = ProgramWithDependencies::new(
+        forwarder.clone(),
+        forwarder.id().into(),
+        [(callee_id, callee)].into(),
+    );
 
     execute_and_prove(
         vec![pre_state],
@@ -627,11 +665,15 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
     let callee = crate::test_methods::auth_asserting_noop();
     let seed = PdaSeed::new([77; 32]);
 
-    let account_id = AccountId::for_public_pda(&forwarder.id(), &seed);
+    let account_id = AccountId::for_public_pda(&AccountId::from(forwarder.id()), &seed);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let callee_id = callee.id().into();
+    let program_with_deps = ProgramWithDependencies::new(
+        forwarder.clone(),
+        forwarder.id().into(),
+        [(callee_id, callee)].into(),
+    );
 
     let (output, _proof) = execute_and_prove(
         vec![pre_state],
@@ -664,11 +706,15 @@ fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
     let seed = PdaSeed::new([77; 32]);
     let wrong_seed = PdaSeed::new([88; 32]);
 
-    let account_id = AccountId::for_public_pda(&forwarder.id(), &seed);
+    let account_id = AccountId::for_public_pda(&AccountId::from(forwarder.id()), &seed);
     let pre_state = AccountWithMetadata::new(Account::default(), true, account_id);
 
-    let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let callee_id = callee.id().into();
+    let program_with_deps = ProgramWithDependencies::new(
+        forwarder.clone(),
+        forwarder.id().into(),
+        [(callee_id, callee)].into(),
+    );
 
     let (output, _proof) = execute_and_prove(
         vec![pre_state],
@@ -698,13 +744,20 @@ fn delegated_pda_is_not_authorized_in_sibling_call() {
     let npk = keys.npk();
     let seed = PdaSeed::new([77; 32]);
 
-    let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), 0);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(delegator.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        0,
+    );
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let callee_id = callee.id();
-    let sibling_id = sibling.id();
+    let callee_id = callee.id().into();
+    let sibling_id = sibling.id().into();
     let program_with_deps = ProgramWithDependencies::new(
-        delegator,
+        delegator.clone(),
+        delegator.id().into(),
         [(callee_id, callee), (sibling_id, sibling)].into(),
     );
 
@@ -739,13 +792,14 @@ fn public_pda_first_sight_grant_does_not_extend_to_sibling_calls() {
     let sibling = crate::test_methods::auth_asserting_noop();
     let seed = PdaSeed::new([77; 32]);
 
-    let account_id = AccountId::for_public_pda(&delegator.id(), &seed);
+    let account_id = AccountId::for_public_pda(&AccountId::from(delegator.id()), &seed);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let callee_id = callee.id();
-    let sibling_id = sibling.id();
+    let callee_id = callee.id().into();
+    let sibling_id = sibling.id().into();
     let program_with_deps = ProgramWithDependencies::new(
-        delegator,
+        delegator.clone(),
+        delegator.id().into(),
         [(callee_id, callee), (sibling_id, sibling)].into(),
     );
 
@@ -781,13 +835,20 @@ fn sibling_call_may_declare_delegated_pda_unauthorized() {
     let npk = keys.npk();
     let seed = PdaSeed::new([77; 32]);
 
-    let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), 0);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(delegator.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        0,
+    );
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let callee_id = callee.id();
-    let sibling_id = sibling.id();
+    let callee_id = callee.id().into();
+    let sibling_id = sibling.id().into();
     let program_with_deps = ProgramWithDependencies::new(
-        delegator,
+        delegator.clone(),
+        delegator.id().into(),
         [(callee_id, callee), (sibling_id, sibling)].into(),
     );
 
@@ -815,13 +876,20 @@ fn delegated_pda_stays_authorized_in_delegated_subtree() {
     let npk = keys.npk();
     let seed = PdaSeed::new([77; 32]);
 
-    let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), 0);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(delegator.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        0,
+    );
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let forwarder_id = forwarder.id();
-    let callee_id = callee.id();
+    let forwarder_id = forwarder.id().into();
+    let callee_id = callee.id().into();
     let program_with_deps = ProgramWithDependencies::new(
-        delegator,
+        delegator.clone(),
+        delegator.id().into(),
         [(forwarder_id, forwarder), (callee_id, callee)].into(),
     );
     let no_sibling: Option<(ProgramId, bool)> = None;
@@ -858,15 +926,22 @@ fn holder_authorization_survives_across_sibling_calls() {
     let holder_npk = holder_keys.npk();
     let seed = PdaSeed::new([77; 32]);
 
-    let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk, &pda_keys.vpk(), 0);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(delegator.id()),
+        &seed,
+        &npk,
+        &pda_keys.vpk(),
+        0,
+    );
     let holder_id = AccountId::for_regular_private_account(&holder_npk, &holder_keys.vpk(), 0);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
     let holder_pre_state = AccountWithMetadata::new(Account::default(), true, holder_id);
 
-    let callee_id = callee.id();
-    let sibling_id = sibling.id();
+    let callee_id = callee.id().into();
+    let sibling_id = sibling.id().into();
     let program_with_deps = ProgramWithDependencies::new(
-        delegator,
+        delegator.clone(),
+        delegator.id().into(),
         [(callee_id, callee), (sibling_id, sibling)].into(),
     );
 
@@ -908,13 +983,20 @@ fn inherited_scope_passes_through_nested_intermediate_calls() {
     let npk = keys.npk();
     let seed = PdaSeed::new([77; 32]);
 
-    let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), 0);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(delegator.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        0,
+    );
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let forwarder_id = forwarder.id();
-    let callee_id = callee.id();
+    let forwarder_id = forwarder.id().into();
+    let callee_id = callee.id().into();
     let program_with_deps = ProgramWithDependencies::new(
-        delegator,
+        delegator.clone(),
+        delegator.id().into(),
         [(forwarder_id, forwarder), (callee_id, callee)].into(),
     );
     let no_sibling: Option<(ProgramId, bool)> = None;
@@ -955,14 +1037,18 @@ fn inherited_scope_passes_through_nested_intermediate_calls() {
 fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let callee = crate::test_methods::noop();
-    let callee_id = callee.id();
+    let callee_id = callee.id().into();
 
     let keys = test_private_account_keys_1();
     // is_authorized must match whether the witness below supplies an `ask` credential.
     let pre_state =
         AccountWithMetadata::new(Account::default(), true, (&keys.npk(), &keys.vpk(), 0));
 
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let program_with_deps = ProgramWithDependencies::new(
+        forwarder.clone(),
+        forwarder.id().into(),
+        [(callee_id, callee)].into(),
+    );
 
     let (output, proof) = execute_and_prove(
         vec![pre_state],
@@ -1009,7 +1095,7 @@ fn top_level_reordering_through_a_passthrough_is_still_provable() {
     let seed_a = PdaSeed::new([1; 32]);
     let seed_b = PdaSeed::new([2; 32]);
 
-    let forwarder_id = forwarder.id();
+    let forwarder_id = forwarder.id().into();
     let account_a =
         AccountId::for_private_pda(&forwarder_id, &seed_a, &keys_a.npk(), &keys_a.vpk(), 0);
     let account_b =
@@ -1017,8 +1103,12 @@ fn top_level_reordering_through_a_passthrough_is_still_provable() {
     let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
     let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
 
-    let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(forwarder, [(callee_id, callee)].into());
+    let callee_id = callee.id().into();
+    let program_with_deps = ProgramWithDependencies::new(
+        forwarder.clone(),
+        forwarder.id().into(),
+        [(callee_id, callee)].into(),
+    );
 
     // Delegate seed_b to the callee — the callee should be authorized for `account_b` alone,
     // and only asserts on `account_b`, ignoring `account_a` (which is genuinely unauthorized).
@@ -1058,14 +1148,14 @@ fn two_private_pdas_bound_under_same_seed_are_rejected() {
     let seed = PdaSeed::new([55; 32]);
 
     let account_a = AccountId::for_private_pda(
-        &program.id(),
+        &AccountId::from(program.id()),
         &seed,
         &keys_a.npk(),
         &keys_a.vpk(),
         u128::MAX,
     );
     let account_b = AccountId::for_private_pda(
-        &program.id(),
+        &AccountId::from(program.id()),
         &seed,
         &keys_b.npk(),
         &keys_b.vpk(),
@@ -1079,8 +1169,8 @@ fn two_private_pdas_bound_under_same_seed_are_rejected() {
         vec![pre_a, pre_b],
         Program::serialize_instruction(()).unwrap(),
         vec![
-            init_pda_witness(&keys_a, u128::MAX, Some((program.id(), seed))),
-            init_pda_witness(&keys_b, u128::MAX, Some((program.id(), seed))),
+            init_pda_witness(&keys_a, u128::MAX, Some((program.id().into(), seed))),
+            init_pda_witness(&keys_b, u128::MAX, Some((program.id().into(), seed))),
         ],
         &program.into(),
     );
@@ -1100,7 +1190,13 @@ fn private_pda_top_level_reuse_rejected_by_binding_check() {
     let npk = keys.npk();
     let seed = PdaSeed::new([99; 32]);
 
-    let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), u128::MAX);
+    let account_id = AccountId::for_private_pda(
+        &AccountId::from(program.id()),
+        &seed,
+        &npk,
+        &keys.vpk(),
+        u128::MAX,
+    );
     let owned_pre_state = AccountWithMetadata::new(
         Account {
             program_owner: program.id().into(),
@@ -1375,13 +1471,14 @@ fn two_private_pda_family_members_receive_and_spend() {
 
     let proxy = crate::test_methods::pda_spend_proxy();
     let simple_transfer = crate::test_methods::simple_balance_transfer();
-    let proxy_id = proxy.id();
-    let simple_transfer_id = simple_transfer.id();
+    let proxy_id = proxy.id().into();
+    let simple_transfer_id = simple_transfer.id().into();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
     let spend_with_deps = ProgramWithDependencies::new(
-        proxy,
+        proxy.clone(),
+        proxy.id().into(),
         [(simple_transfer_id, simple_transfer.clone())].into(),
     );
 

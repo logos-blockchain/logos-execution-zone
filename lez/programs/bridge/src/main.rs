@@ -19,8 +19,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -31,7 +31,7 @@ fn main() {
     };
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "Bridge cannot be invoked through chain calls"
     );
 
@@ -49,7 +49,7 @@ fn main() {
 
             assert_eq!(
                 bridge.account_id,
-                bridge_core::compute_bridge_account_id(self_program_id),
+                bridge_core::compute_bridge_account_id(self_account_id),
                 "First account must be bridge PDA"
             );
 
@@ -60,7 +60,7 @@ fn main() {
 
             assert_eq!(
                 receipt.account_id,
-                bridge_core::deposit_receipt_account_id(self_program_id, l1_deposit_op_id),
+                bridge_core::deposit_receipt_account_id(self_account_id, l1_deposit_op_id),
                 "Third account must be the deposit-receipt PDA"
             );
 
@@ -82,7 +82,7 @@ fn main() {
             // bricks loudly rather than being silently skipped, and the
             // sequencer keeps re-driving the mint every block (see the deposit
             // drain). Accepted: there is no reclaim path today.
-            if receipt.account.program_owner == self_program_id.into() {
+            if receipt.account.program_owner == self_account_id {
                 (unchanged_diffs(&pre_states_clone), vec![], vec![])
             } else {
                 // First mint: write the marker byte into the receipt. The write
@@ -131,7 +131,7 @@ fn main() {
 
             // assert_eq!(
             //     bridge.account_id,
-            //     bridge_core::compute_bridge_account_id(self_program_id),
+            //     bridge_core::compute_bridge_account_id(self_account_id),
             //     "Second account must be bridge PDA"
             // );
 
@@ -163,8 +163,8 @@ fn main() {
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         post_diffs,
     )

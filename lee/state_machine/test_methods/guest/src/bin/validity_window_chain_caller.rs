@@ -17,8 +17,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (block_validity_window, chained_program_id, chained_block_validity_window),
         },
@@ -36,15 +36,15 @@ fn main() {
     ))
     .unwrap();
     let chained_call = ChainedCall {
-        program_id: chained_program_id,
+        program_account_id: chained_program_id.into(),
         instruction_data: chained_instruction,
         pre_state_ids: pre_states.iter().map(|p| p.account_id).collect(),
         pda_seeds: vec![],
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![AccountStateDiff::unchanged(pre)],
     )

@@ -612,14 +612,14 @@ fn tx_events_fixture(tx_index: u32, tx_hash: [u8; 32]) -> TxEvents {
         tx_hash: tx_hash.into(),
         events: vec![
             lee_core::program::TransactionEvent {
-                program_id: [7; 8],
+                account_id: lee_core::account::AccountId::new([7; 32]),
                 event: lee_core::program::ProgramEvent {
                     selector: [1; 8],
                     data: vec![1, 2, 3],
                 },
             },
             lee_core::program::TransactionEvent {
-                program_id: [9; 8],
+                account_id: lee_core::account::AccountId::new([9; 32]),
                 event: lee_core::program::ProgramEvent {
                     selector: [2; 8],
                     data: vec![],

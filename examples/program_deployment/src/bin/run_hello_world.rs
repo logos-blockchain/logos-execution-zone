@@ -53,7 +53,8 @@ async fn main() {
     // `run_hello_world_with_authorization` on how to use them.
     let nonces = vec![];
     let signing_keys = [];
-    let message = Message::try_new(program.id(), vec![account_id], nonces, greeting).unwrap();
+    let message =
+        Message::try_new(program.id().into(), vec![account_id], nonces, greeting).unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 

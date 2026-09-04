@@ -1772,7 +1772,7 @@ impl LiveCommittee {
 /// program keeps.
 fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> bool {
     let receipt_id =
-        bridge_core::deposit_receipt_account_id(programs::bridge().id(), deposit_op_id.0);
+        bridge_core::deposit_receipt_account_id(programs::bridge().id().into(), deposit_op_id.0);
     state
         .get_account_by_id_ref(receipt_id)
         .is_some_and(|receipt| receipt.program_owner == programs::bridge().id().into())
@@ -1790,7 +1790,7 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
 /// delivered would drop the record instead of dead-lettering it.
 fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage) -> bool {
     let shard_id = cross_zone_inbox_core::inbox_seen_shard_account_id(
-        programs::cross_zone_inbox().id(),
+        programs::cross_zone_inbox().id().into(),
         &message.src_zone,
         message.src_block_id,
     );
@@ -2311,7 +2311,7 @@ fn genesis_stake_message(
         .expect("genesis funding nonce overflow");
 
     Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![
             genesis_stake_funding_account(),
             ownership_id,
@@ -2325,7 +2325,7 @@ fn genesis_stake_message(
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
             amount,
-            mover_program_id: programs::authenticated_transfer().id(),
+            mover_account_id: programs::authenticated_transfer().id().into(),
             mover_instruction_data,
         },
     )
@@ -2361,7 +2361,7 @@ fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTrans
         .expect("genesis stake total overflow");
 
     let fund_message = Message::try_new(
-        programs::faucet().id(),
+        programs::faucet().id().into(),
         vec![
             system_accounts::faucet_account_id(),
             genesis_stake_funding_account(),
@@ -2420,15 +2420,16 @@ fn bridge_lock_holdings(
 /// block. The fee program is invoked solely by the forced per-block fee
 /// transaction.
 #[must_use]
-pub fn is_sequencer_only_program(program_id: lee::ProgramId) -> bool {
-    cross_zone::is_sequencer_only_program(program_id) || program_id == programs::fee().id()
+pub fn is_sequencer_only_program(program_account_id: AccountId) -> bool {
+    cross_zone::is_sequencer_only_program(program_account_id)
+        || program_account_id == programs::fee().id().into()
 }
 
 fn build_supply_account_genesis_transaction(
     account_id: &AccountId,
     balance: lee::Balance,
 ) -> PublicTransaction {
-    let faucet_program_id = programs::faucet().id();
+    let faucet_program_id: AccountId = programs::faucet().id().into();
 
     let message = Message::try_new(
         faucet_program_id,
@@ -2455,7 +2456,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let metadata = DepositMetadata::try_from_slice(&event.metadata)
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
-    let bridge_program_id = programs::bridge().id();
+    let bridge_program_id: AccountId = programs::bridge().id().into();
     // The receipt PDA carries the exactly-once check: the program reads it to
     // detect a replay, so it must be in the tx's account list.
     let receipt_id =
@@ -2506,7 +2507,7 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
     };
 
     let message = tx.message();
-    if message.program_id != programs::sequencer_stake().id() {
+    if message.program_account_id != programs::sequencer_stake().id().into() {
         return None;
     }
 
@@ -2538,7 +2539,7 @@ fn build_finalize_unstake_tx(
     pending: sequencer_stake_core::PendingUnstake,
 ) -> Result<LeeTransaction> {
     let message = Message::try_new(
-        programs::sequencer_stake().id(),
+        programs::sequencer_stake().id().into(),
         vec![
             ownership_id,
             system_accounts::stake_funds_account_id(&ownership_id),
@@ -2575,7 +2576,7 @@ fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
 #[must_use]
 fn is_sequencer_only_tx(tx: &LeeTransaction) -> bool {
     matches!(tx, LeeTransaction::Public(tx)
-        if is_sequencer_only_program(tx.message().program_id))
+        if is_sequencer_only_program(tx.message().program_account_id))
 }
 
 /// The cross-zone message an inbox dispatch delivers, or `None` if `tx` is not
@@ -2587,7 +2588,7 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
     };
 
     let message = tx.message();
-    if message.program_id != programs::cross_zone_inbox().id() {
+    if message.program_account_id != programs::cross_zone_inbox().id().into() {
         return None;
     }
 
@@ -2693,7 +2694,7 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     };
 
     let message = tx.message();
-    if message.program_id != programs::bridge().id() {
+    if message.program_account_id != programs::bridge().id().into() {
         return None;
     }
 
@@ -2715,7 +2716,7 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     };
 
     let message = tx.message();
-    if message.program_id != programs::bridge().id() {
+    if message.program_account_id != programs::bridge().id().into() {
         return None;
     }
 

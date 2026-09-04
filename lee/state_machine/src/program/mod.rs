@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountWithMetadata, Cycles},
+    account::{AccountId, AccountWithMetadata, Cycles},
     from_frame,
     program::{CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_borsh_frame, to_frame,
@@ -57,7 +57,8 @@ impl Program {
 
     pub(crate) fn execute(
         &self,
-        caller_program_id: Option<ProgramId>,
+        self_account_id: AccountId,
+        caller_account_id: Option<AccountId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &InstructionData,
         cycle_budget: Cycles,
@@ -66,7 +67,8 @@ impl Program {
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(cycle_budget));
         self.write_inputs(
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             &mut env_builder,
@@ -115,7 +117,8 @@ impl Program {
     /// length-prefixed borsh frame, the form `read_lee_call` expects.
     pub fn write_inputs(
         &self,
-        caller_program_id: Option<ProgramId>,
+        self_account_id: AccountId,
+        caller_account_id: Option<AccountId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &[u8],
         env_builder: &mut ExecutorEnvBuilder,
@@ -123,8 +126,8 @@ impl Program {
         env_builder.write_slice(&to_borsh_frame(&CallKind::Execute));
 
         let input = ProgramInput {
-            self_program_id: self.id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states: pre_states.to_vec(),
             instruction: instruction_data.to_vec(),
         };
