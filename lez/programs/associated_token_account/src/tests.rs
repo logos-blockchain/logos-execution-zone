@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
-use lee_core::account::{Account, AccountId, AccountWithMetadata, Data};
+use lee_core::account::{AccountId, Data, Input};
 use token_core::{TokenDefinition, TokenHolding};
 
 const ATA_PROGRAM_ID: AccountId = AccountId::new([1u8; 32]);
@@ -22,53 +22,39 @@ fn ata_id() -> AccountId {
     )
 }
 
-fn owner_account() -> AccountWithMetadata {
-    AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: true,
-        account_id: owner_id(),
-    }
+fn owner_account() -> Input {
+    Input::balance_only(owner_id(), true, 0)
 }
 
-fn definition_account() -> AccountWithMetadata {
-    AccountWithMetadata {
-        account: Account {
-            program_owner: TOKEN_PROGRAM_ID,
-            balance: 0,
-            data: Data::from(&TokenDefinition::Fungible {
-                name: "TEST".to_string(),
-                total_supply: 1000,
-                metadata_id: None,
-            }),
-            nonce: lee_core::account::Nonce(0),
-        },
-        is_authorized: false,
-        account_id: definition_id(),
-    }
+fn definition_account() -> Input {
+    Input::named(
+        definition_id(),
+        false,
+        0,
+        TOKEN_PROGRAM_ID,
+        Data::from(&TokenDefinition::Fungible {
+            name: "TEST".to_string(),
+            total_supply: 1000,
+            metadata_id: None,
+        }),
+    )
 }
 
-fn uninitialized_ata_account() -> AccountWithMetadata {
-    AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: false,
-        account_id: ata_id(),
-    }
+fn uninitialized_ata_account() -> Input {
+    Input::named(ata_id(), false, 0, TOKEN_PROGRAM_ID, Data::empty())
 }
 
-fn initialized_ata_account() -> AccountWithMetadata {
-    AccountWithMetadata {
-        account: Account {
-            program_owner: TOKEN_PROGRAM_ID,
-            balance: 0,
-            data: Data::from(&TokenHolding::Fungible {
-                definition_id: definition_id(),
-                balance: 100,
-            }),
-            nonce: lee_core::account::Nonce(0),
-        },
-        is_authorized: false,
-        account_id: ata_id(),
-    }
+fn initialized_ata_account() -> Input {
+    Input::named(
+        ata_id(),
+        false,
+        0,
+        TOKEN_PROGRAM_ID,
+        Data::from(&TokenHolding::Fungible {
+            definition_id: definition_id(),
+            balance: 100,
+        }),
+    )
 }
 
 #[test]
@@ -78,6 +64,7 @@ fn create_emits_chained_call_for_uninitialized_ata() {
         definition_account(),
         uninitialized_ata_account(),
         ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
     );
 
     assert_eq!(post_diffs.len(), 3);
@@ -92,6 +79,7 @@ fn create_is_idempotent_for_initialized_ata() {
         definition_account(),
         initialized_ata_account(),
         ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
     );
 
     assert_eq!(post_diffs.len(), 3);
@@ -104,17 +92,20 @@ fn create_is_idempotent_for_initialized_ata() {
 #[test]
 #[should_panic(expected = "ATA account ID does not match expected derivation")]
 fn create_panics_on_wrong_ata_address() {
-    let wrong_ata = AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: false,
-        account_id: AccountId::new([0xFFu8; 32]),
-    };
+    let wrong_ata = Input::named(
+        AccountId::new([0xFFu8; 32]),
+        false,
+        0,
+        TOKEN_PROGRAM_ID,
+        Data::empty(),
+    );
 
     crate::create::create_associated_token_account(
         owner_account(),
         definition_account(),
         wrong_ata,
         ATA_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
     );
 }
 

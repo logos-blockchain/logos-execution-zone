@@ -7,6 +7,12 @@ use lee_core::{
 };
 
 /// AMM Program Instruction.
+///
+/// The Pool is this program's own record and its position names this program; every vault,
+/// user holding and the liquidity token definition are the token program's records and their
+/// positions name it. Which token program that is comes from the caller once, at
+/// [`Instruction::NewDefinition`], and is pinned in [`PoolDefinition::token_program_id`]
+/// thereafter — never taken from an account a caller supplied.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Initializes a new Pool (or re-initializes an inactive Pool).
@@ -22,7 +28,8 @@ pub enum Instruction {
     NewDefinition {
         token_a_amount: u128,
         token_b_amount: u128,
-        amm_program_id: AccountId,
+        /// The token program the Pool is denominated in, recorded in its [`PoolDefinition`].
+        token_program_id: AccountId,
     },
 
     /// Adds liquidity to the Pool.
@@ -92,6 +99,9 @@ pub enum Instruction {
 
 #[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 pub struct PoolDefinition {
+    /// The token program every vault, user holding and the liquidity definition of this Pool
+    /// lives under. Set at `NewDefinition` and read back on every later instruction.
+    pub token_program_id: AccountId,
     pub definition_token_a_id: AccountId,
     pub definition_token_b_id: AccountId,
     pub vault_a_id: AccountId,

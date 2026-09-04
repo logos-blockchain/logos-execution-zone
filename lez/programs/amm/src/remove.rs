@@ -2,29 +2,31 @@ use std::num::NonZeroU128;
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountStateDiff, ChainedCall},
+    account::{AccountId, BalanceDiff, Data, Input, Position},
+    program::{ChainedCall, ShardStateDiff},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn remove_liquidity(
-    pool: &AccountWithMetadata,
-    vault_a: &AccountWithMetadata,
-    vault_b: &AccountWithMetadata,
-    pool_definition_lp: &AccountWithMetadata,
-    user_holding_a: &AccountWithMetadata,
-    user_holding_b: &AccountWithMetadata,
-    user_holding_lp: &AccountWithMetadata,
+    pool: &Input,
+    vault_a: &Input,
+    vault_b: &Input,
+    pool_definition_lp: &Input,
+    user_holding_a: &Input,
+    user_holding_b: &Input,
+    user_holding_lp: &Input,
     remove_liquidity_amount: NonZeroU128,
     min_amount_to_remove_token_a: u128,
     min_amount_to_remove_token_b: u128,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+    self_account_id: AccountId,
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     let remove_liquidity_amount: u128 = remove_liquidity_amount.into();
 
     // 1. Fetch Pool state
-    let pool_def_data = PoolDefinition::try_from(&pool.account.data)
+    let pool_def_data = PoolDefinition::try_from(pool.shard_of(self_account_id))
         .expect("Remove liquidity: AMM Program expects a valid Pool Definition Account");
+    let token_program_id = pool_def_data.token_program_id;
 
     assert!(pool_def_data.active, "Pool is inactive");
     assert_eq!(
@@ -50,8 +52,10 @@ pub fn remove_liquidity(
     );
 
     // 2. Compute withdrawal amounts
-    let user_holding_lp_data = token_core::TokenHolding::try_from(&user_holding_lp.account.data)
-        .expect("Remove liquidity: AMM Program expects a valid Token Account for liquidity token");
+    let user_holding_lp_data = token_core::TokenHolding::try_from(
+        user_holding_lp.shard_of(token_program_id),
+    )
+    .expect("Remove liquidity: AMM Program expects a valid Token Account for liquidity token");
     let token_core::TokenHolding::Fungible {
         definition_id: _,
         balance: user_lp_balance,
@@ -102,12 +106,10 @@ pub fn remove_liquidity(
         ..pool_def_data
     };
 
-    let token_program_id: AccountId = user_holding_a.account.program_owner;
-
     // Chaincall for Token A withdraw
     let call_token_a = ChainedCall::new(
         token_program_id,
-        vec![vault_a.account_id, user_holding_a.account_id],
+        vec![Position::from(vault_a), Position::from(user_holding_a)],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_a,
         },
@@ -119,7 +121,7 @@ pub fn remove_liquidity(
     // Chaincall for Token B withdraw
     let call_token_b = ChainedCall::new(
         token_program_id,
-        vec![vault_b.account_id, user_holding_b.account_id],
+        vec![Position::from(vault_b), Position::from(user_holding_b)],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_b,
         },
@@ -131,7 +133,10 @@ pub fn remove_liquidity(
     // Chaincall for LP adjustment
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_definition_lp.account_id, user_holding_lp.account_id],
+        vec![
+            Position::from(pool_definition_lp),
+            Position::from(user_holding_lp),
+        ],
         &token_core::Instruction::Burn {
             amount_to_burn: delta_lp,
         },
@@ -141,17 +146,17 @@ pub fn remove_liquidity(
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_diffs = vec![
-        AccountStateDiff::new(
+        ShardStateDiff::new(
             pool.clone(),
             BalanceDiff::Add(0),
             Data::from(&pool_post_definition),
         ),
-        AccountStateDiff::unchanged(vault_a.clone()),
-        AccountStateDiff::unchanged(vault_b.clone()),
-        AccountStateDiff::unchanged(pool_definition_lp.clone()),
-        AccountStateDiff::unchanged(user_holding_a.clone()),
-        AccountStateDiff::unchanged(user_holding_b.clone()),
-        AccountStateDiff::unchanged(user_holding_lp.clone()),
+        ShardStateDiff::unchanged(vault_a.clone()),
+        ShardStateDiff::unchanged(vault_b.clone()),
+        ShardStateDiff::unchanged(pool_definition_lp.clone()),
+        ShardStateDiff::unchanged(user_holding_a.clone()),
+        ShardStateDiff::unchanged(user_holding_b.clone()),
+        ShardStateDiff::unchanged(user_holding_lp.clone()),
     ];
 
     (post_diffs, chained_calls)

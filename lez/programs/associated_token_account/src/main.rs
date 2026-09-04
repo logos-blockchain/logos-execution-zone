@@ -19,7 +19,7 @@ fn main() {
     };
 
     let (state_diffs, chained_calls) = match instruction {
-        Instruction::Create { ata_program_id } => {
+        Instruction::Create { token_program_id } => {
             let [owner, token_definition, ata_account] = pre_states
                 .try_into()
                 .expect("Create instruction requires exactly three accounts");
@@ -27,11 +27,12 @@ fn main() {
                 owner,
                 token_definition,
                 ata_account,
-                ata_program_id,
+                self_account_id,
+                token_program_id,
             )
         }
         Instruction::Transfer {
-            ata_program_id,
+            token_program_id,
             amount,
         } => {
             let [owner, sender_ata, recipient] = pre_states
@@ -41,12 +42,13 @@ fn main() {
                 owner,
                 sender_ata,
                 recipient,
-                ata_program_id,
+                self_account_id,
+                token_program_id,
                 amount,
             )
         }
         Instruction::Burn {
-            ata_program_id,
+            token_program_id,
             amount,
         } => {
             let [owner, holder_ata, token_definition] = pre_states
@@ -56,7 +58,8 @@ fn main() {
                 owner,
                 holder_ata,
                 token_definition,
-                ata_program_id,
+                self_account_id,
+                token_program_id,
                 amount,
             )
         }

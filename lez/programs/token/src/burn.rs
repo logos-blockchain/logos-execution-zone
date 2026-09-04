@@ -1,23 +1,24 @@
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff, Data},
-    program::AccountStateDiff,
+    account::{AccountId, BalanceDiff, Data, Input},
+    program::ShardStateDiff,
 };
 use token_core::{TokenDefinition, TokenHolding};
 
 #[must_use]
 pub fn burn(
-    definition_account: &AccountWithMetadata,
-    user_holding_account: &AccountWithMetadata,
+    definition_account: &Input,
+    user_holding_account: &Input,
+    self_account_id: AccountId,
     amount_to_burn: u128,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
         user_holding_account.is_authorized,
         "Authorization is missing"
     );
 
-    let mut definition = TokenDefinition::try_from(&definition_account.account.data)
+    let mut definition = TokenDefinition::try_from(definition_account.shard_of(self_account_id))
         .expect("Token Definition account must be valid");
-    let mut holding = TokenHolding::try_from(&user_holding_account.account.data)
+    let mut holding = TokenHolding::try_from(user_holding_account.shard_of(self_account_id))
         .expect("Token Holding account must be valid");
 
     assert_eq!(
@@ -92,13 +93,13 @@ pub fn burn(
         _ => panic!("Mismatched Token Definition and Token Holding types"),
     }
 
-    let definition_diff = AccountStateDiff::new(
+    let definition_diff = ShardStateDiff::new(
         definition_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&definition),
     );
 
-    let holding_diff = AccountStateDiff::new(
+    let holding_diff = ShardStateDiff::new(
         user_holding_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&holding),

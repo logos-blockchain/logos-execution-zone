@@ -1,24 +1,26 @@
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff, Data},
-    program::AccountStateDiff,
+    account::{AccountId, BalanceDiff, Data, Input},
+    program::ShardStateDiff,
 };
 use token_core::TokenHolding;
 
 #[must_use]
 pub fn transfer(
-    sender: &AccountWithMetadata,
-    recipient: &AccountWithMetadata,
+    sender: &Input,
+    recipient: &Input,
+    self_account_id: AccountId,
     balance_to_move: u128,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(sender.is_authorized, "Sender authorization is missing");
 
     let mut sender_holding =
-        TokenHolding::try_from(&sender.account.data).expect("Invalid sender data");
+        TokenHolding::try_from(sender.shard_of(self_account_id)).expect("Invalid sender data");
 
-    let mut recipient_holding = if recipient.account.data.is_empty() {
+    let recipient_shard = recipient.shard_of(self_account_id);
+    let mut recipient_holding = if recipient_shard.is_empty() {
         TokenHolding::zeroized_clone_from(&sender_holding)
     } else {
-        TokenHolding::try_from(&recipient.account.data).expect("Invalid recipient data")
+        TokenHolding::try_from(recipient_shard).expect("Invalid recipient data")
     };
 
     assert_eq!(
@@ -98,13 +100,13 @@ pub fn transfer(
         }
     }
 
-    let sender_diff = AccountStateDiff::new(
+    let sender_diff = ShardStateDiff::new(
         sender.clone(),
         BalanceDiff::Add(0),
         Data::from(&sender_holding),
     );
 
-    let recipient_diff = AccountStateDiff::new(
+    let recipient_diff = ShardStateDiff::new(
         recipient.clone(),
         BalanceDiff::Add(0),
         Data::from(&recipient_holding),
