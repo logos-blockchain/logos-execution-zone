@@ -560,7 +560,7 @@ mod tests {
         let segment_message = lee::public_transaction::Message::try_new_with_fees(
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
             vec![segment_id],
-            vec![lee_core::account::Nonce(0)],
+            vec![lee_core::account::Nonce(0), lee_core::account::Nonce(0)],
             program_loader_core::Instruction::WriteSegment {
                 bytecode: test_methods::EVENT_EMITTER_ELF.to_vec(),
                 next_segment: None,
@@ -580,7 +580,7 @@ mod tests {
         let header_message = lee::public_transaction::Message::try_new_with_fees(
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
             vec![header_id, segment_id],
-            vec![lee_core::account::Nonce(0)],
+            vec![lee_core::account::Nonce(0), lee_core::account::Nonce(1)],
             program_loader_core::Instruction::CreateHeader {
                 first_segment: segment_id,
                 immutable: true,
@@ -606,7 +606,7 @@ mod tests {
         let message = lee::public_transaction::Message::try_new_with_fees(
             emitter_header_account_id(),
             vec![AccountId::new([42; 32])],
-            vec![0_u128.into()],
+            vec![2_u128.into()],
             EmitterInstruction {
                 events,
                 chain: vec![],

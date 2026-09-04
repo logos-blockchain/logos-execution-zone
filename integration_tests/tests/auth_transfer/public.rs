@@ -457,11 +457,12 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let payer = &initial_pub_accounts_private_keys()[0];
     let segment_key = PrivateKey::try_new([210; 32]).unwrap();
     let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
+    let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
 
     let segment_message = public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         vec![segment_id],
-        vec![lee_core::account::Nonce(0)],
+        vec![lee_core::account::Nonce(0), payer_nonce],
         program_loader_core::Instruction::WriteSegment {
             bytecode: faucet_chain_caller.elf().to_vec(),
             next_segment: None,
@@ -485,7 +486,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let header_message = public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         vec![faucet_chain_caller_id, segment_id],
-        vec![lee_core::account::Nonce(1)],
+        vec![lee_core::account::Nonce(payer_nonce.0 + 1)],
         program_loader_core::Instruction::CreateHeader {
             first_segment: segment_id,
             immutable: true,

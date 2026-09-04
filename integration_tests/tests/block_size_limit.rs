@@ -11,6 +11,7 @@ use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::SequencerPartialConfig};
 use lee::{AccountId, PrivateKey, PublicKey};
+use lee_core::account::Nonce;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
@@ -99,11 +100,14 @@ async fn accept_transaction_within_limit() -> Result<()> {
     let payer = &initial_pub_accounts_private_keys()[0];
     let segment_key = PrivateKey::try_new([221; 32]).unwrap();
     let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
+    let payer_nonce = integration_tests::get_account(&ctx, payer.account_id)
+        .await?
+        .nonce;
 
     let message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         vec![segment_id],
-        vec![lee_core::account::Nonce(0)],
+        vec![lee_core::account::Nonce(0), payer_nonce],
         program_loader_core::Instruction::WriteSegment {
             bytecode: small_binary,
             next_segment: None,
@@ -163,32 +167,46 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     let segment_id_a = AccountId::from(&PublicKey::new_from_private_key(&segment_key_a));
     let segment_key_b = PrivateKey::try_new([223; 32]).unwrap();
     let segment_id_b = AccountId::from(&PublicKey::new_from_private_key(&segment_key_b));
+    let payer_nonce = integration_tests::get_account(&ctx, payer.account_id)
+        .await?
+        .nonce;
 
-    let build_tx = |segment_key: &PrivateKey, segment_id: AccountId, bytecode: Vec<u8>| {
-        let message = lee::public_transaction::Message::try_new_with_fees(
-            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-            vec![segment_id],
-            vec![lee_core::account::Nonce(0)],
-            program_loader_core::Instruction::WriteSegment {
-                bytecode,
-                next_segment: None,
-            },
-            common::test_utils::test_fee_declaration(payer.account_id),
-        )
-        .expect("WriteSegment instruction data should always be serializable");
-        let witness_set = lee::public_transaction::WitnessSet::for_message(
-            &message,
-            &[segment_key, &payer.pub_sign_key],
-        );
-        LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
-    };
+    let build_tx =
+        |segment_key: &PrivateKey, segment_id: AccountId, bytecode: Vec<u8>, payer_nonce: Nonce| {
+            let message = lee::public_transaction::Message::try_new_with_fees(
+                lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+                vec![segment_id],
+                vec![lee_core::account::Nonce(0), payer_nonce],
+                program_loader_core::Instruction::WriteSegment {
+                    bytecode,
+                    next_segment: None,
+                },
+                common::test_utils::test_fee_declaration(payer.account_id),
+            )
+            .expect("WriteSegment instruction data should always be serializable");
+            let witness_set = lee::public_transaction::WitnessSet::for_message(
+                &message,
+                &[segment_key, &payer.pub_sign_key],
+            );
+            LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
+        };
 
-    // Submit both segment writes back to back.
+    // Submit both segment writes back to back, before either lands.
     ctx.sequencer_client()
-        .send_transaction(build_tx(&segment_key_a, segment_id_a, filler_a.clone()))
+        .send_transaction(build_tx(
+            &segment_key_a,
+            segment_id_a,
+            filler_a.clone(),
+            payer_nonce,
+        ))
         .await?;
     ctx.sequencer_client()
-        .send_transaction(build_tx(&segment_key_b, segment_id_b, filler_b.clone()))
+        .send_transaction(build_tx(
+            &segment_key_b,
+            segment_id_b,
+            filler_b.clone(),
+            Nonce(payer_nonce.0 + 1),
+        ))
         .await?;
 
     // Wait for first block
