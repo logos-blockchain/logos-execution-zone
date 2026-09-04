@@ -392,7 +392,7 @@ fn open_with(home: &Path, filter: EventFilter) -> IndexerStore {
     IndexerStore::open_db(
         home,
         true,
-        vec![common::test_utils::claimed_producer_seed()],
+        vec![common::test_utils::producer_seed()],
         filter,
     )
     .expect("open store")
@@ -506,7 +506,7 @@ fn settled_test_block(
 #[cfg(test)]
 fn claimed_build_state() -> lee::V03State {
     testnet_initial_state::initial_state(true)
-        .with_public_accounts([common::test_utils::claimed_producer_seed()])
+        .with_public_accounts([common::test_utils::producer_seed()])
 }
 
 #[cfg(test)]
