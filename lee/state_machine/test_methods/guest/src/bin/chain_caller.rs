@@ -14,8 +14,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (balance, simple_transfer_id, num_chain_calls, pda_seed),
         },
@@ -34,7 +34,7 @@ fn main() {
     let mut chained_calls = Vec::new();
     for _i in 0..num_chain_calls {
         let new_chained_call = ChainedCall {
-            program_id: simple_transfer_id,
+            program_account_id: simple_transfer_id.into(),
             instruction_data: call_instruction_data.clone(),
             // Account order permuted here (sender before recipient).
             pre_state_ids: vec![sender_pre.account_id, recipient_pre.account_id],
@@ -44,8 +44,8 @@ fn main() {
     }
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![
             AccountStateDiff::unchanged(sender_pre),

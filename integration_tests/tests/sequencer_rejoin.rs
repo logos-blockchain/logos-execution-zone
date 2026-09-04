@@ -141,7 +141,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         &sequencer_stake_core::Instruction::Stake {
             sequencer_key: stake_key_b,
             amount: STAKE,
-            mover_program_id: programs::authenticated_transfer().id(),
+            mover_account_id: programs::authenticated_transfer().id().into(),
             mover_instruction_data,
         },
     )
@@ -195,7 +195,7 @@ async fn send_stake_tx(
     let data = Program::serialize_instruction(instruction.clone())
         .context("Failed to serialize the sequencer_stake instruction")?;
     ctx.wallet()
-        .send_pub_tx(accounts, data, programs::sequencer_stake().id())
+        .send_pub_tx(accounts, data, programs::sequencer_stake().id().into())
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit sequencer_stake transaction: {err:?}"))?;
     Ok(())

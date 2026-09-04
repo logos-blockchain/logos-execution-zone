@@ -10,7 +10,6 @@ use crate::HashType;
 pub enum LeeTransaction {
     Public(lee::PublicTransaction),
     PrivacyPreserving(lee::PrivacyPreservingTransaction),
-    ProgramDeployment(lee::ProgramDeploymentTransaction),
 }
 
 impl Serialize for LeeTransaction {
@@ -31,7 +30,6 @@ impl LeeTransaction {
         HashType(match self {
             Self::Public(tx) => tx.hash(),
             Self::PrivacyPreserving(tx) => tx.hash(),
-            Self::ProgramDeployment(tx) => tx.hash(),
         })
     }
 
@@ -40,14 +38,12 @@ impl LeeTransaction {
         match self {
             Self::Public(_) => TxKind::Public,
             Self::PrivacyPreserving(_) => TxKind::PrivacyPreserving,
-            Self::ProgramDeployment(_) => TxKind::ProgramDeployment,
         }
     }
 
     #[must_use]
     pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
         match self {
-            Self::ProgramDeployment(tx) => tx.affected_public_account_ids(),
             Self::Public(tx) => tx.affected_public_account_ids(),
             Self::PrivacyPreserving(tx) => tx.affected_public_account_ids(),
         }
@@ -71,7 +67,6 @@ impl LeeTransaction {
                     Err(TransactionMalformationError::InvalidSignature)
                 }
             }
-            Self::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx)),
         }
     }
 
@@ -108,9 +103,6 @@ impl LeeTransaction {
             Self::PrivacyPreserving(tx) => ValidatedStateDiff::from_privacy_preserving_transaction(
                 tx, state, block_id, timestamp,
             ),
-            Self::ProgramDeployment(tx) => {
-                ValidatedStateDiff::from_program_deployment_transaction(tx, state)
-            }
         }
     }
 
@@ -161,19 +153,12 @@ impl From<lee::PrivacyPreservingTransaction> for LeeTransaction {
     }
 }
 
-impl From<lee::ProgramDeploymentTransaction> for LeeTransaction {
-    fn from(value: lee::ProgramDeploymentTransaction) -> Self {
-        Self::ProgramDeployment(value)
-    }
-}
-
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub enum TxKind {
     Public,
     PrivacyPreserving,
-    ProgramDeployment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
@@ -203,7 +188,7 @@ pub struct TxEvents {
 #[must_use]
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
-        programs::clock().id(),
+        programs::clock().id().into(),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
         vec![],
         timestamp,
@@ -238,19 +223,19 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
         return false;
     }
     let message = public_tx.message();
-    if message.program_id == programs::bridge().id() {
+    if message.program_account_id == programs::bridge().id().into() {
         return matches!(
             borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data),
             Ok(bridge_core::Instruction::Deposit { .. })
         );
     }
-    if message.program_id == programs::cross_zone_inbox().id() {
+    if message.program_account_id == programs::cross_zone_inbox().id().into() {
         return matches!(
             borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data),
             Ok(cross_zone_inbox_core::Instruction::Dispatch(_))
         );
     }
-    if message.program_id == programs::ping_sender().id() {
+    if message.program_account_id == programs::ping_sender().id().into() {
         return matches!(
             borsh::from_slice::<ping_core::SenderInstruction>(&message.instruction_data),
             Ok(ping_core::SenderInstruction::Send { .. })
@@ -272,7 +257,7 @@ pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
         return false;
     };
     let message = public_tx.message();
-    if message.program_id != programs::bridge_lock().id() {
+    if message.program_account_id != programs::bridge_lock().id().into() {
         return false;
     }
     matches!(
@@ -292,7 +277,7 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
         return false;
     };
-    public_tx.message().program_id == programs::sequencer_stake().id()
+    public_tx.message().program_account_id == programs::sequencer_stake().id().into()
 }
 
 /// Returns the canonical Fee Program invocation transaction for the given block fee summary.
@@ -308,7 +293,7 @@ pub fn fee_invocation(
     let mut account_ids = system_accounts::fee_account_ids().to_vec();
     account_ids.push(producer); // this is the 4th account
     let message = lee::public_transaction::Message::try_new(
-        programs::fee().id(),
+        programs::fee().id().into(),
         account_ids,
         vec![],
         fee_core::Instruction::Distribute(summary),
@@ -362,7 +347,7 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
     // TODO: consider a stake-program like pattern where tx carries the program id & the instruction
     // itself, instead of fixing the auth transfer program here
     lee::public_transaction::Message::try_new(
-        programs::authenticated_transfer().id(),
+        programs::authenticated_transfer().id().into(),
         vec![payer, system_accounts::fee_inbox_account_id()],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
@@ -377,7 +362,7 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
 #[must_use]
 pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
     lee::public_transaction::Message::try_new(
-        programs::fee().id(),
+        programs::fee().id().into(),
         vec![system_accounts::fee_inbox_account_id(), payer],
         vec![],
         fee_core::Instruction::Refund { amount },

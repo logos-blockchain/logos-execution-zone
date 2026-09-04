@@ -835,7 +835,7 @@ impl CrossZoneVerifier {
         let LeeTransaction::Public(public_tx) = tx else {
             return None;
         };
-        if public_tx.message().program_id != programs::cross_zone_inbox().id() {
+        if public_tx.message().program_account_id != programs::cross_zone_inbox().id().into() {
             return None;
         }
         match borsh::from_slice::<InboxInstruction>(&public_tx.message().instruction_data) {
@@ -889,8 +889,8 @@ impl CrossZoneVerifier {
             ));
         };
         let message = emission_tx.message();
-        let emission =
-            extract_emission(message.program_id, &message.instruction_data).ok_or_else(|| {
+        let emission = extract_emission(message.program_account_id, &message.instruction_data)
+            .ok_or_else(|| {
                 forged(
                     msg,
                     "peer transaction at src_tx_index is not a recognized emitter".to_owned(),
@@ -916,9 +916,9 @@ impl CrossZoneVerifier {
                 src_block_id: msg.src_block_id,
                 src_block_hash: peer_block.recompute_hash().0,
                 src_tx_index: msg.src_tx_index,
-                src_program_id: message.program_id,
+                src_account_id: message.program_account_id,
             },
-            emission.target_program_id,
+            emission.target_account_id,
             &emission.target_accounts,
             emission.payload,
         ))
@@ -1416,7 +1416,7 @@ mod tests {
     use common::{HashType, test_utils::produce_dummy_block};
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
-    use lee::{PrivateKey, PublicKey};
+    use lee::{AccountId, PrivateKey, PublicKey};
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
     use ping_core::{ping_record_pda, receiver_config_account_id};
@@ -1474,7 +1474,7 @@ mod tests {
 
     /// A `ping_sender` emission addressed to `SELF_ZONE` carrying `payload`.
     fn emission(payload: &[u8]) -> LeeTransaction {
-        ping_emission(SELF_ZONE, programs::ping_receiver().id(), payload)
+        ping_emission(SELF_ZONE, programs::ping_receiver().id().into(), payload)
     }
 
     /// A peer-stream item inscribing `data` at `slot`.
@@ -1543,14 +1543,14 @@ mod tests {
     }
 
     fn dispatch_naming_block_hash(payload: &[u8], src_block_hash: [u8; 32]) -> LeeTransaction {
-        let receiver_id = programs::ping_receiver().id();
+        let receiver_id: AccountId = programs::ping_receiver().id().into();
         LeeTransaction::Public(build_dispatch_from_emission(
             &EmissionSource {
                 src_zone: PEER_ZONE,
                 src_block_id: PEER_BLOCK_ID,
                 src_block_hash,
                 src_tx_index: 0,
-                src_program_id: programs::ping_sender().id(),
+                src_account_id: programs::ping_sender().id().into(),
             },
             receiver_id,
             &[

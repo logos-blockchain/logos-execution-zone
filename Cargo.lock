@@ -4636,6 +4636,7 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-zone-sdk",
  "ping_core",
+ "program_loader_core",
  "programs",
  "serde",
  "serde_json",
@@ -4823,6 +4824,7 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
  "ping_core",
+ "program_loader_core",
  "programs",
  "sequencer_core",
  "sequencer_service",
@@ -5624,6 +5626,7 @@ dependencies = [
  "k256 0.13.4",
  "lee_core",
  "log",
+ "program_loader_core",
  "rand 0.8.6",
  "risc0-binfmt",
  "risc0-zkvm",
@@ -5640,7 +5643,6 @@ version = "0.1.0"
 dependencies = [
  "base58",
  "borsh",
- "bytemuck",
  "bytesize",
  "chacha20",
  "ml-kem",
@@ -9479,6 +9481,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "program_loader_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+ "risc0-binfmt",
+]
+
+[[package]]
 name = "programs"
 version = "0.1.0"
 dependencies = [
@@ -11090,6 +11101,7 @@ dependencies = [
  "mempool",
  "num-bigint 0.4.6",
  "ping_core",
+ "program_loader_core",
  "programs",
  "rand 0.8.6",
  "sequencer_core_metrics",
@@ -13628,6 +13640,7 @@ dependencies = [
  "lee_core",
  "log",
  "optfield",
+ "program_loader_core",
  "programs",
  "rand 0.8.6",
  "rpassword",

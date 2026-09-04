@@ -9,8 +9,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: Instruction::GenesisTransfer { amount },
         },
@@ -21,7 +21,7 @@ fn main() {
     };
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "Faucet cannot be invoked through chain calls"
     );
 
@@ -34,7 +34,7 @@ fn main() {
 
     assert_eq!(
         faucet.account_id,
-        faucet_core::compute_faucet_account_id(self_program_id),
+        faucet_core::compute_faucet_account_id(self_account_id),
         "First account must be faucet PDA"
     );
 
@@ -46,8 +46,8 @@ fn main() {
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         post_diffs,
     )

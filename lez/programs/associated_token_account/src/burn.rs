@@ -1,6 +1,6 @@
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountStateDiff, ChainedCall, ProgramId},
+    account::{AccountId, AccountWithMetadata},
+    program::{AccountStateDiff, ChainedCall},
 };
 use token_core::TokenHolding;
 
@@ -8,10 +8,10 @@ pub fn burn_from_associated_token_account(
     owner: AccountWithMetadata,
     holder_ata: AccountWithMetadata,
     token_definition: AccountWithMetadata,
-    ata_program_id: ProgramId,
+    ata_program_id: AccountId,
     amount: u128,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
-    let token_program_id: lee_core::program::ProgramId = holder_ata.account.program_owner.into();
+    let token_program_id: AccountId = holder_ata.account.program_owner;
     assert!(owner.is_authorized, "Owner authorization is missing");
     let definition_id = TokenHolding::try_from(&holder_ata.account.data)
         .expect("Holder ATA must hold a valid token")

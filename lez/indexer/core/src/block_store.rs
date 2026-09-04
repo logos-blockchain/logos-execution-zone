@@ -514,7 +514,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
-    use lee_core::program::{InstructionData, ProgramEvent, ProgramId};
+    use lee_core::program::{InstructionData, ProgramEvent};
     use storage::{DBIO as _, indexer::indexer_cells::EventFilterSegmentsCellOwned};
     use tempfile::tempdir;
     use testnet_initial_state::initial_pub_accounts_private_keys;
@@ -526,7 +526,7 @@ mod tests {
     #[derive(borsh::BorshSerialize)]
     struct EmitterInstruction {
         events: Vec<ProgramEvent>,
-        chain: Vec<(ProgramId, InstructionData)>,
+        chain: Vec<(lee_core::account::AccountId, InstructionData)>,
     }
 
     fn emitted(n: u8) -> ProgramEvent {
@@ -536,21 +536,77 @@ mod tests {
         }
     }
 
-    fn deploy_emitter_tx() -> LeeTransaction {
-        LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-            lee::program_deployment_transaction::Message::new(
-                test_methods::EVENT_EMITTER_ELF.to_vec(),
-            ),
-        ))
+    fn emitter_header_key() -> lee::PrivateKey {
+        lee::PrivateKey::try_new([201; 32]).unwrap()
+    }
+
+    fn emitter_header_account_id() -> AccountId {
+        AccountId::from(&lee::PublicKey::new_from_private_key(&emitter_header_key()))
+    }
+
+    // Deploys the emitter guest through `program_loader`: a `WriteSegment` claiming a fresh
+    // segment account, then a `CreateHeader` claiming a fresh header account that points at it.
+    // Both land in the same block, in order, so the header's `CreateHeader` sees the segment
+    // the preceding transaction just committed. Both are ordinary (non-exempt) public
+    // transactions, so each needs its own fee declaration; a funded genesis account co-signs
+    // as payer since the freshly-claimed segment/header accounts hold nothing to self-pay with.
+    fn deploy_emitter_txs() -> Vec<LeeTransaction> {
+        let payer = &initial_pub_accounts_private_keys()[0];
+        let segment_key = lee::PrivateKey::try_new([200; 32]).unwrap();
+        let segment_id = AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key));
+        let header_key = emitter_header_key();
+        let header_id = emitter_header_account_id();
+
+        let segment_message = lee::public_transaction::Message::try_new_with_fees(
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            vec![segment_id],
+            vec![lee_core::account::Nonce(0), lee_core::account::Nonce(0)],
+            program_loader_core::Instruction::WriteSegment {
+                bytecode: test_methods::EVENT_EMITTER_ELF.to_vec(),
+                next_segment: None,
+            },
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )
+        .expect("WriteSegment instruction data should always be serializable");
+        let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
+            &segment_message,
+            &[&segment_key, &payer.pub_sign_key],
+        );
+        let segment_tx = LeeTransaction::Public(lee::PublicTransaction::new(
+            segment_message,
+            segment_witness_set,
+        ));
+
+        let header_message = lee::public_transaction::Message::try_new_with_fees(
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            vec![header_id, segment_id],
+            vec![lee_core::account::Nonce(0), lee_core::account::Nonce(1)],
+            program_loader_core::Instruction::CreateHeader {
+                first_segment: segment_id,
+                immutable: true,
+            },
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )
+        .expect("CreateHeader instruction data should always be serializable");
+        let header_witness_set = lee::public_transaction::WitnessSet::for_message(
+            &header_message,
+            &[&header_key, &payer.pub_sign_key],
+        );
+        let header_tx = LeeTransaction::Public(lee::PublicTransaction::new(
+            header_message,
+            header_witness_set,
+        ));
+
+        vec![segment_tx, header_tx]
     }
 
     fn invoke_emitter_tx(events: Vec<ProgramEvent>) -> LeeTransaction {
         // create message with payer so that it's not rejected due to missing fee declaration
         let payer = &initial_pub_accounts_private_keys()[0];
         let message = lee::public_transaction::Message::try_new_with_fees(
-            test_methods::EVENT_EMITTER_ID,
+            emitter_header_account_id(),
             vec![AccountId::new([42; 32])],
-            vec![0_u128.into()],
+            vec![2_u128.into()],
             EmitterInstruction {
                 events,
                 chain: vec![],
@@ -583,7 +639,7 @@ mod tests {
             &mut build_state,
             2,
             Some(genesis.header.hash),
-            vec![deploy_emitter_tx()],
+            deploy_emitter_txs(),
         );
         assert!(matches!(
             store
@@ -739,7 +795,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .all(|event| event.program_id == test_methods::EVENT_EMITTER_ID)
+                .all(|event| event.account_id == emitter_header_account_id())
         );
         assert_eq!(events[0].event, emitted(0));
         assert_eq!(events[1].event, emitted(1));
@@ -823,7 +879,7 @@ mod tests {
     async fn declared_source_filters_at_ingest() {
         let home = tempdir().unwrap();
         let filter = EventFilter::Sources(HashMap::from([(
-            test_methods::EVENT_EMITTER_ID,
+            emitter_header_account_id(),
             SelectorFilter::Only(HashSet::from([emitted(1).selector])),
         )]));
         let store = open_with(home.as_ref(), filter);
@@ -838,10 +894,7 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].tx_hash, invoke_hash);
         assert_eq!(groups[0].events.len(), 1);
-        assert_eq!(
-            groups[0].events[0].program_id,
-            test_methods::EVENT_EMITTER_ID
-        );
+        assert_eq!(groups[0].events[0].account_id, emitter_header_account_id());
         assert_eq!(groups[0].events[0].event, emitted(1));
     }
 
@@ -979,12 +1032,12 @@ mod tests {
 
     #[tokio::test]
     async fn sources_segment_survives_reopen_regardless_of_insertion_order() {
-        let filter = |entries: Vec<(ProgramId, SelectorFilter)>| {
+        let filter = |entries: Vec<(AccountId, SelectorFilter)>| {
             EventFilter::Sources(entries.into_iter().collect())
         };
-        let a = ([1; 8], SelectorFilter::All);
+        let a = (AccountId::new([1; 32]), SelectorFilter::All);
         let b = (
-            [2; 8],
+            AccountId::new([2; 32]),
             SelectorFilter::Only(HashSet::from([[3; 8], [4; 8]])),
         );
 
@@ -1010,7 +1063,10 @@ mod tests {
             .saturating_add(1);
         drop(store);
 
-        let widened = EventFilter::Sources(HashMap::from([([1; 8], SelectorFilter::All)]));
+        let widened = EventFilter::Sources(HashMap::from([(
+            AccountId::new([1; 32]),
+            SelectorFilter::All,
+        )]));
         drop(open_with(home.as_ref(), widened));
         let reopened = open_default(home.as_ref());
 
@@ -1522,7 +1578,7 @@ mod accept_tests {
         // longer works here: it reverts-with-fee inside a valid block.
         let bogus_deposit = {
             let message = lee::public_transaction::Message::try_new(
-                programs::bridge().id(),
+                programs::bridge().id().into(),
                 vec![
                     lee::AccountId::new([1_u8; 32]),
                     lee::AccountId::new([2_u8; 32]),

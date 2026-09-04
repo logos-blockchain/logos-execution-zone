@@ -5,8 +5,8 @@ use fee_core::{
 use lee_core::{
     account::{AccountWithMetadata, BalanceDiff},
     program::{
-        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_call, respond_unsupported_call,
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
     },
 };
 
@@ -14,8 +14,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -26,18 +26,18 @@ fn main() {
     };
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "Fee program is only invoked as a top-level system transaction"
     );
 
     let (state_diffs, chained_calls) = match instruction {
-        Instruction::Distribute(summary) => distribute(self_program_id, pre_states, summary),
-        Instruction::Refund { amount } => refund(self_program_id, pre_states, amount),
+        Instruction::Distribute(summary) => distribute(self_account_id, pre_states, summary),
+        Instruction::Refund { amount } => refund(self_account_id, pre_states, amount),
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         state_diffs,
     )
@@ -48,7 +48,7 @@ fn main() {
 /// Every balance leaves a fee PDA through a chained authenticated transfer the PDA's seed
 /// authorizes; the fee program itself only rewrites its state account.
 fn distribute(
-    self_program_id: ProgramId,
+    self_account_id: lee_core::account::AccountId,
     pre_states: Vec<AccountWithMetadata>,
     summary: BlockFeeSummary,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
@@ -56,15 +56,15 @@ fn distribute(
     else {
         panic!("Distribute requires exactly 4 accounts");
     };
-    if pre_state.account_id != fee_core::compute_fee_state_account_id(self_program_id)
-        || pre_escrow.account_id != fee_core::compute_fee_escrow_account_id(self_program_id)
-        || pre_inbox.account_id != fee_core::compute_fee_inbox_account_id(self_program_id)
+    if pre_state.account_id != fee_core::compute_fee_state_account_id(self_account_id)
+        || pre_escrow.account_id != fee_core::compute_fee_escrow_account_id(self_account_id)
+        || pre_inbox.account_id != fee_core::compute_fee_inbox_account_id(self_account_id)
     {
         panic!("Invalid input accounts");
     }
-    if pre_state.account.program_owner != self_program_id.into()
-        || pre_escrow.account.program_owner != self_program_id.into()
-        || pre_inbox.account.program_owner != self_program_id.into()
+    if pre_state.account.program_owner != self_account_id
+        || pre_escrow.account.program_owner != self_account_id
+        || pre_inbox.account.program_owner != self_account_id
     {
         panic!("Fee accounts must be owned by the fee program");
     }
@@ -112,7 +112,7 @@ fn distribute(
 }
 
 fn refund(
-    self_program_id: ProgramId,
+    self_account_id: lee_core::account::AccountId,
     pre_states: Vec<AccountWithMetadata>,
     amount: u128,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
@@ -120,11 +120,11 @@ fn refund(
         panic!("Refund requires exactly 2 accounts");
     };
     assert!(
-        pre_inbox.account_id == fee_core::compute_fee_inbox_account_id(self_program_id),
+        pre_inbox.account_id == fee_core::compute_fee_inbox_account_id(self_account_id),
         "Invalid inbox account"
     );
     assert!(
-        pre_inbox.account.program_owner == self_program_id.into(),
+        pre_inbox.account.program_owner == self_account_id,
         "Inbox must be owned by the fee program"
     );
     let chained_calls = vec![custody_transfer(

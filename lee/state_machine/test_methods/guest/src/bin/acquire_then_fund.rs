@@ -1,14 +1,14 @@
 use lee_core::{
-    account::AccountWithMetadata,
+    account::{AccountId, AccountWithMetadata},
     program::{
-        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_call, respond_unsupported_call,
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
     },
 };
 
 /// The amount to fund, the program that acquires the recipient, the program that funds it, and
 /// the data the acquirer writes.
-type Instruction = (u128, ProgramId, ProgramId, Vec<u8>);
+type Instruction = (u128, AccountId, AccountId, Vec<u8>);
 
 /// Chains twice, in sequence: first to an acquirer that writes `data` into the recipient and so
 /// takes it over, then to a plain transfer that funds it from the sender.
@@ -20,8 +20,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (balance, acquirer_id, transfer_id, data),
         },
@@ -61,8 +61,8 @@ fn main() {
         .collect();
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         state_diffs,
     )

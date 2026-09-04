@@ -4,10 +4,7 @@ use std::collections::BTreeMap;
 
 pub use ed25519_dalek;
 pub use lee_core::program::PdaSeed;
-use lee_core::{
-    account::AccountId,
-    program::{InstructionData, ProgramId},
-};
+use lee_core::{account::AccountId, program::InstructionData};
 use serde::{Deserialize, Serialize};
 
 /// Approvals a `Slash` must carry. Raising it moves the program id.
@@ -79,7 +76,7 @@ pub enum Instruction {
     Stake {
         sequencer_key: SequencerKey,
         amount: u128,
-        mover_program_id: ProgramId,
+        mover_account_id: AccountId,
         mover_instruction_data: InstructionData,
     },
 
@@ -213,7 +210,7 @@ const fn slash_sink_seed() -> PdaSeed {
 }
 
 #[must_use]
-pub fn slash_sink_account_id(program_id: ProgramId) -> AccountId {
+pub fn slash_sink_account_id(program_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&program_id, &slash_sink_seed())
 }
 
@@ -224,7 +221,7 @@ pub const fn sequencer_stake_config_seed() -> PdaSeed {
 }
 
 #[must_use]
-pub fn sequencer_stake_config_account_id(program_id: ProgramId) -> AccountId {
+pub fn sequencer_stake_config_account_id(program_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&program_id, &sequencer_stake_config_seed())
 }
 
@@ -234,7 +231,7 @@ pub const fn stake_funds_seed(ownership_id: &AccountId) -> PdaSeed {
 }
 
 #[must_use]
-pub fn stake_funds_account_id(program_id: ProgramId, ownership_id: &AccountId) -> AccountId {
+pub fn stake_funds_account_id(program_id: AccountId, ownership_id: &AccountId) -> AccountId {
     AccountId::for_public_pda(&program_id, &stake_funds_seed(ownership_id))
 }
 
@@ -242,7 +239,7 @@ pub fn stake_funds_account_id(program_id: ProgramId, ownership_id: &AccountId) -
 mod tests {
     use super::*;
 
-    const PROGRAM_ID: ProgramId = [9; 8];
+    const PROGRAM_ID: AccountId = AccountId::new([9; 32]);
 
     fn test_destination() -> AccountId {
         AccountId::new([3; 32])

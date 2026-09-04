@@ -210,7 +210,7 @@ mod tests {
         let pda_ct = EncryptionScheme::encrypt(
             &account,
             &PrivateAccountKind::Pda {
-                program_id: [1_u32; 8],
+                account_id: AccountId::new([1_u8; 32]),
                 seed: PdaSeed::new([2_u8; 32]),
                 identifier: 42,
             },

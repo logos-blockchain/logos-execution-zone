@@ -1,8 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{
-    account::Nonce,
-    program::{InstructionData, ProgramId},
-};
+use lee_core::{account::Nonce, program::InstructionData};
 use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::LeeError, fees::FeeDeclaration, program::Program};
@@ -11,7 +8,7 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x0
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    pub program_id: ProgramId,
+    pub program_account_id: AccountId,
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
@@ -22,20 +19,14 @@ pub struct Message {
 impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
             fee,
         } = self;
-        let program_id_hex = hex::encode(
-            program_id
-                .iter()
-                .flat_map(|n| n.to_le_bytes())
-                .collect::<Vec<u8>>(),
-        );
         f.debug_struct("Message")
-            .field("program_id", &program_id_hex)
+            .field("program_account_id", program_account_id)
             .field("account_ids", account_ids)
             .field("nonces", nonces)
             .field("instruction_data", instruction_data)
@@ -49,7 +40,7 @@ impl Message {
     /// transactions (clock, deposits, dispatches); charged transactions use
     /// [`Self::try_new_with_fees`].
     pub fn try_new<T: BorshSerialize>(
-        program_id: ProgramId,
+        program_account_id: AccountId,
         account_ids: Vec<AccountId>,
         nonces: Vec<Nonce>,
         instruction: T,
@@ -57,7 +48,7 @@ impl Message {
         let instruction_data = Program::serialize_instruction(instruction)?;
 
         Ok(Self::new_preserialized(
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
@@ -66,7 +57,7 @@ impl Message {
     }
 
     pub fn try_new_with_fees<T: BorshSerialize>(
-        program_id: ProgramId,
+        program_account_id: AccountId,
         account_ids: Vec<AccountId>,
         nonces: Vec<Nonce>,
         instruction: T,
@@ -75,7 +66,7 @@ impl Message {
         let instruction_data = Program::serialize_instruction(instruction)?;
 
         Ok(Self::new_preserialized(
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
@@ -85,14 +76,14 @@ impl Message {
 
     #[must_use]
     pub const fn new_preserialized(
-        program_id: ProgramId,
+        program_account_id: AccountId,
         account_ids: Vec<AccountId>,
         nonces: Vec<Nonce>,
         instruction_data: InstructionData,
         fee: Option<FeeDeclaration>,
     ) -> Self {
         Self {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
@@ -133,8 +124,9 @@ mod tests {
     use super::{Message, PREFIX};
     use crate::fees::FeeDeclaration;
 
-    // program_id: [1_u32; 8], each word as LE u32.
-    const PROGRAM_ID_BYTES: &[u8] = &[
+    // program_account_id: AccountId, matching the raw bytes of the old [1_u32; 8] ProgramId
+    // (each word as LE u32) so this pinned wire layout is unchanged.
+    const PROGRAM_ACCOUNT_ID_BYTES: &[u8] = &[
         1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
         0, 0,
     ];
@@ -148,7 +140,10 @@ mod tests {
 
     fn pinned_message(instruction_data: Vec<u8>, fee: Option<FeeDeclaration>) -> Message {
         Message::new_preserialized(
-            [1_u32; 8],
+            AccountId::new([
+                1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+                1, 0, 0, 0,
+            ]),
             vec![AccountId::new([42; 32])],
             vec![Nonce(5)],
             instruction_data,
@@ -156,11 +151,11 @@ mod tests {
         )
     }
 
-    /// Pins the borsh wire order (`program_id` ++ `account_ids` ++ `nonces` ++
+    /// Pins the borsh wire order (`program_account_id` ++ `account_ids` ++ `nonces` ++
     /// `instruction_data` ++ `fee`) and the prefixed hash. Any layout change trips this.
     fn assert_hash_pinned(msg: &Message, instruction_bytes: &[u8], fee_bytes: &[u8]) {
         let expected_borsh: Vec<u8> = [
-            PROGRAM_ID_BYTES,
+            PROGRAM_ACCOUNT_ID_BYTES,
             ACCOUNT_IDS_BYTES,
             NONCES_BYTES,
             instruction_bytes,

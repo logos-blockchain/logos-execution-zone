@@ -6,8 +6,8 @@ use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{AccountWithMetadata, BalanceDiff},
     program::{
-        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_call, respond_unsupported_call,
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
     },
 };
 
@@ -19,8 +19,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -31,21 +31,21 @@ fn main() {
     };
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "Inbox is only invoked as a top-level sequencer-origin transaction"
     );
 
     match instruction {
         Instruction::Dispatch(msg) => dispatch(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             &msg,
         ),
         Instruction::InitConfig(config) => init_config(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             &config,
@@ -61,7 +61,7 @@ fn main() {
 /// reachable across zones MUST check the marker at position 0 against sources it
 /// authorized itself, the way `wrapped_token` and `ping_receiver` do. A program
 /// not meant to be reachable has only whatever its own code happens to do. Some
-/// refuse: four assert `caller_program_id` is none, several chain into the
+/// refuse: four assert `caller_account_id` is none, several chain into the
 /// marker's zero program id and are stopped by the host, and the rest are saved
 /// by an address assert on a PDA. Others no longer do — a target that used to be
 /// stopped only because it claimed the marker without its authorization now runs,
@@ -72,8 +72,8 @@ fn main() {
 /// are reachable too, and were written with no expectation of an inbox caller at
 /// all.
 fn dispatch(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: lee_core::account::AccountId,
+    caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     msg: &CrossZoneMessage,
@@ -92,12 +92,12 @@ fn dispatch(
 
     assert_eq!(
         config.account_id,
-        inbox_config_account_id(self_program_id),
+        inbox_config_account_id(self_account_id),
         "First account must be the inbox config PDA"
     );
     assert_eq!(
         seen.account_id,
-        inbox_seen_shard_account_id(self_program_id, &msg.src_zone, msg.src_block_id),
+        inbox_seen_shard_account_id(self_account_id, &msg.src_zone, msg.src_block_id),
         "Second account must be the seen-shard PDA"
     );
     // The one value the chained call carries about where the message came from.
@@ -105,7 +105,7 @@ fn dispatch(
     // here is what makes a target's own check meaningful.
     assert_eq!(
         marker.account_id,
-        inbox_source_marker_account_id(self_program_id, &msg.src_zone, msg.src_program_id),
+        inbox_source_marker_account_id(self_account_id, &msg.src_zone, msg.src_account_id),
         "Third account must be the source marker PDA for this message"
     );
 
@@ -116,7 +116,7 @@ fn dispatch(
         "Source zone must not be this zone"
     );
     // Mirrors the bridge receipt.
-    let mut shard = if seen.account.program_owner == self_program_id.into() {
+    let mut shard = if seen.account.program_owner == self_account_id {
         SeenShard::from_bytes(&seen.account.data).expect("seen shard decodes")
     } else {
         SeenShard::default()
@@ -158,7 +158,7 @@ fn dispatch(
         let mut call_accounts = vec![marker.account_id];
         call_accounts.extend(target_accounts.iter().map(|a| a.account_id));
         let call = ChainedCall {
-            program_id: msg.target_program_id,
+            program_account_id: msg.target_account_id,
             pre_state_ids: call_accounts,
             instruction_data: call_instruction_data,
             pda_seeds: vec![],
@@ -170,8 +170,8 @@ fn dispatch(
     post_diffs.extend(target_accounts.iter().map(unchanged));
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         post_diffs,
     )
@@ -181,8 +181,8 @@ fn dispatch(
 
 /// Writes the inbox config into the config PDA exactly once at genesis.
 fn init_config(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: lee_core::account::AccountId,
+    caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     config: &InboxConfig,
@@ -192,7 +192,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config_meta.account_id,
-        inbox_config_account_id(self_program_id),
+        inbox_config_account_id(self_account_id),
         "account must be the inbox config PDA"
     );
     // Init-once, idempotent under genesis replay: an empty config is a first init;
@@ -202,8 +202,7 @@ fn init_config(
     // on a later call.
     if !config_meta.account.data.is_empty() {
         assert_eq!(
-            config_meta.account.program_owner,
-            self_program_id.into(),
+            config_meta.account.program_owner, self_account_id,
             "inbox config PDA is owned by another program"
         );
         assert_eq!(
@@ -223,8 +222,8 @@ fn init_config(
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![config_post],
     )

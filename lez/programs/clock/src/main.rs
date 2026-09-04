@@ -41,8 +41,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: timestamp,
         },
@@ -65,7 +65,6 @@ fn main() {
     }
 
     // Verify all clock accounts are owned by this program (assigned at genesis).
-    let self_account_id: lee_core::account::AccountId = self_program_id.into();
     if pre_01.account.program_owner != self_account_id
         || pre_10.account.program_owner != self_account_id
         || pre_50.account.program_owner != self_account_id
@@ -90,8 +89,8 @@ fn main() {
     let diff_50 = update_if_multiple(pre_50, 50, current_block_id, &updated_data);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![diff_01, diff_10, diff_50],
     )

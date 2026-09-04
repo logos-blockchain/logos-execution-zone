@@ -21,7 +21,6 @@ typedef enum OperationStatus {
 typedef enum FfiTransactionKind {
   Public = 0,
   Private,
-  ProgramDeploy,
 } FfiTransactionKind;
 
 typedef enum FfiBedrockStatus {
@@ -299,17 +298,9 @@ typedef struct FfiPrivateTransactionBody {
   FfiProof proof;
 } FfiPrivateTransactionBody;
 
-typedef FfiVecU8 FfiProgramDeploymentMessage;
-
-typedef struct FfiProgramDeploymentTransactionBody {
-  FfiHashType hash;
-  FfiProgramDeploymentMessage message;
-} FfiProgramDeploymentTransactionBody;
-
 typedef struct FfiTransactionBody {
   struct FfiPublicTransactionBody *public_body;
   struct FfiPrivateTransactionBody *private_body;
-  struct FfiProgramDeploymentTransactionBody *program_deployment_body;
 } FfiTransactionBody;
 
 typedef struct FfiTransaction {

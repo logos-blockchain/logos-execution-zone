@@ -179,7 +179,7 @@ fn swap_logic(
     );
     assert!(withdraw_amount != 0, "Withdraw amount should be nonzero");
 
-    let token_program_id: lee_core::program::ProgramId = user_deposit.account.program_owner.into();
+    let token_program_id: AccountId = user_deposit.account.program_owner;
 
     let mut chained_calls = Vec::new();
     chained_calls.push(ChainedCall::new(
@@ -308,7 +308,7 @@ fn exact_output_swap_logic(
         "Required input exceeds maximum amount in"
     );
 
-    let token_program_id: lee_core::program::ProgramId = user_deposit.account.program_owner.into();
+    let token_program_id: AccountId = user_deposit.account.program_owner;
 
     let mut chained_calls = Vec::new();
     chained_calls.push(ChainedCall::new(

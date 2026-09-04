@@ -24,7 +24,7 @@ pub type Slots = u32;
 
 #[must_use]
 pub fn faucet_account_id() -> AccountId {
-    faucet_core::compute_faucet_account_id(programs::faucet().id())
+    faucet_core::compute_faucet_account_id(programs::faucet().id().into())
 }
 
 #[must_use]
@@ -38,7 +38,7 @@ pub fn faucet_account() -> Account {
 
 #[must_use]
 pub fn bridge_account_id() -> AccountId {
-    bridge_core::compute_bridge_account_id(programs::bridge().id())
+    bridge_core::compute_bridge_account_id(programs::bridge().id().into())
 }
 
 #[must_use]
@@ -51,17 +51,17 @@ pub fn bridge_account() -> Account {
 
 #[must_use]
 pub fn fee_state_account_id() -> AccountId {
-    fee_core::compute_fee_state_account_id(programs::fee().id())
+    fee_core::compute_fee_state_account_id(programs::fee().id().into())
 }
 
 #[must_use]
 pub fn fee_escrow_account_id() -> AccountId {
-    fee_core::compute_fee_escrow_account_id(programs::fee().id())
+    fee_core::compute_fee_escrow_account_id(programs::fee().id().into())
 }
 
 #[must_use]
 pub fn fee_inbox_account_id() -> AccountId {
-    fee_core::compute_fee_inbox_account_id(programs::fee().id())
+    fee_core::compute_fee_inbox_account_id(programs::fee().id().into())
 }
 
 /// Fee program account IDs in the order expected by the fee program.
@@ -103,12 +103,15 @@ pub const fn clock_account_ids() -> [AccountId; 3] {
 
 #[must_use]
 pub fn sequencer_stake_config_account_id() -> AccountId {
-    sequencer_stake_core::sequencer_stake_config_account_id(programs::sequencer_stake().id())
+    sequencer_stake_core::sequencer_stake_config_account_id(programs::sequencer_stake().id().into())
 }
 
 #[must_use]
 pub fn stake_funds_account_id(ownership_id: &AccountId) -> AccountId {
-    sequencer_stake_core::stake_funds_account_id(programs::sequencer_stake().id(), ownership_id)
+    sequencer_stake_core::stake_funds_account_id(
+        programs::sequencer_stake().id().into(),
+        ownership_id,
+    )
 }
 
 /// Starts with no entries; every stake, including the bootstrap sequencer's

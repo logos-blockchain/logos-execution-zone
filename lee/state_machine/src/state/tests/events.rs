@@ -22,13 +22,17 @@ impl ExampleEvent {
 }
 
 fn program_transaction<T: borsh::BorshSerialize>(
-    program_id: ProgramId,
+    program_account_id: AccountId,
     account_id: AccountId,
     instruction: T,
 ) -> PublicTransaction {
-    let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], instruction)
-            .expect("test instruction must serialize");
+    let message = public_transaction::Message::try_new(
+        program_account_id,
+        vec![account_id],
+        vec![],
+        instruction,
+    )
+    .expect("test instruction must serialize");
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     PublicTransaction::new(message, witness_set)
 }
@@ -51,7 +55,7 @@ fn emitted(n: u8) -> ProgramEvent {
 fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
-    let emitter_id = crate::test_methods::event_emitter().id();
+    let emitter_id = crate::test_methods::event_emitter().id().into();
 
     let tx = program_transaction(
         emitter_id,
@@ -72,14 +76,14 @@ fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
             .collect::<Vec<_>>(),
         vec![[0; 8], [1; 8]]
     );
-    assert!(events.iter().all(|event| event.program_id == emitter_id));
+    assert!(events.iter().all(|event| event.account_id == emitter_id));
 }
 
 #[test]
 fn chained_events_follow_depth_first_pre_order() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
-    let emitter_id = crate::test_methods::event_emitter().id();
+    let emitter_id = crate::test_methods::event_emitter().id().into();
 
     let grandchild = Program::serialize_instruction(EmitterInstruction {
         events: vec![emitted(2)],
@@ -122,8 +126,10 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     let emitter = crate::test_methods::event_emitter();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0; 32]));
-    let receiver_id = AccountId::for_public_pda(&emitter.id(), &PdaSeed::new([1; 32]));
+    let vault_id =
+        AccountId::for_public_pda(&AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
+    let receiver_id =
+        AccountId::for_public_pda(&AccountId::from(emitter.id()), &PdaSeed::new([1; 32]));
 
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(
@@ -152,8 +158,8 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     })
     .unwrap();
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id(),
-        callback_program_id: emitter.id(),
+        token_program_id: token.id().into(),
+        callback_program_id: emitter.id().into(),
         amount_out: 0,
         callback_instruction_data,
     };
@@ -162,9 +168,9 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     assert_eq!(payloads(&events), vec![vec![0; 4]]);
-    assert_eq!(events[0].program_id, emitter.id());
-    assert_ne!(events[0].program_id, initiator.id());
-    assert_ne!(events[0].program_id, token.id());
+    assert_eq!(events[0].account_id, emitter.id().into());
+    assert_ne!(events[0].account_id, initiator.id().into());
+    assert_ne!(events[0].account_id, token.id().into());
 }
 
 #[test]
@@ -172,7 +178,7 @@ fn program_that_emits_nothing_yields_no_events() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
 
-    let tx = program_transaction(crate::test_methods::noop().id(), account_id, ());
+    let tx = program_transaction(crate::test_methods::noop().id().into(), account_id, ());
 
     let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
@@ -182,7 +188,7 @@ fn program_that_emits_nothing_yields_no_events() {
 #[test]
 fn emitted_events_leave_state_untouched() {
     let account_id = AccountId::new([1; 32]);
-    let emitter_id = crate::test_methods::event_emitter().id();
+    let emitter_id = crate::test_methods::event_emitter().id().into();
 
     let run = |events: Vec<ProgramEvent>| {
         let mut state = V03State::new().with_test_programs();
@@ -221,7 +227,7 @@ fn example_event_selector_matches_its_derivation() {
 fn events_are_filterable_by_selector_and_decodable() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
-    let emitter_id = crate::test_methods::event_emitter().id();
+    let emitter_id = crate::test_methods::event_emitter().id().into();
 
     let example = ExampleEvent {
         account: AccountId::new([7; 32]),
@@ -250,7 +256,7 @@ fn events_are_filterable_by_selector_and_decodable() {
         .filter(|event| event.event.selector == ExampleEvent::SELECTOR)
         .collect();
     assert_eq!(matched.len(), 1);
-    assert_eq!(matched[0].program_id, emitter_id);
+    assert_eq!(matched[0].account_id, emitter_id);
     assert_eq!(ExampleEvent::from_bytes(&matched[0].event.data), example);
 
     let unmatched = events
@@ -286,7 +292,7 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &emitter.into(),
+        &emitter.clone().into(),
     )
     .expect("emitting guest must prove on the private path");
 
@@ -297,6 +303,7 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
     let mut state = V03State::new();
+    register_program(&mut state, &emitter);
 
     state
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)

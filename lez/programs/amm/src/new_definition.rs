@@ -5,8 +5,8 @@ use amm_core::{
     compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
 };
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountStateDiff, ChainedCall, ProgramId},
+    account::{AccountId, AccountWithMetadata, BalanceDiff, Data},
+    program::{AccountStateDiff, ChainedCall},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -21,7 +21,7 @@ pub fn new_definition(
     user_holding_lp: &AccountWithMetadata,
     token_a_amount: NonZeroU128,
     token_b_amount: NonZeroU128,
-    amm_program_id: ProgramId,
+    amm_program_id: AccountId,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     // Verify token_a and token_b are different
     let definition_token_a_id = token_core::TokenHolding::try_from(&user_holding_a.account.data)
@@ -115,8 +115,7 @@ pub fn new_definition(
         Data::from(&pool_post_definition),
     );
 
-    let token_program_id: lee_core::program::ProgramId =
-        user_holding_a.account.program_owner.into();
+    let token_program_id: AccountId = user_holding_a.account.program_owner;
 
     // Chain call for Token A (user_holding_a -> Vault_A)
     let vault_a_seed = compute_vault_pda_seed(pool.account_id, definition_token_a_id);

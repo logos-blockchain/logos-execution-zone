@@ -27,7 +27,7 @@ fn public_chained_call() {
     };
 
     let message = public_transaction::Message::try_new(
-        program.id(),
+        program.id().into(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![Nonce(0)],
@@ -67,7 +67,7 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
     );
 
     let message = public_transaction::Message::try_new(
-        program.id(),
+        program.id().into(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![Nonce(0)],
@@ -88,7 +88,7 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
 fn execution_that_requires_authentication_of_a_program_derived_account_id_succeeds() {
     let chain_caller = crate::test_methods::chain_caller();
     let pda_seed = PdaSeed::new([37; 32]);
-    let from = AccountId::for_public_pda(&chain_caller.id(), &pda_seed);
+    let from = AccountId::for_public_pda(&AccountId::from(chain_caller.id()), &pda_seed);
     let to = AccountId::new([2; 32]);
     let initial_balance = 1000;
     let initial_data = [(from, initial_balance), (to, 0)];
@@ -109,7 +109,7 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
         ..Account::default()
     };
     let message = public_transaction::Message::try_new(
-        chain_caller.id(),
+        chain_caller.id().into(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![],
@@ -161,7 +161,7 @@ fn credit_within_chain_call_leaves_the_recipient_unowned() {
         None,
     );
     let message = public_transaction::Message::try_new(
-        chain_caller.id(),
+        chain_caller.id().into(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![Nonce(0), Nonce(0)],
@@ -229,8 +229,9 @@ fn private_chained_call(number_of_calls: u32) {
 
     let mut dependencies = HashMap::new();
 
-    dependencies.insert(simple_transfers.id(), simple_transfers);
-    let program_with_deps = ProgramWithDependencies::new(chain_caller, dependencies);
+    dependencies.insert(simple_transfers.id().into(), simple_transfers);
+    let program_with_deps =
+        ProgramWithDependencies::new(chain_caller.clone(), chain_caller.id().into(), dependencies);
 
     let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk());
     let to_new_nonce = Nonce::default().private_account_nonce_increment(&to_keys.nsk());

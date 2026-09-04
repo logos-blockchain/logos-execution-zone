@@ -3,12 +3,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput,
+    PrivacyPreservingCircuitOutput, ProgramImageClaim,
     account::{Account, AccountId, AccountWithMetadata},
     from_frame,
     program::{
-        ChainedCall, InstructionData, ProgramId, ProgramOutput, compute_public_authorized_pdas,
-        post_state,
+        ChainedCall, InstructionData, ProgramOutput, compute_public_authorized_pdas, post_state,
     },
     to_frame,
 };
@@ -48,23 +47,39 @@ impl Proof {
 #[derive(Clone)]
 pub struct ProgramWithDependencies {
     pub program: Program,
+    /// Where `program` is actually deployed — never assumed to be its bytecode's bijection
+    /// address, since the same bytecode may be deployed more than once at different addresses.
+    pub self_account_id: AccountId,
     // TODO: avoid having a copy of the bytecode of each dependency.
-    pub dependencies: HashMap<ProgramId, Program>,
+    /// Every program a chained call may target, keyed by the account address it's deployed at —
+    /// never its bytecode identity, for the same reason. The caller building this off-chain
+    /// (e.g. the wallet) already knows which program lives where; there's no live state to look
+    /// it up against inside a pure proving function.
+    pub dependencies: HashMap<AccountId, Program>,
 }
 
 impl ProgramWithDependencies {
     #[must_use]
-    pub const fn new(program: Program, dependencies: HashMap<ProgramId, Program>) -> Self {
+    pub const fn new(
+        program: Program,
+        self_account_id: AccountId,
+        dependencies: HashMap<AccountId, Program>,
+    ) -> Self {
         Self {
             program,
+            self_account_id,
             dependencies,
         }
     }
 }
 
 impl From<Program> for ProgramWithDependencies {
+    /// Assumes `program` lives at its bijection address — the common case (genesis-seeded
+    /// builtins, or anything not yet moved by `program_loader`). Use [`Self::new`] directly for a
+    /// program deployed elsewhere.
     fn from(program: Program) -> Self {
-        Self::new(program, HashMap::new())
+        let self_account_id = AccountId::from(program.id());
+        Self::new(program, self_account_id, HashMap::new())
     }
 }
 
@@ -100,6 +115,7 @@ pub fn execute_and_prove_with_padded_inputs(
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProgramWithDependencies {
         program: initial_program,
+        self_account_id: initial_account_id,
         dependencies,
     } = program_with_dependencies;
     let mut env_builder = ExecutorEnv::builder();
@@ -132,7 +148,7 @@ pub fn execute_and_prove_with_padded_inputs(
     let mut next_position: usize = 0;
 
     let initial_call = ChainedCall {
-        program_id: initial_program.id(),
+        program_account_id: *initial_account_id,
         instruction_data,
         pre_state_ids,
         pda_seeds: vec![],
@@ -141,7 +157,7 @@ pub fn execute_and_prove_with_padded_inputs(
     let mut chained_calls =
         VecDeque::from_iter([(initial_call, initial_program, None, HashSet::new())]);
     let mut chain_calls_counter = 0;
-    while let Some((chained_call, program, caller_program_id, caller_authorized_accounts)) =
+    while let Some((chained_call, program, caller_account_id, caller_authorized_accounts)) =
         chained_calls.pop_front()
     {
         if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
@@ -152,9 +168,9 @@ pub fn execute_and_prove_with_padded_inputs(
         // the top), used only to build this callee's input. The top-level call's pre_states
         // came straight from the caller, not a `ChainedCall`, and are used as-is.
         let authorized_pdas =
-            compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
+            compute_public_authorized_pdas(caller_account_id, &chained_call.pda_seeds);
 
-        let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_id) = caller_program_id {
+        let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_id) = caller_account_id {
             let mut resolved = Vec::with_capacity(chained_call.pre_state_ids.len());
             for account_id in &chained_call.pre_state_ids {
                 let account = materialized_state.get(account_id).cloned().ok_or(
@@ -199,7 +215,8 @@ pub fn execute_and_prove_with_padded_inputs(
 
         let inner_receipt = execute_and_prove_program(
             program,
-            caller_program_id,
+            chained_call.program_account_id,
+            caller_account_id,
             &real_pre_states,
             &chained_call.instruction_data,
         )?;
@@ -236,7 +253,7 @@ pub fn execute_and_prove_with_padded_inputs(
                 .get(position)
                 .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
             let pda_match = authorized_pdas.contains(&account_id)
-                || caller_program_id.is_some_and(|caller_id| {
+                || caller_account_id.is_some_and(|caller_id| {
                     private_pda_witness.is_some_and(|(npk, vpk, identifier)| {
                         chained_call.pda_seeds.iter().any(|seed| {
                             AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
@@ -247,7 +264,7 @@ pub fn execute_and_prove_with_padded_inputs(
 
             // A data write to an unowned account acquires it; the guest doesn't write this into
             // its own post_state, the circuit does it afterward, so predict it here too.
-            let post = post_state(diff, chained_call.program_id)
+            let post = post_state(diff, chained_call.program_account_id)
                 .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
             materialized_state.insert(account_id, post);
             if pre.is_authorized {
@@ -269,15 +286,15 @@ pub fn execute_and_prove_with_padded_inputs(
         env_builder.add_assumption(inner_receipt);
 
         for new_call in program_output.chained_calls.into_iter().rev() {
-            let next_program = dependencies.get(&new_call.program_id).ok_or(
+            let next_program = dependencies.get(&new_call.program_account_id).ok_or(
                 InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                    program_id: new_call.program_id,
+                    program_account_id: new_call.program_account_id,
                 },
             )?;
             chained_calls.push_front((
                 new_call,
                 next_program,
-                Some(chained_call.program_id),
+                Some(chained_call.program_account_id),
                 authorized_output_accounts.clone(),
             ));
         }
@@ -287,12 +304,30 @@ pub fn execute_and_prove_with_padded_inputs(
             .expect("we check the max depth at the beginning of the loop");
     }
 
+    // Every address-deployed program actually invoked, claimed against its real bytecode
+    // identity — the guest circuit uses these for `env::verify`, unchecked; the sequencer
+    // verifies each one against real chain state before accepting the proof (see
+    // `ProgramImageClaim`'s doc comment).
+    let program_image_claims: Vec<ProgramImageClaim> =
+        std::iter::once((*initial_account_id, initial_program.id()))
+            .chain(
+                dependencies
+                    .iter()
+                    .map(|(account_id, program)| (*account_id, program.id())),
+            )
+            .map(|(account_id, image_id)| ProgramImageClaim {
+                account_id,
+                image_id,
+            })
+            .collect();
+
     let circuit_input = PrivacyPreservingCircuitInput {
         program_outputs,
         account_identities,
-        program_id: program_with_dependencies.program.id(),
+        program_account_id: *initial_account_id,
         dummy_inputs,
         initial_pre_states,
+        program_image_claims,
     };
 
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;
@@ -320,14 +355,16 @@ pub fn execute_and_prove_with_padded_inputs(
 
 fn execute_and_prove_program(
     program: &Program,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: &[AccountWithMetadata],
     instruction_data: &InstructionData,
 ) -> Result<Receipt, LeeError> {
     // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
     program.write_inputs(
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         pre_states,
         instruction_data,
         &mut env_builder,

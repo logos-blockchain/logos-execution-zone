@@ -2,7 +2,7 @@ use std::num::NonZeroU128;
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff, Data},
+    account::{AccountId, AccountWithMetadata, BalanceDiff, Data},
     program::{AccountStateDiff, ChainedCall},
 };
 
@@ -102,8 +102,7 @@ pub fn remove_liquidity(
         ..pool_def_data
     };
 
-    let token_program_id: lee_core::program::ProgramId =
-        user_holding_a.account.program_owner.into();
+    let token_program_id: AccountId = user_holding_a.account.program_owner;
 
     // Chaincall for Token A withdraw
     let call_token_a = ChainedCall::new(

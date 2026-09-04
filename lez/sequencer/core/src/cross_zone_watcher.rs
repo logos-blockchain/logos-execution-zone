@@ -647,7 +647,9 @@ async fn record_block_deliveries<S: StorageActorTrait>(
             continue;
         };
         let message = public_tx.message();
-        let Some(emission) = extract_emission(message.program_id, &message.instruction_data) else {
+        let Some(emission) =
+            extract_emission(message.program_account_id, &message.instruction_data)
+        else {
             continue;
         };
 
@@ -660,7 +662,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
         // lettered. Kept host-side only, never in `extract_emission` or the
         // verifier's re-derivation, where a check that depends on this build would
         // make the two disagree and halt ingestion.
-        if is_sequencer_only_program(emission.target_program_id) {
+        if is_sequencer_only_program(emission.target_account_id) {
             warn!(
                 "Watcher dropping message from peer {}: a peer may not dispatch into a sequencer-only program",
                 hex::encode(peer_zone)
@@ -675,9 +677,9 @@ async fn record_block_deliveries<S: StorageActorTrait>(
                 src_block_id: block.header.block_id,
                 src_block_hash: block_hash.0,
                 src_tx_index,
-                src_program_id: message.program_id,
+                src_account_id: message.program_account_id,
             },
-            emission.target_program_id,
+            emission.target_account_id,
             &emission.target_accounts,
             emission.payload,
         );
@@ -824,11 +826,11 @@ mod tests {
 
     /// A `ping_sender` emission addressed to `SELF_ZONE`.
     fn emission() -> LeeTransaction {
-        emission_to(programs::ping_receiver().id())
+        emission_to(programs::ping_receiver().id().into())
     }
 
     /// A `ping_sender` emission aimed at `target_program_id`.
-    fn emission_to(target_program_id: lee_core::program::ProgramId) -> LeeTransaction {
+    fn emission_to(target_program_id: lee_core::account::AccountId) -> LeeTransaction {
         ping_emission(SELF_ZONE, target_program_id, b"hi")
     }
 
@@ -861,7 +863,7 @@ mod tests {
 
     /// A block continuing the peer's chain at `block_id`, whose one emission
     /// targets `target_program_id`.
-    fn chain_block_to(block_id: u64, target_program_id: lee_core::program::ProgramId) -> Block {
+    fn chain_block_to(block_id: u64, target_program_id: lee_core::account::AccountId) -> Block {
         let prefix = chain_to(block_id.saturating_sub(1));
         produce_dummy_block(
             block_id,
@@ -884,7 +886,7 @@ mod tests {
     fn peer_block_msg_to(
         block_id: u64,
         slot: u64,
-        target_program_id: lee_core::program::ProgramId,
+        target_program_id: lee_core::account::AccountId,
     ) -> (ZoneMessage, Slot) {
         block_msg(&chain_block_to(block_id, target_program_id), slot)
     }
@@ -1080,7 +1082,7 @@ mod tests {
             stream::iter(vec![peer_block_msg_to(
                 1,
                 0,
-                programs::cross_zone_inbox().id(),
+                programs::cross_zone_inbox().id().into(),
             )]),
             &peer_context(),
             &storage_ref,
@@ -1119,7 +1121,7 @@ mod tests {
             stream::iter(vec![peer_block_msg_to(
                 1,
                 0,
-                programs::wrapped_token().id(),
+                programs::wrapped_token().id().into(),
             )]),
             &peer_context(),
             &storage_ref,

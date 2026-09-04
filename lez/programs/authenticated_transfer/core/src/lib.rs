@@ -32,7 +32,7 @@ pub fn custody_transfer(
     amount: u128,
 ) -> ChainedCall {
     ChainedCall::new(
-        AUTHENTICATED_TRANSFER_IMAGE_ID,
+        AUTHENTICATED_TRANSFER_IMAGE_ID.into(),
         vec![from, to],
         &Instruction::Transfer { amount },
     )

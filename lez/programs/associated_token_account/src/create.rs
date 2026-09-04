@@ -1,17 +1,16 @@
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountStateDiff, ChainedCall, ProgramId},
+    account::{AccountId, AccountWithMetadata},
+    program::{AccountStateDiff, ChainedCall},
 };
 
 pub fn create_associated_token_account(
     owner: AccountWithMetadata,
     token_definition: AccountWithMetadata,
     ata_account: AccountWithMetadata,
-    ata_program_id: ProgramId,
+    ata_program_id: AccountId,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     // No authorization check needed: create is idempotent, so anyone can call it safely.
-    let token_program_id: lee_core::program::ProgramId =
-        token_definition.account.program_owner.into();
+    let token_program_id: AccountId = token_definition.account.program_owner;
     let ata_seed = associated_token_account_core::verify_ata_and_get_seed(
         &ata_account,
         &owner,

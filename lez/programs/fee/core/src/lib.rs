@@ -3,7 +3,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Balance, Gas},
-    program::{PdaSeed, ProgramId},
+    program::PdaSeed,
 };
 
 pub mod assess;
@@ -57,19 +57,19 @@ pub const fn fee_inbox_seed() -> PdaSeed {
 
 /// The fee-state account: base fees, payout window, and carry live in its `data`.
 #[must_use]
-pub fn compute_fee_state_account_id(fee_program_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&fee_program_id, &fee_state_seed())
+pub fn compute_fee_state_account_id(fee_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&fee_account_id, &fee_state_seed())
 }
 
 /// The escrow account: its balance is the fee payout escrow.
 #[must_use]
-pub fn compute_fee_escrow_account_id(fee_program_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&fee_program_id, &fee_escrow_seed())
+pub fn compute_fee_escrow_account_id(fee_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&fee_account_id, &fee_escrow_seed())
 }
 
 /// The inbox account: per-block fee collection point, zero outside the fee
 /// invocation.
 #[must_use]
-pub fn compute_fee_inbox_account_id(fee_program_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&fee_program_id, &fee_inbox_seed())
+pub fn compute_fee_inbox_account_id(fee_account_id: AccountId) -> AccountId {
+    AccountId::for_public_pda(&fee_account_id, &fee_inbox_seed())
 }

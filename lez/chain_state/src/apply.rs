@@ -354,15 +354,12 @@ pub fn settle_transaction(
                 }
             })?;
 
-            // Private and deployment transactions never legitimately touch the
-            // bridge, so any bridge diff from one is a drain attempt. Deposits
-            // legitimately debit the bridge, so they stay unguarded here — a
-            // forged empty-witness deposit still slips through by shape, which
-            // only L1 deposit verification can close (#809).
-            if matches!(
-                transaction,
-                LeeTransaction::PrivacyPreserving(_) | LeeTransaction::ProgramDeployment(_)
-            ) {
+            // Private transactions never legitimately touch the bridge, so any
+            // bridge diff from one is a drain attempt. Deposits legitimately
+            // debit the bridge, so they stay unguarded here — a forged
+            // empty-witness deposit still slips through by shape, which only
+            // L1 deposit verification can close (#809).
+            if matches!(transaction, LeeTransaction::PrivacyPreserving(_)) {
                 validate_bridge_account_modification(state, &diff, false).map_err(|err| {
                     BlockIngestError::RestrictedAccountModification {
                         tx_index,
@@ -431,7 +428,7 @@ fn settle_charged_transaction(
     let reserve_msg = fee_reserve_invocation(payer, reserved);
     let payer_authorized = HashSet::from([payer]);
     let reserve_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
-        reserve_msg.program_id,
+        reserve_msg.program_account_id,
         &reserve_msg.account_ids,
         &reserve_msg.instruction_data,
         &payer_authorized,
@@ -498,7 +495,7 @@ fn settle_charged_transaction(
     if refund > 0 {
         let refund_msg = fee_refund_invocation(payer, refund);
         let refund_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
-            refund_msg.program_id,
+            refund_msg.program_account_id,
             &refund_msg.account_ids,
             &refund_msg.instruction_data,
             &HashSet::new(),
@@ -828,7 +825,7 @@ mod tests {
         // inbox, which the apply-path guard must reject.
         let fee_program_id = fee_invocation(BlockFeeSummary::default(), attacker)
             .message()
-            .program_id;
+            .program_account_id;
         let message = lee::public_transaction::Message::try_new_with_fees(
             fee_program_id,
             vec![system_accounts::fee_inbox_account_id(), attacker],

@@ -2,15 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use common::transaction::TxEvents;
-use lee_core::{
-    BlockId,
-    program::{ProgramId, TransactionEvent},
-};
+use lee_core::{BlockId, account::AccountId, program::TransactionEvent};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum EventFilter {
     Archival,
-    Sources(HashMap<ProgramId, SelectorFilter>),
+    Sources(HashMap<AccountId, SelectorFilter>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -29,7 +26,7 @@ impl EventFilter {
     fn keeps(&self, event: &TransactionEvent) -> bool {
         match self {
             Self::Archival => true,
-            Self::Sources(sources) => match sources.get(&event.program_id) {
+            Self::Sources(sources) => match sources.get(&event.account_id) {
                 None => false,
                 Some(SelectorFilter::All) => true,
                 Some(SelectorFilter::Only(selectors)) => selectors.contains(&event.event.selector),
@@ -45,7 +42,7 @@ impl EventFilter {
     /// Whether every event in the requested `(program, selector)` domain is stored
     /// under this filter; `None` widens the dimension to "all".
     #[must_use]
-    pub fn covers(&self, program_id: Option<ProgramId>, selector: Option<[u8; 8]>) -> bool {
+    pub fn covers(&self, program_id: Option<AccountId>, selector: Option<[u8; 8]>) -> bool {
         match self {
             Self::Archival => true,
             Self::Sources(sources) => {
@@ -88,7 +85,7 @@ pub fn covered_over_range(
     segments: &[(EventFilter, BlockId)],
     from: BlockId,
     to: BlockId,
-    program_id: Option<ProgramId>,
+    program_id: Option<AccountId>,
     selector: Option<[u8; 8]>,
 ) -> bool {
     if to < from {
@@ -115,14 +112,14 @@ mod tests {
 
     use super::*;
 
-    const PROGRAM_A: ProgramId = [1; 8];
-    const PROGRAM_B: ProgramId = [2; 8];
+    const PROGRAM_A: AccountId = AccountId::new([1; 32]);
+    const PROGRAM_B: AccountId = AccountId::new([2; 32]);
     const SELECTOR_X: [u8; 8] = [1; 8];
     const SELECTOR_Y: [u8; 8] = [2; 8];
 
-    fn event(program_id: ProgramId, selector: [u8; 8]) -> TransactionEvent {
+    fn event(account_id: AccountId, selector: [u8; 8]) -> TransactionEvent {
         TransactionEvent {
-            program_id,
+            account_id,
             event: ProgramEvent {
                 selector,
                 data: selector.to_vec(),
@@ -138,7 +135,7 @@ mod tests {
         }
     }
 
-    fn sources(entries: Vec<(ProgramId, SelectorFilter)>) -> EventFilter {
+    fn sources(entries: Vec<(AccountId, SelectorFilter)>) -> EventFilter {
         EventFilter::Sources(entries.into_iter().collect())
     }
 

@@ -106,11 +106,12 @@ fn prove_chain_caller(
     num_chain_calls: u32,
 ) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
     let chain_caller = test_programs::chain_caller();
+    let chain_caller_id = chain_caller.id();
     let auth_transfer = programs::authenticated_transfer();
     let auth_transfer_id = auth_transfer.id();
     let mut deps = HashMap::new();
-    deps.insert(auth_transfer.id(), auth_transfer);
-    let pwd = ProgramWithDependencies::new(chain_caller, deps);
+    deps.insert(auth_transfer.id().into(), auth_transfer);
+    let pwd = ProgramWithDependencies::new(chain_caller, chain_caller_id.into(), deps);
 
     // Both accounts are seeded owned by auth_transfer.
     let recipient_pre = AccountWithMetadata {

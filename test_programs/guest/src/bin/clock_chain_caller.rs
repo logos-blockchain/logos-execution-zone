@@ -16,8 +16,8 @@ fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (clock_program_id, timestamp),
         },
@@ -33,15 +33,15 @@ fn main() {
         .collect();
 
     let chained_call = ChainedCall {
-        program_id: clock_program_id,
+        program_account_id: clock_program_id.into(),
         instruction_data: to_vec(&timestamp).unwrap(),
         pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
         pda_seeds: vec![],
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         state_diffs,
     )

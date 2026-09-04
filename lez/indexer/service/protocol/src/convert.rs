@@ -7,9 +7,8 @@ use crate::{
     Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData,
     EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState,
     Nullifier, PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    PrivateAction, ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, Proof,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, Signature,
-    StallReason, Transaction, ValidityWindow, WitnessSet,
+    PrivateAction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
+    PublicTransaction, Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -275,14 +274,14 @@ impl From<FeeDeclaration> for lee::FeeDeclaration {
 impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::public_transaction::Message {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
             fee,
         } = value;
         Self {
-            program_id: program_id.into(),
+            program_id: ProgramId(program_account_id.into()),
             account_ids: account_ids.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
@@ -301,7 +300,7 @@ impl From<PublicMessage> for lee::public_transaction::Message {
             fee,
         } = value;
         Self::new_preserialized(
-            program_id.into(),
+            lee::AccountId::from(program_id.0),
             account_ids.into_iter().map(Into::into).collect(),
             nonces
                 .iter()
@@ -341,6 +340,10 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            // Not yet part of this wire protocol; see the `program_image_claims` field doc on
+            // `lee::privacy_preserving_transaction::message::Message`. FFI/wallet plumbing for
+            // address-flexible program dispatch is tracked separately.
+            program_image_claims: _,
         } = value;
         Self {
             public_actions: public_actions.into_iter().map(Into::into).collect(),
@@ -410,22 +413,11 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             timestamp_validity_window: timestamp_validity_window
                 .try_into()
                 .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+            // Not yet part of this wire protocol; see the corresponding destructure above.
+            // A privacy-preserving tx submitted through this protocol will fail proof
+            // verification for any program not at its bijection address until this is wired.
+            program_image_claims: Vec::new(),
         })
-    }
-}
-
-impl From<lee::program_deployment_transaction::Message> for ProgramDeploymentMessage {
-    fn from(value: lee::program_deployment_transaction::Message) -> Self {
-        Self {
-            bytecode: value.into_bytecode(),
-        }
-    }
-}
-
-impl From<ProgramDeploymentMessage> for lee::program_deployment_transaction::Message {
-    fn from(value: ProgramDeploymentMessage) -> Self {
-        let ProgramDeploymentMessage { bytecode } = value;
-        Self::new(bytecode)
     }
 }
 
@@ -557,34 +549,12 @@ impl TryFrom<PrivacyPreservingTransaction> for lee::PrivacyPreservingTransaction
     }
 }
 
-impl From<lee::ProgramDeploymentTransaction> for ProgramDeploymentTransaction {
-    fn from(value: lee::ProgramDeploymentTransaction) -> Self {
-        let hash = HashType(value.hash());
-        let lee::ProgramDeploymentTransaction { message } = value;
-
-        Self {
-            hash,
-            message: message.into(),
-        }
-    }
-}
-
-impl From<ProgramDeploymentTransaction> for lee::ProgramDeploymentTransaction {
-    fn from(value: ProgramDeploymentTransaction) -> Self {
-        let ProgramDeploymentTransaction { hash: _, message } = value;
-        Self::new(message.into())
-    }
-}
-
 impl From<common::transaction::LeeTransaction> for Transaction {
     fn from(value: common::transaction::LeeTransaction) -> Self {
         match value {
             common::transaction::LeeTransaction::Public(tx) => Self::Public(tx.into()),
             common::transaction::LeeTransaction::PrivacyPreserving(tx) => {
                 Self::PrivacyPreserving(tx.into())
-            }
-            common::transaction::LeeTransaction::ProgramDeployment(tx) => {
-                Self::ProgramDeployment(tx.into())
             }
         }
     }
@@ -597,7 +567,6 @@ impl TryFrom<Transaction> for common::transaction::LeeTransaction {
         match value {
             Transaction::Public(tx) => Ok(Self::Public(tx.try_into()?)),
             Transaction::PrivacyPreserving(tx) => Ok(Self::PrivacyPreserving(tx.try_into()?)),
-            Transaction::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx.into())),
         }
     }
 }
@@ -660,9 +629,6 @@ impl From<common::block::BlockBody> for BlockBody {
                 common::transaction::LeeTransaction::Public(tx) => Transaction::Public(tx.into()),
                 common::transaction::LeeTransaction::PrivacyPreserving(tx) => {
                     Transaction::PrivacyPreserving(tx.into())
-                }
-                common::transaction::LeeTransaction::ProgramDeployment(tx) => {
-                    Transaction::ProgramDeployment(tx.into())
                 }
             })
             .collect();
@@ -973,7 +939,7 @@ impl EventRecord {
                 block_id,
                 tx_index,
                 tx_hash: tx_hash.into(),
-                program_id: event.program_id.into(),
+                program_id: ProgramId(event.account_id.into()),
                 selector: event.event.selector.into(),
                 data: event.event.data,
             })
@@ -988,7 +954,7 @@ mod tests {
     #[test]
     fn from_tx_events_copies_block_and_tx_context_onto_every_record() {
         let event = |selector: u8| lee_core::program::TransactionEvent {
-            program_id: [7_u32; 8],
+            account_id: lee_core::account::AccountId::from([7_u32; 8]),
             event: lee_core::program::ProgramEvent {
                 selector: [selector; 8],
                 data: vec![selector; 2],
@@ -1023,7 +989,7 @@ mod tests {
 
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
         let message = lee::public_transaction::Message::try_new_with_fees(
-            [7_u32; 8],
+            [7_u32; 8].into(),
             vec![signer_id],
             vec![0_u128.into()],
             0_u32,
@@ -1057,7 +1023,7 @@ mod tests {
         let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
 
         let message = lee::public_transaction::Message::try_new(
-            [7_u32; 8],
+            [7_u32; 8].into(),
             vec![signer_id],
             vec![0_u128.into()],
             0_u32,
