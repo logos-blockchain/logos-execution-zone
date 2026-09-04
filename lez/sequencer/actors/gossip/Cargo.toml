@@ -1,0 +1,34 @@
+[package]
+name = "sequencer_gossip_actor"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+common.workspace = true
+sequencer_core.workspace = true
+
+logos-blockchain-core.workspace = true
+logos-blockchain-key-management-system-service.workspace = true
+logos-blockchain-zone-sdk.workspace = true
+
+kameo.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+anyhow.workspace = true
+borsh.workspace = true
+futures.workspace = true
+hex.workspace = true
+libp2p.workspace = true
+log.workspace = true
+
+[features]
+# Enable mDNS-based local peer discovery for gossip.
+mdns = []
+
+[dev-dependencies]
+lee = { workspace = true, features = ["test-utils"] }
+mempool.workspace = true
+testnet_initial_state.workspace = true

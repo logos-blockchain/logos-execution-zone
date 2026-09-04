@@ -11,8 +11,8 @@ use kameo::{
     error::{Infallible, SendError},
 };
 use log::{error, warn};
-use sequencer_core::gossip::GossipTxPublisher;
 use sequencer_executor_actor::ExecutorActorTrait;
+use sequencer_gossip_actor::GossipTxPublisher;
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,

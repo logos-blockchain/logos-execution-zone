@@ -9,16 +9,13 @@ pub use sequencer_core::config::*;
 use sequencer_core::load_or_create_signing_key;
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_rpc_server_actor::RpcServerActor;
-use sequencer_slasher_actor::{SetApprovalPublisher, SlasherActor};
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActor;
 use tokio::select;
 
 use crate::actor_handle::ActorHandle;
 
 mod actor_handle;
-
-/// Depth of the gossip-to-slasher approval channel; overflow only delays a slash.
-const INBOUND_APPROVAL_CHANNEL_CAPACITY: usize = 256;
 
 #[cfg(not(feature = "standalone"))]
 type BlockPublisher = sequencer_core::block_publisher::ZoneSdkPublisher;
@@ -33,33 +30,41 @@ pub struct SequencerHandle {
     // NOTE: Order of fields matters as it affects drop order.
     scheduler: ActorHandle<Scheduler>,
     rpc_server: ActorHandle<RpcServerActor>,
+    /// Deliberately NOT part of [`Self::failed`]/[`Self::is_healthy`]: gossip
+    /// going down degrades the node to L1-only, it never halts it (the
+    /// watchdog warns operators instead). `None` when gossip is unconfigured.
+    gossip: Option<ActorHandle<sequencer_gossip_actor::GossipActor>>,
     executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
     slasher: ActorHandle<SlasherActor>,
     storage: ActorHandle<StorageActor>,
     addr: SocketAddr,
-    /// Held for its lifetime: dropping it stops the gossip drive task.
-    /// `None` when gossip is unconfigured.
-    gossip: Option<sequencer_core::gossip::GossipNetwork>,
+    gossip_bootstrap_addrs: Option<Vec<sequencer_gossip_actor::Multiaddr>>,
+    /// Aborts the L1-only outage warner when the handle is dropped.
+    _gossip_watchdog: Option<sequencer_gossip_actor::WatchdogGuard>,
 }
 
 impl SequencerHandle {
     const fn new(
         scheduler: ActorHandle<Scheduler>,
         rpc_server: ActorHandle<RpcServerActor>,
+        gossip: Option<ActorHandle<sequencer_gossip_actor::GossipActor>>,
         executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
         slasher: ActorHandle<SlasherActor>,
         storage: ActorHandle<StorageActor>,
         addr: SocketAddr,
-        gossip: Option<sequencer_core::gossip::GossipNetwork>,
+        gossip_bootstrap_addrs: Option<Vec<sequencer_gossip_actor::Multiaddr>>,
+        _gossip_watchdog: Option<sequencer_gossip_actor::WatchdogGuard>,
     ) -> Self {
         Self {
             scheduler,
             rpc_server,
+            gossip,
             executor,
             slasher,
             storage,
             addr,
-            gossip,
+            gossip_bootstrap_addrs,
+            _gossip_watchdog,
         }
     }
 
@@ -69,16 +74,21 @@ impl SequencerHandle {
         let Self {
             scheduler,
             rpc_server,
+            gossip,
             executor,
             slasher,
             storage,
             addr: _,
-            gossip: _,
+            gossip_bootstrap_addrs: _,
+            _gossip_watchdog: _,
         } = self;
 
         // NOTE: Order of shutdown matters. Make sure it follows the order of fields in the struct.
         scheduler.shutdown().await;
         rpc_server.shutdown().await;
+        if let Some(gossip) = gossip {
+            gossip.shutdown().await;
+        }
         executor.shutdown().await;
         slasher.shutdown().await;
         storage.shutdown().await;
@@ -97,7 +107,10 @@ impl SequencerHandle {
             slasher,
             storage,
             addr: _,
+            // A gossip failure never halts the node; see the field docs.
             gossip: _,
+            gossip_bootstrap_addrs: _,
+            _gossip_watchdog: _,
         } = self;
 
         select! {
@@ -132,7 +145,10 @@ impl SequencerHandle {
             slasher,
             storage,
             addr: _,
+            // A gossip failure never halts the node; see the field docs.
             gossip: _,
+            gossip_bootstrap_addrs: _,
+            _gossip_watchdog: _,
         } = self;
 
         executor.is_healthy()
@@ -150,10 +166,8 @@ impl SequencerHandle {
     /// Multiaddrs (with the `/p2p/` peer id suffix) other nodes can use as
     /// gossip `bootstrap_peers`. `None` when gossip is unconfigured.
     #[must_use]
-    pub fn gossip_bootstrap_addrs(&self) -> Option<Vec<sequencer_core::gossip::Multiaddr>> {
-        self.gossip
-            .as_ref()
-            .map(sequencer_core::gossip::GossipNetwork::bootstrap_addrs)
+    pub fn gossip_bootstrap_addrs(&self) -> Option<Vec<sequencer_gossip_actor::Multiaddr>> {
+        self.gossip_bootstrap_addrs.clone()
     }
 }
 
@@ -180,21 +194,14 @@ pub fn run(
 
         let executor = ExecutorActor::new(config, storage_ref.clone()).await;
         let slasher_ref = executor.slasher_ref();
-        // The core has already read a committee by the time this returns.
-        let accredited_keys_rx = executor.accredited_keys_watch();
         let executor_ref = ExecutorActor::spawn(executor);
         info!("Executor Actor spawned");
 
-        // Inbound slash approvals, forwarded to the slasher below.
-        let (approval_tx, mut approval_rx) =
-            tokio::sync::mpsc::channel(INBOUND_APPROVAL_CHANNEL_CAPACITY);
-
-        // TODO: Should be a separate actor
-        let gossip_network = match gossip_config {
-            None => None,
+        let (gossip, tx_publisher, gossip_bootstrap_addrs, gossip_watchdog) = match gossip_config {
+            None => (None, None, None, None),
             Some(gossip_config) => {
                 // The node's L1 bedrock signing key is deliberately reused as the
-                // libp2p identity; `GossipNetwork::start` derives the keypair.
+                // libp2p identity; `GossipActor::new` derives the keypair.
                 let signing_key =
                     load_or_create_signing_key(&sequencer_home.join("bedrock_signing_key"))?;
                 let channel_id = *bedrock_config.channel_id.as_ref();
@@ -202,7 +209,7 @@ pub fn run(
                 // door (fee screen + mempool push), same as RPC submissions —
                 // gossip never touches the mempool directly.
                 let submit_ref = executor_ref.clone();
-                let submit: sequencer_core::gossip::IngestSubmit =
+                let submit: sequencer_gossip_actor::IngestSubmit =
                     std::sync::Arc::new(move |transaction| {
                         let executor_submit_ref = submit_ref.clone();
                         Box::pin(async move {
@@ -216,39 +223,28 @@ pub fn run(
                             executor_submit_ref.ask(message).await.map_err(Into::into)
                         })
                     });
-                let network = sequencer_core::gossip::GossipNetwork::start(
+                let gossip_actor = sequencer_gossip_actor::GossipActor::new(
                     gossip_config,
                     channel_id,
                     signing_key,
-                    approval_tx,
                     max_block_size.as_u64(),
                     submit,
-                    accredited_keys_rx,
                 )
                 .await
                 .context("Failed to start sequencer gossip network")?;
-                info!("Gossip network started as {}", network.local_peer_id());
-                Some(network)
+                info!("Gossip network started as {}", gossip_actor.local_peer_id());
+                let bootstrap_addrs = gossip_actor.bootstrap_addrs();
+                let gossip_ref = sequencer_gossip_actor::GossipActor::spawn(gossip_actor);
+                info!("Gossip Actor spawned");
+                let watchdog = sequencer_gossip_actor::spawn_l1_only_watchdog(gossip_ref.clone());
+                (
+                    Some(ActorHandle::new(gossip_ref.clone())),
+                    Some(sequencer_gossip_actor::GossipTxPublisher::new(gossip_ref)),
+                    Some(bootstrap_addrs),
+                    Some(watchdog),
+                )
             }
         };
-        let tx_publisher = gossip_network
-            .as_ref()
-            .map(sequencer_core::gossip::GossipNetwork::tx_publisher);
-
-        // Without gossip the slasher has nowhere to publish and only its own approval.
-        if let Some(network) = gossip_network.as_ref() {
-            slasher_ref
-                .tell(SetApprovalPublisher(network.approval_publisher()))
-                .await?;
-            let slasher = slasher_ref.clone();
-            tokio::spawn(async move {
-                while let Some(approval) = approval_rx.recv().await {
-                    if slasher.tell(approval).await.is_err() {
-                        break;
-                    }
-                }
-            });
-        }
 
         let rpc_server = RpcServerActor::new(
             listen_addr,
@@ -279,11 +275,13 @@ pub fn run(
         Ok(SequencerHandle::new(
             ActorHandle::new(scheduler_ref),
             ActorHandle::new(rpc_server_ref),
+            gossip,
             ActorHandle::new(executor_ref),
             ActorHandle::new(slasher_ref),
             ActorHandle::new(storage_ref),
             addr,
-            gossip_network,
+            gossip_bootstrap_addrs,
+            gossip_watchdog,
         ))
     }
 }
