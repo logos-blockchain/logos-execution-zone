@@ -29,11 +29,13 @@ async fn get_existing_account() -> Result<()> {
 
     let account = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
 
-    // Genesis credits the account; a credit neither claims it nor spends its nonce.
+    // Genesis credits the account.
     assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
     assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
+    // No data is appended.
     assert!(account.data.is_empty());
-    assert_eq!(account.nonce.0, 0);
+    // It also gets used as a funder for private accounts on genesis twice.
+    assert_eq!(account.nonce.0, 2);
 
     log::info!("Successfully retrieved account with correct details");
 
