@@ -28,7 +28,7 @@ async fn fresh_store_and_chain(
     let storage_ref = StorageActor::spawn(storage);
     // What `start_from_config` does before it opens a store, mirrored here
     // because these cases drive `verify_and_reconstruct` directly.
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let bootstrap_sequencer_key = Some(test_bootstrap_sequencer_key(config));
     SequencerCore::<StorageActor, MockBlockPublisher>::seed_genesis_if_absent(
         &storage_ref,

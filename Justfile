@@ -53,6 +53,12 @@ regenerate-test-fixture:
     @echo "🧪 Regenerating test fixture"
     RISC0_DEV_MODE=1 RUST_LOG=info cargo run -p test_fixtures --bin regenerate_test_fixture
 
+# Regenerate the four-node docker devnet's shared sequencer config and per-node keys (the genesis
+# stakes the whole committee, so the signatures are resigned; commit the result).
+regenerate-devnet-configs:
+    @echo "🕸️  Regenerating devnet sequencer config and keys"
+    @cargo run -q -p devnet_configs
+
 # Regenerate the committed Grafana dashboards from the Rust generator
 # (tools/dashboard_gen) and commit the result. CI checks these are up to date.
 regenerate-dashboards:
@@ -209,5 +215,6 @@ clean:
     rm -rf lez/wallet/configs/debug/storage.json
     rm -rf lez/wallet/configs/debug/statistics.json
     rm -rf rocksdb*
+    docker compose down -v
     cd bedrock && docker compose down -v && cd ..
     cd monitoring && docker compose down -v && cd ..

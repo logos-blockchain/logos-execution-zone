@@ -76,6 +76,7 @@ members = [
   "tools/integration_bench",
   "tools/cross_zone_chat",
   "tools/dashboard_gen",
+  "tools/devnet_configs",
 ]
 
 [workspace.dependencies]
