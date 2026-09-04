@@ -5630,6 +5630,7 @@ dependencies = [
  "rand 0.8.6",
  "risc0-binfmt",
  "risc0-zkvm",
+ "semver",
  "serde_with",
  "sha2 0.10.9",
  "test-case",
