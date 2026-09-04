@@ -45,6 +45,12 @@ pub fn bridge_account() -> Account {
     Account::default()
 }
 
+/// The program whose shard every fee account's record lives in.
+#[must_use]
+pub fn fee_program_id() -> AccountId {
+    programs::fee().id().into()
+}
+
 #[must_use]
 pub fn fee_state_account_id() -> AccountId {
     fee_core::compute_fee_state_account_id(programs::fee().id().into())
