@@ -6,7 +6,7 @@
 //! never halts the node.
 
 pub use libp2p::Multiaddr;
-pub use network::{GossipNetwork, GossipTxPublisher, IngestScreen, admit_all_screen};
+pub use network::{GossipNetwork, GossipTxPublisher, IngestSubmit, unscreened_mempool_submit};
 
 pub mod accreditation;
 pub mod network;

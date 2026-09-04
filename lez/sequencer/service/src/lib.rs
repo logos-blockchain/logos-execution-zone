@@ -164,7 +164,6 @@ pub fn run(
         info!("Storage Actor spawned");
 
         let executor = ExecutorActor::new(config, storage_ref.clone()).await;
-        let mempool_handle = executor.mempool_handle();
         let executor_ref = ExecutorActor::spawn(executor);
         info!("Executor Actor spawned");
 
@@ -177,25 +176,25 @@ pub fn run(
                 let signing_key =
                     load_or_create_signing_key(&sequencer_home.join("bedrock_signing_key"))?;
                 let channel_id = *bedrock_config.channel_id.as_ref();
-                // Gossiped transactions pass the same fee-admission screen as
-                // RPC submissions before entering the mempool.
-                let screen_ref = executor_ref.clone();
-                let screen: sequencer_core::gossip::IngestScreen =
+                // Gossiped transactions enter through the executor's admission
+                // door (fee screen + mempool push), same as RPC submissions —
+                // gossip never touches the mempool directly.
+                let submit_ref = executor_ref.clone();
+                let submit: sequencer_core::gossip::IngestSubmit =
                     std::sync::Arc::new(move |transaction| {
-                        let executor_screen_ref = screen_ref.clone();
+                        let executor_submit_ref = submit_ref.clone();
                         Box::pin(async move {
-                            use sequencer_executor_actor::protocol::{
-                                ScreenTransaction, SubmitOutcome,
+                            use sequencer_executor_actor::protocol::{SubmitOutcome, Transaction};
+                            let message = Transaction {
+                                transaction,
+                                origin: sequencer_core::TransactionOrigin::Gossip,
                             };
-                            match executor_screen_ref
-                                .ask(ScreenTransaction { transaction })
-                                .await
-                            {
+                            match executor_submit_ref.ask(message).await {
                                 Ok(SubmitOutcome::Admitted) => Ok(()),
                                 Ok(SubmitOutcome::Rejected(rejection)) => {
                                     Err(rejection.to_string())
                                 }
-                                Err(err) => Err(format!("screen ask failed: {err}")),
+                                Err(err) => Err(format!("submission failed: {err}")),
                             }
                         })
                     });
@@ -203,9 +202,8 @@ pub fn run(
                     gossip_config,
                     channel_id,
                     signing_key,
-                    mempool_handle,
                     max_block_size.as_u64(),
-                    screen,
+                    submit,
                 )
                 .await
                 .context("Failed to start sequencer gossip network")?;

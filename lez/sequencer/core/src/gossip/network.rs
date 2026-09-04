@@ -60,12 +60,12 @@ pub struct GossipNetwork {
     tx_tx: mpsc::Sender<LeeTransaction>,
 }
 
-/// Advisory fee-admission screen run at gossip ingest, before a peer's
-/// transaction is pushed to the mempool.
+/// Submits a gossiped transaction to the node's admission door (fee screen +
+/// mempool push, the executor actor in production).
 ///
-/// Its verdict never affects mesh acceptance: admission is priced off the
+/// The verdict never affects mesh acceptance: admission is priced off the
 /// local head state, which drifts, so peers legitimately disagree.
-pub type IngestScreen =
+pub type IngestSubmit =
     Arc<dyn Fn(LeeTransaction) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
 
 /// Handle for publishing locally-submitted transactions to the gossip mesh.
@@ -89,9 +89,8 @@ impl GossipNetwork {
         config: GossipConfig,
         channel_id: [u8; 32],
         signing_key: Ed25519Key,
-        mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
         max_block_size: u64,
-        screen: IngestScreen,
+        submit: IngestSubmit,
     ) -> Result<Self> {
         // Reuse the node's L1 bedrock signing key as the libp2p identity. The
         // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
@@ -215,10 +214,9 @@ impl GossipNetwork {
             connected_tx,
             shutdown: shutdown.clone(),
             topic,
-            mempool: mempool_handle,
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
             max_block_size,
-            screen,
+            submit,
             tx_rx,
             bootstrap,
             pending_publish: VecDeque::new(),
@@ -294,10 +292,9 @@ struct DriveTask {
     connected_tx: watch::Sender<Vec<[u8; 32]>>,
     shutdown: CancellationToken,
     topic: gossipsub::IdentTopic,
-    mempool: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     seen: SeenCache,
     max_block_size: u64,
-    screen: IngestScreen,
+    submit: IngestSubmit,
     tx_rx: mpsc::Receiver<LeeTransaction>,
     /// Configured bootstrap peers, re-dialed while the node is isolated.
     bootstrap: Vec<Multiaddr>,
@@ -416,24 +413,17 @@ impl DriveTask {
                 if self.seen.contains(&hash) {
                     gossipsub::MessageAcceptance::Ignore
                 } else {
-                    // before admitting to mempool, run the ingest screen
-                    match (self.screen)(tx.clone()).await {
+                    // Through the admission door (fee screen + mempool push).
+                    // Advisory: the tx is forwarded either way, and a refused
+                    // one stays unseen so a rebroadcast can retry once e.g.
+                    // its payer is funded or the mempool has room.
+                    match (self.submit)(tx).await {
+                        Ok(()) => {
+                            self.seen.insert(hash);
+                        }
                         Err(reason) => {
                             log::debug!("Not admitting gossiped tx {hash:?}: {reason}");
                         }
-                        Ok(()) => match self.mempool.try_push((TransactionOrigin::Gossip, tx)) {
-                            Ok(()) => {
-                                // mark seen only on successful pushes, so that if mempool is full
-                                // we can later receive the same tx from gossip and try pushing it
-                                // again
-                                self.seen.insert(hash);
-                            }
-                            Err(_) => {
-                                log::debug!(
-                                    "Mempool full; forwarding tx {hash:?} without admitting"
-                                );
-                            }
-                        },
                     }
 
                     gossipsub::MessageAcceptance::Accept
@@ -538,10 +528,20 @@ pub(crate) fn peer_id_from_ed25519(
         .map(|key| libp2p::identity::PublicKey::from(key).to_peer_id())
 }
 
-/// An [`IngestScreen`] that admits everything; for tests and standalone runs.
+/// An [`IngestSubmit`] that pushes straight into `mempool` unscreened; for
+/// tests.
 #[must_use]
-pub fn admit_all_screen() -> IngestScreen {
-    Arc::new(|_| Box::pin(async { Ok(()) }))
+pub fn unscreened_mempool_submit(
+    mempool: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+) -> IngestSubmit {
+    Arc::new(move |tx| {
+        let mempool = mempool.clone();
+        Box::pin(async move {
+            mempool
+                .try_push((TransactionOrigin::Gossip, tx))
+                .map_err(|err| format!("mempool full: {err}"))
+        })
+    })
 }
 
 #[expect(
@@ -665,9 +665,8 @@ mod tests {
             test_config(),
             [1; 32],
             Ed25519Key::from_bytes(&[9; 32]),
-            test_mempool_handle(),
             TEST_MAX_BLOCK_SIZE,
-            admit_all_screen(),
+            unscreened_mempool_submit(test_mempool_handle()),
         )
         .await
         .unwrap();
@@ -683,9 +682,8 @@ mod tests {
             test_config(),
             [1; 32],
             Ed25519Key::from_bytes(&[9; 32]),
-            test_mempool_handle(),
             TEST_MAX_BLOCK_SIZE,
-            admit_all_screen(),
+            unscreened_mempool_submit(test_mempool_handle()),
         )
         .await
         .unwrap();

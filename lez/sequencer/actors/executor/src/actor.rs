@@ -33,8 +33,8 @@ use crate::{
         GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock, GetBlockRange,
         GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
         GetFeeQuote, GetFeeQuoteReply, GetLastBlockId, GetProofsAndRoot, GetTransaction,
-        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        ScreenTransaction, SubmitOutcome, Transaction,
+        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitOutcome,
+        Transaction,
     },
 };
 
@@ -121,13 +121,6 @@ impl<BP: BlockPublisherTrait + Send + 'static, S: StorageActorTrait> ExecutorAct
                 failed_attempts: 0,
             }
         }
-    }
-
-    /// Handle to the sequencer's mempool, for feeding externally-received
-    /// (e.g. gossiped) transactions in.
-    #[must_use]
-    pub fn mempool_handle(&self) -> MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
-        self.mempool_handle.clone()
     }
 }
 
@@ -280,7 +273,10 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
 
     async fn handle(
         &mut self,
-        Transaction { transaction }: Transaction,
+        Transaction {
+            transaction,
+            origin,
+        }: Transaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         // Fee admission against the head state, before the mempool sees it.
@@ -295,30 +291,9 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
         }
 
         self.mempool_handle
-            .try_push((TransactionOrigin::User, transaction))
+            .try_push((origin, transaction))
             .map_err(|_err| Error::MempoolIsFull)?;
         Ok(SubmitOutcome::Admitted)
-    }
-}
-
-impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
-    Message<ScreenTransaction> for ExecutorActor<BP, S>
-{
-    type Reply = SubmitOutcome;
-
-    async fn handle(
-        &mut self,
-        ScreenTransaction { transaction }: ScreenTransaction,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        match self
-            .sequencer
-            .with_state(|state| sequencer_core::fees::screen(&transaction, state))
-            .await
-        {
-            Ok(()) => SubmitOutcome::Admitted,
-            Err(rejection) => SubmitOutcome::Rejected(rejection),
-        }
     }
 }
 

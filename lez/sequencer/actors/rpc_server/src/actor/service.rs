@@ -107,6 +107,7 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             .executor_ref
             .ask(sequencer_executor_actor::protocol::Transaction {
                 transaction: authenticated_tx.clone(),
+                origin: sequencer_core::TransactionOrigin::User,
             })
             .await
             .map_err(internal_error)?;
