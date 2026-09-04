@@ -1,8 +1,8 @@
 use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda};
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff},
+    account::{BalanceDiff, Input},
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -47,8 +47,7 @@ fn main() {
         ),
     };
 
-    let [outbox] =
-        <[AccountWithMetadata; 1]>::try_from(pre_states).expect("Emit requires exactly 1 account");
+    let [outbox] = <[Input; 1]>::try_from(pre_states).expect("Emit requires exactly 1 account");
 
     assert_eq!(
         outbox.account_id,
@@ -60,17 +59,13 @@ fn main() {
     // happens to be free is reported as the wrong account rather than as a used
     // slot.
     //
-    // This is the same predicate the state machine already requires of a first
-    // write, so guest and host agree by construction rather than by coincidence.
-    //
     // A slot can still be denied to its intended writer by a real emission: the
     // ordinal is caller-chosen in a namespace every user of an emitter shares,
     // and an emission needs no signature, so anyone can occupy one. A client must
     // pick an ordinal the chain does not already hold rather than counting from
-    // zero. TODO(squatting): a foreign data write at the address denies the
-    // ordinal the same way, since whoever writes data first owns the account.
+    // zero.
     assert!(
-        outbox.account.data.is_empty(),
+        outbox.shard_of(self_account_id).is_empty(),
         "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
     );
 
@@ -86,7 +81,7 @@ fn main() {
     .try_into()
     .expect("OutboxRecord fits in account data");
 
-    let post = AccountStateDiff::new(outbox, BalanceDiff::Add(0), new_data);
+    let post = ShardStateDiff::new(outbox, BalanceDiff::Add(0), new_data);
 
     ProgramOutput::new(
         self_account_id,

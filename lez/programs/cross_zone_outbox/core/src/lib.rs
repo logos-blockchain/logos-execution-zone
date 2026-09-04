@@ -1,5 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{account::AccountId, program::PdaSeed};
+use lee_core::{
+    account::{AccountId, Position},
+    program::PdaSeed,
+};
 
 /// Versions the seed layout: bump on any change to its field list or offsets,
 /// so slots under an old layout can never be re-derived. Redundant with the
@@ -12,7 +15,8 @@ pub type ZoneId = [u8; 32];
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
-    /// Records an outbound cross-zone message as a write to a self-owned PDA.
+    /// Records an outbound cross-zone message as a write to the outbox's own shard
+    /// at the slot PDA.
     ///
     /// The slot is written once: a second `Emit` at the same
     /// `(emitter, target_zone, ordinal)` fails the transaction rather than
@@ -23,10 +27,11 @@ pub enum Instruction {
     Emit {
         target_zone: ZoneId,
         target_account_id: AccountId,
-        /// Accounts the destination inbox must hand to the target program's
-        /// chained call. The emitter specifies them; the watcher forwards them
-        /// verbatim so the inbox stays target-agnostic.
-        target_accounts: Vec<[u8; 32]>,
+        /// Positions the destination inbox must hand to the target program's
+        /// chained call, each naming the namespace it reads there. The emitter
+        /// specifies them; the watcher forwards them verbatim so the inbox stays
+        /// target-agnostic.
+        target_accounts: Vec<Position>,
         payload: Vec<u8>,
         ordinal: u32,
     },
@@ -48,7 +53,8 @@ pub struct OutboxRecord {
     pub target_zone: ZoneId,
     pub ordinal: u32,
     pub target_account_id: AccountId,
-    pub target_accounts: Vec<[u8; 32]>,
+    /// The positions the delivery hands the target program, verbatim as emitted.
+    pub target_accounts: Vec<Position>,
     pub payload: Vec<u8>,
 }
 
@@ -145,7 +151,10 @@ mod tests {
             target_zone: [1; 32],
             ordinal: 7,
             target_account_id: AccountId::new([6; 32]),
-            target_accounts: vec![[9; 32]],
+            target_accounts: vec![Position::new(
+                AccountId::new([9; 32]),
+                AccountId::new([6; 32]),
+            )],
             payload: b"payload".to_vec(),
         };
 

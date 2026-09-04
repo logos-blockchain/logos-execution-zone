@@ -33,8 +33,8 @@ pub enum Instruction {
     /// Required accounts (3): the source marker, the wrapped-token config PDA,
     /// then the recipient's holding PDA.
     Mint { recipient: [u8; 32], amount: u128 },
-    /// Pins the minter and the peer sources it may mint for, written once into a
-    /// default config PDA at genesis. A re-run holding anything different is
+    /// Pins the minter and the peer sources it may mint for, written once into an
+    /// empty config shard at genesis. A re-run holding anything different is
     /// refused; an identical one is a no-op, which is what genesis replay does.
     ///
     /// Required accounts (1): the wrapped-token config PDA.
@@ -210,7 +210,7 @@ mod tests {
         );
     }
 
-    /// An unclaimed config reads as empty, which must not decode to a config that
+    /// An unwritten config reads as empty, which must not decode to a config that
     /// authorizes anything.
     #[test]
     fn an_empty_config_does_not_decode() {

@@ -5,9 +5,9 @@ use bridge_lock_core::{
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, BalanceDiff},
+    account::{AccountId, BalanceDiff, Input, Position},
     program::{
-        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ChainedCall, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -74,20 +74,20 @@ fn main() {
 fn lock(
     self_account_id: AccountId,
     caller_account_id: Option<AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     amount: u128,
     target_zone: [u8; 32],
     target_account_id: AccountId,
-    target_accounts: Vec<[u8; 32]>,
+    target_accounts: Vec<Position>,
     payload: Vec<u8>,
     ordinal: u32,
 ) {
     // pre_states: [config PDA, holder (authorized, echoed), holding PDA,
-    // escrow PDA, outbox PDA].
-    let [config, holder, holding, escrow, outbox] =
-        <[AccountWithMetadata; 5]>::try_from(pre_states)
-            .expect("Lock requires config, holder, holding, escrow, and outbox accounts");
+    // escrow PDA, outbox PDA]. Only the config carries this program's data; the
+    // rest move or authorize balance, so they are named balance-only.
+    let [config, holder, holding, escrow, outbox] = <[Input; 5]>::try_from(pre_states)
+        .expect("Lock requires config, holder, holding, escrow, and outbox accounts");
 
     // Pinned rather than caller-named: chaining elsewhere would debit the escrow
     // and leave no record of what it was for.
@@ -96,7 +96,7 @@ fn lock(
         config_account_id(self_account_id),
         "first account must be the bridge-lock config PDA"
     );
-    let (outbox_account_id, pinned_target) = read_config(&config.account.data)
+    let (outbox_account_id, pinned_target) = read_config(config.shard_of(self_account_id))
         .expect("config account holds an outbox and a mint target");
 
     // Value conservation: the forwarded payload must mint exactly what is locked.
@@ -122,10 +122,17 @@ fn lock(
     assert_eq!(
         target_accounts,
         vec![
-            wrapped_token_core::config_account_id(pinned_target).into_value(),
-            wrapped_token_core::holding_account_id(pinned_target, &recipient).into_value(),
+            Position::new(
+                wrapped_token_core::config_account_id(pinned_target),
+                pinned_target
+            ),
+            Position::new(
+                wrapped_token_core::holding_account_id(pinned_target, &recipient),
+                pinned_target
+            ),
         ],
-        "target accounts must be the mint's config and the recipient's holding"
+        "target accounts must be the mint's config and the recipient's holding, under the \
+         wrapped token's own namespace"
     );
     assert!(
         amount <= MAX_MINT_AMOUNT,
@@ -157,9 +164,11 @@ fn lock(
         amount,
     );
 
+    // The slot is the outbox's own record, whatever namespace the caller named
+    // it under here.
     let emit_call = ChainedCall::new(
         outbox_account_id,
-        vec![outbox.account_id],
+        vec![Position::new(outbox.account_id, outbox_account_id)],
         &OutboxInstruction::Emit {
             target_zone,
             target_account_id,
@@ -169,20 +178,18 @@ fn lock(
         },
     );
 
-    let config_post = AccountStateDiff::unchanged(config);
-
     ProgramOutput::new(
         self_account_id,
         caller_account_id,
         instruction_data,
         vec![
-            config_post,
+            ShardStateDiff::unchanged(config),
             // The holder only signs, its account is echoed untouched, as are
             // the holding and escrow.
-            AccountStateDiff::unchanged(holder),
-            AccountStateDiff::unchanged(holding),
-            AccountStateDiff::unchanged(escrow),
-            AccountStateDiff::unchanged(outbox),
+            ShardStateDiff::unchanged(holder),
+            ShardStateDiff::unchanged(holding),
+            ShardStateDiff::unchanged(escrow),
+            ShardStateDiff::unchanged(outbox),
         ],
     )
     .with_chained_calls(vec![move_call, emit_call])
@@ -194,36 +201,32 @@ fn lock(
 fn init_config(
     self_account_id: AccountId,
     caller_account_id: Option<AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<Input>,
     instruction_data: Vec<u8>,
     outbox_account_id: AccountId,
     target_account_id: AccountId,
 ) {
     // pre_states: [config PDA].
-    let [config] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitConfig requires the config account");
+    let [config] =
+        <[Input; 1]>::try_from(pre_states).expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
         config_account_id(self_account_id),
         "account must be the bridge-lock config PDA"
     );
-    // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned one must already pin exactly these programs, since
-    // genesis is replayed onto seeded state during multi-sequencer reconstruction.
-    // Acquiring it on the data write alone would not stop a later self-owned rewrite.
-    if !config.account.data.is_empty() {
+    // Init-once, idempotent under genesis replay: an empty shard is a first init;
+    // a written one must already pin exactly these programs, since genesis is
+    // replayed onto seeded state during multi-sequencer reconstruction.
+    let existing = config.shard_of(self_account_id);
+    if !existing.is_empty() {
         assert_eq!(
-            config.account.program_owner, self_account_id,
-            "bridge-lock config PDA is owned by another program"
-        );
-        assert_eq!(
-            *config.account.data,
+            **existing,
             config_bytes(outbox_account_id, target_account_id),
             "bridge-lock config already pins a different outbox or mint target"
         );
     }
 
-    let config_post = AccountStateDiff::new(
+    let config_post = ShardStateDiff::new(
         config,
         BalanceDiff::Add(0),
         config_bytes(outbox_account_id, target_account_id)
