@@ -24,3 +24,7 @@ zstd.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 programs.workspace = true
 system_accounts.workspace = true
+
+[features]
+# Runs guest execution in-process against the memoized image cache.
+prove = ["lee/prove"]
