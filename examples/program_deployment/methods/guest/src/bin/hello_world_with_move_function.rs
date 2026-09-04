@@ -1,7 +1,7 @@
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff, Data},
+    account::{AccountId, BalanceDiff, Data, Input},
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -11,44 +11,41 @@ use lee_core::{
 // This program reads an instruction of the form `(function_id, data)` and
 // dispatches to either:
 //
-// - `write`: appends `data` to the `data` field of a single input account.
-// - `move_data`: moves all bytes from one account to another. The source account is cleared and the
-//   destination account receives the appended bytes.
+// - `write`: appends `data` to this program's own shard on a single input account.
+// - `move_data`: moves all bytes from one account's shard to another's. The source shard is cleared
+//   and the destination shard receives the appended bytes.
 
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
 
 type Instruction = (u8, Vec<u8>);
 
-fn write(pre_state: &AccountWithMetadata, greeting: &[u8]) -> AccountStateDiff {
+fn write(self_account_id: AccountId, pre_state: &Input, greeting: &[u8]) -> ShardStateDiff {
     // Construct the new data value: the existing data with the greeting appended.
     let new_data: Data = {
-        let mut bytes = pre_state.account.data.clone().into_inner();
+        let mut bytes = pre_state.shard_of(self_account_id).clone().into_inner();
         bytes.extend_from_slice(greeting);
         bytes
             .try_into()
             .expect("Data should fit within the allowed limits")
     };
 
-    AccountStateDiff::new(pre_state.clone(), BalanceDiff::Add(0), new_data)
+    ShardStateDiff::new(pre_state.clone(), BalanceDiff::Add(0), new_data)
 }
 
-fn move_data(
-    from_pre: &AccountWithMetadata,
-    to_pre: &AccountWithMetadata,
-) -> Vec<AccountStateDiff> {
+fn move_data(self_account_id: AccountId, from_pre: &Input, to_pre: &Input) -> Vec<ShardStateDiff> {
     // Construct the new data values.
-    let from_data: Vec<u8> = from_pre.account.data.clone().into();
+    let from_data: Vec<u8> = from_pre.shard_of(self_account_id).clone().into_inner();
 
-    let from_post = AccountStateDiff::new(from_pre.clone(), BalanceDiff::Add(0), Data::default());
+    let from_post = ShardStateDiff::new(from_pre.clone(), BalanceDiff::Add(0), Data::default());
 
     let to_post = {
-        let mut bytes = to_pre.account.data.clone().into_inner();
+        let mut bytes = to_pre.shard_of(self_account_id).clone().into_inner();
         bytes.extend_from_slice(&from_data);
         let new_data: Data = bytes
             .try_into()
             .expect("Data should fit within the allowed limits");
-        AccountStateDiff::new(to_pre.clone(), BalanceDiff::Add(0), new_data)
+        ShardStateDiff::new(to_pre.clone(), BalanceDiff::Add(0), new_data)
     };
 
     vec![from_post, to_post]
@@ -72,11 +69,11 @@ fn main() {
 
     let state_diffs = match (pre_states.as_slice(), function_id, data.len()) {
         ([account_pre], WRITE_FUNCTION_ID, _) => {
-            let post = write(account_pre, &data);
+            let post = write(self_account_id, account_pre, &data);
             vec![post]
         }
         ([account_from_pre, account_to_pre], MOVE_DATA_FUNCTION_ID, 0) => {
-            move_data(account_from_pre, account_to_pre)
+            move_data(self_account_id, account_from_pre, account_to_pre)
         }
         _ => panic!("invalid params"),
     };

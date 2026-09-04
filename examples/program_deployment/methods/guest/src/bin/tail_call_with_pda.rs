@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::Position,
+    program::{
+        ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
 // Tail Call with PDA example program.
@@ -51,17 +54,20 @@ fn main() {
         .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
 
     // Create the (unchanged) post state
-    let post_state = AccountStateDiff::unchanged(pre_state.clone());
+    let post_state = ShardStateDiff::unchanged(pre_state.clone());
 
     // Create the chained call
     let chained_call_greeting: Vec<u8> =
         b"Hello from tail call with Program Derived Account ID".to_vec();
     let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
+    let hello_world_id = hello_world_program_id().into();
 
     let chained_call = ChainedCall {
-        program_account_id: hello_world_program_id().into(),
+        program_account_id: hello_world_id,
         instruction_data: chained_call_instruction_data,
-        pre_state_ids: vec![pre_state.account_id],
+        // Named under the callee's own namespace: `hello_world_with_authorization` reads and
+        // writes its own shard on this account.
+        positions: vec![Position::new(pre_state.account_id, hello_world_id)],
         pda_seeds: vec![PDA_SEED],
     };
 

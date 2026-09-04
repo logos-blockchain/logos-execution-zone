@@ -332,7 +332,7 @@ Luckily all that complexity is hidden behind the `wallet_core.send_privacy_prese
 Check the `run_hello_world_private.rs` file to see how it is used.
 
 # 8. Account authorization mechanism
-The Hello world example does not enforce any authorization on the input account. This means any user can execute it on any account, regardless of ownership.
+The Hello world example does not enforce any authorization on the input account. This means any user can execute it on any account.
 LEE provides a mechanism for programs to enforce proper authorization before an execution can succeed. For both private and public accounts, the authorization is checked against knowledge of a secret key, yet the check is different:
 - Public accounts: the transaction is signed with the account’s signing key.
 - Private accounts: the circuit verifies knowledge of the account’s authorization secret key (`ask`), the key from which the account’s nullifier secret key is derived.
@@ -361,7 +361,7 @@ wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_authorization
 ```
 
 ### Create a new public account
-Our previous public account is already owned by the simple Hello world program. So we need a new one to work with this other version of the hello program
+Our previous public account already carries the simple Hello world program's record. So we need a new one to work with this other version of the hello program
 ```bash
 wallet account new public
 ```
@@ -430,7 +430,7 @@ Previous examples only operated on public or private accounts independently. Tho
 The "Hello world with move function" introduces two operations that require one or two input accounts:
 - `write`: appends arbitrary bytes to a single account. This is what we already had.
 - `move_data`: reads all bytes from one account, clears it, and appends those bytes to another account.
-Because these operations may involve multiple accounts, we'll see how public and private accounts can participate together in one execution. It highlights how ownership checks work, when writing data takes an account over, and how multiple post-states are emitted when several accounts are modified.
+Because these operations may involve multiple accounts, we'll see how public and private accounts can participate together in one execution. It highlights how a program writes only its own shard, how a position says which record is meant, and how multiple post-states are emitted when several accounts are modified.
 
 > [!NOTE]
 > The program logic is completely agnostic to whether input accounts are public or private. It always executes the same way.
@@ -516,7 +516,7 @@ As before, let's start by deploying the program
 wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/simple_tail_call.bin
 ```
 
-We'll use the first public account of this tutorial. The one with account id `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`. This account is already owned by the Hello world program and its data reads `Hola mundo!`.
+We'll use the first public account of this tutorial. The one with account id `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`. This account already carries the Hello world program's record, which reads `Hola mundo!`.
 
 Let's run the tail call program
 
@@ -556,7 +556,7 @@ Hola mundo!Hello from tail call
 There's support for tail calls in privacy preserving executions too. The `run_hello_world_through_tail_call_private.rs` runner walks you through the process of invoking such an execution.
 The only difference is that, since the execution is local, the runner will need both programs: the `simple_tail_call` and it's dependency `hello_world`.
 
-Let's use our existing private account with id `8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU`. This one is already owned by the `hello_world` program.
+Let's use our existing private account with id `8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU`. This one already carries the `hello_world` program's record.
 
 You can test the privacy tail calls with
 ```bash
@@ -577,32 +577,44 @@ wallet account get --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEV
 
 # 13. Program derived accounts: authorizing accounts through tail calls
 
-## Digression: account authority vs account program ownership
+## Digression: account authority vs the shard a program writes
 
 In LEE there are two distinct concepts that control who can modify an account:
-**Program Ownership:** Each account has a field: `program_owner: ProgramId`.
-This indicates which program is allowed to update the account’s state during execution.
-- If a program is the program_owner of an account, it can freely mutate its fields.
-- If the account is unowned (`program_owner = DEFAULT_PROGRAM_ID`), a program that writes data to it becomes its owner.
-- If a program is not the owner and the account is already owned, any attempt to modify its data will cause the transition to fail.
-Program ownership is about mutation rights during program execution.
 
-**Account authority**: Independent from program ownership, each account also has an authority. The entity that is allowed to set: `is_authorized = true`. This flag indicates that the account has been authorized for use in a transaction.
+**Sharded state:** an account is a balance, a nonce, and a map from program to that program's own
+record — its *shard*. A program may write only its own shard, at any account, and can read another
+program's shard only where the transaction hands it that namespace. Nobody owns an account, so
+nothing has to be acquired before it can be used, and a stranger's record at an address can never
+displace yours.
+
+A transaction says which shard it means. Each account it names is a *position*: an account id plus,
+optionally, the program whose record is meant there. A position naming no program carries only the
+balance, which is what a plain transfer needs; a position naming a program hands that program's
+record to the guest, and a guest asked for a namespace it does not expect fails loudly rather than
+reading an empty record.
+
+**Account authority**: independent from which shard a program writes, each account has an authority:
+the entity that may set `is_authorized = true`. That flag says the account has been authorized for
+use in a transaction, and only it lets a program reduce the account's balance.
 Who can act as authority?
-- User-defined accounts: The user is the authority. They can mark an account as authorized by:
-  - Signing the transaction (public accounts)
-  - Providing a valid nullifiers secret key ownership proof (private accounts)
-- Program derived accounts: Programs are automatically the authority of a dedicated namespace of public accounts.
+- User-defined accounts: the user is the authority. They mark an account as authorized by
+  - signing the transaction (public accounts)
+  - providing a valid nullifier secret key ownership proof (private accounts)
+- Program derived accounts: programs are automatically the authority of a dedicated namespace of
+  public account ids.
 
-Each program owns a non-overlapping space of 2^256 **public** account IDs. They do not overlap with:
+Each program has a non-overlapping space of 2^256 **public** account IDs. They do not overlap with:
 - User accounts (public or private)
-- Other program’s PDAs
+- Other program's PDAs
 
 > [!NOTE]
 > Currently PDAs are restricted to the public state.
 
-A program can be the authority of an account owned by another program, which is the most common case.
-During a chained call, a program can mark its PDA accounts as `is_authorized=true` without requiring any user signatures or nullifier secret keys. This enables programs to safely authorize accounts during program composition. Importantly, these flags can only be set to true for PDA accounts through an execution of the program that is their authority. No user and no other program can execute any transition that requires authorization of PDA accounts belonging to a different program.
+During a chained call, a program can mark its PDA accounts as `is_authorized=true` without any user
+signature or nullifier secret key. This is what lets programs authorize accounts during composition.
+These flags can only be set for PDA accounts by an execution of the program that is their authority:
+no user and no other program can execute a transition that requires authorization of a PDA belonging
+to a different program.
 
 ## Running the example
 This tutorial includes an example of PDA usage in `methods/guest/src/bin/tail_call_with_pda.rs.`. That program’s sole purpose is to forward one of its own PDA accounts, an account for which it is the authority, to the "Hello World with authorization" program via a chained call. The Hello World program will then write to the account and become its program owner, but the `tail_call_with_pda` program remains the authority. This means it is still the only entity capable of marking that account as `is_authorized=true`.

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use common::transaction::LeeTransaction;
-use lee::{PublicTransaction, program::Program, public_transaction};
+use lee::{Position, PublicTransaction, program::Program, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::{AccountIdentity, WalletCore};
 
@@ -78,7 +78,7 @@ async fn main() {
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
                 program.id().into(),
-                vec![account_id],
+                vec![Position::new(account_id, program.id().into())],
                 nonces,
                 instruction,
             )
@@ -99,7 +99,8 @@ async fn main() {
         } => {
             let instruction: Instruction = (WRITE_FUNCTION_ID, greeting.into_bytes());
             let account_id = account_id.parse().unwrap();
-            let accounts = vec![AccountIdentity::PrivateOwned(account_id)];
+            let accounts =
+                vec![AccountIdentity::PrivateOwned(account_id).in_namespace(program.id().into())];
 
             wallet_core
                 .send_privacy_preserving_tx(
@@ -117,7 +118,10 @@ async fn main() {
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
                 program.id().into(),
-                vec![from, to],
+                vec![
+                    Position::new(from, program.id().into()),
+                    Position::new(to, program.id().into()),
+                ],
                 nonces,
                 instruction,
             )
@@ -136,10 +140,11 @@ async fn main() {
             let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, vec![]);
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
+            let program_id = program.id().into();
 
             let accounts = vec![
-                AccountIdentity::Public(from),
-                AccountIdentity::PrivateOwned(to),
+                AccountIdentity::Public(from).in_namespace(program_id),
+                AccountIdentity::PrivateOwned(to).in_namespace(program_id),
             ];
 
             wallet_core
