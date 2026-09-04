@@ -33,8 +33,8 @@ use crate::{
         GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock, GetBlockRange,
         GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
         GetFeeQuote, GetFeeQuoteReply, GetLastBlockId, GetProofsAndRoot, GetTransaction,
-        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitOutcome,
-        Transaction,
+        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
+        ScreenTransaction, SubmitOutcome, Transaction,
     },
 };
 
@@ -298,6 +298,27 @@ impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Mess
             .try_push((TransactionOrigin::User, transaction))
             .map_err(|_err| Error::MempoolIsFull)?;
         Ok(SubmitOutcome::Admitted)
+    }
+}
+
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
+    Message<ScreenTransaction> for ExecutorActor<BP, S>
+{
+    type Reply = SubmitOutcome;
+
+    async fn handle(
+        &mut self,
+        ScreenTransaction { transaction }: ScreenTransaction,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        match self
+            .sequencer
+            .with_state(|state| sequencer_core::fees::screen(&transaction, state))
+            .await
+        {
+            Ok(()) => SubmitOutcome::Admitted,
+            Err(rejection) => SubmitOutcome::Rejected(rejection),
+        }
     }
 }
 

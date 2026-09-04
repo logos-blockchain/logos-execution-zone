@@ -54,6 +54,7 @@ async fn start_node(
         Ed25519Key::from_bytes(&secret),
         mempool_handle,
         TEST_MAX_BLOCK_SIZE,
+        crate::gossip::admit_all_screen(),
     )
     .await
     .expect("node should start");

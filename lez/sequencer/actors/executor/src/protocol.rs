@@ -19,6 +19,14 @@ pub struct Transaction {
     pub transaction: LeeTransaction,
 }
 
+/// Screen-only fee admission against the head state — no mempool push.
+///
+/// What gossip ingest asks before admitting a peer's transaction;
+/// `Admitted` here means "passed the screen".
+pub struct ScreenTransaction {
+    pub transaction: LeeTransaction,
+}
+
 /// What fee admission decided about a submitted transaction.
 ///
 /// A rejection is a reply, not an actor failure: the transaction was handled,
