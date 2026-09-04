@@ -55,3 +55,59 @@ fn main() {
     )
     .write();
 }
+
+#[cfg(test)]
+mod tests {
+    use lee_core::account::AccountId;
+
+    use super::*;
+
+    fn holder(seed: u8, balance: u128) -> Input {
+        Input::balance_only(AccountId::new([seed; 32]), true, balance)
+    }
+
+    #[test]
+    fn transfer_moves_the_amount_from_sender_to_recipient() {
+        let diffs = transfer(holder(0, 100), holder(1, 0), 30);
+
+        assert_eq!(diffs[0].post_balance_diff, BalanceDiff::Sub(30));
+        assert_eq!(diffs[1].post_balance_diff, BalanceDiff::Add(30));
+    }
+
+    #[test]
+    fn transfer_writes_no_data_whatever_namespace_a_position_names() {
+        let program = AccountId::new([9; 32]);
+        let sender = Input::named(
+            AccountId::new([0; 32]),
+            true,
+            100,
+            program,
+            b"record".to_vec().try_into().unwrap(),
+        );
+
+        let diffs = transfer(sender, holder(1, 0), 30);
+
+        assert!(diffs.iter().all(|diff| diff.post_data.is_none()));
+    }
+
+    #[test]
+    fn transfer_credits_a_recipient_that_did_not_authorize() {
+        let mut recipient = holder(1, 0);
+        recipient.is_authorized = false;
+
+        let diffs = transfer(holder(0, 100), recipient, 30);
+
+        assert_eq!(diffs[1].post_balance_diff, BalanceDiff::Add(30));
+    }
+
+    #[test]
+    #[should_panic(expected = "Sender must be authorized")]
+    fn transfer_refuses_an_unauthorized_sender() {
+        let mut sender = holder(0, 100);
+        sender.is_authorized = false;
+
+        let diffs = transfer(sender, holder(1, 0), 30);
+
+        unreachable!("an unauthorized sender must panic, got {diffs:?}");
+    }
+}
