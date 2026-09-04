@@ -14,7 +14,8 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, ExecutionValidationError, InstructionData, MAX_NUMBER_CHAINED_CALLS,
-        PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow, TransactionEvent,
+        PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramHeader, ProgramId, ProgramSegment,
+        TimestampValidityWindow, TransactionEvent,
     },
 };
 
@@ -269,6 +270,52 @@ pub fn init_pda_witness(
     })
 }
 
+/// Registers `program` in `state` at its own bijection address, as a single-segment
+/// `program_loader` deploy — the shape `ProgramWithDependencies::from(program)` assumes.
+/// `check_privacy_preserving_circuit_proof_is_valid` claims every top-level/dependency program
+/// against real chain state, so any test that runs a privacy-preserving transaction through
+/// `V03State::transition_from_privacy_preserving_transaction` needs the program registered here
+/// first, not just known to the local prover.
+pub fn register_program(state: &mut V03State, program: &Program) {
+    let self_account_id = AccountId::from(program.id());
+    let segment_account_id = AccountId::new({
+        let mut bytes = self_account_id.into_value();
+        bytes[0] = bytes[0].wrapping_add(1);
+        bytes
+    });
+    state.force_insert_account(
+        segment_account_id,
+        Account {
+            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+            data: Data::try_from(
+                ProgramSegment {
+                    bytecode: program.elf().to_vec(),
+                    next_segment: None,
+                }
+                .to_bytes(),
+            )
+            .unwrap(),
+            ..Account::default()
+        },
+    );
+    state.force_insert_account(
+        self_account_id,
+        Account {
+            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+            data: Data::try_from(
+                ProgramHeader {
+                    image_id: program.id(),
+                    program_first_segment: segment_account_id,
+                    immutable: true,
+                }
+                .to_bytes(),
+            )
+            .unwrap(),
+            ..Account::default()
+        },
+    );
+}
+
 fn shielded_balance_transfer_for_tests(
     sender_keys: &TestPublicKeys,
     recipient_keys: &TestPrivateKeys,
@@ -445,7 +492,8 @@ fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransact
         ..Account::default()
     };
     let recipient_keys = test_private_account_keys_2();
-    let state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
+    let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
+    register_program(&mut state, &crate::test_methods::simple_balance_transfer());
     let tx = private_balance_transfer_for_tests(
         &sender_keys,
         &sender_private_account,

@@ -171,25 +171,27 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         .await?
         .nonce;
 
-    let build_tx =
-        |segment_key: &PrivateKey, segment_id: AccountId, bytecode: Vec<u8>, payer_nonce: Nonce| {
-            let message = lee::public_transaction::Message::try_new_with_fees(
-                lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-                vec![segment_id],
-                vec![lee_core::account::Nonce(0), payer_nonce],
-                program_loader_core::Instruction::WriteSegment {
-                    bytecode,
-                    next_segment: None,
-                },
-                common::test_utils::test_fee_declaration(payer.account_id),
-            )
-            .expect("WriteSegment instruction data should always be serializable");
-            let witness_set = lee::public_transaction::WitnessSet::for_message(
-                &message,
-                &[segment_key, &payer.pub_sign_key],
-            );
-            LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
-        };
+    let build_tx = |segment_key: &PrivateKey,
+                    segment_id: AccountId,
+                    bytecode: Vec<u8>,
+                    nonce_for_payer: Nonce| {
+        let message = lee::public_transaction::Message::try_new_with_fees(
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            vec![segment_id],
+            vec![lee_core::account::Nonce(0), nonce_for_payer],
+            program_loader_core::Instruction::WriteSegment {
+                bytecode,
+                next_segment: None,
+            },
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )
+        .expect("WriteSegment instruction data should always be serializable");
+        let witness_set = lee::public_transaction::WitnessSet::for_message(
+            &message,
+            &[segment_key, &payer.pub_sign_key],
+        );
+        LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
+    };
 
     // Submit both segment writes back to back, before either lands.
     ctx.sequencer_client()

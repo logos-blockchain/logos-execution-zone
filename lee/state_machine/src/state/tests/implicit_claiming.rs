@@ -369,6 +369,7 @@ fn private_credit_to_a_public_unowned_recipient_leaves_it_unowned() {
     let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
     let mut state =
         V03State::new().with_private_accounts([(sender_commitment, sender_init_nullifier)]);
+    register_program(&mut state, &program);
     let sender_pre = AccountWithMetadata::new(
         sender_private_account,
         true,
