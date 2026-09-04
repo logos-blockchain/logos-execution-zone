@@ -80,19 +80,15 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 }
 
 #[expect(
-    clippy::needless_pass_by_value,
-    reason = "Error is consumed to create FFI error response"
-)]
-#[expect(
     clippy::wildcard_enum_match_arm,
     reason = "We want to catch all errors for future proofing"
 )]
 pub(crate) fn map_execution_error(e: ExecutionFailureKind) -> FfiError {
-    if let Some(::wallet::AdmissionRejection::PayerCannotFund { .. }) = e.fee_admission_rejection()
-    {
-        return FfiError::PayerCannotFund;
-    }
     match e {
+        // TODO: Perform normal error (de-)encoding on both sides
+        ExecutionFailureKind::SequencerClientError(sequencer_service_rpc::ClientError::Call(
+            error,
+        )) if error.message().contains("Incorrect fee") => FfiError::PayerCannotFund,
         ExecutionFailureKind::InsufficientFundsError => FfiError::InsufficientFunds,
         ExecutionFailureKind::KeyNotFoundError => FfiError::KeyNotFound,
         ExecutionFailureKind::SequencerError(_) | ExecutionFailureKind::SequencerClientError(_) => {

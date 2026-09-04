@@ -3,14 +3,14 @@
 
 #![expect(clippy::print_stdout, reason = "It's normal in this small cli")]
 
-use std::{path::Path, sync::Arc};
+use std::{collections::HashSet, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use kameo::actor::Spawn as _;
 use sequencer_storage_actor::{
     StorageActor,
     protocol::{
-        ApplyStoreUpdate, DeleteZoneCheckpoint, DumpDb, GetLatestBlockMeta, GetLeeState,
+        AtomicUpdate, DeleteZoneCheckpoint, DumpDb, GetLatestBlockMeta, GetLeeState,
         ResetAllBlocksToPending,
     },
 };
@@ -119,7 +119,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         .context("Fixture store has no blocks")?;
     let state = Arc::new(state);
     storage_ref
-        .ask(ApplyStoreUpdate {
+        .ask(AtomicUpdate {
             checkpoint: None,
             blocks: vec![],
             channel_cursor: None,
@@ -129,10 +129,10 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
             // Blocks must stay Pending for the re-publish; only the snapshot moves.
             finalized_up_to: None,
             new_deposit_events: vec![],
-            remove_deposit_records: vec![],
-            remove_dispatch_records: vec![],
-            consumed_withdrawals: vec![],
-            new_withdraw_intents: vec![],
+            finalized_deposit_records: HashSet::new(),
+            finalized_dispatch_records: HashSet::new(),
+            consumed_withdrawals: HashSet::new(),
+            new_withdraw_intents: HashSet::new(),
             zone_anchor: None,
             lower_published_high_water: None,
         })
@@ -150,10 +150,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create fixture directory {}", parent.display()))?;
     }
-    let bytes = dump
-        .to_bytes()
-        .context("Failed to serialize fixture dump")?;
-    std::fs::write(dest, bytes)
+    std::fs::write(dest, dump.bytes)
         .with_context(|| format!("Failed to write fixture dump to {}", dest.display()))?;
 
     Ok(())

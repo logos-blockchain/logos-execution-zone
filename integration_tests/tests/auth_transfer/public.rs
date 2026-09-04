@@ -268,7 +268,7 @@ async fn fresh_account_cannot_pay_for_its_own_transaction() -> Result<()> {
     // fee-admission message, so match the `PayerCannotFund` text — distinct from
     // every other admission rejection.
     assert!(
-        err.to_string().contains("but the fee reserve is"),
+        err.to_string().contains("Incorrect fee"),
         "expected a PayerCannotFund rejection, got: {err}",
     );
 
@@ -387,7 +387,7 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
         .await
         .expect_err("a fee-less faucet impersonation must be refused at admission");
     assert!(
-        err.to_string().contains("must declare a fee"),
+        err.to_string().contains("Incorrect fee"),
         "expected the missing-fee admission rejection, got: {err}",
     );
 
@@ -428,7 +428,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
         .await
         .expect_err("a fee-less faucet invocation must be refused at admission");
     assert!(
-        err.to_string().contains("must declare a fee"),
+        err.to_string().contains("Incorrect fee"),
         "expected the missing-fee admission rejection, got: {err}",
     );
 
@@ -532,7 +532,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
         .await
         .expect_err("a fee-less chain-call attack must be refused at admission");
     assert!(
-        err.to_string().contains("must declare a fee"),
+        err.to_string().contains("Incorrect fee"),
         "expected the missing-fee admission rejection, got: {err}",
     );
 

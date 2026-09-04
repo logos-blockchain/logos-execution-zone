@@ -23,6 +23,7 @@ members = [
   "lez/sequencer/service/protocol",
   "lez/sequencer/service/rpc",
   "lez/sequencer/actors/executor",
+  "lez/sequencer/actors/executor/metrics",
   "lez/sequencer/actors/rpc_server",
   "lez/sequencer/actors/rpc_server/metrics",
   "lez/sequencer/actors/storage",
@@ -90,6 +91,7 @@ sequencer_core_metrics = { path = "lez/sequencer/core/metrics" }
 sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
 sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
 sequencer_executor_actor = { path = "lez/sequencer/actors/executor" }
+sequencer_executor_actor_metrics = { path = "lez/sequencer/actors/executor/metrics" }
 sequencer_rpc_server_actor = { path = "lez/sequencer/actors/rpc_server" }
 sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/metrics" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
@@ -252,6 +254,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
 zeroize = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 num-traits = "0.2.19"
+enum-iterator = "2.3.0"
 
 # Profile for leptos WASM release builds
 [profile.wasm-release]

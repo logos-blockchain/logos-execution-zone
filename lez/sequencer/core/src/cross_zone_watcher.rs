@@ -756,7 +756,7 @@ mod tests {
     use sequencer_storage_actor::{
         StorageActor,
         mock::MockStorageActor,
-        protocol::{GetPendingCrossZoneDispatches, RecordNewBlock},
+        protocol::{AtomicUpdate, CrossZoneMessageKey, GetPendingCrossZoneDispatches},
     };
     use tempfile::TempDir;
 
@@ -813,13 +813,10 @@ mod tests {
     /// and dispatch cells share a store with one — so seed it like a real node.
     async fn seed_genesis(storage_ref: &ActorRef<StorageActor>) {
         storage_ref
-            .ask(RecordNewBlock {
-                block: produce_dummy_block(0, None, vec![]),
-                channel_cursor: None,
-                withdrawals: vec![],
-                state: Arc::new(lee::V03State::new()),
-                checkpoint_bytes: None,
-            })
+            .ask(AtomicUpdate::from_block(
+                produce_dummy_block(0, None, vec![]),
+                Arc::new(lee::V03State::new()),
+            ))
             .await
             .expect("seed genesis");
     }
@@ -905,7 +902,7 @@ mod tests {
 
     /// The message keys recorded so far, sorted: the store keys each record by
     /// its message key, so no insertion order survives.
-    async fn recorded_keys(storage_ref: &ActorRef<StorageActor>) -> Vec<[u8; 32]> {
+    async fn recorded_keys(storage_ref: &ActorRef<StorageActor>) -> Vec<CrossZoneMessageKey> {
         let mut keys = storage_ref
             .ask(GetPendingCrossZoneDispatches)
             .await
@@ -928,10 +925,9 @@ mod tests {
         storage
             .expect_handle_add_pending_cross_zone_dispatches()
             .returning(|_, _| {
-                Err(storage::error::DbError::db_interaction_error(
-                    "the store refused the write".to_owned(),
-                )
-                .into())
+                Err(sequencer_storage_actor::error::Error::DatabaseError(
+                    anyhow::anyhow!("the store refused the write"),
+                ))
             });
 
         let written_floor = Arc::clone(&floor);

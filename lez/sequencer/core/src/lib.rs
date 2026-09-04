@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
@@ -30,16 +30,14 @@ use logos_blockchain_zone_sdk::{
     sequencer::{DepositInfo, WithdrawArg},
 };
 use mempool::{MemPool, MemPoolHandle};
-#[cfg(feature = "mock")]
-pub use mock::SequencerCoreWithMockClients;
 use num_bigint::BigUint;
 use sequencer_storage_actor::{
-    StorageActor, StorageActorTrait,
+    StorageActorTrait,
     protocol::{
-        ApplyStoreUpdate, DeadLetterDispatchRecord, DeadLetterRequeue, DispatchFailure,
+        AtomicUpdate, CrossZoneMessageKey, DeadLetterDispatch, DeadLetterRequeue, DispatchFailure,
         DispatchOrigin, DropSettledCrossZoneDispatches, GetBlock, GetDeadLetterDispatches,
         GetFirstBlockId, GetLatestBlockMeta, GetPendingCrossZoneDispatches,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordNewBlock, SetZoneAnchor,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, SetZoneAnchor,
         WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
@@ -59,7 +57,6 @@ pub mod config;
 pub mod cross_zone_watcher;
 pub mod fees;
 pub mod gossip;
-
 #[cfg(feature = "mock")]
 pub mod mock;
 pub mod slashing;
@@ -162,10 +159,7 @@ struct DepositMetadata {
     recipient_id: lee::AccountId,
 }
 
-pub struct SequencerCore<
-    BP: BlockPublisherTrait = ZoneSdkPublisher,
-    S: StorageActorTrait = StorageActor,
-> {
+pub struct SequencerCore<S: StorageActorTrait, BP: BlockPublisherTrait = ZoneSdkPublisher> {
     /// Two-tier chain state: production builds on its head; the publisher's
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
@@ -185,7 +179,7 @@ pub struct SequencerCore<
     bedrock_signing_key: block_publisher::Ed25519Key,
 }
 
-impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
+impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
     const CHANNEL_PROBE_RETRIES: usize = 29;
     const CHANNEL_PROBE_RETRY_DELAY: Duration = Duration::from_secs(2);
     /// Channel slots between committee-config submissions; a margin over
@@ -273,13 +267,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
 
         let (block, state) = genesis_block_and_state(signing_key, bootstrap_sequencer_key, config);
         storage_ref
-            .ask(RecordNewBlock {
-                block,
-                channel_cursor: None,
-                withdrawals: Vec::new(),
-                state: Arc::new(state),
-                checkpoint_bytes: None,
-            })
+            .ask(AtomicUpdate::from_block(block, Arc::new(state)))
             .await
             .expect("Failed to seed the database with the genesis block");
 
@@ -738,7 +726,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         // A reconstructed block is finalized, so any deposit it mints is
         // permanently reflected in state (its receipt PDA); drop the pending
         // record backfill may have re-delivered, so the drain stops re-minting.
-        let finalized_deposit_ids: Vec<_> = block
+        let finalized_deposit_ids: HashSet<_> = block
             .body
             .transactions
             .iter()
@@ -754,20 +742,20 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         let head_tip = chain.head_tip().map(|head| BlockMeta::from(&head));
         let final_meta = chain.final_tip().map(|meta| BlockMeta::from(&meta));
         storage_ref
-            .ask(ApplyStoreUpdate {
-                blocks: vec![(block.clone(), true)],
-                channel_cursor: Some(this_msg.into()),
+            .ask(AtomicUpdate {
+                blocks: vec![block.clone()],
                 head_tip,
+                channel_cursor: Some(this_msg.into()),
                 head_state: chain.share_head_state(),
                 final_snapshot: final_meta.map(|meta| (chain.share_final_state(), meta)),
-                remove_deposit_records: finalized_deposit_ids,
-                remove_dispatch_records: finalized_dispatch_keys,
+                finalized_deposit_records: finalized_deposit_ids,
+                finalized_dispatch_records: finalized_dispatch_keys,
                 zone_anchor: Some(record),
                 checkpoint: None,
-                finalized_up_to: None,
+                finalized_up_to: Some(block.header.block_id),
                 new_deposit_events: Vec::new(),
-                consumed_withdrawals: Vec::new(),
-                new_withdraw_intents: Vec::new(),
+                consumed_withdrawals: HashSet::new(),
+                new_withdraw_intents: HashSet::new(),
                 lower_published_high_water: None,
             })
             .await
@@ -845,7 +833,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         // config updates don't need to be.
         self.submit_committee_update(committee_update).await;
 
-        let withdrawal_reconciliation_keys: Vec<_> = released_notes
+        let withdrawal_reconciliation_keys: HashSet<_> = released_notes
             .iter()
             .map(withdrawal_reconciliation_key)
             .collect();
@@ -962,10 +950,10 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     /// block is persisted by the follow path instead, and our invalidated
     /// inscription comes back via `orphaned`.
     async fn record_produced_block(
-        &mut self,
+        &self,
         this_msg: MsgId,
         block: Block,
-        withdrawal_reconciliation_keys: Vec<WithdrawalReconciliationKey>,
+        withdrawal_reconciliation_keys: HashSet<WithdrawalReconciliationKey>,
         checkpoint: &block_publisher::SequencerCheckpoint,
     ) -> Result<()> {
         let checkpoint_bytes = block_store::checkpoint_bytes(checkpoint)?;
@@ -975,13 +963,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             AcceptOutcome::Applied => {
                 let block_id = block.header.block_id;
                 self.store
-                    .record_new_block(
-                        block,
-                        Some(this_msg.into()),
-                        withdrawal_reconciliation_keys,
-                        chain.share_head_state(),
-                        Some(checkpoint_bytes),
-                    )
+                    .storage_ref()
+                    .ask(AtomicUpdate {
+                        new_withdraw_intents: withdrawal_reconciliation_keys,
+                        checkpoint: Some(checkpoint_bytes.clone()),
+                        channel_cursor: Some(this_msg.into()),
+                        ..AtomicUpdate::from_block(block.clone(), chain.share_head_state())
+                    })
                     .await?;
 
                 sequencer_core_metrics::increment_blocks_produced_total();
@@ -1572,20 +1560,6 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         hex::encode(self.bedrock_signing_key.public_key().to_bytes())
     }
 
-    /// Marks all pending blocks with `block_id <= last_finalized_block_id` as
-    /// finalized. Idempotent. Production no longer calls this: finalization
-    /// flips now ride the follow path's atomic write via
-    /// [`StoreUpdate::finalized_up_to`]. Kept on the type for tests.
-    // TODO: Delete blocks instead of marking them as finalized. Current
-    // approach is used because we still have `GetBlockDataRequest`.
-    pub async fn clean_finalized_blocks_from_db(&self, last_finalized_block_id: u64) -> Result<()> {
-        log::info!("Clearing pending blocks up to id: {last_finalized_block_id}");
-        self.store
-            .clean_pending_blocks_up_to(last_finalized_block_id)
-            .await?;
-        Ok(())
-    }
-
     /// Returns the list of stored pending blocks.
     pub async fn get_pending_blocks(&self) -> Result<Vec<Block>> {
         Ok(self
@@ -1692,7 +1666,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     /// Retained is read first so the pair can only skew towards a total that
     /// leads its list, an ordinary evicted or settled state. The other order
     /// would report entries against a total of zero.
-    pub async fn cross_zone_dead_letters(&self) -> Result<(u64, Vec<DeadLetterDispatchRecord>)> {
+    pub async fn cross_zone_dead_letters(&self) -> Result<(u64, Vec<DeadLetterDispatch>)> {
         let retained = self.store.dead_letter_dispatches().await?;
         let total = self.store.dead_letter_dispatch_count().await?;
         Ok((total, retained))
@@ -1702,7 +1676,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     /// clean attempt count. The next production turn attempts it again.
     pub async fn requeue_cross_zone_dead_letter(
         &self,
-        message_key: [u8; 32],
+        message_key: CrossZoneMessageKey,
     ) -> Result<DeadLetterRequeue> {
         self.store.requeue_dead_letter_dispatch(message_key).await
     }
@@ -1904,9 +1878,10 @@ async fn apply_follow_update<S: StorageActorTrait>(
     let deposit_records: Vec<PendingDepositEventRecord> =
         deposits.iter().map(pending_deposit_event_record).collect();
 
-    // One reconciliation unit per released note, matching how the intents were
-    // recorded at publish time.
-    let consumed_withdrawals: Vec<WithdrawalReconciliationKey> = withdrawals
+    // A set, because a released note identifies its withdrawal outright: the
+    // chain releases a note once, so a repeat here is a re-delivery, not a
+    // second withdrawal.
+    let consumed_withdrawals: HashSet<WithdrawalReconciliationKey> = withdrawals
         .iter()
         .flat_map(|withdraw| withdraw.op.inputs.iter())
         .map(withdrawal_reconciliation_key)
@@ -1972,11 +1947,11 @@ async fn apply_follow_update<S: StorageActorTrait>(
             warn!("Head rewound from {before} to {after}");
         }
 
-        let mut to_persist: Vec<(&Block, bool)> = adopted
+        let mut to_persist: Vec<&Block> = adopted
             .iter()
             .zip(&outcomes)
             .filter(|(_, outcome)| matches!(outcome, AcceptOutcome::Applied))
-            .map(|(block, _)| (block, false))
+            .map(|(block, _)| block)
             .collect();
 
         // Only blocks the final tier holds drive the bookkeeping below: a parked
@@ -1987,7 +1962,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         for ((block, _), outcome) in finalized.iter().zip(&finalized_outcomes) {
             match outcome {
                 AcceptOutcome::Applied => {
-                    to_persist.push((block, true));
+                    to_persist.push(block);
                     irreversible.push(block);
                     final_advanced = true;
                 }
@@ -2072,7 +2047,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // dropped. Keyed by op id, not block id: a record only goes once its own
         // deposit finalizes, never because some other block finalized at its
         // height.
-        let finalized_deposit_ids: Vec<HashType> = irreversible
+        let finalized_deposit_ids: HashSet<HashType> = irreversible
             .iter()
             .flat_map(|block| block.body.transactions.iter())
             .filter_map(extract_bridge_deposit_id)
@@ -2081,7 +2056,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // The same for cross-zone deliveries, keyed by message key: a record
         // goes once its own delivery is irreversible, never because another
         // block finalized at its height.
-        let mut finalized_dispatch_keys: Vec<[u8; 32]> = Vec::new();
+        let mut finalized_dispatch_keys = HashSet::new();
         for block in &irreversible {
             finalized_dispatch_keys.extend(settled_dispatch_keys(storage_ref, block).await);
         }
@@ -2090,22 +2065,19 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // and continuing would leave a permanent gap in the store. The `panic!`
         // ends the drive task, whose cancellation halts the node.
         let outcome = storage_ref
-            .ask(ApplyStoreUpdate {
+            .ask(AtomicUpdate {
                 checkpoint: Some(checkpoint_bytes),
-                blocks: to_persist
-                    .into_iter()
-                    .map(|(block, fin)| (block.clone(), fin))
-                    .collect(),
+                blocks: to_persist.into_iter().cloned().collect(),
                 channel_cursor: chain.channel_cursor().map(Into::into),
                 head_tip,
                 head_state: chain.share_head_state(),
                 final_snapshot: final_meta.map(|meta| (chain.share_final_state(), meta)),
                 finalized_up_to: last_finalized,
                 new_deposit_events: deposit_records,
-                remove_deposit_records: finalized_deposit_ids,
-                remove_dispatch_records: finalized_dispatch_keys,
+                finalized_deposit_records: finalized_deposit_ids,
+                finalized_dispatch_records: finalized_dispatch_keys,
                 consumed_withdrawals,
-                new_withdraw_intents: Vec::new(),
+                new_withdraw_intents: HashSet::new(),
                 zone_anchor: None,
                 lower_published_high_water,
             })
@@ -2128,7 +2100,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
     }
     for withdrawal in &outcome.unmatched_withdrawals {
         warn!(
-            "Unexpected Bedrock Withdraw event releasing channel note {}: no matching unseen withdraw found",
+            "Unexpected Bedrock Withdraw event releasing channel note {}: this node published no withdrawal for it",
             hex::encode(withdrawal.released_note_id)
         );
     }
@@ -2701,7 +2673,7 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
 /// A delivery in an irreversible block settles its pending record, so the record
 /// is dropped by identity rather than by the height it happened to land at.
 #[must_use]
-fn extract_cross_zone_dispatch_key(tx: &LeeTransaction) -> Option<[u8; 32]> {
+fn extract_cross_zone_dispatch_key(tx: &LeeTransaction) -> Option<CrossZoneMessageKey> {
     extract_cross_zone_dispatch(tx).map(|msg| {
         cross_zone_inbox_core::message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index)
     })
@@ -2720,7 +2692,7 @@ fn extract_cross_zone_dispatch_key(tx: &LeeTransaction) -> Option<[u8; 32]> {
 async fn settled_dispatch_keys<S: StorageActorTrait>(
     storage_ref: &ActorRef<S>,
     block: &Block,
-) -> Vec<[u8; 32]> {
+) -> HashSet<CrossZoneMessageKey> {
     let recorded = storage_ref
         .ask(GetPendingCrossZoneDispatches)
         .await
@@ -2744,8 +2716,8 @@ async fn settled_dispatch_keys<S: StorageActorTrait>(
 fn classify_settled_deliveries(
     recorded: &[PendingCrossZoneDispatchRecord],
     block: &Block,
-) -> (Vec<[u8; 32]>, Vec<[u8; 32]>) {
-    let mut keys = Vec::new();
+) -> (HashSet<CrossZoneMessageKey>, Vec<CrossZoneMessageKey>) {
+    let mut keys = HashSet::new();
     let mut forged = Vec::new();
     for tx in &block.body.transactions {
         let Some(key) = extract_cross_zone_dispatch_key(tx) else {
@@ -2760,7 +2732,7 @@ fn classify_settled_deliveries(
         if mismatched {
             forged.push(key);
         }
-        keys.push(key);
+        keys.insert(key);
     }
     (keys, forged)
 }

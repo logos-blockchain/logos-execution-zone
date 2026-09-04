@@ -1,8 +1,4 @@
-// TODO: Instead of `From` conversions from `protocol` types to `cell` types consider moving
-// `storage` crate as sub-module in `actor` while removing `cell` types and implementing
-// encoding/decoding for `protocol` structures.
-
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use common::{
     HashType,
@@ -10,20 +6,17 @@ use common::{
 };
 use lee::V03State;
 use lee_core::BlockId;
-use storage::sequencer::{self as db, sequencer_cells as db_cells};
 
-use crate::Result;
+/// Content-addressed replay key of a cross-zone message, and the identity of the
+/// records tracking its delivery.
+pub type CrossZoneMessageKey = [u8; 32];
 
-/// Persists `block` with the effects it covers.
-pub struct RecordNewBlock {
-    pub block: Block,
-    /// The `MsgId` the block was inscribed under; `None` leaves the stored
-    /// cursor untouched.
-    pub channel_cursor: Option<[u8; 32]>,
-    pub withdrawals: Vec<WithdrawalReconciliationKey>,
-    pub state: Arc<V03State>,
-    pub checkpoint_bytes: Option<Vec<u8>>,
-}
+/// Zone id of a cross-zone peer.
+pub type PeerZoneKey = [u8; 32];
+
+/// The zone-sdk `MsgId` of a channel inscription, as the raw bytes it wraps: the
+/// sdk type does not derive borsh, and so cannot be stored.
+pub type MsgId = [u8; 32];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GetBlock {
@@ -40,10 +33,6 @@ pub struct DeleteBlock {
     pub block_id: BlockId,
 }
 
-pub struct MarkBlockAsFinalized {
-    pub block_id: BlockId,
-}
-
 pub struct ResetAllBlocksToPending;
 
 pub struct GetFirstBlockId;
@@ -57,6 +46,7 @@ pub struct GetLeeState;
 pub struct GetZoneCheckpointBytes;
 
 pub struct SetZoneCheckpointBytes {
+    // TODO: Consider `bytes` crate for all `Vec<u8>` in protocol.
     pub bytes: Vec<u8>,
 }
 
@@ -86,20 +76,7 @@ pub struct RaisePublishedHighWater {
 
 pub struct GetPendingDepositEvents;
 
-pub struct AddPendingDepositEvent {
-    pub event: PendingDepositEventRecord,
-}
-
 pub struct GetFinalSnapshot;
-
-/// Marks every stored pending block at or below `last_finalized` as finalized.
-pub struct CleanPendingBlocksUpTo {
-    pub last_finalized: BlockId,
-}
-
-pub struct ConsumeUnseenWithdrawCount {
-    pub withdrawal: WithdrawalReconciliationKey,
-}
 
 pub struct GetPendingCrossZoneDispatches;
 
@@ -108,19 +85,21 @@ pub struct AddPendingCrossZoneDispatches {
 }
 
 pub struct DropSettledCrossZoneDispatches {
-    pub message_keys: Vec<[u8; 32]>,
+    pub message_keys: HashSet<CrossZoneMessageKey>,
 }
 
 pub struct RecordDispatchFailure {
-    pub message_key: [u8; 32],
+    pub message_key: CrossZoneMessageKey,
     pub retire_at: u32,
     pub origin: DispatchOrigin,
 }
 
 pub struct GetDeadLetterDispatches;
 
+/// Restores a retained dead-lettered delivery to the pending list, with a clean
+/// attempt count.
 pub struct RequeueDeadLetterDispatch {
-    pub message_key: [u8; 32],
+    pub message_key: CrossZoneMessageKey,
 }
 
 pub struct GetDeadLetterDispatchCount;
@@ -149,20 +128,17 @@ pub struct SetCrossZonePeerTip {
 
 pub struct DumpDb;
 
-/// Everything one sequencer event writes.
-// TODO: Consider removing [`SetZoneCheckpointBytes`] in favor of this.
-// TODO: How does this stack with [`RecordNewBlock`] ?
-// TODO: Reconsider options here.
-pub struct ApplyStoreUpdate {
+/// Update everything in the store at once, atomically.
+pub struct AtomicUpdate {
     /// Serialized zone-sdk checkpoint for this event.
     pub checkpoint: Option<Vec<u8>>,
 
-    /// `(block, finalized)` payloads to write.
-    pub blocks: Vec<(Block, bool)>,
+    /// Block payloads to write.
+    pub blocks: Vec<Block>,
 
     /// The `MsgId` of the newest inscription this update processed, block or
     /// not; `None` leaves the stored cursor untouched.
-    pub channel_cursor: Option<[u8; 32]>,
+    pub channel_cursor: Option<MsgId>,
 
     /// Head tip to pin the stored chain to; `None` only for an empty chain.
     pub head_tip: Option<BlockMeta>,
@@ -178,15 +154,15 @@ pub struct ApplyStoreUpdate {
 
     /// Deposit events observed on L1, recorded unless already pending.
     pub new_deposit_events: Vec<PendingDepositEventRecord>,
-
     /// Deposit op ids whose mint finalized: their pending records are dropped.
-    pub remove_deposit_records: Vec<HashType>,
-    /// Message keys whose delivery finalized: their pending records are dropped.
-    pub remove_dispatch_records: Vec<[u8; 32]>,
-    /// L1 withdraw events to reconcile against the local unseen counters.
-    pub consumed_withdrawals: Vec<WithdrawalReconciliationKey>,
+    pub finalized_deposit_records: HashSet<HashType>,
+    /// L1 withdraw events to reconcile against the intents held locally.
+    pub consumed_withdrawals: HashSet<WithdrawalReconciliationKey>,
     /// L2 withdraw intents this update raises, awaiting their L1 event.
-    pub new_withdraw_intents: Vec<WithdrawalReconciliationKey>,
+    pub new_withdraw_intents: HashSet<WithdrawalReconciliationKey>,
+
+    /// Message keys whose delivery finalized: their pending records are dropped.
+    pub finalized_dispatch_records: HashSet<CrossZoneMessageKey>,
 
     /// Advance the channel-read anchor.
     pub zone_anchor: Option<ZoneAnchorRecord>,
@@ -195,30 +171,38 @@ pub struct ApplyStoreUpdate {
     pub lower_published_high_water: Option<BlockId>,
 }
 
-/// Zone id of a cross-zone peer.
-pub type PeerZoneKey = [u8; 32];
+impl AtomicUpdate {
+    /// Create [`ApplyStoreUpdate`] from a single non-finalized block and state.
+    ///
+    /// Leaves all other fields empty or [`None`].
+    #[must_use]
+    pub fn from_block(block: Block, state: Arc<V03State>) -> Self {
+        Self {
+            checkpoint: None,
+            head_tip: Some(BlockMeta::from(&block)),
+            blocks: vec![block],
+            channel_cursor: None,
+            head_state: state,
+            final_snapshot: None,
+            finalized_up_to: None,
+            new_deposit_events: Vec::new(),
+            finalized_deposit_records: HashSet::new(),
+            finalized_dispatch_records: HashSet::new(),
+            consumed_withdrawals: HashSet::new(),
+            new_withdraw_intents: HashSet::new(),
+            zone_anchor: None,
+            lower_published_high_water: None,
+        }
+    }
+}
 
 /// Identity of one withdrawal: the id of the channel note it releases.
 ///
 /// Shared by the intent recorded when the sequencer publishes a withdrawal and
 /// the Bedrock event that later reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WithdrawalReconciliationKey {
     pub released_note_id: [u8; 32],
-}
-
-impl From<WithdrawalReconciliationKey> for db_cells::WithdrawalReconciliationKey {
-    fn from(WithdrawalReconciliationKey { released_note_id }: WithdrawalReconciliationKey) -> Self {
-        Self { released_note_id }
-    }
-}
-
-impl From<db_cells::WithdrawalReconciliationKey> for WithdrawalReconciliationKey {
-    fn from(
-        db_cells::WithdrawalReconciliationKey { released_note_id }: db_cells::WithdrawalReconciliationKey,
-    ) -> Self {
-        Self { released_note_id }
-    }
 }
 
 /// The last channel block read back and verified from Bedrock: the anchor for
@@ -233,38 +217,6 @@ pub struct ZoneAnchorRecord {
     pub hash: HashType,
 }
 
-impl From<ZoneAnchorRecord> for db_cells::ZoneAnchorRecord {
-    fn from(
-        ZoneAnchorRecord {
-            slot,
-            block_id,
-            hash,
-        }: ZoneAnchorRecord,
-    ) -> Self {
-        Self {
-            slot,
-            block_id,
-            hash,
-        }
-    }
-}
-
-impl From<db_cells::ZoneAnchorRecord> for ZoneAnchorRecord {
-    fn from(
-        db_cells::ZoneAnchorRecord {
-            slot,
-            block_id,
-            hash,
-        }: db_cells::ZoneAnchorRecord,
-    ) -> Self {
-        Self {
-            slot,
-            block_id,
-            hash,
-        }
-    }
-}
-
 /// An L1 deposit event observed but not yet seen finalized.
 ///
 /// Purely a liveness queue: whether to emit a mint is decided against chain
@@ -275,42 +227,6 @@ pub struct PendingDepositEventRecord {
     pub source_tx_hash: HashType,
     pub amount: u64,
     pub metadata: Vec<u8>,
-}
-
-impl From<PendingDepositEventRecord> for db_cells::PendingDepositEventRecord {
-    fn from(
-        PendingDepositEventRecord {
-            deposit_op_id,
-            source_tx_hash,
-            amount,
-            metadata,
-        }: PendingDepositEventRecord,
-    ) -> Self {
-        Self {
-            deposit_op_id,
-            source_tx_hash,
-            amount,
-            metadata,
-        }
-    }
-}
-
-impl From<db_cells::PendingDepositEventRecord> for PendingDepositEventRecord {
-    fn from(
-        db_cells::PendingDepositEventRecord {
-            deposit_op_id,
-            source_tx_hash,
-            amount,
-            metadata,
-        }: db_cells::PendingDepositEventRecord,
-    ) -> Self {
-        Self {
-            deposit_op_id,
-            source_tx_hash,
-            amount,
-            metadata,
-        }
-    }
 }
 
 /// A cross-zone delivery read off a peer block but not yet known to be
@@ -325,7 +241,7 @@ impl From<db_cells::PendingDepositEventRecord> for PendingDepositEventRecord {
 pub struct PendingCrossZoneDispatchRecord {
     /// Content-addressed replay key of the delivered message, and this record's
     /// identity.
-    pub message_key: [u8; 32],
+    pub message_key: CrossZoneMessageKey,
     /// The borsh-encoded dispatch transaction, so production can re-feed it
     /// without re-reading the peer channel.
     pub transaction: Vec<u8>,
@@ -337,43 +253,11 @@ pub struct PendingCrossZoneDispatchRecord {
 impl PendingCrossZoneDispatchRecord {
     /// A delivery the watcher has just read: never attempted.
     #[must_use]
-    pub const fn recorded(message_key: [u8; 32], transaction: Vec<u8>) -> Self {
+    pub const fn recorded(message_key: CrossZoneMessageKey, transaction: Vec<u8>) -> Self {
         Self {
             message_key,
             transaction,
             failed_attempts: 0,
-        }
-    }
-}
-
-impl From<PendingCrossZoneDispatchRecord> for db_cells::PendingCrossZoneDispatchRecord {
-    fn from(
-        PendingCrossZoneDispatchRecord {
-            message_key,
-            transaction,
-            failed_attempts,
-        }: PendingCrossZoneDispatchRecord,
-    ) -> Self {
-        Self {
-            message_key,
-            transaction,
-            failed_attempts,
-        }
-    }
-}
-
-impl From<db_cells::PendingCrossZoneDispatchRecord> for PendingCrossZoneDispatchRecord {
-    fn from(
-        db_cells::PendingCrossZoneDispatchRecord {
-            message_key,
-            transaction,
-            failed_attempts,
-        }: db_cells::PendingCrossZoneDispatchRecord,
-    ) -> Self {
-        Self {
-            message_key,
-            transaction,
-            failed_attempts,
         }
     }
 }
@@ -387,38 +271,6 @@ pub struct DispatchOrigin {
     pub src_tx_index: u32,
 }
 
-impl From<DispatchOrigin> for db_cells::DispatchOrigin {
-    fn from(
-        DispatchOrigin {
-            src_zone,
-            src_block_id,
-            src_tx_index,
-        }: DispatchOrigin,
-    ) -> Self {
-        Self {
-            src_zone,
-            src_block_id,
-            src_tx_index,
-        }
-    }
-}
-
-impl From<db_cells::DispatchOrigin> for DispatchOrigin {
-    fn from(
-        db_cells::DispatchOrigin {
-            src_zone,
-            src_block_id,
-            src_tx_index,
-        }: db_cells::DispatchOrigin,
-    ) -> Self {
-        Self {
-            src_zone,
-            src_block_id,
-            src_tx_index,
-        }
-    }
-}
-
 /// A cross-zone delivery this node has given up on.
 ///
 /// A dispatch that fails execution is left out of the block, so nothing on
@@ -426,8 +278,8 @@ impl From<db_cells::DispatchOrigin> for DispatchOrigin {
 /// carries the encoded transaction so a requeue can restore the delivery
 /// without re-reading the peer channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeadLetterDispatchRecord {
-    pub message_key: [u8; 32],
+pub struct DeadLetterDispatch {
+    pub message_key: CrossZoneMessageKey,
     pub origin: DispatchOrigin,
     /// Attempts made before giving up, so the record carries the policy that was
     /// in force at the time.
@@ -435,24 +287,6 @@ pub struct DeadLetterDispatchRecord {
     /// The borsh-encoded dispatch transaction. Its length is the diagnostic for
     /// size-related failures.
     pub transaction: Vec<u8>,
-}
-
-impl From<db_cells::DeadLetterDispatchRecord> for DeadLetterDispatchRecord {
-    fn from(
-        db_cells::DeadLetterDispatchRecord {
-            message_key,
-            origin,
-            failed_attempts,
-            transaction,
-        }: db_cells::DeadLetterDispatchRecord,
-    ) -> Self {
-        Self {
-            message_key,
-            origin: origin.into(),
-            failed_attempts,
-            transaction,
-        }
-    }
 }
 
 /// What restoring a dead-lettered delivery did.
@@ -470,40 +304,16 @@ pub enum DeadLetterRequeue {
     NotRetained,
 }
 
-impl From<db::DeadLetterRequeue> for DeadLetterRequeue {
-    fn from(value: db::DeadLetterRequeue) -> Self {
-        match value {
-            db::DeadLetterRequeue::Requeued => Self::Requeued,
-            db::DeadLetterRequeue::AlreadyPending => Self::AlreadyPending,
-            db::DeadLetterRequeue::NotFound => Self::NotFound,
-            db::DeadLetterRequeue::NotRetained => Self::NotRetained,
-        }
-    }
-}
-
 /// What counting a failed production attempt did to a delivery's record, the
 /// reply to [`RecordDispatchFailure`].
-///
-/// Three outcomes rather than a bool: only one means this node stopped trying,
-/// and a settled delivery has no record, so it is [`Self::Absent`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchFailure {
     /// Counted; the delivery is still pending and will be attempted again.
     Retried { failed_attempts: u32 },
     /// Given up on: moved out of the pending list and into the dead letter.
-    Retired(Box<DeadLetterDispatchRecord>),
+    Retired(Box<DeadLetterDispatch>),
     /// No pending record, so nothing was counted and nothing was given up on.
     Absent,
-}
-
-impl From<db::DispatchFailure> for DispatchFailure {
-    fn from(value: db::DispatchFailure) -> Self {
-        match value {
-            db::DispatchFailure::Retried { failed_attempts } => Self::Retried { failed_attempts },
-            db::DispatchFailure::Retired(record) => Self::Retired(Box::new((*record).into())),
-            db::DispatchFailure::Absent => Self::Absent,
-        }
-    }
 }
 
 /// What [`ApplyStoreUpdate`] observed while staging, for the caller to act on
@@ -513,47 +323,12 @@ pub struct StoreUpdateOutcome {
     /// How many deposit events were newly recorded; the rest were already
     /// pending, and so already owed.
     pub accepted_deposits: usize,
-    /// Withdraw events with no matching local unseen counter, one entry per
-    /// unmatched occurrence.
+    /// The `consumed_withdrawals` this node holds no intent for: a released
+    /// note it never published, and so cannot account for.
     pub unmatched_withdrawals: Vec<WithdrawalReconciliationKey>,
 }
 
-impl From<db::StoreUpdateOutcome> for StoreUpdateOutcome {
-    fn from(
-        db::StoreUpdateOutcome {
-            accepted_deposits,
-            unmatched_withdrawals,
-        }: db::StoreUpdateOutcome,
-    ) -> Self {
-        Self {
-            accepted_deposits,
-            unmatched_withdrawals: unmatched_withdrawals.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
 /// Schema-agnostic snapshot of a whole store, opaque by design.
-pub struct DbDump(db::DbDump);
-
-impl DbDump {
-    /// Serializes the dump to a compressed blob.
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        self.0.to_bytes().map_err(Into::into)
-    }
-
-    /// Reads back a dump produced by [`Self::to_bytes`].
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        db::DbDump::from_bytes(bytes).map(Self).map_err(Into::into)
-    }
-
-    /// The wrapped dump, for the restore path.
-    pub(crate) const fn as_db_dump(&self) -> &db::DbDump {
-        &self.0
-    }
-}
-
-impl From<db::DbDump> for DbDump {
-    fn from(value: db::DbDump) -> Self {
-        Self(value)
-    }
+pub struct DbDump {
+    pub bytes: Vec<u8>,
 }

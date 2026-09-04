@@ -7,30 +7,50 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Adds actor implementation.
+actor = [
+  "dep:sequencer_executor_actor_metrics",
+  "dep:lee",
+  "dep:sequencer_core",
+  "dep:mempool",
+
+  "dep:tokio",
+  "dep:tokio-util",
+  "dep:futures",
+  "dep:log",
+]
+# Adds mock actor implementation.
+mock = ["dep:mockall"]
+
 [dependencies]
-sequencer_core.workspace = true
-sequencer_service_protocol.workspace = true
-sequencer_core_metrics = { workspace = true, features = ["record"] }
 common.workspace = true
 lee_core.workspace = true
-mempool.workspace = true
 sequencer_storage_actor.workspace = true
+sequencer_executor_actor_metrics = { workspace = true, features = [
+  "record",
+], optional = true }
+lee = { workspace = true, optional = true }
+sequencer_core = { workspace = true, optional = true }
+mempool = { workspace = true, optional = true }
 
 kameo.workspace = true
-tokio.workspace = true
-tokio-util.workspace = true
-futures.workspace = true
-log.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 num-traits.workspace = true
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+log = { workspace = true, optional = true }
+mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
-lee.workspace = true
+lee = { workspace = true, features = ["test-utils"] }
 sequencer_core = { workspace = true, features = ["mock"] }
 sequencer_storage_actor = { workspace = true, features = ["mock"] }
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
+programs.workspace = true
 test_programs.workspace = true
 testnet_initial_state.workspace = true
 
@@ -39,3 +59,4 @@ mockall.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
 num-bigint.workspace = true
+borsh.workspace = true

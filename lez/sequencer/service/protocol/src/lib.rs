@@ -3,16 +3,36 @@
 use std::{fmt::Display, str::FromStr};
 
 pub use common::{HashType, block::Block, transaction::LeeTransaction};
-pub use fees::{AdmissionRejection, FeeStateQuote};
 pub use lee::{Account, AccountId, ProgramId};
 pub use lee_core::{BlockId, Commitment, CommitmentSetDigest, MembershipProof, account::Nonce};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-mod fees;
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]
 pub struct ChannelId(pub [u8; 32]);
+
+/// The fee market priced off the head state, for wallets sizing `max_fee`.
+///
+/// TODO: Move slop struct description into by-field descriptions.
+/// The next-block figures are a band rather than an estimate: the block being
+/// filled is not observable at query time, so the quote steps the market once
+/// at an empty block (floor) and once at a block filled to its caps (ceiling);
+/// every possible next-block base fee lies between them. Fee-exempt classes
+/// (private transactions, deployments) pay nothing under the interim policy
+/// and are not quoted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeeStateQuote {
+    /// The block height the quoted state settled at, for staleness checks.
+    pub height: u64,
+    pub base_fee_exec: u64,
+    pub base_fee_stor: u64,
+    pub next_base_fee_exec_floor: u64,
+    pub next_base_fee_exec_ceiling: u64,
+    pub next_base_fee_stor_floor: u64,
+    pub next_base_fee_stor_ceiling: u64,
+    pub max_gas_exec: u64,
+    pub max_gas_stor: u64,
+}
 
 /// A cross-zone delivery a sequencer gave up on after repeated failures.
 ///

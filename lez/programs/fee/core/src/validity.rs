@@ -16,15 +16,22 @@ use crate::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum FeeError {
-    #[error("data_bytes {data_bytes} outside 1..=MAX_GAS_STOR")]
+    #[error("data_bytes {data_bytes} outside 1..=max {}", market::MAX_GAS_STOR)]
     DataBytesOutOfRange { data_bytes: u64 },
-    #[error("gas_limit {gas_limit} above MAX_GAS_EXEC")]
+
+    #[error("gas_limit {gas_limit} above max {}", market::MAX_GAS_EXEC)]
     GasLimitAboveCap { gas_limit: u64 },
+
     #[error("max_fee {max_fee} below the fee reserve {fee_reserve}")]
     MaxFeeBelowReserve { fee_reserve: u128, max_fee: u128 },
-    #[error("block execution gas total {total} exceeds MAX_GAS_EXEC")]
+
+    #[error(
+        "block execution gas total {total} exceeds max {}",
+        market::MAX_GAS_EXEC
+    )]
     ExecGasCapExceeded { total: u128 },
-    #[error("block storage gas total {total} exceeds MAX_GAS_STOR")]
+
+    #[error("block storage gas total {total} exceeds max {}", market::MAX_GAS_STOR)]
     StorGasCapExceeded { total: u128 },
 }
 

@@ -29,7 +29,7 @@ pub struct SequencerHandle {
     // NOTE: Order of fields matters as it affects drop order.
     scheduler: ActorHandle<Scheduler>,
     rpc_server: ActorHandle<RpcServerActor>,
-    executor: ActorHandle<ExecutorActor<BlockPublisher>>,
+    executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
     storage: ActorHandle<StorageActor>,
     addr: SocketAddr,
     /// Held for its lifetime: dropping it stops the gossip drive task.
@@ -41,7 +41,7 @@ impl SequencerHandle {
     const fn new(
         scheduler: ActorHandle<Scheduler>,
         rpc_server: ActorHandle<RpcServerActor>,
-        executor: ActorHandle<ExecutorActor<BlockPublisher>>,
+        executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
         storage: ActorHandle<StorageActor>,
         addr: SocketAddr,
         gossip: Option<sequencer_core::gossip::GossipNetwork>,
@@ -184,18 +184,14 @@ pub fn run(
                     std::sync::Arc::new(move |transaction| {
                         let executor_submit_ref = submit_ref.clone();
                         Box::pin(async move {
-                            use sequencer_executor_actor::protocol::{SubmitOutcome, Transaction};
+                            use sequencer_executor_actor::protocol::{
+                                Transaction, TransactionOrigin,
+                            };
                             let message = Transaction {
                                 transaction,
-                                origin: sequencer_core::TransactionOrigin::Gossip,
+                                origin: TransactionOrigin::Gossip,
                             };
-                            match executor_submit_ref.ask(message).await {
-                                Ok(SubmitOutcome::Admitted) => Ok(()),
-                                Ok(SubmitOutcome::Rejected(rejection)) => {
-                                    Err(rejection.to_string())
-                                }
-                                Err(err) => Err(format!("submission failed: {err}")),
-                            }
+                            executor_submit_ref.ask(message).await.map_err(Into::into)
                         })
                     });
                 let network = sequencer_core::gossip::GossipNetwork::start(
