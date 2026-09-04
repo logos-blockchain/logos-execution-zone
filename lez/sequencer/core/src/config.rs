@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use bytesize::ByteSize;
 use common::config::BasicAuth;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
@@ -14,6 +14,7 @@ use humantime_serde;
 use lee::{AccountId, Balance, PublicKey, Signature};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
+pub use sequencer_stake_core::ChannelParams;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -119,6 +120,10 @@ pub struct BedrockConfig {
     pub funding_key: ZkPublicKey,
     #[serde(default = "default_priority_fee_percent")]
     pub priority_fee_percent: u64,
+    /// What it takes to write on this channel, fixed at genesis: the stake a
+    /// key needs to be accredited, and the turn timing round robin runs on.
+    /// Every node on the channel must agree on them.
+    pub channel_params: ChannelParams,
 }
 
 impl SequencerConfig {
@@ -129,8 +134,20 @@ impl SequencerConfig {
     pub fn from_path(config_home: &Path) -> Result<Self> {
         let file = File::open(config_home)?;
         let reader = BufReader::new(file);
+        let config: Self = serde_json::from_reader(reader)?;
 
-        Ok(serde_json::from_reader(reader)?)
+        // A turn passes on after `posting_timeout` idle slots (1 slot = 1s), so a slower block
+        // interval drops our turn between our own blocks.
+        let posting_timeout = Duration::from_secs(u64::from(
+            config.bedrock_config.channel_params.posting_timeout,
+        ));
+        ensure!(
+            config.block_create_timeout < posting_timeout,
+            "block_create_timeout ({:?}) must be under posting_timeout ({posting_timeout:?})",
+            config.block_create_timeout
+        );
+
+        Ok(config)
     }
 
     /// Where this sequencer's database lives, suffixed with the channel id like
@@ -164,4 +181,14 @@ const fn default_metrics_address() -> Option<SocketAddr> {
 #[must_use]
 pub const fn default_priority_fee_percent() -> u64 {
     12
+}
+
+/// Production defaults for the values genesis fixes.
+#[must_use]
+pub const fn default_channel_params() -> ChannelParams {
+    ChannelParams {
+        minimum_sequencer_stake: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
+        posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+        posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+    }
 }

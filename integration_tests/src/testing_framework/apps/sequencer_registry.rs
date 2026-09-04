@@ -169,8 +169,13 @@ impl LezSequencerRegistryClient {
                     .ok_or_else(|| anyhow!("initial committee alias '{alias}' is not registered"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let generated = test_fixtures::config::genesis_sequencer_stakes(&signing_keys)
-            .context("failed to build founding sequencer stakes")?;
+        // Every sequencer in this registry shares one config, so its params are
+        // the ones the channel is created with.
+        let generated = test_fixtures::config::genesis_sequencer_stakes(
+            &signing_keys,
+            self.0.config.channel_params,
+        )
+        .context("failed to build founding sequencer stakes")?;
         *genesis = Some(generated.clone());
         Ok(generated)
     }

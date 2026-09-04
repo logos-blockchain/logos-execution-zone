@@ -24,3 +24,6 @@ integration_tests/configs/debug/
 
 /integration_tests/cucumber_tests/temp/
 MyLogFile.log
+# default sequencer home for `just run-sequencer`
+lez/sequencer/service/sequencer_home/
+__pycache__/

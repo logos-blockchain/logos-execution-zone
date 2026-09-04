@@ -240,6 +240,7 @@ async fn committee_is_active(
         funding_key: config::bedrock_funding_key(),
         auth: None,
         priority_fee_percent: 12,
+        channel_params: sequencer_core::config::default_channel_params(),
     };
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {
@@ -302,6 +303,7 @@ async fn sequencer_becomes_posting_turn(
         funding_key: config::bedrock_funding_key(),
         auth: None,
         priority_fee_percent: 12,
+        channel_params: sequencer_core::config::default_channel_params(),
     };
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {

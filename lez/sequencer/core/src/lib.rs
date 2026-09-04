@@ -460,13 +460,19 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             // founding set is applied by the same tx that writes genesis; the
             // committee is never observable without it.
             let founding_committee = founding_committee(&config, own_sequencer_key);
+            // The account, not the config: the genesis tx above already wrote
+            // the configured values there, and the account is what every later
+            // update reads, so creation must not have a second source.
+            let channel_params =
+                committee_discovery::channel_params(chain.lock().await.head_state())
+                    .expect("genesis sets the channel posting params in the stake config account");
 
             let mut last_checkpoint = None;
             for block in &pending_blocks {
                 let publish = match &founding_committee {
                     Some(keys) if block.header.block_id == GENESIS_BLOCK_ID => {
                         block_publisher
-                            .publish_genesis_creating_channel(block, keys.clone())
+                            .publish_genesis_creating_channel(block, keys.clone(), channel_params)
                             .await
                     }
                     _ => block_publisher.publish_block(block, vec![]).await,
@@ -622,12 +628,18 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             let ZoneMessage::Block(zone_block) = message else {
                 continue;
             };
-            let block: Block = borsh::from_slice(&zone_block.data).map_err(|err| {
-                anyhow!(
-                    "Failed to deserialize channel block at slot {}: {err}",
-                    slot.into_inner()
-                )
-            })?;
+            // An offence the channel already carries, so replaying it must not
+            // be fatal: skip the payload and let the pin follow the entry, the
+            // same way the follow path treats one.
+            let Ok(block) = borsh::from_slice::<Block>(&zone_block.data) else {
+                warn!(
+                    "Skipping an undecodable inscription {:?} at slot {}",
+                    zone_block.id,
+                    slot.into_inner(),
+                );
+                chain.lock().await.skip_channel_entry(zone_block.id);
+                continue;
+            };
             // Locked per message (not across the stream `await`): concurrent
             // follow events interleave safely — both paths apply idempotently
             // and persist under this same lock.
@@ -918,8 +930,24 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
                     .expect("sequencer key was decoded from a valid Ed25519 public key")
             })
             .collect();
+        // Same state the committee decision itself was read from, and the params
+        // have not moved since genesis set them.
+        let channel_params = {
+            let chain = self.chain.lock().await;
+            committee_discovery::channel_params(chain.final_state())
+        };
+        let Some(channel_params) = channel_params else {
+            warn!(
+                "sequencer_stake config carries no channel posting params; skipping committee update"
+            );
+            return;
+        };
         self.last_committee_submission_slot = tip_slot;
-        if let Err(err) = self.block_publisher.submit_channel_config(new_keys).await {
+        if let Err(err) = self
+            .block_publisher
+            .submit_channel_config(new_keys, channel_params)
+            .await
+        {
             warn!("Failed to submit committee channel-config update: {err:#}");
         }
     }
@@ -1529,6 +1557,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         &self.sequencer_config
     }
 
+    /// This node's Bedrock public key, hex — the identity the channel's
+    /// accredited keys and round-robin are keyed by.
+    #[must_use]
+    pub fn bedrock_public_key_hex(&self) -> String {
+        hex::encode(self.bedrock_signing_key.public_key().to_bytes())
+    }
+
     /// Marks all pending blocks with `block_id <= last_finalized_block_id` as
     /// finalized. Idempotent. Production no longer calls this: finalization
     /// flips now ride the follow path's atomic write via
@@ -1708,9 +1743,9 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
         (self.next_block_height().await <= high_water).then_some(high_water)
     }
 
-    /// The live channel tip when it has moved past our pin, meaning the next
-    /// publish would be refused and the caller should skip its turn.
-    pub async fn pin_behind_channel_tip(&self) -> Option<MsgId> {
+    /// Our pin and the live channel tip when the tip has moved past it, meaning
+    /// the next publish would be refused and the caller should skip its turn.
+    pub async fn pin_behind_channel_tip(&self) -> Option<PinBehindTip> {
         let pin = {
             let chain = self.chain.lock().await;
             // A read can trail a publish of ours, so it cannot judge one.
@@ -1720,7 +1755,7 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
             chain.pin_parent()?
         };
         match self.block_publisher.channel_tip_message().await {
-            Ok(Some(tip)) if tip != pin => Some(tip),
+            Ok(Some(tip)) if tip != pin => Some(PinBehindTip { pin, tip }),
             Ok(_) => None,
             Err(err) => {
                 warn!(
@@ -1737,6 +1772,13 @@ impl<BP: BlockPublisherTrait, S: StorageActorTrait> SequencerCore<BP, S> {
     fn chain(&self) -> Arc<Mutex<ChainState>> {
         Arc::clone(&self.chain)
     }
+}
+
+/// A pin that trails the live channel tip: the parent we would publish on, and
+/// where the channel actually ends.
+pub struct PinBehindTip {
+    pub pin: MsgId,
+    pub tip: MsgId,
 }
 
 struct BlockWithMeta {
@@ -1885,12 +1927,24 @@ async fn apply_follow_update<S: StorageActorTrait>(
             );
         }
 
+        // A pin that stops moving while the channel keeps going is a wedge, so
+        // log each move.
+        let cursor_before = chain.channel_cursor();
+
         // The whole delta in one call. Outcomes align with the blocks passed in.
         let FollowOutcome {
             adopted: outcomes,
             finalized: finalized_outcomes,
             cursor_moved: _,
         } = chain.apply_follow(&orphaned, &adopted, &finalized, checkpoint.last_msg_id);
+
+        let cursor_after = chain.channel_cursor();
+        if cursor_before != cursor_after {
+            info!(
+                "Channel pin moved to {}",
+                cursor_after.map_or_else(|| "none".to_owned(), |msg| msg.to_string()),
+            );
+        }
 
         // An adoption that does not apply freezes the head where it is, and
         // every later one then fails the same way. Nothing else reports it.
@@ -2189,22 +2243,33 @@ fn build_genesis_state(
             let key_path = config.home.join("sequencer_stake_signing_key");
             let owner = load_or_create_stake_signing_key(&key_path)
                 .expect("Failed to load or create the stake signing key");
-            let signature = sign_genesis_stake(0, key, &owner);
+            let signature = sign_genesis_stake(
+                0,
+                key,
+                &owner,
+                config.bedrock_config.channel_params.minimum_sequencer_stake,
+            );
             (key, lee::PublicKey::new_from_private_key(&owner), signature)
         }));
     }
-    let bootstrap_stake_txs = build_stake_genesis_transactions(&staked);
+    let bootstrap_stake_txs = build_stake_genesis_transactions(
+        &staked,
+        config.bedrock_config.channel_params.minimum_sequencer_stake,
+    );
 
-    let mut genesis_txs: Vec<_> = cross_zone_config_txs
-        .chain(inbox_config_tx)
-        .chain(supply_txs)
-        .chain(bootstrap_stake_txs)
-        .inspect(|tx| {
-            state
-                .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
-                .expect("Failed to execute genesis transaction");
-        })
-        .collect();
+    let mut genesis_txs: Vec<_> = std::iter::once(build_init_channel_params_transaction(
+        config.bedrock_config.channel_params,
+    ))
+    .chain(cross_zone_config_txs)
+    .chain(inbox_config_tx)
+    .chain(supply_txs)
+    .chain(bootstrap_stake_txs)
+    .inspect(|tx| {
+        state
+            .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
+            .expect("Failed to execute genesis transaction");
+    })
+    .collect();
 
     // The genesis fee tx credits the first staked sequencer's ownership
     // account, already claimed by its stake tx above (which ran earlier in this
@@ -2297,8 +2362,9 @@ fn genesis_stake_message(
     index: usize,
     sequencer_key: sequencer_stake_core::SequencerKey,
     ownership_id: AccountId,
+    minimum_stake: u128,
 ) -> Message {
-    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let amount = minimum_stake;
     let mover_instruction_data = lee::program::Program::serialize_instruction(
         authenticated_transfer_core::Instruction::Transfer { amount },
     )
@@ -2339,22 +2405,45 @@ pub fn sign_genesis_stake(
     index: usize,
     sequencer_key: sequencer_stake_core::SequencerKey,
     ownership_key: &lee::PrivateKey,
+    minimum_stake: u128,
 ) -> lee::Signature {
     let ownership_id = AccountId::from(&lee::PublicKey::new_from_private_key(ownership_key));
-    let message = genesis_stake_message(index, sequencer_key, ownership_id);
+    let message = genesis_stake_message(index, sequencer_key, ownership_id, minimum_stake);
     lee::Signature::new(ownership_key, &message.hash())
+}
+
+/// Sets the channel posting params in the `sequencer_stake` config account.
+/// Unsigned and replayable, so an indexer reconstructs it from the genesis
+/// block rather than needing the sequencer's config.
+fn build_init_channel_params_transaction(
+    channel_params: config::ChannelParams,
+) -> PublicTransaction {
+    let message = Message::try_new(
+        programs::sequencer_stake().id().into(),
+        vec![system_accounts::sequencer_stake_config_account_id()],
+        vec![],
+        sequencer_stake_core::Instruction::InitChannelParams(channel_params),
+    )
+    .expect("Failed to build the InitChannelParams genesis message");
+    PublicTransaction::new(
+        message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    )
 }
 
 /// The founding sequencers' `Stake`s, funded via the faucet. Real transactions,
 /// not raw state, so followers replay them instead of missing them.
-fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTransaction> {
+fn build_stake_genesis_transactions(
+    staked: &[FoundingStake],
+    minimum_stake: u128,
+) -> Vec<PublicTransaction> {
     if staked.is_empty() {
         return Vec::new();
     }
 
     let funding_key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY).unwrap();
     let funding_public_key = lee::PublicKey::new_from_private_key(&funding_key);
-    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let amount = minimum_stake;
     let total = u128::try_from(staked.len())
         .ok()
         .and_then(|count| amount.checked_mul(count))
@@ -2379,7 +2468,8 @@ fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTrans
 
     for (index, (sequencer_key, ownership_public_key, signature)) in staked.iter().enumerate() {
         let ownership_id = AccountId::from(ownership_public_key);
-        let stake_message = genesis_stake_message(index, *sequencer_key, ownership_id);
+        let stake_message =
+            genesis_stake_message(index, *sequencer_key, ownership_id, minimum_stake);
         let stake_witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![
             (
                 lee::Signature::new(&funding_key, &stake_message.hash()),

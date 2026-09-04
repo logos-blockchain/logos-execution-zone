@@ -638,8 +638,13 @@ impl ZoneTestContextBuilder {
         let genesis_transactions = if mn_config.num_nodes == 1 {
             genesis_transactions
         } else {
-            let mut actions = config::genesis_sequencer_stakes(&sequencer_keys)
-                .context("Failed to build the founding sequencer stakes")?;
+            // The leader creates the channel, so its params are the ones these
+            // founding stakes must clear.
+            let mut actions = config::genesis_sequencer_stakes(
+                &sequencer_keys,
+                sequencer_partial_config.unwrap_or_default().channel_params,
+            )
+            .context("Failed to build the founding sequencer stakes")?;
             actions.extend(genesis_transactions.unwrap_or_default());
             // Returning Some() forces a live build below: the prebuilt dump stakes only one
             // sequencer.
@@ -1083,6 +1088,7 @@ async fn wait_until_channel_exists(bedrock_addr: SocketAddr, channel_id: Channel
         funding_key: config::bedrock_funding_key(),
         auth: None,
         priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+        channel_params: sequencer_core::config::default_channel_params(),
     };
     let wait = async {
         loop {

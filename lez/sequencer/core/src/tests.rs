@@ -142,6 +142,7 @@ fn setup_sequencer_config() -> SequencerConfig {
             auth: None,
             funding_key: ZkPublicKey::zero(),
             priority_fee_percent: config::default_priority_fee_percent(),
+            channel_params: crate::config::default_channel_params(),
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: vec![],
@@ -3921,7 +3922,12 @@ fn diag_sequencer_stake_claims_ownership_account() {
                     ..Account::default()
                 },
             ),
-            (config_id, system_accounts::sequencer_stake_config_account()),
+            (
+                config_id,
+                system_accounts::sequencer_stake_config_account(Some(
+                    crate::config::default_channel_params(),
+                )),
+            ),
         ]);
 
     assert_eq!(
@@ -4060,7 +4066,9 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
             ),
             (
                 system_accounts::sequencer_stake_config_account_id(),
-                system_accounts::sequencer_stake_config_account(),
+                system_accounts::sequencer_stake_config_account(Some(
+                    crate::config::default_channel_params(),
+                )),
             ),
         ])
 }
@@ -4294,7 +4302,9 @@ fn a_fully_exited_ownership_account_can_stake_again() {
             ),
             (
                 system_accounts::sequencer_stake_config_account_id(),
-                system_accounts::sequencer_stake_config_account(),
+                system_accounts::sequencer_stake_config_account(Some(
+                    crate::config::default_channel_params(),
+                )),
             ),
         ]);
 

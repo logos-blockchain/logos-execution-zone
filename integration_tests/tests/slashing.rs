@@ -112,6 +112,7 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         funding_key: config::bedrock_funding_key(),
         auth: None,
         priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+        channel_params: sequencer_core::config::default_channel_params(),
     };
 
     // An unaccredited key writes nothing that L1 accepts.
