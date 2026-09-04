@@ -191,25 +191,45 @@ typedef struct FfiU128 {
 } FfiU128;
 
 /**
+ * One program's record at an account - C-compatible version of a shard entry.
+ */
+typedef struct FfiShard {
+  /**
+   * Address of the program whose record this is.
+   */
+  struct FfiBytes32 program;
+  /**
+   * Pointer to the record's bytes.
+   */
+  const uint8_t *data;
+  /**
+   * Length of the record.
+   */
+  uintptr_t data_len;
+} FfiShard;
+
+/**
  * Account data structure - C-compatible version of lee Account.
+ *
+ * An account's records live one per program in `shards`; an empty `shards` means no program
+ * holds a record here.
  *
  * Note: `balance` and `nonce` are u128 values represented as little-endian
  * byte arrays since C doesn't have native u128 support.
  */
 typedef struct FfiAccount {
-  struct FfiBytes32 program_owner;
   /**
    * Balance as little-endian [u8; 16].
    */
   struct FfiU128 balance;
   /**
-   * Pointer to account data bytes.
+   * Pointer to this account's shards, ordered by program address.
    */
-  const uint8_t *data;
+  const struct FfiShard *shards;
   /**
-   * Length of account data.
+   * Number of shards.
    */
-  uintptr_t data_len;
+  uintptr_t shards_len;
   /**
    * Nonce as little-endian [u8; 16].
    */
@@ -230,8 +250,13 @@ typedef struct FfiTransferResult {
   bool success;
 } FfiTransferResult;
 
+typedef struct FfiBytes32 FfiPdaSeed;
+
 /**
  * Struct representing an account identity, given to `AccountManager` at intialization.
+ *
+ * `authority` and `seed` are the pair a private PDA's `account_id` was derived from; they are
+ * mandatory for the `PrivatePda*` kinds and ignored for every other one.
  */
 typedef struct FfiAccountIdentity {
   enum FfiAccountIdentityKind kind;
@@ -240,6 +265,8 @@ typedef struct FfiAccountIdentity {
    * C-compatible string.
    */
   char *key_path;
+  struct FfiBytes32 authority;
+  FfiPdaSeed seed;
   struct FfiBytes32 authorization_secret_key;
   struct FfiBytes32 nullifier_secret_key;
   struct FfiBytes32 nullifier_public_key;
@@ -247,6 +274,18 @@ typedef struct FfiAccountIdentity {
   uintptr_t viewing_public_key_len;
   struct FfiU128 identifier;
 } FfiAccountIdentity;
+
+/**
+ * One account as a transaction names it.
+ *
+ * An identity, plus the namespace it is named under. `has_namespace == false` means the call
+ * only moves the account's balance or checks its address, and `namespace` is then ignored.
+ */
+typedef struct FfiAccountMention {
+  struct FfiAccountIdentity identity;
+  struct FfiBytes32 namespace_;
+  bool has_namespace;
+} FfiAccountMention;
 
 /**
  * Program ID - 8 u32 values (32 bytes total).
@@ -318,8 +357,6 @@ typedef struct LabelList {
   uintptr_t labels_size;
   enum WalletFfiError error;
 } LabelList;
-
-typedef struct FfiBytes32 FfiPdaSeed;
 
 typedef struct FfiBytes32 FfiNullifierPublicKey;
 
@@ -600,7 +637,7 @@ enum WalletFfiError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
  *
  * # Parameters
  * - `handle`: Valid pointer to wallet handle
- * - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
+ * - `account_mentions`: Valid pointer to list of `FfiAccountMention`
  * - `instruction_data`: Valid pointer to instruction data bytes
  * - `out_result`: Valid pointer to `FfiTransactionResult`
  *
@@ -610,13 +647,13 @@ enum WalletFfiError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
  *
  * # Safety
  * - `handle` must be a valid pointer
- * - `account_identities` must be a valid pointer
+ * - `account_mentions` must be a valid pointer
  * - `instruction_data` must be a valid pointer
  * - `out_result` must be a valid pointer
  */
 enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHandle *handle,
-                                                               const struct FfiAccountIdentity *account_identities,
-                                                               uintptr_t account_identities_size,
+                                                               const struct FfiAccountMention *account_mentions,
+                                                               uintptr_t account_mentions_size,
                                                                const uint8_t *instruction_data,
                                                                uintptr_t instruction_data_size,
                                                                struct FfiProgramId program_id,
@@ -627,7 +664,7 @@ enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHand
  *
  * # Parameters
  * - `handle`: Valid pointer to wallet handle
- * - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
+ * - `account_mentions`: Valid pointer to list of `FfiAccountMention`
  * - `instruction_data`: Valid pointer to instruction data bytes
  * - `out_result`: Valid pointer to `FfiTransactionResult`
  *
@@ -637,13 +674,13 @@ enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHand
  *
  * # Safety
  * - `handle` must be a valid pointer
- * - `account_identities` must be a valid pointer
+ * - `account_mentions` must be a valid pointer
  * - `instruction_data` must be a valid pointer
  * - `out_result` must be a valid pointer
  */
 enum WalletFfiError wallet_ffi_send_generic_private_transaction(struct WalletHandle *handle,
-                                                                const struct FfiAccountIdentity *account_identities,
-                                                                uintptr_t account_identities_size,
+                                                                const struct FfiAccountMention *account_mentions,
+                                                                uintptr_t account_mentions_size,
                                                                 const uint8_t *instruction_data,
                                                                 uintptr_t instruction_data_size,
                                                                 const struct FfiProgramWithDependencies *program_with_dependencies,
@@ -1206,8 +1243,9 @@ enum WalletFfiError wallet_ffi_get_current_block_height(struct WalletHandle *han
  *
  * Transfers tokens from one public account to another on the network.
  *
- * If `to` is a fresh, unclaimed account whose key this wallet holds, the
- * transfer also signs with that key and claims the account.
+ * Only the two balances move; neither position names a program's record. If this wallet holds
+ * `to`'s key the transfer signs with it too, which authorizes but does not otherwise change the
+ * destination.
  *
  * # Parameters
  * - `handle`: Valid wallet handle

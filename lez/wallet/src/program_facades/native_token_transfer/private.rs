@@ -23,12 +23,14 @@ impl NativeTokenTransfer<'_> {
                 vec![
                     self.0
                         .resolve_private_account(from)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .balance_only(),
                     AccountIdentity::PrivateForeign {
                         npk: to_npk,
                         vpk: to_vpk,
                         identifier: to_identifier,
-                    },
+                    }
+                    .balance_only(),
                 ],
                 instruction_data,
                 &program.into(),
@@ -62,7 +64,7 @@ impl NativeTokenTransfer<'_> {
 
         self.0
             .send_privacy_preserving_tx_with_pre_check(
-                vec![from_account, to_account],
+                vec![from_account.balance_only(), to_account.balance_only()],
                 instruction_data,
                 &program.into(),
                 tx_pre_check,

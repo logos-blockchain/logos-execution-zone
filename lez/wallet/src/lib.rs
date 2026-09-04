@@ -12,21 +12,22 @@ use std::{
     path::PathBuf,
 };
 
-pub use account_manager::AccountIdentity;
+pub use account_manager::{AccountIdentity, AccountMention};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, ProgramId,
+    Account, AccountId, PrivacyPreservingTransaction, ProgramId, ProvingInput,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies,
         message::{EncryptedAccountData, Message},
     },
 };
 use lee_core::{
-    BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey, account::Nonce,
+    BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
+    account::{Input, Nonce},
     program::InstructionData,
 };
 use log::warn;
@@ -380,14 +381,23 @@ impl WalletCore {
     /// Checks the key tree first, then shared private accounts.
     #[must_use]
     pub fn resolve_private_account(&self, account_id: lee::AccountId) -> Option<AccountIdentity> {
-        // Check key tree first
-        if self
-            .storage
-            .key_chain()
-            .private_account(account_id)
-            .is_some()
-        {
-            return Some(AccountIdentity::PrivateOwned(account_id));
+        // Check key tree first. A PDA's witness proves its address from the pair it was derived
+        // from, so the stored kind decides which variant this resolves to.
+        if let Some(found) = self.storage.key_chain().private_account(account_id) {
+            return Some(match found.kind {
+                lee_core::PrivateAccountKind::Pda {
+                    account_id: authority,
+                    seed,
+                    ..
+                } => AccountIdentity::PrivatePdaOwned {
+                    account_id,
+                    authority: *authority,
+                    seed: *seed,
+                },
+                lee_core::PrivateAccountKind::Regular(_) => {
+                    AccountIdentity::PrivateOwned(account_id)
+                }
+            });
         }
 
         // Check shared private accounts
@@ -399,9 +409,13 @@ impl WalletCore {
         let vpk = keys.generate_viewing_public_key();
         let identifier = entry.identifier;
 
-        if entry.pda_seed.is_some() {
+        if let Some(seed) = entry.pda_seed {
+            // A PDA's witness proves its address from the pair it was derived from, so an entry
+            // that lost its authority cannot be resolved into one.
             Some(AccountIdentity::PrivatePdaShared {
                 account_id,
+                authority: AccountId::from(entry.authority_program_id?),
+                seed,
                 nsk: keys.nullifier_secret_key(),
                 vpk,
                 identifier,
@@ -775,7 +789,7 @@ impl WalletCore {
 
     pub async fn send_privacy_preserving_tx(
         &self,
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
@@ -787,31 +801,27 @@ impl WalletCore {
 
     pub async fn send_privacy_preserving_tx_with_pre_check(
         &self,
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
-        tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[Input]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
-        let pre_states = acc_manager.pre_states();
-
-        tx_pre_check(
-            &pre_states
-                .iter()
-                .map(|pre| &pre.account)
-                .collect::<Vec<_>>(),
-        )?;
+        tx_pre_check(&acc_manager.pre_states())?;
 
         let private_account_keys = acc_manager.private_account_keys();
-        let (output, proof) =
-            lee::privacy_preserving_transaction::circuit::execute_and_prove_with_padded_inputs(
-                pre_states,
+        let (output, proof) = lee::privacy_preserving_transaction::circuit::execute_and_prove(
+            ProvingInput {
+                positions: acc_manager.positions(),
+                signers: acc_manager.signers(),
+                public_accounts: acc_manager.public_accounts(),
+                private_witnesses: acc_manager.private_witnesses(),
                 instruction_data,
-                acc_manager.account_identities(),
-                acc_manager.dummy_inputs_default(),
-                &program.to_owned(),
-            )?;
+                dummy_inputs: acc_manager.dummy_inputs_default(),
+            },
+            program,
+        )?;
 
         let message = lee::privacy_preserving_transaction::message::Message::from_circuit_output(
             acc_manager.public_account_nonces(),
@@ -847,7 +857,7 @@ impl WalletCore {
 
     pub async fn send_pub_tx(
         &self,
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program_account_id: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -857,13 +867,13 @@ impl WalletCore {
 
     pub async fn send_pub_tx_with_pre_check(
         &self,
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program_account_id: AccountId,
-        tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[Input]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
-        if accounts.iter().any(AccountIdentity::is_private) {
+        if accounts.iter().any(|mention| mention.identity.is_private()) {
             return Err(ExecutionFailureKind::TransactionBuildError(
                 lee::error::LeeError::InvalidInput(
                     "Private accounts are not allowed in public transactions".to_owned(),
@@ -873,15 +883,9 @@ impl WalletCore {
 
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
-        let pre_states = acc_manager.pre_states();
-        tx_pre_check(
-            &pre_states
-                .iter()
-                .map(|pre| &pre.account)
-                .collect::<Vec<_>>(),
-        )?;
+        tx_pre_check(&acc_manager.pre_states())?;
 
-        let account_ids = acc_manager.public_account_ids();
+        let positions = acc_manager.positions();
         let nonces = acc_manager.public_account_nonces();
 
         let payer = acc_manager.fee_payer_account_id().ok_or_else(|| {
@@ -892,7 +896,7 @@ impl WalletCore {
 
         let message = lee::public_transaction::Message::new_preserialized(
             program_account_id,
-            account_ids,
+            positions,
             nonces,
             instruction_data,
             Some(lee::FeeDeclaration::new(
