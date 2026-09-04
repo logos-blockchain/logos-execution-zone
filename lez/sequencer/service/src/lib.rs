@@ -182,12 +182,15 @@ pub fn run(
                 let screen_ref = executor_ref.clone();
                 let screen: sequencer_core::gossip::IngestScreen =
                     std::sync::Arc::new(move |transaction| {
-                        let executor_ref = screen_ref.clone();
+                        let executor_screen_ref = screen_ref.clone();
                         Box::pin(async move {
                             use sequencer_executor_actor::protocol::{
                                 ScreenTransaction, SubmitOutcome,
                             };
-                            match executor_ref.ask(ScreenTransaction { transaction }).await {
+                            match executor_screen_ref
+                                .ask(ScreenTransaction { transaction })
+                                .await
+                            {
                                 Ok(SubmitOutcome::Admitted) => Ok(()),
                                 Ok(SubmitOutcome::Rejected(rejection)) => {
                                     Err(rejection.to_string())
