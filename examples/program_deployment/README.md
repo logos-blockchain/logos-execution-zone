@@ -115,11 +115,14 @@ Example output:
 ```json
 {
   "balance": 0,
-  "program_owner_b64": "o6C6/bbjDmN9VUC51McBpPrta8lxrx2X0iHExhX0yNU=",
   "data_b64": "SG9sYSBtdW5kbyE=",
   "nonce": 0
 }
 ```
+> [!NOTE]
+> These sample outputs predate the current CLI rendering: an account's data is now one record per
+> program, so `account get` prints the balance and nonce first and then a block per program that
+> holds a record there. Refresh them from a live run against a node.
 The `data_b64` field contains de data in Base64.
 Decode it:
 ```bash
@@ -296,7 +299,6 @@ should show something similar to
 ```json
 {
   "balance":0,
-  "program_owner_b64":"dWgtNRixwjC0C8aA0NL0Iuss3Q26Dw6ECk7bzExW4bI=",
   "data_b64":"SG9sYSBtdW5kbyE=",
   "nonce":236788677072686551559312843688143377080
 }
@@ -537,7 +539,6 @@ You should se an output similar to
 ```json
 {
   "balance":0,
-  "program_owner_b64":"fpnW4tFY9N6llZcBHaXRwu7xe+7WZnZX9RWzhwNbk1o=",
   "data_b64":"SG9sYSBtdW5kbyFIZWxsbyBmcm9tIHRhaWwgY2FsbA==",
   "nonce":0
 }
@@ -647,7 +648,6 @@ Output:
 ```bash
 {
   "balance":0,
-  "program_owner_b64":"HZXHYRaKf6YusVo8x00/B15uyY5sGsJb1bzH4KlCY5g=",
   "data_b64": "SGVsbG8gZnJvbSB0YWlsIGNhbGwgd2l0aCBQcm9ncmFtIERlcml2ZWQgQWNjb3VudCBJRA==",
   "nonce":0"
 }

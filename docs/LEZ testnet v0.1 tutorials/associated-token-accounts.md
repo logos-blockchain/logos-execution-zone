@@ -124,7 +124,7 @@ Use the ATA address derived in the previous section:
 wallet account get --account-id Public/7a2Bf9cKLm3XpRtH1wDqZs8vYjN4eU6gAoFxW5kMnE2R
 
 # Output:
-Holding account owned by ata program
+Token program holding record
 {"account_type":"Token holding","definition_id":"3YpK8RvVzWm6Q4h2nDAbxJfLmuRqkEkFP9C7UwTdGvE4","balance":0}
 ```
 
@@ -171,7 +171,7 @@ wallet ata send \
 wallet account get --account-id Public/7a2Bf9cKLm3XpRtH1wDqZs8vYjN4eU6gAoFxW5kMnE2R
 
 # Output:
-Holding account owned by ata program
+Token program holding record
 {"account_type":"Token holding","definition_id":"3YpK8RvVzWm6Q4h2nDAbxJfLmuRqkEkFP9C7UwTdGvE4","balance":3000}
 ```
 
@@ -179,7 +179,7 @@ Holding account owned by ata program
 wallet account get --account-id Public/9Ht4Kv8pYmW2rXjN6dFcQsA7bEoLf3gUZx1wDnR5eTi
 
 # Output:
-Holding account owned by token program
+Token program holding record
 {"account_type":"Token holding","definition_id":"3YpK8RvVzWm6Q4h2nDAbxJfLmuRqkEkFP9C7UwTdGvE4","balance":2000}
 ```
 
@@ -202,7 +202,7 @@ wallet ata burn \
 wallet account get --account-id Public/7a2Bf9cKLm3XpRtH1wDqZs8vYjN4eU6gAoFxW5kMnE2R
 
 # Output:
-Holding account owned by ata program
+Token program holding record
 {"account_type":"Token holding","definition_id":"3YpK8RvVzWm6Q4h2nDAbxJfLmuRqkEkFP9C7UwTdGvE4","balance":2500}
 ```
 
@@ -314,7 +314,7 @@ wallet ata address \
 wallet account get --account-id Public/2pQxNf7YkWm3rVsH8jDcQaA4bEoLf9gUZx6wTnR2eMs1
 
 # Output:
-Holding account owned by ata program
+Token program holding record
 {"account_type":"Token holding","definition_id":"3YpK8RvVzWm6Q4h2nDAbxJfLmuRqkEkFP9C7UwTdGvE4","balance":0}
 ```
 
@@ -345,7 +345,7 @@ Verify the ATA balance decreased:
 wallet account get --account-id Public/2pQxNf7YkWm3rVsH8jDcQaA4bEoLf9gUZx6wTnR2eMs1
 
 # Output:
-Holding account owned by ata program
+Token program holding record
 {"account_type":"Token holding","definition_id":"3YpK8RvVzWm6Q4h2nDAbxJfLmuRqkEkFP9C7UwTdGvE4","balance":300}
 ```
 
@@ -364,6 +364,6 @@ Verify the balance and token supply:
 wallet account get --account-id Public/2pQxNf7YkWm3rVsH8jDcQaA4bEoLf9gUZx6wTnR2eMs1
 
 # Output:
-Holding account owned by ata program
+Token program holding record
 {"account_type":"Token holding","definition_id":"3YpK8RvVzWm6Q4h2nDAbxJfLmuRqkEkFP9C7UwTdGvE4","balance":200}
 ```

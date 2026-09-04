@@ -36,13 +36,13 @@ wallet amm new \
 ```
 
 > [!Important]
-> The LP holding account is owned by the token program, so LP tokens are managed using the same token infrastructure as regular tokens.
+> The LP holding is the token program's own record, so LP tokens are managed using the same token infrastructure as regular tokens.
 
 ```bash
 wallet account get --account-id Public/FHgLW9jW4HXMV6egLWbwpTqVAGiCHw2vkg71KYSuimVf
 
 # Output:
-Holding account owned by token program
+Token program holding record
 {"account_type":"Token holding","definition_id":"7BeDS3e28MA5Err7gBswmR1fUKdHXqmUpTefNPu3pJ9i","balance":100}
 ```
 
