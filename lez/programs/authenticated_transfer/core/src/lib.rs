@@ -3,7 +3,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 #[cfg(feature = "image_id")]
 use lee_core::{
-    account::AccountId,
+    account::{AccountId, Position},
     program::{ChainedCall, PdaSeed},
 };
 
@@ -18,7 +18,8 @@ include!(concat!(
 pub enum Instruction {
     /// Transfer `amount` of native balance from sender to recipient.
     ///
-    /// Required accounts: `[sender, recipient]`.
+    /// Required accounts: `[sender, recipient]`. Only their balances move, whatever namespace
+    /// each position names.
     Transfer { amount: u128 },
 }
 
@@ -33,7 +34,7 @@ pub fn custody_transfer(
 ) -> ChainedCall {
     ChainedCall::new(
         AUTHENTICATED_TRANSFER_IMAGE_ID.into(),
-        vec![from, to],
+        vec![Position::balance_only(from), Position::balance_only(to)],
         &Instruction::Transfer { amount },
     )
     .with_pda_seeds(vec![seed])

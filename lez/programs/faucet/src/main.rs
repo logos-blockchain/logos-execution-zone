@@ -1,7 +1,7 @@
 use authenticated_transfer_core::custody_transfer;
 use faucet_core::Instruction;
 use lee_core::program::{
-    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
     respond_unsupported_call,
 };
 
@@ -25,10 +25,6 @@ fn main() {
         "Faucet cannot be invoked through chain calls"
     );
 
-    let post_diffs = pre_states
-        .iter()
-        .map(|pre_state| AccountStateDiff::unchanged(pre_state.clone()))
-        .collect();
     let [faucet, recipient] =
         <[_; 2]>::try_from(pre_states).expect("GenesisTransfer requires exactly 2 accounts");
 
@@ -44,6 +40,11 @@ fn main() {
         recipient.account_id,
         amount,
     );
+
+    let post_diffs = vec![
+        ShardStateDiff::unchanged(faucet),
+        ShardStateDiff::unchanged(recipient),
+    ];
 
     ProgramOutput::new(
         self_account_id,

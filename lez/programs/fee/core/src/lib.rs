@@ -31,12 +31,13 @@ pub enum Instruction {
     /// Block-tail distribution: apply the market update, drain the inbox (base
     /// revenue to escrow, tips to the producer), and pay the smoothed payout.
     ///
-    /// Accounts: `[state, escrow, inbox, producer]`.
+    /// Accounts: `[state, escrow, inbox, producer]`; `state` is named under this program's
+    /// namespace, the rest are balance-only.
     Distribute(BlockFeeSummary),
     /// Per-transaction refund: return `amount` (the unspent part of the reserve)
     /// from the inbox to the payer.
     ///
-    /// Accounts: `[inbox, payer]`.
+    /// Accounts: `[inbox, payer]`, both balance-only.
     Refund { amount: Balance },
 }
 
