@@ -61,17 +61,12 @@ pub struct GossipNetwork {
 }
 
 /// Advisory fee-admission screen run at gossip ingest, before a peer's
-/// transaction is pushed to the mempool. Its verdict never affects mesh
-/// acceptance: admission is priced off the local head state, which drifts,
-/// so peers legitimately disagree.
+/// transaction is pushed to the mempool.
+///
+/// Its verdict never affects mesh acceptance: admission is priced off the
+/// local head state, which drifts, so peers legitimately disagree.
 pub type IngestScreen =
     Arc<dyn Fn(LeeTransaction) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
-
-/// An [`IngestScreen`] that admits everything; for tests and standalone runs.
-#[must_use]
-pub fn admit_all_screen() -> IngestScreen {
-    Arc::new(|_| Box::pin(async { Ok(()) }))
-}
 
 /// Handle for publishing locally-submitted transactions to the gossip mesh.
 /// `publish` is non-blocking: a full channel drops the transaction rather
@@ -555,6 +550,12 @@ pub(crate) fn peer_id_from_ed25519(
     clippy::wildcard_enum_match_arm,
     reason = "SwarmEvent is non_exhaustive; only startup listener events are handled here"
 )]
+/// An [`IngestScreen`] that admits everything; for tests and standalone runs.
+#[must_use]
+pub fn admit_all_screen() -> IngestScreen {
+    Arc::new(|_| Box::pin(async { Ok(()) }))
+}
+
 async fn wait_for_listen_addr(swarm: &mut Swarm<GossipBehaviour>) -> Result<Vec<Multiaddr>> {
     let deadline = tokio::time::sleep(LISTEN_TIMEOUT);
     tokio::pin!(deadline);

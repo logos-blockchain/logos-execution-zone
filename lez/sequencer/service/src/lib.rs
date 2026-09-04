@@ -189,7 +189,9 @@ pub fn run(
                             };
                             match executor_ref.ask(ScreenTransaction { transaction }).await {
                                 Ok(SubmitOutcome::Admitted) => Ok(()),
-                                Ok(SubmitOutcome::Rejected(rejection)) => Err(rejection.to_string()),
+                                Ok(SubmitOutcome::Rejected(rejection)) => {
+                                    Err(rejection.to_string())
+                                }
                                 Err(err) => Err(format!("screen ask failed: {err}")),
                             }
                         })
