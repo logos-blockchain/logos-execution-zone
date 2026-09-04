@@ -38,7 +38,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
         mempool_max_size: 10,
         block_create_timeout: std::time::Duration::from_secs(5),
         retry_pending_blocks_timeout: std::time::Duration::from_secs(5),
-        signing_key: [37; 32],
+        signing_key: Some([37; 32]),
         bedrock_config: BedrockConfig {
             channel_id: [0; 32].into(),
             node_url: "http://not-used".parse().expect("Failed to parse URL"),

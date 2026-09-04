@@ -5,12 +5,25 @@ services:
     environment:
       - RUST_LOG=error
 
-  sequencer_service:
+  sequencer_service_0:
     depends_on:
       - logos-blockchain-node-0
       - indexer_service
-    volumes:
-      - ./lez/configs/docker-all-in-one/sequencer_config.json:/etc/sequencer_service/sequencer_config.json
+
+  sequencer_service_1:
+    depends_on:
+      - logos-blockchain-node-0
+      - indexer_service
+
+  sequencer_service_2:
+    depends_on:
+      - logos-blockchain-node-0
+      - indexer_service
+
+  sequencer_service_3:
+    depends_on:
+      - logos-blockchain-node-0
+      - indexer_service
 
   indexer_service:
     depends_on:

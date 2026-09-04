@@ -5,6 +5,8 @@ WORKDIR /sequencer_service
 
 # Build argument to enable standalone feature (defaults to false)
 ARG STANDALONE=false
+# Comma-separated extra cargo features, e.g. FEATURES=mdns for LAN peer discovery
+ARG FEATURES=""
 
 # Planner stage - generates dependency recipe
 FROM chef AS planner
@@ -14,17 +16,17 @@ RUN cargo chef prepare --bin sequencer_service --recipe-path recipe.json
 # Builder stage - builds dependencies and application
 FROM chef AS builder
 ARG STANDALONE
+ARG FEATURES
 COPY --from=planner /sequencer_service/recipe.json recipe.json
 # Build dependencies only (this layer will be cached)
 RUN --mount=type=cache,target=/usr/local/cargo/registry/index \
     --mount=type=cache,target=/usr/local/cargo/registry/cache \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/sequencer_service/target \
-    if [ "$STANDALONE" = "true" ]; then \
-      cargo chef cook --bin sequencer_service --features standalone --release --recipe-path recipe.json; \
-    else \
-      cargo chef cook --bin sequencer_service --release --recipe-path recipe.json; \
-    fi
+    features="$FEATURES"; \
+    if [ "$STANDALONE" = "true" ]; then features="${features:+$features,}standalone"; fi; \
+    cargo chef cook --bin sequencer_service ${features:+--features "$features"} \
+      --release --recipe-path recipe.json
 
 # Copy source code
 COPY . .
@@ -34,11 +36,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry/index \
     --mount=type=cache,target=/usr/local/cargo/registry/cache \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/sequencer_service/target \
-    if [ "$STANDALONE" = "true" ]; then \
-      cargo build --release --features standalone --bin sequencer_service; \
-    else \
-      cargo build --release --bin sequencer_service; \
-    fi \
+    features="$FEATURES"; \
+    if [ "$STANDALONE" = "true" ]; then features="${features:+$features,}standalone"; fi; \
+    cargo build --release ${features:+--features "$features"} --bin sequencer_service \
     && strip /sequencer_service/target/release/sequencer_service \
     && cp /sequencer_service/target/release/sequencer_service /usr/local/bin/sequencer_service
 

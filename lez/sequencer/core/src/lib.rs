@@ -323,7 +323,9 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             info!("Channel does not exist yet; starting it as channel creator");
         }
         let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
-        let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+        let signing_key = config
+            .block_signing_key()
+            .expect("Failed to load the block signing key");
         Self::seed_genesis_if_absent(&storage_ref, &signing_key, bootstrap_sequencer_key, &config)
             .await;
 

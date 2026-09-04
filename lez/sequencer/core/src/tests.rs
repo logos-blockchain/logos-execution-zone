@@ -135,7 +135,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         max_block_size: bytesize::ByteSize::mib(1),
         mempool_max_size: 10000,
         block_create_timeout: Duration::from_secs(1),
-        signing_key: *sequencer_sign_key_for_testing().value(),
+        signing_key: Some(*sequencer_sign_key_for_testing().value()),
         bedrock_config: BedrockConfig {
             channel_id: ChannelId::from([0; 32]),
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
@@ -551,7 +551,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
     config.home = temp_dir.path().to_path_buf();
 
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let (genesis_state, genesis_txs) =
         build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
     let genesis_hashable_data = HashableBlockData {
@@ -4387,7 +4387,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let (state, _genesis_txs) =
         build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
 
@@ -4424,7 +4424,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
 fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let (mut state, _genesis_txs) =
         build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
 
@@ -4824,7 +4824,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     let mut config = setup_sequencer_config();
     config.home = temp_dir.path().to_path_buf();
     let key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let (state, txs) = build_genesis_state(&signing_key, &config, Some(key));
     assert!(
         !txs.iter()
@@ -4844,7 +4844,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
         source_governance: None,
     });
     let key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let (state, txs) = build_genesis_state(&signing_key, &config, Some(key));
     let cross_zone_txs: Vec<_> = txs
         .iter()

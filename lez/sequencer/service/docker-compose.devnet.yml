@@ -1,0 +1,125 @@
+# Four sequencers on one channel, the committee arrangement
+# `integration_tests/tests/multi_sequencer.rs` drives in-process.
+#
+# All four run off one config file, whose genesis stakes all four block-signing
+# keys: seq-0 opens the channel already accrediting the whole committee, and the
+# others join a channel that expects them. A node's own directory holds all that
+# is left to differ — the key it signs blocks with, handed over by
+# `--signing-key`, and the Bedrock identity its stake accredits.
+# `just regenerate-devnet-configs` rebuilds both.
+#
+# The image is built with the `mdns` feature, so the nodes find each other on
+# the compose network and gossip their mempools without any address configured.
+#
+# Included by the repo-root compose file, which is where the Bedrock node and
+# the indexer these configs name come from — hence the configs living with the
+# rest of that project's, up in lez/configs/docker-all-in-one.
+
+x-sequencer-node: &sequencer_node
+  image: lez/sequencer_service:mdns
+  build:
+    context: ../../..
+    dockerfile: lez/sequencer/service/Dockerfile
+    additional_contexts:
+      risc0_base: "service:risc0_base"
+    args:
+      FEATURES: mdns
+  # Lets a node reach a Bedrock published on the host, on Linux too, for a
+  # config pointed there rather than at the compose network.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+# A follower that starts before the channel exists races seq-0 into creating a
+# second one, so it waits the way the integration test's harness does. The node
+# and the channel are read out of the config, so this follows whichever one is
+# mounted.
+x-await-channel: &await_channel
+  command: []
+  entrypoint:
+    - /bin/sh
+    - -c
+    - |
+      config=/etc/sequencer_service/sequencer_config.json
+      node=$$(grep -o '"node_url"[^,]*' "$$config" | cut -d'"' -f4)
+      channel=$$(grep -o '"channel_id"[^,]*' "$$config" | cut -d'"' -f4)
+      until curl -s "$${node%/}/channel/$$channel" | grep -q accredited_keys; do
+        echo "waiting for the channel to land on Bedrock"
+        sleep 2
+      done
+      exec sequencer_service "$$config" --signing-key /etc/sequencer_service/signing_key
+
+services:
+  # Build-only: shared base image (toolchain + r0vm) referenced as the
+  # `risc0_base` named context above. It has no long-running command, so it
+  # only gets built — it exits immediately if started.
+  risc0_base:
+    image: lez/risc0_base
+    build:
+      context: ../../..
+      dockerfile: lez/docker/risc0-base.Dockerfile
+
+  # Creates the channel and produces the genesis block; the others follow it.
+  sequencer_service_0:
+    <<: *sequencer_node
+    container_name: sequencer_service_0
+    command:
+      - sequencer_service
+      - /etc/sequencer_service/sequencer_config.json
+      - --signing-key
+      - /etc/sequencer_service/signing_key
+    ports:
+      - "3040:3040"
+      - "9000:9000"
+    volumes:
+      - ../../configs/docker-all-in-one/devnet/sequencer_config.json:/etc/sequencer_service/sequencer_config.json
+      - ../../configs/docker-all-in-one/devnet/seq-0/signing_key:/etc/sequencer_service/signing_key
+      - ../../configs/docker-all-in-one/devnet/seq-0/bedrock_signing_key:/var/lib/sequencer_service/bedrock_signing_key
+      - sequencer_devnet_data_0:/var/lib/sequencer_service
+
+  sequencer_service_1:
+    <<: [*sequencer_node, *await_channel]
+    container_name: sequencer_service_1
+    depends_on:
+      - sequencer_service_0
+    ports:
+      - "3041:3040"
+      - "9001:9000"
+    volumes:
+      - ../../configs/docker-all-in-one/devnet/sequencer_config.json:/etc/sequencer_service/sequencer_config.json
+      - ../../configs/docker-all-in-one/devnet/seq-1/signing_key:/etc/sequencer_service/signing_key
+      - ../../configs/docker-all-in-one/devnet/seq-1/bedrock_signing_key:/var/lib/sequencer_service/bedrock_signing_key
+      - sequencer_devnet_data_1:/var/lib/sequencer_service
+
+  sequencer_service_2:
+    <<: [*sequencer_node, *await_channel]
+    container_name: sequencer_service_2
+    depends_on:
+      - sequencer_service_0
+    ports:
+      - "3042:3040"
+      - "9002:9000"
+    volumes:
+      - ../../configs/docker-all-in-one/devnet/sequencer_config.json:/etc/sequencer_service/sequencer_config.json
+      - ../../configs/docker-all-in-one/devnet/seq-2/signing_key:/etc/sequencer_service/signing_key
+      - ../../configs/docker-all-in-one/devnet/seq-2/bedrock_signing_key:/var/lib/sequencer_service/bedrock_signing_key
+      - sequencer_devnet_data_2:/var/lib/sequencer_service
+
+  sequencer_service_3:
+    <<: [*sequencer_node, *await_channel]
+    container_name: sequencer_service_3
+    depends_on:
+      - sequencer_service_0
+    ports:
+      - "3043:3040"
+      - "9003:9000"
+    volumes:
+      - ../../configs/docker-all-in-one/devnet/sequencer_config.json:/etc/sequencer_service/sequencer_config.json
+      - ../../configs/docker-all-in-one/devnet/seq-3/signing_key:/etc/sequencer_service/signing_key
+      - ../../configs/docker-all-in-one/devnet/seq-3/bedrock_signing_key:/var/lib/sequencer_service/bedrock_signing_key
+      - sequencer_devnet_data_3:/var/lib/sequencer_service
+
+volumes:
+  sequencer_devnet_data_0:
+  sequencer_devnet_data_1:
+  sequencer_devnet_data_2:
+  sequencer_devnet_data_3:
