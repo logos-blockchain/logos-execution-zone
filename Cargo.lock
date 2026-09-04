@@ -11165,6 +11165,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sequencer_gossip_actor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "common",
+ "futures",
+ "hex",
+ "kameo",
+ "lee",
+ "libp2p",
+ "log",
+ "logos-blockchain-core",
+ "logos-blockchain-key-management-system-service",
+ "logos-blockchain-zone-sdk",
+ "mempool",
+ "sequencer_core",
+ "testnet_initial_state",
+ "tokio",
+]
+
+[[package]]
 name = "sequencer_rpc_server_actor"
 version = "0.1.0"
 dependencies = [
@@ -11178,6 +11200,7 @@ dependencies = [
  "programs",
  "sequencer_core",
  "sequencer_executor_actor",
+ "sequencer_gossip_actor",
  "sequencer_rpc_server_actor_metrics",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
@@ -11210,6 +11233,7 @@ dependencies = [
  "programs",
  "sequencer_core",
  "sequencer_executor_actor",
+ "sequencer_gossip_actor",
  "sequencer_rpc_server_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",

@@ -8,7 +8,8 @@ use jsonrpsee::{
 };
 use kameo::actor::ActorRef;
 use log::{error, warn};
-use sequencer_core::{block_publisher::BlockPublisherTrait, gossip::GossipTxPublisher};
+use sequencer_core::block_publisher::BlockPublisherTrait;
+use sequencer_gossip_actor::GossipTxPublisher;
 use sequencer_service_protocol::{
     Account, AccountId, AdmissionRejection, Block, BlockId, ChannelId, Commitment,
     CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,

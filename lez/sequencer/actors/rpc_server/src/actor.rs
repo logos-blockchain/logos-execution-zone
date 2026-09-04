@@ -4,7 +4,8 @@ use bytesize::ByteSize;
 use jsonrpsee::server::ServerHandle;
 use kameo::{Actor, actor::ActorRef, mailbox::Signal};
 use log::info;
-use sequencer_core::{block_publisher::BlockPublisherTrait, gossip::GossipTxPublisher};
+use sequencer_core::block_publisher::BlockPublisherTrait;
+use sequencer_gossip_actor::GossipTxPublisher;
 use sequencer_service_rpc::RpcServer as _;
 use tokio::select;
 

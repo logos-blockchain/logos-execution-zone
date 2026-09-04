@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 sequencer_core.workspace = true
+sequencer_gossip_actor.workspace = true
 sequencer_executor_actor.workspace = true
 sequencer_rpc_server_actor.workspace = true
 sequencer_storage_actor.workspace = true
@@ -47,7 +48,7 @@ default = []
 # Runs the sequencer in standalone mode without depending on Bedrock and Indexer services.
 standalone = ["sequencer_core/mock"]
 # Enable mDNS-based local peer discovery for gossip.
-mdns = ["sequencer_core/mdns"]
+mdns = ["sequencer_gossip_actor/mdns"]
 # Needed only by the inscribe_garbage bin. Never in a release build.
 inscribe_garbage = ["sequencer_core/test-utils"]
 # Needed only by the submit_stake bin.

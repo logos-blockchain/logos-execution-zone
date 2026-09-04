@@ -1,11 +1,11 @@
 //! Pure decision function for an inbound gossiped transaction.
 //!
 //! The same stateless admission the RPC performs, minus mempool/seen-cache
-//! side effects (those live in the drive task). Testable without a swarm.
+//! side effects (those live in the gossip actor). Testable without a swarm.
 
 use common::transaction::LeeTransaction;
 
-use crate::config::BLOCK_OVERHEAD;
+use sequencer_core::config::BLOCK_OVERHEAD;
 
 #[derive(Debug)]
 // `Accept` is intentionally left unboxed: it is the common outcome and the enum
@@ -41,7 +41,7 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     };
 
     if let LeeTransaction::Public(public_tx) = &authenticated
-        && crate::is_sequencer_only_program(public_tx.message().program_account_id)
+        && sequencer_core::is_sequencer_only_program(public_tx.message().program_account_id)
     {
         return TxEvaluation::Reject("sequencer-only program".to_owned());
     }

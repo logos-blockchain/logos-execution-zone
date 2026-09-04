@@ -56,8 +56,6 @@ libp2p.workspace = true
 default = []
 # Generate mock external clients implementations for testing
 mock = []
-# Enable mDNS-based local peer discovery for gossip.
-mdns = []
 # Expose hooks integration tests need to provoke misbehaviour. Never in a release build.
 test-utils = []
 
