@@ -24,7 +24,7 @@ use integration_tests::{
     indexer_client::IndexerClient,
 };
 use lee::{
-    AccountId, PrivateKey, PublicKey, PublicTransaction,
+    AccountId, Position, PrivateKey, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
@@ -182,8 +182,14 @@ fn build_lock_tx(
     let payload = borsh::to_vec(&mint).expect("serialize mint");
 
     let target_accounts = vec![
-        wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
-        wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT).into_value(),
+        Position::new(
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            wrapped_token_id,
+        ),
+        Position::new(
+            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+            wrapped_token_id,
+        ),
     ];
     let lock = bridge_lock_core::Instruction::Lock {
         amount: LOCK_AMOUNT,
@@ -195,14 +201,17 @@ fn build_lock_tx(
     };
 
     let accounts = vec![
-        bridge_lock_core::config_account_id(bridge_lock_id),
-        holder_id,
-        bridge_lock_core::holding_account_id(
+        Position::new(
+            bridge_lock_core::config_account_id(bridge_lock_id),
+            bridge_lock_id,
+        ),
+        Position::balance_only(holder_id),
+        Position::balance_only(bridge_lock_core::holding_account_id(
             programs::bridge_lock().id().into(),
             &holder_id.into_value(),
-        ),
-        bridge_lock_core::escrow_account_id(bridge_lock_id),
-        outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
+        )),
+        Position::balance_only(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+        Position::balance_only(outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal)),
     ];
     // One nonce per signature: the holder signs, at its genesis nonce 0. The
     // lock is fee-exempt (cross-zone outbound traffic), so it carries no fee
@@ -242,11 +251,17 @@ async fn wait_for_mint(indexer: &IndexerClient, holding_id: AccountId) -> Result
     let account_id = indexer_service_protocol::AccountId {
         value: holding_id.into_value(),
     };
+    let wrapped_token_id = indexer_service_protocol::AccountId {
+        value: AccountId::from(programs::wrapped_token().id()).into_value(),
+    };
     let wait = async {
         loop {
             let account =
                 indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
-            let balance = wrapped_token_core::read_balance(&account.data.0);
+            let balance = account
+                .shards
+                .get(&wrapped_token_id)
+                .map_or(0, |data| wrapped_token_core::read_balance(&data.0));
             if balance != 0 {
                 return Ok::<u128, anyhow::Error>(balance);
             }

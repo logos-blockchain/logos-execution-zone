@@ -11,8 +11,6 @@ use integration_tests::{
     utils::{get_account, new_account},
 };
 use key_protocol::key_management::KeyChain;
-use lee::Data;
-use lee_core::{account::Nonce, program::DEFAULT_PROGRAM_OWNER};
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -30,10 +28,9 @@ async fn get_existing_account() -> Result<()> {
     let account = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
 
     // Genesis credits the account.
-    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
     assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
-    // No data is appended.
-    assert!(account.data.is_empty());
+    // No program has written a record here.
+    assert!(account.shards.is_empty());
     // It also gets used as a funder for private accounts on genesis twice.
     assert_eq!(account.nonce.0, 2);
 
@@ -151,10 +148,8 @@ async fn import_private_account() -> Result<()> {
         0,
     ));
     let account = lee::Account {
-        program_owner: programs::authenticated_transfer().id().into(),
         balance: 777,
-        data: Data::default(),
-        nonce: Nonce::default(),
+        ..lee::Account::default()
     };
 
     let key_chain_json = serde_json::to_string(&key_chain)
@@ -215,10 +210,8 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;
 
     let initial_account = lee::Account {
-        program_owner: programs::authenticated_transfer().id().into(),
         balance: 100,
-        data: Data::default(),
-        nonce: Nonce::default(),
+        ..lee::Account::default()
     };
 
     // First import
@@ -234,10 +227,8 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     .await?;
 
     let updated_account = lee::Account {
-        program_owner: programs::authenticated_transfer().id().into(),
         balance: 999,
-        data: Data::default(),
-        nonce: Nonce::default(),
+        ..lee::Account::default()
     };
 
     // Second import with different account data (same key chain)

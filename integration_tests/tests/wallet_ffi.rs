@@ -29,7 +29,6 @@ use lee::{
     Account, AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
-use lee_core::program::DEFAULT_PROGRAM_OWNER;
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
@@ -613,9 +612,8 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
-    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
     assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
-    assert!(account.data.is_empty());
+    assert!(account.shards.is_empty());
     assert_eq!(account.nonce.0, 2);
 
     unsafe {
@@ -650,12 +648,11 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
-    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
     // A private account: private balances stay small (fee-exempt under the
     // interim policy), so this asserts against the private constant, not the
     // LGO-scaled public one.
     assert_eq!(account.balance, INITIAL_PRIVATE_BALANCES_FOR_WALLET[0]);
-    assert!(account.data.is_empty());
+    assert!(account.shards.is_empty());
 
     unsafe {
         wallet_ffi_free_account_data(&raw mut out_account);
@@ -810,7 +807,7 @@ fn wallet_ffi_public_account_is_credited_without_being_claimed() -> Result<()> {
         wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id).unwrap();
     }
 
-    // Check its program owner is the default program id
+    // A freshly created account holds no program's record.
     let account: Account = unsafe {
         let mut out_account = FfiAccount::default();
         wallet_ffi_get_account_public(
@@ -821,7 +818,7 @@ fn wallet_ffi_public_account_is_credited_without_being_claimed() -> Result<()> {
         .unwrap();
         (&out_account).try_into().unwrap()
     };
-    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
+    assert!(account.shards.is_empty());
 
     // There is no registration step: a credit lands on the fresh account and
     // leaves it unowned.
@@ -852,7 +849,7 @@ fn wallet_ffi_public_account_is_credited_without_being_claimed() -> Result<()> {
         .unwrap();
         (&out_account).try_into().unwrap()
     };
-    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
+    assert!(account.shards.is_empty());
     assert_eq!(ffi_balance(wallet_ffi_handle, &out_account_id, true), 100);
 
     unsafe {
