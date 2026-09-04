@@ -83,50 +83,27 @@ typedef struct PointerResult_SequencerServiceFFI__OperationStatus {
 typedef struct PointerResult_SequencerServiceFFI__OperationStatus InitializedSequencerServiceFFIResult;
 
 /**
+ * Result of [`query_last_block`], returned **inline** (no heap allocation, so
+ * there is no corresponding `free_*` to call).
+ *
+ * `block_id` is only meaningful when `error` is `Ok` *and* `is_some` is
+ * `true`. An `Ok` result with `is_some == false` means the sequencer has no
+ * finalized block yet (an empty chain) — which is distinct from an error.
+ */
+typedef struct LastBlockIdResult {
+  uint64_t block_id;
+  bool is_some;
+  enum OperationStatus error;
+} LastBlockIdResult;
+
+typedef uint64_t FfiBlockId;
+
+/**
  * 32-byte array type for `AccountId`, keys, hashes, etc.
  */
 typedef struct FfiBytes32 {
   uint8_t data[32];
 } FfiBytes32;
-
-/**
- * U128 - 16 bytes little endian.
- */
-typedef struct FfiU128 {
-  uint8_t data[16];
-} FfiU128;
-
-/**
- * Account data structure - C-compatible version of lee Account.
- *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
- * byte arrays since C doesn't have native u128 support.
- */
-typedef struct FfiAccount {
-  struct FfiBytes32 program_owner;
-  /**
-   * Balance as little-endian [u8; 16].
-   */
-  struct FfiU128 balance;
-  /**
-   * Pointer to account data bytes.
-   */
-  uint8_t *data;
-  /**
-   * Length of account data.
-   */
-  uintptr_t data_len;
-  /**
-   * Capacity of account data.
-   */
-  uintptr_t data_cap;
-  /**
-   * Nonce as little-endian [u8; 16].
-   */
-  struct FfiU128 nonce;
-} FfiAccount;
-
-typedef uint64_t FfiBlockId;
 
 typedef struct FfiBytes32 FfiHashType;
 
@@ -168,6 +145,13 @@ typedef struct FfiVec_FfiAccountId {
 } FfiVec_FfiAccountId;
 
 typedef struct FfiVec_FfiAccountId FfiAccountIdList;
+
+/**
+ * U128 - 16 bytes little endian.
+ */
+typedef struct FfiU128 {
+  uint8_t data[16];
+} FfiU128;
 
 typedef struct FfiU128 FfiNonce;
 
@@ -226,6 +210,36 @@ typedef struct FfiPublicTransactionBody {
   struct FfiPublicMessage message;
   FfiSignaturePubKeyList witness_set;
 } FfiPublicTransactionBody;
+
+/**
+ * Account data structure - C-compatible version of lee Account.
+ *
+ * Note: `balance` and `nonce` are u128 values represented as little-endian
+ * byte arrays since C doesn't have native u128 support.
+ */
+typedef struct FfiAccount {
+  struct FfiBytes32 program_owner;
+  /**
+   * Balance as little-endian [u8; 16].
+   */
+  struct FfiU128 balance;
+  /**
+   * Pointer to account data bytes.
+   */
+  uint8_t *data;
+  /**
+   * Length of account data.
+   */
+  uintptr_t data_len;
+  /**
+   * Capacity of account data.
+   */
+  uintptr_t data_cap;
+  /**
+   * Nonce as little-endian [u8; 16].
+   */
+  struct FfiU128 nonce;
+} FfiAccount;
 
 typedef struct FfiPublicAction {
   FfiAccountId account_id;
@@ -319,6 +333,44 @@ typedef struct FfiOption_FfiBlock {
 
 typedef struct FfiOption_FfiBlock FfiBlockOpt;
 
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiBlockOpt__OperationStatus {
+  FfiBlockOpt *value;
+  enum OperationStatus error;
+} PointerResult_FfiBlockOpt__OperationStatus;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiAccount__OperationStatus {
+  struct FfiAccount *value;
+  enum OperationStatus error;
+} PointerResult_FfiAccount__OperationStatus;
+
+typedef struct FfiOption_FfiTransaction {
+  struct FfiTransaction *value;
+  bool is_some;
+} FfiOption_FfiTransaction;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiOption_FfiTransaction_____OperationStatus {
+  struct FfiOption_FfiTransaction *value;
+  enum OperationStatus error;
+} PointerResult_FfiOption_FfiTransaction_____OperationStatus;
+
 typedef struct FfiVec_FfiBlock {
   struct FfiBlock *entries;
   uintptr_t len;
@@ -326,33 +378,26 @@ typedef struct FfiVec_FfiBlock {
 } FfiVec_FfiBlock;
 
 /**
- * 8-byte array type for event selectors.
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
  */
-typedef struct FfiBytes8 {
-  uint8_t data[8];
-} FfiBytes8;
+typedef struct PointerResult_FfiVec_FfiBlock_____OperationStatus {
+  struct FfiVec_FfiBlock *value;
+  enum OperationStatus error;
+} PointerResult_FfiVec_FfiBlock_____OperationStatus;
 
-typedef struct FfiBytes8 FfiSelector;
-
-typedef struct FfiEventRecord {
-  FfiBlockId block_id;
-  uint32_t tx_index;
-  FfiHashType tx_hash;
-  struct FfiProgramId program_id;
-  FfiSelector selector;
-  FfiVecU8 data;
-} FfiEventRecord;
-
-typedef struct FfiVec_FfiEventRecord {
-  struct FfiEventRecord *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiEventRecord;
-
-typedef struct FfiOption_FfiTransaction {
-  struct FfiTransaction *value;
-  bool is_some;
-} FfiOption_FfiTransaction;
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
+  struct FfiVec_FfiTransaction *value;
+  enum OperationStatus error;
+} PointerResult_FfiVec_FfiTransaction_____OperationStatus;
 
 #ifdef __cplusplus
 extern "C" {
@@ -422,6 +467,179 @@ void init_logger(const char *level);
  * will cause a segfault.
  */
 void free_cstring(char *block);
+
+/**
+ * Query the last block id from sequencer.
+ *
+ * # Arguments
+ *
+ * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+ *
+ * # Returns
+ *
+ * A [`LastBlockIdResult`] indicating success or failure. The block id is
+ * returned inline; nothing needs to be freed.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+ */
+struct LastBlockIdResult query_last_block(const struct SequencerServiceFFI *sequencer);
+
+/**
+ * Query the sequencer's current sync status as a JSON C-string.
+ *
+ * The JSON schema is owned by `sequencer_core` (`SequencerStatus`): an object with
+ * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
+ * `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
+ * `cross_zone_peers`. Each peer entry's `health` is one of
+ * `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
+ * know as not known healthy. Lets a client distinguish "still catching up"
+ * from "something went wrong".
+ *
+ * # Arguments
+ *
+ * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+ *
+ * # Returns
+ *
+ * A heap-allocated, null-terminated JSON string that the caller MUST free with
+ * `free_cstring`. Returns null on error (null `sequencer` pointer or a
+ * serialization failure).
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+ */
+char *query_status(const struct SequencerServiceFFI *sequencer);
+
+/**
+ * Query the block by id from sequencer.
+ *
+ * # Arguments
+ *
+ * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+ * - `block_id`: `u64` number of block id
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiBlockOpt, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+ */
+struct PointerResult_FfiBlockOpt__OperationStatus query_block(const struct SequencerServiceFFI *sequencer,
+                                                              FfiBlockId block_id);
+
+/**
+ * Query the block by hash from sequencer.
+ *
+ * # Arguments
+ *
+ * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+ * - `hash`: `FfiHashType` - hash of block
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiBlockOpt, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+ */
+struct PointerResult_FfiBlockOpt__OperationStatus query_block_by_hash(const struct SequencerServiceFFI *sequencer,
+                                                                      FfiHashType _hash);
+
+/**
+ * Query the account by id from sequencer.
+ *
+ * # Arguments
+ *
+ * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+ * - `account_id`: `FfiAccountId` - id of queried account
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiAccount, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+ */
+struct PointerResult_FfiAccount__OperationStatus query_account(const struct SequencerServiceFFI *sequencer,
+                                                               FfiAccountId account_id);
+
+/**
+ * Query the transaction by hash from sequencer.
+ *
+ * # Arguments
+ *
+ * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+ * - `hash`: `FfiHashType` - hash of transaction
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiOption<FfiTransaction>, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+ */
+struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transaction(const struct SequencerServiceFFI *sequencer,
+                                                                                    FfiHashType hash);
+
+/**
+ * Query the blocks by block range from sequencer.
+ *
+ * # Arguments
+ *
+ * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+ * - `before`: `FfiOption<u64>` - end block of query
+ * - `limit`: `u64` - number of blocks to query before `before`
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiVec<FfiBlock>, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+ */
+struct PointerResult_FfiVec_FfiBlock_____OperationStatus query_block_vec(const struct SequencerServiceFFI *sequencer,
+                                                                         uint64_t before,
+                                                                         uint64_t limit);
+
+/**
+ * Query the transactions range by account id from sequencer.
+ *
+ * # Arguments
+ *
+ * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+ * - `account_id`: `FfiAccountId` - id of queried account
+ * - `offset`: `u64` - first tx id of query
+ * - `limit`: `u64` - number of tx ids to query after `offset`
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiVec<FfiTransaction>, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+ */
+struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transactions_by_account(const struct SequencerServiceFFI *sequencer,
+                                                                                             FfiAccountId _account_id,
+                                                                                             uint64_t _offset,
+                                                                                             uint64_t _limit);
 
 /**
  * Frees the resources associated with the given ffi account.
@@ -513,28 +731,6 @@ void free_ffi_block_opt(FfiBlockOpt *val);
  * - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
  */
 void free_ffi_block_vec(struct FfiVec_FfiBlock *val);
-
-/**
- * Frees the resources associated with the given vector of ffi event records.
- *
- * Takes ownership of the whole allocation produced by `query_events`: the outer
- * `Box<FfiVec<FfiEventRecord>>` (the `PointerResult.value` pointer), the vector's
- * backing buffer, and every record's payload within it.
- *
- * # Arguments
- *
- * - `val`: The `*mut FfiVec<FfiEventRecord>` returned in `PointerResult.value`.
- *
- * # Returns
- *
- * void.
- *
- * # Safety
- *
- * The caller must ensure that:
- * - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yet freed.
- */
-void free_ffi_event_record_vec(struct FfiVec_FfiEventRecord *val);
 
 /**
  * Frees the resources associated with the given ffi transaction.

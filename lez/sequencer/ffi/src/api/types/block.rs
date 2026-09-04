@@ -1,3 +1,9 @@
+use common::{
+    HashType,
+    block::{BedrockStatus, Block, BlockHeader},
+};
+use lee::{PublicKey, Signature};
+
 use crate::api::types::{
     FfiBlockId, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiTimestamp, FfiVec,
     transaction::free_transaction_vec_value, vectors::FfiBlockBody,
@@ -121,8 +127,10 @@ pub unsafe extern "C" fn free_ffi_block(val: FfiBlock) {
         prev_block_hash: HashType(val.header.prev_block_hash.data),
         hash: HashType(val.header.hash.data),
         timestamp: val.header.timestamp,
-        producer: PublicKey(val.header.producer.data),
-        signature: Signature(val.header.signature.data),
+        producer: PublicKey::try_new(val.header.producer.data).unwrap(),
+        signature: Signature {
+            value: val.header.signature.data,
+        },
     };
     let ffi_tx_ffi_vec = val.body;
 

@@ -6,9 +6,11 @@ version = "0.1.0"
 
 [dependencies]
 lee.workspace = true
+lee_core.workspace = true
 sequencer_core = { workspace = true, features = ["testnet"] }
 sequencer_storage_actor.workspace = true
 sequencer_executor_actor.workspace = true
+common.workspace = true
 
 env_logger.workspace = true
 log = { workspace = true }

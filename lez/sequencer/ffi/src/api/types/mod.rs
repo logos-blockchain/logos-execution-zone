@@ -1,8 +1,10 @@
-use lee::{ProgramId, PublicKey, Signature};
+use common::HashType;
+use lee::{AccountId, ProgramId, PublicKey, Signature};
+use lee_core::account::Nonce;
 
 pub mod account;
 pub mod block;
-pub mod event;
+// pub mod event;
 pub mod transaction;
 pub mod vectors;
 
@@ -75,6 +77,18 @@ impl From<FfiU128> for u128 {
     }
 }
 
+impl From<Nonce> for FfiU128 {
+    fn from(value: Nonce) -> Self {
+        value.0.into()
+    }
+}
+
+impl From<FfiU128> for Nonce {
+    fn from(value: FfiU128) -> Self {
+        Nonce(value.into())
+    }
+}
+
 pub type FfiHashType = FfiBytes32;
 pub type FfiBlockId = u64;
 pub type FfiTimestamp = u64;
@@ -84,11 +98,31 @@ pub type FfiNonce = FfiU128;
 pub type FfiPublicKey = FfiBytes32;
 pub type FfiSelector = FfiBytes8;
 
-// impl From<HashType> for FfiHashType {
-//     fn from(value: HashType) -> Self {
-//         Self { data: value.0 }
-//     }
-// }
+impl From<AccountId> for FfiBytes32 {
+    fn from(value: AccountId) -> Self {
+        Self {
+            data: value.to_bytes(),
+        }
+    }
+}
+
+impl From<HashType> for FfiHashType {
+    fn from(value: HashType) -> Self {
+        Self { data: value.0 }
+    }
+}
+
+impl From<FfiBytes32> for HashType {
+    fn from(value: FfiBytes32) -> Self {
+        Self(value.data)
+    }
+}
+
+impl From<FfiBytes32> for AccountId {
+    fn from(value: FfiBytes32) -> Self {
+        AccountId::new(value.data)
+    }
+}
 
 impl From<Signature> for FfiSignature {
     fn from(value: Signature) -> Self {

@@ -1,4 +1,16 @@
-use lee::{AccountId, FeeDeclaration, PrivacyPreservingTransaction, ProgramDeploymentTransaction, PublicKey, PublicTransaction, Signature, privacy_preserving_transaction::message::{EncryptedAccountData, PublicActionWithID}};
+use common::transaction::LeeTransaction;
+use lee::{
+    AccountId, EphemeralPublicKey, FeeDeclaration, PrivacyPreservingTransaction,
+    ProgramDeploymentTransaction, PublicKey, PublicTransaction, Signature,
+    privacy_preserving_transaction::{
+        circuit::Proof,
+        message::{EncryptedAccountData, PublicActionWithID},
+    },
+};
+use lee_core::{
+    Commitment, Nullifier, PrivateAction, encryption::Ciphertext, program::ValidityWindow,
+};
+use sequencer_executor_actor::protocol::Transaction;
 
 use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature,
@@ -20,17 +32,19 @@ pub struct FfiPublicTransactionBody {
 
 impl From<PublicTransaction> for FfiPublicTransactionBody {
     fn from(value: PublicTransaction) -> Self {
+        let hash = value.hash();
+
         let PublicTransaction {
-            hash,
             message,
             witness_set,
         } = value;
 
         Self {
-            hash: hash.into(),
+            hash: FfiBytes32::from_bytes(hash),
             message: message.into(),
             witness_set: witness_set
                 .signatures_and_public_keys()
+                .to_vec()
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
@@ -42,16 +56,13 @@ impl From<PublicTransaction> for FfiPublicTransactionBody {
 impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
     fn from(value: Box<FfiPublicTransactionBody>) -> Self {
         Self {
-            hash: HashType(value.hash.data),
-            message: PublicMessage {
-                program_id: ProgramId(value.message.program_id.data),
+            message: lee::public_transaction::Message {
+                program_id: value.message.program_id.data,
                 account_ids: {
                     let std_vec: Vec<_> = value.message.account_ids.into();
                     std_vec
                         .into_iter()
-                        .map(|ffi_val| AccountId {
-                            value: ffi_val.data,
-                        })
+                        .map(|ffi_val| AccountId::new(ffi_val.data))
                         .collect()
                 },
                 nonces: {
@@ -61,21 +72,20 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
                 instruction_data: value.message.instruction_data.into(),
                 fee: value.message.has_fee.then(|| value.message.fee.into()),
             },
-            witness_set: WitnessSet {
-                signatures_and_public_keys: {
-                    let std_vec: Vec<_> = value.witness_set.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| {
-                            (
-                                Signature(ffi_val.signature.data),
-                                PublicKey(ffi_val.public_key.data),
-                            )
-                        })
-                        .collect()
-                },
-                proof: None,
-            },
+            witness_set: lee::public_transaction::WitnessSet::from_raw_parts({
+                let std_vec: Vec<_> = value.witness_set.into();
+                std_vec
+                    .into_iter()
+                    .map(|ffi_val| {
+                        (
+                            Signature {
+                                value: ffi_val.signature.data,
+                            },
+                            PublicKey::try_new(ffi_val.public_key.data).unwrap(),
+                        )
+                    })
+                    .collect()
+            }),
         }
     }
 }
@@ -113,9 +123,7 @@ impl From<FeeDeclaration> for FfiFeeDeclaration {
 impl From<FfiFeeDeclaration> for FeeDeclaration {
     fn from(value: FfiFeeDeclaration) -> Self {
         Self {
-            payer: AccountId {
-                value: value.payer.data,
-            },
+            payer: AccountId::new(value.payer.data),
             gas_limit: value.gas_limit,
             tip: value.tip,
             max_fee: value.max_fee.into(),
@@ -172,26 +180,24 @@ pub struct FfiPrivateTransactionBody {
 
 impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
     fn from(value: PrivacyPreservingTransaction) -> Self {
+        let hash = value.hash();
+
         let PrivacyPreservingTransaction {
-            hash,
             message,
             witness_set,
         } = value;
 
+        let (signatures_and_public_keys, proof) = witness_set.into_raw_parts();
+
         Self {
-            hash: hash.into(),
+            hash: FfiBytes32::from_bytes(hash),
             message: message.into(),
-            witness_set: witness_set
-                .signatures_and_public_keys
+            witness_set: signatures_and_public_keys
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
                 .into(),
-            proof: witness_set
-                .proof
-                .expect("Private execution: proof must be present")
-                .0
-                .into(),
+            proof: proof.into_inner().into(),
         }
     }
 }
@@ -199,16 +205,13 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
 impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     fn from(value: Box<FfiPrivateTransactionBody>) -> Self {
         Self {
-            hash: HashType(value.hash.data),
-            message: PrivacyPreservingMessage {
+            message: lee::privacy_preserving_transaction::Message {
                 public_actions: {
                     let std_vec: Vec<_> = value.message.public_actions.into();
                     std_vec
                         .into_iter()
                         .map(|ffi_val| PublicActionWithID {
-                            account_id: AccountId {
-                                value: ffi_val.account_id.data,
-                            },
+                            account_id: AccountId::new(ffi_val.account_id.data),
                             post_state: ffi_val.post_state.into(),
                         })
                         .collect()
@@ -222,11 +225,11 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                     std_vec
                         .into_iter()
                         .map(|ffi_val| PrivateAction {
-                            nullifier: Nullifier(ffi_val.nullifier.data),
-                            root: CommitmentSetDigest(ffi_val.root.data),
-                            commitment: Commitment(ffi_val.commitment.data),
+                            nullifier: Nullifier::from_byte_array(ffi_val.nullifier.data),
+                            root: ffi_val.root.data,
+                            commitment: Commitment::from_byte_array(ffi_val.commitment.data),
                             encrypted_post_state: EncryptedAccountData {
-                                ciphertext: Ciphertext(
+                                ciphertext: Ciphertext::from_inner(
                                     ffi_val.encrypted_post_state.ciphertext.into(),
                                 ),
                                 epk: EphemeralPublicKey(ffi_val.encrypted_post_state.epk.into()),
@@ -242,21 +245,23 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                     value.message.timestamp_validity_window,
                 ),
             },
-            witness_set: WitnessSet {
-                signatures_and_public_keys: {
+            witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
+                {
                     let std_vec: Vec<_> = value.witness_set.into();
                     std_vec
                         .into_iter()
                         .map(|ffi_val| {
                             (
-                                Signature(ffi_val.signature.data),
-                                PublicKey(ffi_val.public_key.data),
+                                Signature {
+                                    value: ffi_val.signature.data,
+                                },
+                                PublicKey::try_new(ffi_val.public_key.data).unwrap(),
                             )
                         })
                         .collect()
                 },
-                proof: Some(Proof(value.proof.into())),
-            },
+                Proof::from_inner(value.proof.into()),
+            ),
         }
     }
 }
@@ -292,11 +297,11 @@ impl From<PrivateAction> for FfiPrivateAction {
     fn from(value: PrivateAction) -> Self {
         Self {
             nullifier: FfiBytes32 {
-                data: value.nullifier.0,
+                data: value.nullifier.to_byte_array(),
             },
-            root: FfiBytes32 { data: value.root.0 },
+            root: FfiBytes32 { data: value.root },
             commitment: FfiBytes32 {
-                data: value.commitment.0,
+                data: value.commitment.to_byte_array(),
             },
             encrypted_post_state: value.encrypted_post_state.into(),
         }
@@ -360,7 +365,7 @@ impl From<EncryptedAccountData> for FfiEncryptedAccountData {
         } = value;
 
         Self {
-            ciphertext: ciphertext.0.into(),
+            ciphertext: ciphertext.into_inner().into(),
             epk: epk.0.into(),
             view_tag,
         }
@@ -391,21 +396,20 @@ pub struct FfiProgramDeploymentTransactionBody {
 impl From<Box<FfiProgramDeploymentTransactionBody>> for ProgramDeploymentTransaction {
     fn from(value: Box<FfiProgramDeploymentTransactionBody>) -> Self {
         Self {
-            hash: HashType(value.hash.data),
-            message: ProgramDeploymentMessage {
-                bytecode: value.message.into(),
-            },
+            message: lee::program_deployment_transaction::Message::new(value.message.into()),
         }
     }
 }
 
 impl From<ProgramDeploymentTransaction> for FfiProgramDeploymentTransactionBody {
     fn from(value: ProgramDeploymentTransaction) -> Self {
-        let ProgramDeploymentTransaction { hash, message } = value;
+        let hash = value.hash();
+
+        let ProgramDeploymentTransaction { message } = value;
 
         Self {
-            hash: hash.into(),
-            message: message.bytecode.into(),
+            hash: FfiBytes32::from_bytes(hash),
+            message: message.into_bytecode().into(),
         }
     }
 }
@@ -423,10 +427,10 @@ pub struct FfiTransaction {
     pub kind: FfiTransactionKind,
 }
 
-impl From<Transaction> for FfiTransaction {
-    fn from(value: Transaction) -> Self {
+impl From<LeeTransaction> for FfiTransaction {
+    fn from(value: LeeTransaction) -> Self {
         match value {
-            Transaction::Public(pub_tx) => Self {
+            LeeTransaction::Public(pub_tx) => Self {
                 body: FfiTransactionBody {
                     public_body: Box::into_raw(Box::new(pub_tx.into())),
                     private_body: std::ptr::null_mut(),
@@ -434,7 +438,7 @@ impl From<Transaction> for FfiTransaction {
                 },
                 kind: FfiTransactionKind::Public,
             },
-            Transaction::PrivacyPreserving(priv_tx) => Self {
+            LeeTransaction::PrivacyPreserving(priv_tx) => Self {
                 body: FfiTransactionBody {
                     public_body: std::ptr::null_mut(),
                     private_body: Box::into_raw(Box::new(priv_tx.into())),
@@ -442,7 +446,7 @@ impl From<Transaction> for FfiTransaction {
                 },
                 kind: FfiTransactionKind::Private,
             },
-            Transaction::ProgramDeployment(pr_dep_tx) => Self {
+            LeeTransaction::ProgramDeployment(pr_dep_tx) => Self {
                 body: FfiTransactionBody {
                     public_body: std::ptr::null_mut(),
                     private_body: std::ptr::null_mut(),
@@ -451,6 +455,12 @@ impl From<Transaction> for FfiTransaction {
                 kind: FfiTransactionKind::ProgramDeploy,
             },
         }
+    }
+}
+
+impl From<Transaction> for FfiTransaction {
+    fn from(value: Transaction) -> Self {
+        value.transaction.into()
     }
 }
 
@@ -576,14 +586,14 @@ pub unsafe extern "C" fn free_ffi_transaction_vec(val: *mut FfiVec<FfiTransactio
     free_transaction_vec_value(*boxed);
 }
 
-fn cast_validity_window(window: ValidityWindow) -> [u64; 2] {
+fn cast_validity_window(window: ValidityWindow<u64>) -> [u64; 2] {
     [
-        window.0.0.unwrap_or_default(),
-        window.0.1.unwrap_or(u64::MAX),
+        window.start().unwrap_or_default(),
+        window.end().unwrap_or(u64::MAX),
     ]
 }
 
-const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
+fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow<u64> {
     let left = if ffi_window[0] == 0 {
         None
     } else {
@@ -596,7 +606,7 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
         Some(ffi_window[1])
     };
 
-    ValidityWindow((left, right))
+    ValidityWindow::try_from((left, right)).unwrap()
 }
 
 #[cfg(test)]
@@ -606,24 +616,20 @@ mod tests {
     #[test]
     fn public_transaction_fee_roundtrips_over_the_ffi() {
         let tx = |fee| PublicTransaction {
-            hash: HashType([1; 32]),
-            message: PublicMessage {
-                program_id: ProgramId([2; 8]),
-                account_ids: vec![AccountId { value: [3; 32] }],
+            message: lee::public_transaction::Message {
+                program_id: [2; 8],
+                account_ids: vec![AccountId::new([3; 32])],
                 nonces: vec![],
                 instruction_data: vec![9, 9],
                 fee,
             },
-            witness_set: WitnessSet {
-                signatures_and_public_keys: vec![],
-                proof: None,
-            },
+            witness_set: lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
         };
 
         for fee in [
             None,
             Some(FeeDeclaration {
-                payer: AccountId { value: [3; 32] },
+                payer: AccountId::new([3; 32]),
                 gas_limit: 5,
                 tip: 1,
                 max_fee: 42,

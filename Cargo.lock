@@ -11175,11 +11175,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cbindgen",
+ "common",
  "env_logger",
  "futures",
  "kameo",
  "kameo_actors",
  "lee",
+ "lee_core",
  "log",
  "sequencer_core",
  "sequencer_executor_actor",
