@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-    ProgramOutput, read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::Position,
+    program::{
+        ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        ShardStateDiff, read_lee_call, respond_unsupported_call,
+    },
 };
 
 /// Chain-calls an arbitrary target with caller-supplied instruction data,
@@ -27,13 +30,13 @@ fn main() {
     let chained_call = ChainedCall {
         program_account_id: target_program_id.into(),
         instruction_data: target_instruction_data,
-        pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
+        positions: pre_states.iter().map(Position::from).collect(),
         pda_seeds: pda_seed.into_iter().collect(),
     };
 
     let state_diffs = pre_states
         .iter()
-        .map(|pre| AccountStateDiff::unchanged(pre.clone()))
+        .map(|pre| ShardStateDiff::unchanged(pre.clone()))
         .collect();
 
     ProgramOutput::new(

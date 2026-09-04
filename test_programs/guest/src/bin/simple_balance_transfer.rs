@@ -1,7 +1,7 @@
 use lee_core::{
     account::BalanceDiff,
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -24,7 +24,7 @@ fn main() {
     };
 
     if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
-        let account_post = AccountStateDiff::unchanged(account_pre);
+        let account_post = ShardStateDiff::unchanged(account_pre);
 
         ProgramOutput::new(
             self_account_id,
@@ -45,16 +45,8 @@ fn main() {
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::new(
-                sender_pre.clone(),
-                BalanceDiff::Sub(balance),
-                sender_pre.account.data,
-            ),
-            AccountStateDiff::new(
-                receiver_pre.clone(),
-                BalanceDiff::Add(balance),
-                receiver_pre.account.data,
-            ),
+            ShardStateDiff::balance_only(sender_pre, BalanceDiff::Sub(balance)),
+            ShardStateDiff::balance_only(receiver_pre, BalanceDiff::Add(balance)),
         ],
     )
     .write();
