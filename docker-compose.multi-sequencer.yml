@@ -1,0 +1,134 @@
+# Four LEZ sequencers on one channel, all staked at genesis — the flow the
+# `multi_sequencer` integration test uses. Self-contained (docker-compose.yml
+# and its override are not applied), so run it with an explicit -f:
+#
+#   docker compose -f docker-compose.multi-sequencer.yml up   # or `just run-multi-sequencer`
+#
+# The nodes share one genesis carrying a `StakeSequencer` action per node, so
+# whichever one finds the channel absent creates it already accrediting all
+# four. Those stakes are signed against pinned Bedrock keys, mounted here from
+# `lez/configs/docker-multi-sequencer/keys` — a node generating its own key
+# would not be the node that was staked. Regenerate both with
+# `just regenerate-multi-sequencer-configs`.
+
+# Its own compose project, so it never mixes containers or volumes with the
+# single-sequencer `docker-compose.yml` stack.
+name: lez-multi-sequencer
+
+include:
+  - path:
+      bedrock/docker-compose.yml
+  # Also supplies the `risc0_base` build-only service the sequencers build from.
+  - path:
+      lez/indexer/service/docker-compose.yml
+  - path:
+      lez/explorer_service/docker-compose.yml
+  - path:
+      monitoring/docker-compose.yml
+
+x-sequencer: &sequencer
+  image: lez/sequencer_service
+  build:
+    context: .
+    dockerfile: lez/sequencer/service/Dockerfile
+    additional_contexts:
+      risc0_base: "service:risc0_base"
+  # Same probe as the Dockerfile's, at an interval the followers can wait on:
+  # node 0 binds its RPC port only after the channel-creating publish lands.
+  healthcheck:
+    test:
+      - CMD-SHELL
+      - >-
+        curl -s -o /dev/null http://localhost:3040
+        -H 'Content-Type: application/json'
+        -d '{"jsonrpc":"2.0","method":"checkHealth","params":{},"id":1}'
+    interval: 2s
+    timeout: 3s
+    retries: 90
+    start_period: 5s
+
+# Followers must not start before the channel exists, or they race node 0 into
+# creating a second one.
+x-follower-depends-on: &follower_depends_on
+  sequencer_0:
+    condition: service_healthy
+
+services:
+  logos-blockchain-node-0:
+    environment:
+      - RUST_LOG=error
+
+  indexer_service:
+    depends_on:
+      - logos-blockchain-node-0
+    volumes:
+      - ./lez/configs/docker-all-in-one/indexer_config.json:/etc/indexer_service/indexer_config.json
+
+  explorer_service:
+    depends_on:
+      - indexer_service
+    environment:
+      - INDEXER_RPC_URL=http://indexer_service:8779
+
+  # The stock config scrapes a sequencer running on the host; here they are
+  # containers on this network.
+  prometheus:
+    volumes:
+      - ./monitoring/prometheus/prometheus-multi-sequencer.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+  sequencer_0:
+    <<: *sequencer
+    container_name: sequencer_0
+    ports:
+      - "3040:3040"
+      - "9000:9000"
+    volumes:
+      - ./lez/configs/docker-multi-sequencer/sequencer_config_0.json:/etc/sequencer_service/sequencer_config.json
+      - ./lez/configs/docker-multi-sequencer/keys/bedrock_signing_key_0:/var/lib/sequencer_service/bedrock_signing_key:ro
+      - sequencer_0_data:/var/lib/sequencer_service
+    depends_on:
+      - logos-blockchain-node-0
+      - indexer_service
+
+  sequencer_1:
+    <<: *sequencer
+    container_name: sequencer_1
+    ports:
+      - "3041:3040"
+      - "9001:9000"
+    volumes:
+      - ./lez/configs/docker-multi-sequencer/sequencer_config_1.json:/etc/sequencer_service/sequencer_config.json
+      - ./lez/configs/docker-multi-sequencer/keys/bedrock_signing_key_1:/var/lib/sequencer_service/bedrock_signing_key:ro
+      - sequencer_1_data:/var/lib/sequencer_service
+    depends_on: *follower_depends_on
+
+  sequencer_2:
+    <<: *sequencer
+    container_name: sequencer_2
+    ports:
+      - "3042:3040"
+      - "9002:9000"
+    volumes:
+      - ./lez/configs/docker-multi-sequencer/sequencer_config_2.json:/etc/sequencer_service/sequencer_config.json
+      - ./lez/configs/docker-multi-sequencer/keys/bedrock_signing_key_2:/var/lib/sequencer_service/bedrock_signing_key:ro
+      - sequencer_2_data:/var/lib/sequencer_service
+    depends_on: *follower_depends_on
+
+  sequencer_3:
+    <<: *sequencer
+    container_name: sequencer_3
+    ports:
+      - "3043:3040"
+      - "9003:9000"
+    volumes:
+      - ./lez/configs/docker-multi-sequencer/sequencer_config_3.json:/etc/sequencer_service/sequencer_config.json
+      - ./lez/configs/docker-multi-sequencer/keys/bedrock_signing_key_3:/var/lib/sequencer_service/bedrock_signing_key:ro
+      - sequencer_3_data:/var/lib/sequencer_service
+    depends_on: *follower_depends_on
+
+volumes:
+  sequencer_0_data:
+  sequencer_1_data:
+  sequencer_2_data:
+  sequencer_3_data:

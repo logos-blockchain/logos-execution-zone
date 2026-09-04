@@ -231,6 +231,16 @@ docker compose up
 
 With that you can send transactions from local wallet to the Sequencer running inside Docker using `lez/wallet/configs/debug` as well as exploring blocks by opening `http://localhost:8080`.
 
+### Four sequencers
+
+The same stack with four sequencers sharing one channel, all staked at genesis:
+
+```bash
+just run-multi-sequencer
+```
+
+Their RPCs are on `3040`-`3043` and their metrics on `9000`-`9003`. Node 0 creates the channel, already accrediting all four, and the rest start once it is up. The configs and the Bedrock signing keys their genesis stakes accredit are committed under `lez/configs/docker-multi-sequencer`; regenerate them with `just regenerate-multi-sequencer-configs`.
+
 ## Caution for local image builds
 
 If you're going to build sequencer image locally you should better adjust default docker settings and set `defaultKeepStorage` at least `25GB` so that it can keep layers properly cached.

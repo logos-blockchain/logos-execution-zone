@@ -1,0 +1,243 @@
+{
+  "home": "/var/lib/sequencer_service",
+  "max_num_tx_in_block": 20,
+  "max_block_size": "1.0 MiB",
+  "mempool_max_size": 10000,
+  "block_create_timeout": "10s",
+  "retry_pending_blocks_timeout": "7s",
+  "signing_key": [
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0
+  ],
+  "bedrock_config": {
+    "channel_id": "0101010101010101010101010101010101010101010101010101010101010101",
+    "node_url": "http://logos-blockchain-node-0:18080/",
+    "auth": null,
+    "funding_key": "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26",
+    "priority_fee_percent": 12
+  },
+  "genesis": [
+    {
+      "stake_sequencer": {
+        "sequencer_key": [
+          190,
+          215,
+          210,
+          171,
+          102,
+          141,
+          163,
+          239,
+          173,
+          97,
+          57,
+          152,
+          240,
+          111,
+          122,
+          191,
+          120,
+          117,
+          243,
+          166,
+          183,
+          103,
+          122,
+          159,
+          60,
+          233,
+          71,
+          215,
+          125,
+          119,
+          96,
+          166
+        ],
+        "ownership_public_key": "a1384690b47b31647866845870eb25a349dc8529cb8a1dc746e25500ecb56308",
+        "stake_signature": "d505d42e75f5efe925bbc9fc272cd990eac6fffc9c80d909b634a5b2c49126ae467f07d148eef3362aeaa1acd0edd3380a6d082ec690e7b35936204501517b82"
+      }
+    },
+    {
+      "stake_sequencer": {
+        "sequencer_key": [
+          34,
+          53,
+          30,
+          34,
+          16,
+          90,
+          25,
+          170,
+          187,
+          66,
+          88,
+          145,
+          98,
+          173,
+          127,
+          30,
+          160,
+          223,
+          28,
+          37,
+          206,
+          191,
+          14,
+          74,
+          159,
+          205,
+          38,
+          19,
+          1,
+          39,
+          72,
+          98
+        ],
+        "ownership_public_key": "63e567d0cabc9e4769cb2eadec6fdbb421be33bf752f8c8ac8d58ac4c16b34ca",
+        "stake_signature": "c5364aa612bfa9da45c9e3513e6e9f979cc2526b48c91ff586265a2249c286d8bed2f0b2f1f9dd3773bff4cc900ba8803e08d2f9704283e442d6ca6094aab8b3"
+      }
+    },
+    {
+      "stake_sequencer": {
+        "sequencer_key": [
+          230,
+          142,
+          12,
+          247,
+          242,
+          108,
+          89,
+          249,
+          99,
+          181,
+          132,
+          98,
+          2,
+          210,
+          50,
+          124,
+          200,
+          188,
+          12,
+          78,
+          255,
+          140,
+          185,
+          171,
+          212,
+          1,
+          47,
+          154,
+          113,
+          222,
+          207,
+          0
+        ],
+        "ownership_public_key": "0493024b6f0d73ef4ebda2520e3af159ddf3830bf98e9fb6e8283cce59a47386",
+        "stake_signature": "cdaafaef37feaaf4e4a39cec945a3380306c311d2895083bd18fb322b434696f3fb13eacd2d09c1e2a88df1bfab54994da0f39ace762dd8fd6fad1e30ea1bb6b"
+      }
+    },
+    {
+      "stake_sequencer": {
+        "sequencer_key": [
+          179,
+          224,
+          224,
+          150,
+          176,
+          46,
+          46,
+          201,
+          138,
+          52,
+          65,
+          65,
+          10,
+          237,
+          221,
+          120,
+          201,
+          94,
+          39,
+          160,
+          218,
+          111,
+          65,
+          26,
+          9,
+          198,
+          49,
+          192,
+          242,
+          190,
+          166,
+          233
+        ],
+        "ownership_public_key": "f6f341cc392ab3ee7c467ff51e1546a1dbce47cf89e06bcb021ff6d4a8437b1c",
+        "stake_signature": "a46411f1cc6fb975230ea456a4d18bef2ef6b1a2316cbd083f76b30010295876a64a29471a19fe7edb437db002d4a7161a1b950d85bc679b9ae8bda5c49343db"
+      }
+    },
+    {
+      "supply_bridge_account": {
+        "balance": 1000000
+      }
+    },
+    {
+      "supply_account": {
+        "account_id": "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV",
+        "balance": 10000
+      }
+    },
+    {
+      "supply_account": {
+        "account_id": "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo",
+        "balance": 20000
+      }
+    },
+    {
+      "supply_account": {
+        "account_id": "61EsoYN6gvTLkveh1YSTMG3yJkncpHy5EGmxhSK4ew29",
+        "balance": 10000
+      }
+    },
+    {
+      "supply_account": {
+        "account_id": "3m6HQmCgmAvsxZtxAHPqqEqoBG4335fCG8TzxigyW7rE",
+        "balance": 20000
+      }
+    }
+  ],
+  "cross_zone": null,
+  "metrics_address": "0.0.0.0:9000",
+  "gossip": null
+}

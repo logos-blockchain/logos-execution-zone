@@ -1,0 +1,16 @@
+# Scrape config for the four-sequencer stack (`just run-multi-sequencer`), where
+# the sequencers are containers on the compose network rather than one process
+# on the host. Mounted over `prometheus.yml` by docker-compose.multi-sequencer.yml.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: sequencer
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - sequencer_0:9000
+          - sequencer_1:9000
+          - sequencer_2:9000
+          - sequencer_3:9000

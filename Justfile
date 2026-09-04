@@ -53,6 +53,11 @@ regenerate-test-fixture:
     @echo "🧪 Regenerating test fixture"
     RISC0_DEV_MODE=1 RUST_LOG=info cargo run -p test_fixtures --bin regenerate_test_fixture
 
+# Regenerate the four-sequencer docker configs and the keys their genesis stakes accredit; commit both.
+regenerate-multi-sequencer-configs:
+    @echo "🧩 Regenerating multi-sequencer docker configs"
+    @cargo run -q -p test_fixtures --bin gen_docker_multi_sequencer
+
 # Regenerate the committed Grafana dashboards from the Rust generator
 # (tools/dashboard_gen) and commit the result. CI checks these are up to date.
 regenerate-dashboards:
@@ -71,6 +76,11 @@ bench:
 run-bedrock:
     @echo "⛓️ Running bedrock"
     docker compose up
+
+# Run the stack with four sequencers staked at genesis. RPCs 3040-3043, metrics 9000-9003.
+run-multi-sequencer *args:
+    @echo "🧠 Running four sequencers"
+    docker compose -f docker-compose.multi-sequencer.yml up {{args}}
 
 # Run Prometheus + Grafana in docker. Grafana: http://localhost:3000 (anonymous
 # admin), Prometheus: http://localhost:9090. Scrapes the sequencer's /metrics.
@@ -159,3 +169,4 @@ clean:
     rm -rf rocksdb*
     cd bedrock && docker compose down -v && cd ..
     cd monitoring && docker compose down -v && cd ..
+    docker compose -f docker-compose.multi-sequencer.yml down -v
