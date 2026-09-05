@@ -183,6 +183,12 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Acto
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait> ExecutorActor<S, BP> {
+    /// Handle to the channel-config actor, for the service to wire gossip to.
+    #[must_use]
+    pub fn channel_config_ref(&self) -> ActorRef<sequencer_core::ChannelConfigActor> {
+        self.sequencer.channel_config_ref().clone()
+    }
+
     /// Ends a blocked run, reporting the drop to zero only if there was one.
     fn clear_blocked_attempts(&mut self) {
         if self.blocked_attempts.clear() {

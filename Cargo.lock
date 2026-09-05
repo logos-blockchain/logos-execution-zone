@@ -11091,6 +11091,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sequencer_channel_config_actor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "kameo",
+ "log",
+ "logos-blockchain-codec",
+ "logos-blockchain-core",
+ "logos-blockchain-key-management-system-service",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "sequencer_core"
 version = "0.1.0"
 dependencies = [
@@ -11125,6 +11140,7 @@ dependencies = [
  "program_loader_core",
  "programs",
  "rand 0.8.6",
+ "sequencer_channel_config_actor",
  "sequencer_core_metrics",
  "sequencer_stake_core",
  "sequencer_storage_actor",
@@ -11171,6 +11187,7 @@ dependencies = [
  "num-bigint 0.4.6",
  "num-traits",
  "programs",
+ "sequencer_channel_config_actor",
  "sequencer_core",
  "sequencer_executor_actor_metrics",
  "sequencer_stake_core",
@@ -11235,6 +11252,7 @@ dependencies = [
  "log",
  "metrics-exporter-prometheus",
  "programs",
+ "sequencer_channel_config_actor",
  "sequencer_core",
  "sequencer_executor_actor",
  "sequencer_rpc_server_actor",

@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 sequencer_core.workspace = true
+sequencer_channel_config_actor.workspace = true
 sequencer_rpc_server_actor.workspace = true
 sequencer_executor_actor = { workspace = true, features = ["actor"] }
 sequencer_storage_actor = { workspace = true, features = ["actor"] }

@@ -3,6 +3,35 @@
 use log::warn;
 use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig, StakeRecord};
 
+/// Signatures a `ChannelConfigOp` must carry: two thirds of the accredited
+/// keys, capped at `committee_size - 1`, floored at one.
+///
+/// Bedrock verifies this, not a LEE program, so the rule lives here rather
+/// than in the guest crate.
+///
+/// The cap is what makes ejection possible: a config that removes a key cannot
+/// count on that key to sign it, so the bar has to be clearable by the rest of
+/// the committee alone. Slashing depends on this, since a burnt sequencer is
+/// removed by exactly such a config.
+///
+/// From three keys up the cap and two thirds coexist, so no single key
+/// reconfigures the channel alone. At two they cannot: a threshold of two
+/// would need the ejected key's own signature. Two keys therefore stay
+/// single-signer, which follows from the size rather than from oversight.
+///
+/// The op carries the threshold for the *next* config; the one it must satisfy
+/// itself is whatever the live channel already records.
+#[must_use]
+pub fn channel_config_threshold(committee_size: usize) -> u16 {
+    let threshold = committee_size
+        .saturating_mul(2)
+        .div_ceil(3)
+        .min(committee_size.saturating_sub(1))
+        .max(1);
+
+    u16::try_from(threshold).unwrap_or(u16::MAX)
+}
+
 /// The accredited-keys list LEZ state says the channel should have, or `None`
 /// if it already matches the live Bedrock committee.
 ///
@@ -247,6 +276,34 @@ mod tests {
             .public_key()
             .to_bytes();
         SequencerKey::new(bytes).expect("a derived public key is a curve point")
+    }
+
+    #[test]
+    fn no_single_key_reconfigures_a_committee_of_three_or_more() {
+        let expected = [(1, 1), (2, 1), (3, 2), (4, 3), (5, 4), (6, 4), (7, 5), (9, 6)];
+        for (committee_size, threshold) in expected {
+            assert_eq!(
+                channel_config_threshold(committee_size),
+                threshold,
+                "committee of {committee_size}"
+            );
+            assert!(
+                committee_size < 3 || threshold >= 2,
+                "a committee of {committee_size} lets one key rewrite it alone"
+            );
+        }
+    }
+
+    #[test]
+    fn a_committee_can_always_eject_one_of_its_own() {
+        // The key being removed does not sign its own removal, so the rest of
+        // the committee has to clear the bar without it. Slashing needs this.
+        for committee_size in 2..=64_usize {
+            assert!(
+                usize::from(channel_config_threshold(committee_size)) < committee_size,
+                "a committee of {committee_size} could never eject a member"
+            );
+        }
     }
 
     #[test]
