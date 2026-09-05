@@ -19,7 +19,7 @@ use common::{
 use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
-use kameo::actor::ActorRef;
+use kameo::actor::{ActorRef, Spawn as _};
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
@@ -31,6 +31,8 @@ use logos_blockchain_zone_sdk::{
 };
 use mempool::{MemPool, MemPoolHandle};
 use num_bigint::BigUint;
+pub use sequencer_channel_config_actor::ChannelConfigActor;
+use sequencer_channel_config_actor::{Candidate, ConfigTarget, Propose, Proposed, Report};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
@@ -177,6 +179,8 @@ pub struct SequencerCore<S: StorageActorTrait, BP: BlockPublisherTrait = ZoneSdk
     slash_record: slashing::SlashRecord,
     /// Signs this node's approval of a slash.
     bedrock_signing_key: block_publisher::Ed25519Key,
+    /// Collects the accredited signatures a channel config update needs.
+    channel_config: ActorRef<ChannelConfigActor>,
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
@@ -505,6 +509,9 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             watchers,
             last_committee_submission_slot: None,
             slash_record,
+            channel_config: ChannelConfigActor::spawn(ChannelConfigActor::new(
+                bedrock_signing_key.clone(),
+            )),
             bedrock_signing_key,
         };
 
@@ -831,7 +838,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
 
         // Independent Mantle tx, not bundled with the block above — join/exit
         // config updates don't need to be.
-        self.submit_committee_update(committee_update).await;
+        self.drive_committee_update(committee_update).await;
 
         let withdrawal_reconciliation_keys: HashSet<_> = released_notes
             .iter()
@@ -894,30 +901,24 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         })
     }
 
-    async fn submit_committee_update(
+    /// Keeps the channel-config actor's view current and, on our turn, moves
+    /// the committee update along: fund a candidate, or submit one that has
+    /// collected the signatures Bedrock demands.
+    ///
+    /// Every node reports, turn or not. A peer only signs a candidate that
+    /// matches the config it derived for itself, so it has to have derived one.
+    async fn drive_committee_update(
         &mut self,
         committee_update: Option<Vec<sequencer_stake_core::SequencerKey>>,
     ) {
-        let Some(new_keys) = committee_update else {
-            return;
-        };
-        let tip_slot = match self.block_publisher.channel_tip_slot().await {
-            Ok(tip_slot) => tip_slot,
+        let live = match self.block_publisher.live_channel_config().await {
+            Ok(Some(live)) => live,
+            Ok(None) => return,
             Err(err) => {
-                warn!("Failed to read channel tip slot; skipping committee update: {err:#}");
+                warn!("Failed to read the live channel config; skipping this turn: {err:#}");
                 return;
             }
         };
-        if !Self::committee_cooldown_elapsed(self.last_committee_submission_slot, tip_slot) {
-            return;
-        }
-        let new_keys = new_keys
-            .into_iter()
-            .map(|key| {
-                Ed25519PublicKey::from_bytes(&key.to_bytes())
-                    .expect("sequencer key was decoded from a valid Ed25519 public key")
-            })
-            .collect();
         // Same state the committee decision itself was read from, and the params
         // have not moved since genesis set them.
         let channel_params = {
@@ -930,13 +931,128 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             );
             return;
         };
-        self.last_committee_submission_slot = tip_slot;
-        if let Err(err) = self
-            .block_publisher
-            .submit_channel_config(new_keys, channel_params)
+
+        // Only start a config while none is in flight. The node reports its
+        // head config tip, zone-sdk sheds pending configs against its own
+        // slightly-behind view, and the two coincide exactly when the head tip
+        // is the finalized one — so this is also what keeps zone-sdk from
+        // shedding a candidate that Bedrock would have accepted.
+        let finalized_config = self
+            .store
+            .get_zone_checkpoint()
             .await
-        {
-            warn!("Failed to submit committee channel-config update: {err:#}");
+            .inspect_err(|err| warn!("Failed to read the zone checkpoint: {err:#}"))
+            .ok()
+            .flatten()
+            .map(|checkpoint| checkpoint.finalized_config);
+        if finalized_config != Some(live.config_tip) {
+            debug!("A channel config is still in flight; not starting another this turn");
+        }
+        let target = committee_update
+            .filter(|_| finalized_config == Some(live.config_tip))
+            .map(|new_keys| {
+                let keys: Vec<Ed25519PublicKey> = new_keys
+                    .into_iter()
+                    .map(|key| {
+                        Ed25519PublicKey::from_bytes(&key.to_bytes())
+                            .expect("sequencer key was decoded from a valid Ed25519 public key")
+                    })
+                    .collect();
+
+                ConfigTarget {
+                    // The threshold the op carries is the one the *next* config
+                    // will have to clear, so it is measured against the committee
+                    // this op installs.
+                    configuration_threshold: committee_discovery::channel_config_threshold(
+                        keys.len(),
+                    ),
+                    transfer_threshold: system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
+                    keys,
+                    parent: live.config_tip,
+                    posting_timeframe: channel_params.posting_timeframe,
+                    posting_timeout: channel_params.posting_timeout,
+                }
+            });
+        let report = Report {
+            live_keys: live.keys,
+            required_signatures: live.required_signatures,
+            target,
+        };
+        if self.channel_config.tell(report).await.is_err() {
+            warn!("The channel-config actor is gone; skipping the committee update");
+            return;
+        }
+
+        // Only the turn holder proposes, so at most one candidate is in flight
+        // and the committee never splits its signatures across rivals.
+        if !self.block_publisher.is_our_turn() {
+            return;
+        }
+        self.advance_channel_config().await;
+    }
+
+    /// One step of the config handshake, run on our turn only.
+    async fn advance_channel_config(&mut self) {
+        let proposed = match self.channel_config.ask(Propose).await {
+            Ok(proposed) => proposed,
+            Err(err) => {
+                warn!("Failed to ask the channel-config actor what to do: {err}");
+                return;
+            }
+        };
+        let target = match proposed {
+            Proposed::Idle => return,
+            Proposed::Submit(tx) => return self.submit_signed_config(tx).await,
+            Proposed::Build(target) => target,
+        };
+
+        // Funding is a node round trip, which is why the actor asks for it
+        // instead of doing it: the signatures are over the funded transaction.
+        let funded = match self.block_publisher.fund_channel_config(&target).await {
+            Ok(funded) => funded,
+            Err(err) => {
+                warn!("Failed to fund a channel-config candidate: {err:#}");
+                return;
+            }
+        };
+        let candidate = Candidate {
+            target,
+            tx: Box::new(funded.tx),
+            transfer_proof: funded.transfer_proof,
+        };
+        if self.channel_config.tell(candidate).await.is_err() {
+            warn!("The channel-config actor is gone; dropping the candidate");
+            return;
+        }
+
+        // A single-signer channel is already over its threshold on our own
+        // signature, so it lands this turn rather than the next.
+        if let Ok(Proposed::Submit(tx)) = self.channel_config.ask(Propose).await {
+            self.submit_signed_config(tx).await;
+        }
+    }
+
+    async fn submit_signed_config(
+        &mut self,
+        tx: Box<
+            logos_blockchain_core::mantle::SignedMantleTx<
+                logos_blockchain_core::mantle::transactions::states::Unverified,
+            >,
+        >,
+    ) {
+        let tip_slot = match self.block_publisher.channel_tip_slot().await {
+            Ok(tip_slot) => tip_slot,
+            Err(err) => {
+                warn!("Failed to read channel tip slot; skipping committee update: {err:#}");
+                return;
+            }
+        };
+        if !Self::committee_cooldown_elapsed(self.last_committee_submission_slot, tip_slot) {
+            return;
+        }
+        self.last_committee_submission_slot = tip_slot;
+        if let Err(err) = self.block_publisher.submit_signed_channel_config(tx).await {
+            warn!("Failed to submit the committee channel-config update: {err:#}");
         }
     }
 
@@ -1551,6 +1667,12 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
 
     pub const fn sequencer_config(&self) -> &SequencerConfig {
         &self.sequencer_config
+    }
+
+    /// Handle to the channel-config actor, for the service to feed gossip into.
+    #[must_use]
+    pub const fn channel_config_ref(&self) -> &ActorRef<ChannelConfigActor> {
+        &self.channel_config
     }
 
     /// This node's Bedrock public key, hex — the identity the channel's

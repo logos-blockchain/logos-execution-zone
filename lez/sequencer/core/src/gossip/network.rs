@@ -19,6 +19,7 @@ use libp2p::{
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 #[cfg(test)]
 use mempool::MemPoolHandle;
+use sequencer_channel_config_actor::Outbound;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -44,6 +45,8 @@ const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Local transactions whose publish failed (e.g. `InsufficientPeers` while
 /// the mesh is still forming), kept for republish once a peer subscribes.
 const PENDING_PUBLISH_CAPACITY: usize = 256;
+/// Depth of the actor-to-gossip channel; it only absorbs bursts.
+const CONFIG_PUBLISH_CHANNEL_CAPACITY: usize = 64;
 
 #[derive(NetworkBehaviour)]
 struct GossipBehaviour {
@@ -61,6 +64,7 @@ pub struct GossipNetwork {
     listen_addrs: Vec<Multiaddr>,
     local_peer_id: PeerId,
     tx_tx: mpsc::Sender<LeeTransaction>,
+    config_tx: mpsc::Sender<Outbound>,
 }
 
 /// Submits a gossiped transaction to the node's admission door (fee screen +
@@ -94,6 +98,7 @@ impl GossipNetwork {
         signing_key: Ed25519Key,
         max_block_size: u64,
         submit: IngestSubmit,
+        config_sink: mpsc::Sender<Outbound>,
     ) -> Result<Self> {
         // Reuse the node's L1 bedrock signing key as the libp2p identity. The
         // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
@@ -169,11 +174,17 @@ impl GossipNetwork {
 
         // subscribe to topic for the selected channel
         let topic = Self::get_topic_for_channel(channel_id);
+        let config_topic = Self::get_config_topic_for_channel(channel_id);
         swarm
             .behaviour_mut()
             .gossipsub
             .subscribe(&topic)
             .context("Failed to subscribe to gossip tx topic")?;
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&config_topic)
+            .context("Failed to subscribe to gossip channel-config topic")?;
 
         swarm
             .listen_on(listen_addr)
@@ -209,6 +220,7 @@ impl GossipNetwork {
         let (connected_tx, connected_rx) = watch::channel(Vec::new());
         let shutdown = CancellationToken::new();
         let (tx_tx, tx_rx) = mpsc::channel::<LeeTransaction>(TX_PUBLISH_CHANNEL_CAPACITY);
+        let (config_tx, config_rx) = mpsc::channel::<Outbound>(CONFIG_PUBLISH_CHANNEL_CAPACITY);
 
         let driver = tokio::spawn(run_drive_task(DriveTask {
             swarm,
@@ -217,12 +229,16 @@ impl GossipNetwork {
             connected_tx,
             shutdown: shutdown.clone(),
             topic,
+            config_topic,
+            config_sink,
+            config_rx,
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
             max_block_size,
             submit,
             tx_rx,
             bootstrap,
             pending_publish: VecDeque::new(),
+            pending_config: VecDeque::new(),
         }));
         spawn_driver_watchdog(driver, shutdown.clone());
 
@@ -232,7 +248,18 @@ impl GossipNetwork {
             listen_addrs,
             local_peer_id,
             tx_tx,
+            config_tx,
         })
+    }
+
+    #[must_use]
+    /// Channel-config candidates and signatures ride their own topic, so the
+    /// transaction wire format is untouched.
+    fn get_config_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
+        gossipsub::IdentTopic::new(format!(
+            "/lez/{}/v1/channel-config",
+            hex::encode(channel_id)
+        ))
     }
 
     #[must_use]
@@ -258,6 +285,13 @@ impl GossipNetwork {
     #[must_use]
     pub const fn local_peer_id(&self) -> PeerId {
         self.local_peer_id
+    }
+
+    /// Sink the channel-config actor publishes its own candidates and
+    /// signatures into.
+    #[must_use]
+    pub fn config_publisher(&self) -> mpsc::Sender<Outbound> {
+        self.config_tx.clone()
     }
 
     /// Handle for publishing locally-submitted transactions to the mesh.
@@ -295,6 +329,11 @@ struct DriveTask {
     connected_tx: watch::Sender<Vec<[u8; 32]>>,
     shutdown: CancellationToken,
     topic: gossipsub::IdentTopic,
+    config_topic: gossipsub::IdentTopic,
+    /// Where inbound channel-config messages go; the actor decides what to
+    /// keep, since only it knows the candidate a signature belongs to.
+    config_sink: mpsc::Sender<Outbound>,
+    config_rx: mpsc::Receiver<Outbound>,
     seen: SeenCache,
     max_block_size: u64,
     submit: IngestSubmit,
@@ -304,6 +343,8 @@ struct DriveTask {
     /// Local transactions whose publish failed, retried when a peer
     /// subscribes to the topic. Bounded; the oldest is dropped on overflow.
     pending_publish: VecDeque<LeeTransaction>,
+    /// Same, for channel-config messages whose publish failed.
+    pending_config: VecDeque<Outbound>,
 }
 
 impl DriveTask {
@@ -343,13 +384,22 @@ impl DriveTask {
                 message_id,
                 message,
             }) => {
-                self.on_gossip_message(propagation_source, &message_id, &message.data)
-                    .await;
+                if message.topic == self.config_topic.hash() {
+                    self.on_config_message(propagation_source, &message_id, &message.data);
+                } else {
+                    self.on_gossip_message(propagation_source, &message_id, &message.data)
+                        .await;
+                }
             }
             GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
                 if topic == self.topic.hash() =>
             {
                 self.flush_pending_publishes();
+            }
+            GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
+                if topic == self.config_topic.hash() =>
+            {
+                self.flush_pending_configs();
             }
             GossipBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
                 if let Ok(ed25519_pubkey) = info.public_key.try_into_ed25519() {
@@ -394,6 +444,59 @@ impl DriveTask {
                 true
             }
         });
+    }
+
+    /// Decodes an inbound channel-config message and hands it to the actor,
+    /// which is the only thing that can judge it: a signature means nothing
+    /// without the candidate it was signed over.
+    fn on_config_message(
+        &mut self,
+        source: PeerId,
+        message_id: &gossipsub::MessageId,
+        data: &[u8],
+    ) {
+        let acceptance = if let Some(message) = Outbound::decode(data) {
+            if let Err(err) = self.config_sink.try_send(message) {
+                log::debug!("Dropping an inbound channel-config message: {err}");
+            }
+            gossipsub::MessageAcceptance::Accept
+        } else {
+            log::debug!("Rejecting an undecodable channel-config message from {source}");
+            gossipsub::MessageAcceptance::Reject
+        };
+
+        _ = self
+            .swarm
+            .behaviour_mut()
+            .gossipsub
+            .report_message_validation_result(message_id, &source, acceptance);
+    }
+
+    /// Publishes one of this node's own channel-config messages, queued and
+    /// retried like a transaction: a candidate has to reach every peer that
+    /// might sign it.
+    fn publish_config(&mut self, message: Outbound) {
+        match self
+            .swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(self.config_topic.clone(), message.encode())
+        {
+            Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
+            Err(err) => {
+                log::debug!("Queueing a channel-config publish for retry: {err}");
+                if self.pending_config.len() >= PENDING_PUBLISH_CAPACITY {
+                    self.pending_config.pop_front();
+                }
+                self.pending_config.push_back(message);
+            }
+        }
+    }
+
+    fn flush_pending_configs(&mut self) {
+        for message in std::mem::take(&mut self.pending_config) {
+            self.publish_config(message);
+        }
     }
 
     /// Validates an inbound gossiped transaction and reports the mesh
@@ -596,6 +699,7 @@ async fn run_drive_task(mut task: DriveTask) {
             () = task.shutdown.cancelled() => break,
             event = task.swarm.select_next_some() => task.on_swarm_event(event).await,
             Some(tx) = task.tx_rx.recv() => task.publish_transaction(tx),
+            Some(message) = task.config_rx.recv() => task.publish_config(message),
             _ = bootstrap_retry.tick() => task.retry_bootstrap(),
         }
     }
@@ -671,6 +775,7 @@ mod tests {
             Ed25519Key::from_bytes(&[9; 32]),
             TEST_MAX_BLOCK_SIZE,
             unscreened_mempool_submit(test_mempool_handle()),
+            mpsc::channel(1).0,
         )
         .await
         .unwrap();
@@ -688,6 +793,7 @@ mod tests {
             Ed25519Key::from_bytes(&[9; 32]),
             TEST_MAX_BLOCK_SIZE,
             unscreened_mempool_submit(test_mempool_handle()),
+            mpsc::channel(1).0,
         )
         .await
         .unwrap();

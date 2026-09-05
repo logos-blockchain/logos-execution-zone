@@ -1,0 +1,23 @@
+[package]
+name = "sequencer_channel_config_actor"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+logos-blockchain-codec.workspace = true
+logos-blockchain-core.workspace = true
+logos-blockchain-key-management-system-service.workspace = true
+
+kameo.workspace = true
+anyhow.workspace = true
+hex.workspace = true
+log.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }

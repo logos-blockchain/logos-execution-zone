@@ -9,12 +9,16 @@ pub use sequencer_core::config::*;
 use sequencer_core::load_or_create_signing_key;
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_rpc_server_actor::RpcServerActor;
+use sequencer_channel_config_actor::{Outbound, SetPublisher};
 use sequencer_storage_actor::StorageActor;
 use tokio::select;
 
 use crate::actor_handle::ActorHandle;
 
 mod actor_handle;
+
+/// Depth of the gossip-to-actor channel; overflow only delays a config update.
+const INBOUND_CONFIG_CHANNEL_CAPACITY: usize = 64;
 
 #[cfg(not(feature = "standalone"))]
 type BlockPublisher = sequencer_core::block_publisher::ZoneSdkPublisher;
@@ -164,7 +168,12 @@ pub fn run(
         info!("Storage Actor spawned");
 
         let executor = ExecutorActor::new(config, storage_ref.clone()).await;
+        let channel_config_ref = executor.channel_config_ref();
         let executor_ref = ExecutorActor::spawn(executor);
+
+        // Inbound channel-config messages, forwarded to the actor below.
+        let (config_tx, mut config_rx) =
+            tokio::sync::mpsc::channel(INBOUND_CONFIG_CHANNEL_CAPACITY);
         info!("Executor Actor spawned");
 
         // TODO: Should be a separate actor
@@ -200,6 +209,7 @@ pub fn run(
                     signing_key,
                     max_block_size.as_u64(),
                     submit,
+                    config_tx,
                 )
                 .await
                 .context("Failed to start sequencer gossip network")?;
@@ -210,6 +220,26 @@ pub fn run(
         let tx_publisher = gossip_network
             .as_ref()
             .map(sequencer_core::gossip::GossipNetwork::tx_publisher);
+
+        // Without gossip the actor publishes nowhere, so a channel whose
+        // threshold is above one can never collect the signatures it needs.
+        if let Some(network) = gossip_network.as_ref() {
+            channel_config_ref
+                .tell(SetPublisher(network.config_publisher()))
+                .await?;
+            let actor = channel_config_ref.clone();
+            tokio::spawn(async move {
+                while let Some(message) = config_rx.recv().await {
+                    let delivered = match message {
+                        Outbound::Candidate(candidate) => actor.tell(candidate).await.is_ok(),
+                        Outbound::Signature(signature) => actor.tell(signature).await.is_ok(),
+                    };
+                    if !delivered {
+                        break;
+                    }
+                }
+            });
+        }
 
         let rpc_server = RpcServerActor::new(
             listen_addr,
