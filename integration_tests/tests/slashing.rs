@@ -3,14 +3,16 @@
     reason = "top-level test functions are conventional for integration tests"
 )]
 
-//! The follower inscribes a payload that is not a block and the leader burns
-//! its stake.
+//! A follower inscribes a payload that is not a block and the leader burns its
+//! stake.
 //!
-//! The follower never produces, so only the leader can slash it.
+//! Neither follower produces, so only the leader can slash. Three staked keys put
+//! the threshold at two, so the burn needs a peer's approval to arrive over gossip.
 
-use std::{future::Future, time::Duration};
+use std::{collections::BTreeSet, future::Future, time::Duration};
 
 use anyhow::{Context as _, Result, ensure};
+use common::{block::Block, transaction::LeeTransaction};
 use integration_tests::{assert_same_chain, committee, get_account, init_logger, wait_until};
 use lee::AccountId;
 use log::info;
@@ -48,6 +50,22 @@ async fn stake_config(ctx: &TestContext) -> Result<sequencer_stake_core::Sequenc
         .context("Config account should decode as SequencerStakeConfig")
 }
 
+/// The approvals carried by a `Slash` in this block, if it holds one.
+fn slash_approvals_in(block: &Block) -> Option<Vec<sequencer_stake_core::SlashApproval>> {
+    block.body.transactions.iter().find_map(|tx| {
+        let LeeTransaction::Public(public) = tx else {
+            return None;
+        };
+        if public.message().program_account_id != programs::sequencer_stake().id().into() {
+            return None;
+        }
+        match borsh::from_slice(&public.message().instruction_data) {
+            Ok(sequencer_stake_core::Instruction::Slash { approvals, .. }) => Some(approvals),
+            _ => None,
+        }
+    })
+}
+
 /// Like `wait_until` but with a longer budget, since the offender waits its turn.
 async fn wait_for_slash<F, Fut>(mut check: F) -> Result<()>
 where
@@ -74,11 +92,10 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
 
     let channel = config::bedrock_channel_id();
 
-    // The follower never produces, so it cannot slash itself.
     let ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
-                num_nodes: 2,
+                num_nodes: 3,
                 bedrock_channel: channel,
             })
             .disable_wallet()
@@ -89,11 +106,12 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
             .with_follower_sequencer_partial_config(SequencerPartialConfig {
                 block_create_timeout: Duration::from_secs(100_000),
                 ..SequencerPartialConfig::default()
-            }),
+            })
+            .with_gossip(),
         )
         .build()
         .await
-        .context("Failed to build the two-sequencer test context")?;
+        .context("Failed to build the three-sequencer test context")?;
 
     let offender_key = Ed25519Key::from_bytes(&config::sequencer_signing_key_from_seed(
         u32::try_from(OFFENDER_SEED).context("The offender seed does not fit in a u32")?,
@@ -131,8 +149,17 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         balance(&ctx, sink).await? == 0,
         "nothing should be burned yet"
     );
-    let staked_before = stake_config(&ctx)
-        .await?
+    // Without this the test would also pass at a threshold of one, with no
+    // approval ever crossing the mesh.
+    let config = stake_config(&ctx).await?;
+    let threshold =
+        sequencer_stake_core::slash_approval_threshold(config.accredited_committee_members_count());
+    ensure!(
+        threshold >= 2,
+        "three staked sequencers should ask for more than the leader's own approval, got {threshold}"
+    );
+
+    let staked_before = config
         .entries
         .get(&offender_stake_key)
         .context("the offender should start with a stake config entry")?
@@ -193,12 +220,36 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
 
     // A payload that is not a block never reaches chain state, so it takes no block id.
     let height = leader_client.get_last_block_id().await?;
+    let mut approvals = None;
     for id in 1..=height {
-        ensure!(
-            leader_client.get_block(id).await?.is_some(),
-            "block id {id} is missing: the garbage opened a gap in the chain"
-        );
+        let block = leader_client.get_block(id).await?.with_context(|| {
+            format!("block id {id} is missing: the garbage opened a gap in the chain")
+        })?;
+        approvals = approvals.or_else(|| slash_approvals_in(&block));
     }
+
+    // The leader holds one key, so a second signer can only have come over the mesh.
+    let approvals = approvals.context("No Slash transaction landed in the chain")?;
+    let signers: BTreeSet<_> = approvals.iter().map(|approval| approval.signer).collect();
+    ensure!(
+        signers.len() == approvals.len(),
+        "the Slash repeated a signer, which the program rejects"
+    );
+    ensure!(
+        signers.len() >= threshold,
+        "the Slash carried {} approvals, under the threshold of {threshold}",
+        signers.len()
+    );
+    let leader_stake_key = sequencer_stake_core::SequencerKey::new(
+        Ed25519Key::from_bytes(&config::SEQUENCER_SIGNING_KEY)
+            .public_key()
+            .to_bytes(),
+    )
+    .context("The leader's Bedrock key is not a valid Ed25519 point")?;
+    ensure!(
+        signers.iter().any(|signer| *signer != leader_stake_key),
+        "every approval was the leader's own, so none of them came over gossip"
+    );
     assert_same_chain(leader_client, follower_client)
         .await
         .context("The two sequencers disagree about the chain after the slash")?;

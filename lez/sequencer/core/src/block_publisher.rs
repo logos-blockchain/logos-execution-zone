@@ -470,15 +470,16 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                                     Some(block) => {
                                                         finalized_blocks.push((block, l1_slot));
                                                     }
-                                                    // An empty payload is not a
-                                                    // block, but we don't slash
-                                                    // for it.
+                                                    // An empty payload is a
+                                                    // missed turn, for the
+                                                    // liveness fault to judge.
                                                     None if <Inscription as AsRef<[u8]>>::as_ref(
                                                         &inscription.payload,
                                                     )
                                                     .is_empty() => {}
-                                                    // An inscription always names
-                                                    // its signer.
+                                                    // Only a config entry has no
+                                                    // signer, and those arrive as
+                                                    // `FinalizedOp::Config`.
                                                     None => undecodable.extend(
                                                         inscription.signer.map(|signer| {
                                                             (inscription.this_msg, signer)

@@ -12,6 +12,7 @@ workspace = true
 sequencer_core.workspace = true
 sequencer_rpc_server_actor.workspace = true
 sequencer_executor_actor = { workspace = true, features = ["actor"] }
+sequencer_slasher_actor.workspace = true
 sequencer_storage_actor = { workspace = true, features = ["actor"] }
 lee = { workspace = true, optional = true }
 programs = { workspace = true, optional = true }

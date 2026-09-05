@@ -26,6 +26,7 @@ mock = ["dep:mockall"]
 [dependencies]
 common.workspace = true
 lee_core.workspace = true
+sequencer_slasher_actor.workspace = true
 sequencer_storage_actor.workspace = true
 sequencer_executor_actor_metrics = { workspace = true, features = [
   "record",

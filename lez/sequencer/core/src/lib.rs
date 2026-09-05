@@ -19,7 +19,7 @@ use common::{
 use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
-use kameo::actor::ActorRef;
+use kameo::actor::{ActorRef, Spawn as _};
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
@@ -31,6 +31,7 @@ use logos_blockchain_zone_sdk::{
 };
 use mempool::{MemPool, MemPoolHandle};
 use num_bigint::BigUint;
+use sequencer_slasher_actor::{Propose, Report, ReportedOffence, SlasherActor};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
@@ -59,7 +60,6 @@ pub mod fees;
 pub mod gossip;
 #[cfg(feature = "mock")]
 pub mod mock;
-pub mod slashing;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.
@@ -173,8 +173,8 @@ pub struct SequencerCore<S: StorageActorTrait, BP: BlockPublisherTrait = ZoneSdk
     watchers: TaskGroup,
     /// Channel tip slot as of the last committee-config submission.
     last_committee_submission_slot: Option<Slot>,
-    /// Offending inscriptions, attributed and not.
-    slash_record: slashing::SlashRecord,
+    /// Records offending inscriptions and proposes the slashes for them.
+    slasher: ActorRef<SlasherActor<S>>,
     /// Signs this node's approval of a slash.
     bedrock_signing_key: block_publisher::Ed25519Key,
 }
@@ -368,7 +368,9 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         let (mempool, mempool_handle) = MemPool::new(config.mempool_max_size);
         sequencer_core_metrics::record_mempool_max_size(config.mempool_max_size);
 
-        let slash_record = slashing::SlashRecord::load(store.storage_ref()).await;
+        let slasher = SlasherActor::spawn(
+            SlasherActor::load(store.storage_ref().clone(), bedrock_signing_key.clone()).await,
+        );
 
         let block_publisher = BP::new(
             &config.bedrock_config,
@@ -379,7 +381,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 store.storage_ref().clone(),
                 Arc::clone(&chain),
                 mempool_handle.clone(),
-                slash_record.clone(),
+                slasher.clone(),
             ),
         )
         .await
@@ -504,7 +506,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             block_publisher,
             watchers,
             last_committee_submission_slot: None,
-            slash_record,
+            slasher,
             bedrock_signing_key,
         };
 
@@ -769,16 +771,15 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         storage_ref: ActorRef<S>,
         chain: Arc<Mutex<ChainState>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-        slash_record: slashing::SlashRecord,
+        slasher: ActorRef<SlasherActor<S>>,
     ) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
             let storage_ref = storage_ref.clone();
             let chain = Arc::clone(&chain);
             let mempool_handle = mempool_handle.clone();
-            let slash_record = slash_record.clone();
+            let slasher = slasher.clone();
             Box::pin(async move {
-                // Before the checkpoint moves past them.
-                slash_record.report(&storage_ref, &update.undecodable).await;
+                report_offences(&slasher, &update.undecodable).await;
                 apply_follow_update(&storage_ref, &chain, &mempool_handle, update).await;
             })
         })
@@ -1161,7 +1162,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             mut working_state,
             pending_dispatches,
             finalize_unstake_txs,
-            slash_txs,
             committee_update,
             parent,
         ) = {
@@ -1205,14 +1205,22 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 chain.head_state().clone(),
                 pending,
                 build_finalize_unstake_txs(chain.head_state()),
-                slashing::slash_candidates(
-                    chain.head_state(),
-                    &self.slash_record,
-                    &self.bedrock_signing_key,
-                ),
                 committee_update,
                 parent,
             )
+        };
+
+        // A Slash executes against the head config, so it is proposed from it.
+        let slash_txs = match committee_discovery::read_config(&working_state) {
+            Some(config) => self
+                .slasher
+                .ask(Propose { config })
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("Proposing no slashes this turn: {err}");
+                    Vec::new()
+                }),
+            None => Vec::new(),
         };
 
         // The live committee is the finalized one only while no config is in
@@ -1553,6 +1561,10 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         &self.sequencer_config
     }
 
+    pub const fn slasher_ref(&self) -> &ActorRef<SlasherActor<S>> {
+        &self.slasher
+    }
+
     /// This node's Bedrock public key, hex — the identity the channel's
     /// accredited keys and round-robin are keyed by.
     #[must_use]
@@ -1839,6 +1851,28 @@ async fn record_dead_letter_gauge<S: StorageActorTrait>(storage_ref: &ActorRef<S
             warn!("Failed to read the cross-zone dead letter for its gauge: {err:#}");
         }
     }
+}
+
+/// Records what the follow path saw, before the checkpoint moves past it.
+async fn report_offences<S: StorageActorTrait>(
+    slasher: &ActorRef<SlasherActor<S>>,
+    undecodable: &[(MsgId, Ed25519PublicKey)],
+) {
+    if undecodable.is_empty() {
+        return;
+    }
+
+    let offences = undecodable
+        .iter()
+        .map(|(msg_id, signer)| ReportedOffence {
+            signer: signer.to_bytes(),
+            inscription: (*msg_id).into(),
+        })
+        .collect();
+    slasher
+        .ask(Report { offences })
+        .await
+        .unwrap_or_else(|err| panic!("Failed to persist the slash record: {err}"));
 }
 
 /// Feed one channel delta into the follow state and mirror it to the store:

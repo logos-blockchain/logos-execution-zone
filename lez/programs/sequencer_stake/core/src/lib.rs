@@ -7,12 +7,10 @@ pub use lee_core::program::PdaSeed;
 use lee_core::{account::AccountId, program::InstructionData};
 use serde::{Deserialize, Serialize};
 
-/// Approvals a `Slash` must carry. Raising it moves the program id.
-pub const SLASH_APPROVAL_THRESHOLD: usize = 1;
-
 const INVALID_KEY: &str = "invalid Ed25519 public key";
 const SEQUENCER_STAKE_CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/MinSequencerStake/0000";
-const SLASH_APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashApproval/00000000";
+/// Names the fault, so a second fault gets its own domain and its own signatures.
+const SLASH_APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashApproval/NonBlock";
 const SLASH_SINK_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashedStakeSink/00000";
 
 /// The Bedrock sequencer identity a stake backs. Holds only a valid Ed25519
@@ -191,6 +189,32 @@ impl SequencerStakeConfig {
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         borsh::from_slice(bytes).ok()
     }
+
+    /// Whether `key` still backs enough stake to stand for the committee, at the
+    /// same bar `committee_discovery` uses. No params yet means no committee.
+    #[must_use]
+    pub fn is_accredited_committee_member(&self, key: &SequencerKey) -> bool {
+        let Some(params) = self.channel_params else {
+            return false;
+        };
+
+        self.entries
+            .get(key)
+            .is_some_and(|entry| entry.is_accredited(params.minimum_sequencer_stake))
+    }
+
+    /// How many keys [`Self::is_accredited_committee_member`] accepts.
+    #[must_use]
+    pub fn accredited_committee_members_count(&self) -> usize {
+        let Some(params) = self.channel_params else {
+            return 0;
+        };
+
+        self.entries
+            .values()
+            .filter(|entry| entry.is_accredited(params.minimum_sequencer_stake))
+            .count()
+    }
 }
 
 /// One key's standing. `account_id` makes the ownership account findable — a plain account's id
@@ -212,6 +236,12 @@ impl SequencerEntry {
         self.total_staked.saturating_sub(self.total_pending_unstake)
     }
 
+    /// Whether this entry still backs enough stake to stand for the committee.
+    #[must_use]
+    pub const fn is_accredited(&self, minimum_stake: u128) -> bool {
+        self.net_stake() >= minimum_stake
+    }
+
     /// Whether releasing `amount` is a legal `UnstakeRequest` against this
     /// entry: covered by the stake tracked here, and leaving the key either
     /// fully exited or still at or above `minimum`.
@@ -222,6 +252,18 @@ impl SequencerEntry {
             Some(remaining) => remaining == 0 || remaining >= minimum,
         }
     }
+}
+
+/// Approvals a `Slash` must carry: two thirds of the committee, never fewer
+/// than two.
+///
+/// A `Slash` carries no proof the offence happened, so the signatures are the
+/// only thing standing between a key and a peer's stake. One is never enough.
+/// Below three sequencers that puts the threshold above the keys that would
+/// ever sign, which leaves slashing inert rather than unilateral.
+#[must_use]
+pub fn slash_approval_threshold(committee_size: usize) -> usize {
+    committee_size.saturating_mul(2).div_ceil(3).max(2)
 }
 
 /// Bytes an approver signs. Naming the inscription keeps the approval single use.
@@ -440,6 +482,91 @@ mod tests {
         assert_eq!(
             sequencer_stake_config_account_id(PROGRAM_ID),
             sequencer_stake_config_account_id(PROGRAM_ID)
+        );
+    }
+    #[test]
+    fn no_single_key_can_ever_reach_the_threshold() {
+        let expected = [
+            (0, 2),
+            (1, 2),
+            (2, 2),
+            (3, 2),
+            (4, 3),
+            (5, 4),
+            (6, 4),
+            (7, 5),
+            (9, 6),
+        ];
+        for (committee_size, threshold) in expected {
+            assert_eq!(
+                slash_approval_threshold(committee_size),
+                threshold,
+                "committee of {committee_size}"
+            );
+            // The whole security property: a Slash carries no proof of the
+            // offence, so one key must never be able to burn a peer's stake.
+            assert!(
+                threshold >= 2,
+                "a committee of {committee_size} lets one key slash alone"
+            );
+        }
+    }
+
+    #[test]
+    fn slashing_is_inert_below_three_sequencers() {
+        // The offender is a committee member and never approves its own slash,
+        // so a threshold above the rest of the committee can never be met.
+        for committee_size in 0..=2_usize {
+            let could_sign = committee_size.saturating_sub(1);
+            assert!(
+                slash_approval_threshold(committee_size) > could_sign,
+                "a committee of {committee_size} can still be slashed"
+            );
+        }
+    }
+
+    #[test]
+    fn every_honest_key_suffices_from_three_sequencers_up() {
+        // Liveness: the non-offenders can always clear the bar on their own.
+        for committee_size in 3..=32_usize {
+            assert!(
+                slash_approval_threshold(committee_size) < committee_size,
+                "a committee of {committee_size} could never slash anyone"
+            );
+        }
+    }
+    #[test]
+    fn a_key_on_its_way_out_is_neither_an_approver_nor_a_head_to_count() {
+        let staying = SequencerKey::new(
+            ed25519_dalek::SigningKey::from_bytes(&[1; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
+        .expect("valid key");
+        let leaving = SequencerKey::new(
+            ed25519_dalek::SigningKey::from_bytes(&[2; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
+        .expect("valid key");
+        let config = SequencerStakeConfig {
+            channel_params: Some(ChannelParams {
+                minimum_sequencer_stake: 1_000,
+                posting_timeframe: 300,
+                posting_timeout: 25,
+            }),
+            entries: BTreeMap::from([(staying, entry(1_000, 0)), (leaving, entry(1_000, 1_000))]),
+        };
+
+        assert!(config.is_accredited_committee_member(&staying));
+        assert!(
+            !config.is_accredited_committee_member(&leaving),
+            "a fully pending unstake leaves nothing backing the key"
+        );
+        assert_eq!(
+            config.accredited_committee_members_count(),
+            1,
+            "an exiting key must not raise the threshold its peers have to clear"
         );
     }
 }

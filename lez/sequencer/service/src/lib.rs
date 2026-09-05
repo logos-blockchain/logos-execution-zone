@@ -9,12 +9,16 @@ pub use sequencer_core::config::*;
 use sequencer_core::load_or_create_signing_key;
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_rpc_server_actor::RpcServerActor;
+use sequencer_slasher_actor::{SetApprovalPublisher, SlasherActor};
 use sequencer_storage_actor::StorageActor;
 use tokio::select;
 
 use crate::actor_handle::ActorHandle;
 
 mod actor_handle;
+
+/// Depth of the gossip-to-slasher approval channel; overflow only delays a slash.
+const INBOUND_APPROVAL_CHANNEL_CAPACITY: usize = 256;
 
 #[cfg(not(feature = "standalone"))]
 type BlockPublisher = sequencer_core::block_publisher::ZoneSdkPublisher;
@@ -30,6 +34,7 @@ pub struct SequencerHandle {
     scheduler: ActorHandle<Scheduler>,
     rpc_server: ActorHandle<RpcServerActor>,
     executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
+    slasher: ActorHandle<SlasherActor>,
     storage: ActorHandle<StorageActor>,
     addr: SocketAddr,
     /// Held for its lifetime: dropping it stops the gossip drive task.
@@ -42,6 +47,7 @@ impl SequencerHandle {
         scheduler: ActorHandle<Scheduler>,
         rpc_server: ActorHandle<RpcServerActor>,
         executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
+        slasher: ActorHandle<SlasherActor>,
         storage: ActorHandle<StorageActor>,
         addr: SocketAddr,
         gossip: Option<sequencer_core::gossip::GossipNetwork>,
@@ -50,6 +56,7 @@ impl SequencerHandle {
             scheduler,
             rpc_server,
             executor,
+            slasher,
             storage,
             addr,
             gossip,
@@ -63,6 +70,7 @@ impl SequencerHandle {
             scheduler,
             rpc_server,
             executor,
+            slasher,
             storage,
             addr: _,
             gossip: _,
@@ -72,6 +80,7 @@ impl SequencerHandle {
         scheduler.shutdown().await;
         rpc_server.shutdown().await;
         executor.shutdown().await;
+        slasher.shutdown().await;
         storage.shutdown().await;
     }
 
@@ -85,6 +94,7 @@ impl SequencerHandle {
             executor,
             rpc_server,
             scheduler,
+            slasher,
             storage,
             addr: _,
             gossip: _,
@@ -98,6 +108,9 @@ impl SequencerHandle {
                 Err(err)
             }
             Err(err) = scheduler.failed() => {
+                Err(err)
+            }
+            Err(err) = slasher.failed() => {
                 Err(err)
             }
             Err(err) = storage.failed() => {
@@ -116,6 +129,7 @@ impl SequencerHandle {
             executor,
             rpc_server,
             scheduler,
+            slasher,
             storage,
             addr: _,
             gossip: _,
@@ -124,6 +138,7 @@ impl SequencerHandle {
         executor.is_healthy()
             && rpc_server.is_healthy()
             && scheduler.is_healthy()
+            && slasher.is_healthy()
             && storage.is_healthy()
     }
 
@@ -164,8 +179,13 @@ pub fn run(
         info!("Storage Actor spawned");
 
         let executor = ExecutorActor::new(config, storage_ref.clone()).await;
+        let slasher_ref = executor.slasher_ref();
         let executor_ref = ExecutorActor::spawn(executor);
         info!("Executor Actor spawned");
+
+        // Inbound slash approvals, forwarded to the slasher below.
+        let (approval_tx, mut approval_rx) =
+            tokio::sync::mpsc::channel(INBOUND_APPROVAL_CHANNEL_CAPACITY);
 
         // TODO: Should be a separate actor
         let gossip_network = match gossip_config {
@@ -198,6 +218,7 @@ pub fn run(
                     gossip_config,
                     channel_id,
                     signing_key,
+                    approval_tx,
                     max_block_size.as_u64(),
                     submit,
                 )
@@ -210,6 +231,21 @@ pub fn run(
         let tx_publisher = gossip_network
             .as_ref()
             .map(sequencer_core::gossip::GossipNetwork::tx_publisher);
+
+        // Without gossip the slasher has nowhere to publish and only its own approval.
+        if let Some(network) = gossip_network.as_ref() {
+            slasher_ref
+                .tell(SetApprovalPublisher(network.approval_publisher()))
+                .await?;
+            let slasher = slasher_ref.clone();
+            tokio::spawn(async move {
+                while let Some(approval) = approval_rx.recv().await {
+                    if slasher.tell(approval).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
 
         let rpc_server = RpcServerActor::new(
             listen_addr,
@@ -241,6 +277,7 @@ pub fn run(
             ActorHandle::new(scheduler_ref),
             ActorHandle::new(rpc_server_ref),
             ActorHandle::new(executor_ref),
+            ActorHandle::new(slasher_ref),
             ActorHandle::new(storage_ref),
             addr,
             gossip_network,

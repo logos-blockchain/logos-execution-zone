@@ -29,7 +29,7 @@ pub fn committee_update(
     let mut desired: Vec<SequencerKey> = config
         .entries
         .iter()
-        .filter(|(_, entry)| entry.net_stake() >= minimum_sequencer_stake)
+        .filter(|(_, entry)| entry.is_accredited(minimum_sequencer_stake))
         .map(|(key, _)| *key)
         .collect();
     desired.sort_unstable();

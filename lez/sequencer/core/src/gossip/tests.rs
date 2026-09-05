@@ -3,12 +3,21 @@ use std::time::{Duration, Instant};
 use common::transaction::LeeTransaction;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use mempool::MemPool;
+use sequencer_slasher_actor::{Approval, Offence};
+use sequencer_stake_core::SequencerKey;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
+use tokio::sync::mpsc;
 
 use crate::{TransactionOrigin, config::GossipConfig, gossip::GossipNetwork};
 
 const CHANNEL: [u8; 32] = [1; 32];
 const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
+
+/// The mempool and the approval receiver a started node feeds.
+struct NodeSinks {
+    mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
+    approvals: mpsc::Receiver<Approval>,
+}
 
 fn pubkey(secret: [u8; 32]) -> [u8; 32] {
     Ed25519Key::from_bytes(&secret).public_key().to_bytes()
@@ -42,22 +51,24 @@ fn invalidly_signed_transaction() -> LeeTransaction {
 async fn start_node(
     secret: [u8; 32],
     bootstrap: Vec<libp2p::Multiaddr>,
-) -> (GossipNetwork, MemPool<(TransactionOrigin, LeeTransaction)>) {
+) -> (GossipNetwork, NodeSinks) {
     let config = GossipConfig {
         listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
         bootstrap_peers: bootstrap,
     };
     let (mempool, mempool_handle) = MemPool::new(1000);
+    let (approval_tx, approvals) = mpsc::channel(64);
     let network = GossipNetwork::start(
         config,
         CHANNEL,
         Ed25519Key::from_bytes(&secret),
+        approval_tx,
         TEST_MAX_BLOCK_SIZE,
         crate::gossip::unscreened_mempool_submit(mempool_handle),
     )
     .await
     .expect("node should start");
-    (network, mempool)
+    (network, NodeSinks { mempool, approvals })
 }
 
 async fn wait_for(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
@@ -76,7 +87,7 @@ async fn wait_for(timeout: Duration, mut condition: impl FnMut() -> bool) -> boo
 #[tokio::test]
 async fn nodes_discover_each_other_via_bootstrap() {
     let secrets = [[10; 32], [11; 32], [12; 32]];
-    let (node_a, _mempool_a) = start_node(secrets[0], vec![]).await;
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
     let a_addr = node_a.listen_addrs()[0].clone();
     // B bootstraps with a `/p2p/`-suffixed address (the Kademlia-seeded
     // branch operators configure), C with a plain one (the direct-dial
@@ -84,8 +95,8 @@ async fn nodes_discover_each_other_via_bootstrap() {
     let a_addr_with_peer_id = a_addr
         .clone()
         .with(libp2p::multiaddr::Protocol::P2p(node_a.local_peer_id()));
-    let (node_b, _mempool_b) = start_node(secrets[1], vec![a_addr_with_peer_id]).await;
-    let (node_c, _mempool_c) = start_node(secrets[2], vec![a_addr]).await;
+    let (node_b, _sinks_b) = start_node(secrets[1], vec![a_addr_with_peer_id]).await;
+    let (node_c, _sinks_c) = start_node(secrets[2], vec![a_addr]).await;
 
     assert!(
         wait_for(Duration::from_secs(30), || {
@@ -102,10 +113,10 @@ async fn nodes_discover_each_other_via_bootstrap() {
 #[tokio::test]
 async fn transaction_submitted_to_one_node_reaches_others() {
     let secrets = [[20; 32], [21; 32], [22; 32]];
-    let (node_a, _mempool_a) = start_node(secrets[0], vec![]).await;
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
     let a_addr = node_a.listen_addrs()[0].clone();
-    let (node_b, mut mempool_b) = start_node(secrets[1], vec![a_addr.clone()]).await;
-    let (node_c, mut mempool_c) = start_node(secrets[2], vec![a_addr]).await;
+    let (node_b, mut sinks_b) = start_node(secrets[1], vec![a_addr.clone()]).await;
+    let (node_c, mut sinks_c) = start_node(secrets[2], vec![a_addr]).await;
 
     assert!(
         wait_for(Duration::from_secs(30), || {
@@ -122,7 +133,8 @@ async fn transaction_submitted_to_one_node_reaches_others() {
 
     assert!(
         wait_for(Duration::from_secs(30), || {
-            mempool_b
+            sinks_b
+                .mempool
                 .pop()
                 .is_some_and(|(_, received)| received.hash() == expected_hash)
         })
@@ -131,7 +143,8 @@ async fn transaction_submitted_to_one_node_reaches_others() {
     );
     assert!(
         wait_for(Duration::from_secs(30), || {
-            mempool_c
+            sinks_c
+                .mempool
                 .pop()
                 .is_some_and(|(_, received)| received.hash() == expected_hash)
         })
@@ -139,6 +152,112 @@ async fn transaction_submitted_to_one_node_reaches_others() {
         "C never received the gossiped transaction"
     );
     drop((node_a, node_b, node_c));
+}
+
+/// An approval a peer would accept, signed by `secret` over `inscription`.
+fn approval(secret: [u8; 32], inscription: [u8; 32]) -> Approval {
+    let key = Ed25519Key::from_bytes(&secret);
+    let signer = SequencerKey::new(key.public_key().to_bytes()).expect("valid key");
+    let offence = Offence {
+        offender: SequencerKey::new(pubkey([99; 32])).expect("valid key"),
+        inscription,
+    };
+    let message =
+        sequencer_stake_core::slash_approval_message(offence.offender, offence.inscription);
+
+    Approval {
+        offence,
+        signer,
+        signature: key.sign_payload(&message).to_bytes(),
+    }
+}
+
+#[tokio::test]
+async fn slash_approval_published_by_one_node_reaches_others() {
+    let secrets = [[30; 32], [31; 32], [32; 32]];
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
+    let a_addr = node_a.listen_addrs()[0].clone();
+    let (node_b, mut sinks_b) = start_node(secrets[1], vec![a_addr.clone()]).await;
+    let (node_c, mut sinks_c) = start_node(secrets[2], vec![a_addr]).await;
+
+    assert!(
+        wait_for(Duration::from_secs(30), || {
+            node_a.connected_peers().contains(&pubkey(secrets[1]))
+                && node_a.connected_peers().contains(&pubkey(secrets[2]))
+        })
+        .await,
+        "A never connected to both B and C"
+    );
+
+    let sent = approval(secrets[0], [7; 32]);
+    node_a
+        .approval_publisher()
+        .send(sent.clone())
+        .await
+        .expect("the approval channel should accept a publish");
+
+    assert!(
+        wait_for(Duration::from_secs(30), || {
+            sinks_b.approvals.try_recv().is_ok_and(|got| got == sent)
+        })
+        .await,
+        "B never received the gossiped approval"
+    );
+    assert!(
+        wait_for(Duration::from_secs(30), || {
+            sinks_c.approvals.try_recv().is_ok_and(|got| got == sent)
+        })
+        .await,
+        "C never received the gossiped approval"
+    );
+    drop((node_a, node_b, node_c));
+}
+
+#[tokio::test]
+async fn slash_approval_with_a_bad_signature_is_not_propagated() {
+    let secrets = [[40; 32], [41; 32]];
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
+    let a_addr = node_a.listen_addrs()[0].clone();
+    let (node_b, mut sinks_b) = start_node(secrets[1], vec![a_addr]).await;
+
+    assert!(
+        wait_for(Duration::from_secs(30), || {
+            node_a.connected_peers().contains(&pubkey(secrets[1]))
+        })
+        .await,
+        "A never connected to B"
+    );
+
+    // Signed over one inscription, then claimed over another.
+    let mut forged = approval(secrets[0], [7; 32]);
+    forged.offence.inscription = [8; 32];
+    node_a
+        .approval_publisher()
+        .send(forged)
+        .await
+        .expect("the approval channel should accept a publish");
+
+    // A valid approval behind it: once that arrives, the forged one is not in
+    // flight any more.
+    let sent = approval(secrets[0], [9; 32]);
+    node_a
+        .approval_publisher()
+        .send(sent.clone())
+        .await
+        .expect("the approval channel should accept a publish");
+
+    assert!(
+        wait_for(Duration::from_secs(30), || {
+            sinks_b.approvals.try_recv().is_ok_and(|got| got == sent)
+        })
+        .await,
+        "B never received the valid approval"
+    );
+    assert!(
+        sinks_b.approvals.try_recv().is_err(),
+        "B accepted an approval whose signature does not verify"
+    );
+    drop((node_a, node_b));
 }
 
 #[tokio::test]
@@ -150,9 +269,9 @@ async fn invalid_transaction_is_not_propagated() {
     // path (`evaluate_transaction`'s stateless check, then
     // `MessageAcceptance::Reject`) end-to-end.
     let secrets = [[30; 32], [31; 32]];
-    let (node_a, _mempool_a) = start_node(secrets[0], vec![]).await;
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
     let a_addr = node_a.listen_addrs()[0].clone();
-    let (node_b, mut mempool_b) = start_node(secrets[1], vec![a_addr]).await;
+    let (node_b, mut sinks_b) = start_node(secrets[1], vec![a_addr]).await;
 
     assert!(
         wait_for(Duration::from_secs(30), || {
@@ -171,7 +290,8 @@ async fn invalid_transaction_is_not_propagated() {
     node_a.tx_publisher().publish(valid_tx);
     assert!(
         wait_for(Duration::from_secs(30), || {
-            mempool_b
+            sinks_b
+                .mempool
                 .pop()
                 .is_some_and(|(_, received)| received.hash() == valid_hash)
         })
@@ -185,7 +305,7 @@ async fn invalid_transaction_is_not_propagated() {
 
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(
-        mempool_b.pop().is_none(),
+        sinks_b.mempool.pop().is_none(),
         "an invalidly-signed transaction must not reach the mempool"
     );
     drop((node_a, node_b));
