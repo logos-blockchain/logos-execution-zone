@@ -16,6 +16,7 @@ pub fn create_associated_token_account(
         &owner,
         token_definition.account_id,
         self_account_id,
+        token_program_id,
     );
 
     // Idempotent: an ATA the token program already wrote needs no initialization.

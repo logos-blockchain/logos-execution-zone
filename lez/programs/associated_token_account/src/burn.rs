@@ -21,6 +21,7 @@ pub fn burn_from_associated_token_account(
         &owner,
         definition_id,
         self_account_id,
+        token_program_id,
     );
 
     let burn_positions = vec![

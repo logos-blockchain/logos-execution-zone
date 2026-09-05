@@ -41,11 +41,16 @@ pub enum Instruction {
     },
 }
 
-pub fn compute_ata_seed(owner_id: AccountId, definition_id: AccountId) -> PdaSeed {
+pub fn compute_ata_seed(
+    owner_id: AccountId,
+    definition_id: AccountId,
+    token_program_id: AccountId,
+) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256};
-    let mut bytes = [0_u8; 64];
+    let mut bytes = [0_u8; 96];
     bytes[0..32].copy_from_slice(&owner_id.to_bytes());
     bytes[32..64].copy_from_slice(&definition_id.to_bytes());
+    bytes[64..96].copy_from_slice(&token_program_id.to_bytes());
     PdaSeed::new(
         Impl::hash_bytes(&bytes)
             .as_bytes()
@@ -58,15 +63,16 @@ pub fn get_associated_token_account_id(ata_program_id: &AccountId, seed: &PdaSee
     AccountId::for_public_pda(ata_program_id, seed)
 }
 
-/// Verify the ATA's address matches `(self_account_id, owner, definition)` and return
-/// the [`PdaSeed`] for use in chained calls.
+// The token program is part of the derivation, so a caller naming some other program can only
+// ever reach that program's own ATA family — never the one holding real balances.
 pub fn verify_ata_and_get_seed(
     ata_account: &Input,
     owner: &Input,
     definition_id: AccountId,
     self_account_id: AccountId,
+    token_program_id: AccountId,
 ) -> PdaSeed {
-    let seed = compute_ata_seed(owner.account_id, definition_id);
+    let seed = compute_ata_seed(owner.account_id, definition_id, token_program_id);
     let expected_id = get_associated_token_account_id(&self_account_id, &seed);
     assert_eq!(
         ata_account.account_id, expected_id,

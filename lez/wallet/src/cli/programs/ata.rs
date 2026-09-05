@@ -75,9 +75,14 @@ impl AtaSubcommand {
         _wallet_core: &WalletCore,
     ) -> SubcommandReturnValue {
         let ata_program_id: AccountId = programs::ata().id().into();
+        let token_program_id: AccountId = programs::token().id().into();
         let ata_id = associated_token_account_core::get_associated_token_account_id(
             &ata_program_id,
-            &associated_token_account_core::compute_ata_seed(owner, token_definition),
+            &associated_token_account_core::compute_ata_seed(
+                owner,
+                token_definition,
+                token_program_id,
+            ),
         );
         println!("{ata_id}");
         SubcommandReturnValue::Empty
@@ -194,7 +199,7 @@ impl AtaSubcommand {
         for def in &token_definition {
             let ata_id = associated_token_account_core::get_associated_token_account_id(
                 &ata_program_id,
-                &associated_token_account_core::compute_ata_seed(owner, *def),
+                &associated_token_account_core::compute_ata_seed(owner, *def, token_program_id),
             );
             let account = wallet_core.get_account_public(ata_id).await?;
             let holding = account.shard(token_program_id);

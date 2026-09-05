@@ -21,6 +21,7 @@ pub fn transfer_from_associated_token_account(
         &owner,
         definition_id,
         self_account_id,
+        token_program_id,
     );
 
     let transfer_positions = vec![Position::from(&sender_ata), Position::from(&recipient)];

@@ -25,7 +25,7 @@ impl Ata<'_> {
         let token_program_id: AccountId = programs::token().id().into();
         let ata_id = get_associated_token_account_id(
             &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id),
+            &compute_ata_seed(owner_id, definition_id, token_program_id),
         );
         let instruction = associated_token_account_core::Instruction::Create { token_program_id };
         let instruction_data =
@@ -59,7 +59,7 @@ impl Ata<'_> {
         let token_program_id: AccountId = programs::token().id().into();
         let sender_ata_id = get_associated_token_account_id(
             &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id),
+            &compute_ata_seed(owner_id, definition_id, token_program_id),
         );
         let instruction = associated_token_account_core::Instruction::Transfer {
             token_program_id,
@@ -95,7 +95,7 @@ impl Ata<'_> {
         let token_program_id: AccountId = programs::token().id().into();
         let holder_ata_id = get_associated_token_account_id(
             &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id),
+            &compute_ata_seed(owner_id, definition_id, token_program_id),
         );
         let instruction = associated_token_account_core::Instruction::Burn {
             token_program_id,
@@ -126,7 +126,7 @@ impl Ata<'_> {
         let token_program_id: AccountId = programs::token().id().into();
         let ata_id = get_associated_token_account_id(
             &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id),
+            &compute_ata_seed(owner_id, definition_id, token_program_id),
         );
 
         let instruction = associated_token_account_core::Instruction::Create { token_program_id };
@@ -162,7 +162,7 @@ impl Ata<'_> {
         let token_program_id: AccountId = programs::token().id().into();
         let sender_ata_id = get_associated_token_account_id(
             &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id),
+            &compute_ata_seed(owner_id, definition_id, token_program_id),
         );
 
         let instruction = associated_token_account_core::Instruction::Transfer {
@@ -200,7 +200,7 @@ impl Ata<'_> {
         let token_program_id: AccountId = programs::token().id().into();
         let holder_ata_id = get_associated_token_account_id(
             &ata_program_id,
-            &compute_ata_seed(owner_id, definition_id),
+            &compute_ata_seed(owner_id, definition_id, token_program_id),
         );
 
         let instruction = associated_token_account_core::Instruction::Burn {
