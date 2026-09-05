@@ -11,7 +11,7 @@ use lee_core::{
     account::{Account, AccountId, Cycles, Input, Position},
     program::{
         CallKind, CallerData, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramOutput,
-        TransactionEvent, compute_public_authorized_pdas, get_program_via, post_state,
+        TransactionEvent, compute_public_authorized_pdas, get_program_via,
         pre_states_match_positions, validate_execution,
     },
 };
@@ -390,11 +390,7 @@ impl ValidatedStateDiff {
                 caller_data.account_id.is_none()
                     || pre_states_match_positions(
                         &chained_call.positions,
-                        &program_output
-                            .state_diffs
-                            .iter()
-                            .map(|diff| diff.pre.clone())
-                            .collect::<Vec<_>>()
+                        &program_output.state_diffs
                     ),
                 InvalidProgramBehaviorError::ChainedCallAccountsMismatch {
                     program_account_id: chained_call.program_account_id
@@ -499,12 +495,11 @@ impl ValidatedStateDiff {
             // survive the call untouched.
             for diff in &program_output.state_diffs {
                 let account_id = diff.pre.account_id;
-                let post =
-                    post_state(diff).map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
                 state_diff
                     .entry(account_id)
                     .or_insert_with(|| state.get_account_by_id(account_id))
-                    .splice(Position::from(&diff.pre), post);
+                    .splice(diff)
+                    .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
             }
 
             // Write all the output event data into a proper event struct,

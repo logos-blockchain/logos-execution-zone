@@ -6,9 +6,7 @@ use lee_core::{
     ProgramImageClaim, WitnessKind,
     account::{Account, AccountId, Input, Position},
     from_frame,
-    program::{
-        ChainedCall, InstructionData, ProgramOutput, compute_public_authorized_pdas, post_state,
-    },
+    program::{ChainedCall, InstructionData, ProgramOutput, compute_public_authorized_pdas},
     to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
@@ -272,11 +270,11 @@ pub fn execute_and_prove(
             let pda_match =
                 authorized_pdas.contains(&account_id) || seed_derives_private_pda(&account_id);
 
-            let post = post_state(diff).map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
             materialized
                 .entry(account_id)
                 .or_default()
-                .splice(Position::from(pre), post);
+                .splice(diff)
+                .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
             if pre.is_authorized {
                 authorized_output_accounts.insert(account_id);
                 // Only a first-sighted, non-pda-matched account is a "regular account

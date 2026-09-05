@@ -10,7 +10,7 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, CallKind, CallerData, ChainedCall, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
-        ProgramId, ProgramOutput, ShardStateDiff, TimestampValidityWindow, post_state,
+        ProgramId, ProgramOutput, ShardStateDiff, TimestampValidityWindow,
         pre_states_match_positions, validate_execution,
     },
 };
@@ -196,11 +196,7 @@ impl ExecutionState {
                     // Else, match.
                     || pre_states_match_positions(
                         &chained_call.positions,
-                        &program_output
-                            .state_diffs
-                            .iter()
-                            .map(|diff| diff.pre.clone())
-                            .collect::<Vec<_>>()
+                        &program_output.state_diffs
                     ),
                 "Callee ran on positions the chained call did not name"
             );
@@ -357,11 +353,11 @@ impl ExecutionState {
         }
 
         for diff in state_diffs {
-            let post = post_state(&diff).expect("validate_execution checked the balance diff");
             self.tracked
                 .get_mut(&diff.pre.account_id)
                 .expect("every position of this call was tracked by the first pass")
-                .splice(Position::from(&diff.pre), post);
+                .splice(&diff)
+                .expect("validate_execution checked the balance diff");
         }
 
         let mut authorized_accounts = caller.authorized_accounts;

@@ -308,51 +308,58 @@ fn two_positions_of_one_account_in_a_call_are_rejected() {
 fn pre_states_match_positions_compares_namespaces() {
     let account_id = AccountId::new([7; 32]);
     let program = AccountId::new([2; 32]);
-    let pre_states = [Input::named(account_id, true, 5, program, Data::empty())];
+    let diffs = [ShardStateDiff::unchanged(Input::named(
+        account_id,
+        true,
+        5,
+        program,
+        Data::empty(),
+    ))];
 
     assert!(pre_states_match_positions(
         &[Position::new(account_id, program)],
-        &pre_states
+        &diffs
     ));
     assert!(!pre_states_match_positions(
         &[Position::new(account_id, AccountId::new([3; 32]))],
-        &pre_states
+        &diffs
     ));
     assert!(!pre_states_match_positions(
         &[Position::balance_only(account_id)],
-        &pre_states
+        &diffs
     ));
 }
 
 #[test]
-fn post_state_keeps_the_pre_shard_when_nothing_is_written() {
+fn splice_keeps_the_pre_shard_when_nothing_is_written() {
+    let program = AccountId::new([2; 32]);
     let data: Data = b"record".to_vec().try_into().unwrap();
-    let pre = Input::named(
-        AccountId::new([7; 32]),
-        true,
-        5,
-        AccountId::new([2; 32]),
-        data.clone(),
-    );
+    let pre = Input::named(AccountId::new([7; 32]), true, 5, program, data.clone());
+    let mut account = Account::default();
 
-    let post = post_state(&ShardStateDiff::balance_only(pre, BalanceDiff::Sub(2))).unwrap();
+    account
+        .splice(&ShardStateDiff::balance_only(pre, BalanceDiff::Sub(2)))
+        .unwrap();
 
-    assert_eq!(post.balance, 3);
-    assert_eq!(post.shard, Some(data));
+    assert_eq!(account.balance, 3);
+    assert_eq!(account.shard(program), &data);
 }
 
 #[test]
-fn post_state_of_a_balance_only_position_carries_no_shard() {
+fn splice_of_a_balance_only_position_carries_no_shard() {
     let pre = Input::balance_only(AccountId::new([7; 32]), true, 5);
+    let mut account = Account::default();
 
-    let post = post_state(&ShardStateDiff::balance_only(pre, BalanceDiff::Add(2))).unwrap();
+    account
+        .splice(&ShardStateDiff::balance_only(pre, BalanceDiff::Add(2)))
+        .unwrap();
 
-    assert_eq!(post.balance, 7);
-    assert_eq!(post.shard, None);
+    assert_eq!(account.balance, 7);
+    assert!(account.shards.is_empty());
 }
 
 #[test]
-fn post_state_replaces_the_written_shard() {
+fn splice_replaces_the_written_shard() {
     let program = AccountId::new([2; 32]);
     let pre = Input::named(
         AccountId::new([7; 32]),
@@ -362,15 +369,17 @@ fn post_state_replaces_the_written_shard() {
         b"old".to_vec().try_into().unwrap(),
     );
     let written: Data = b"new".to_vec().try_into().unwrap();
+    let mut account = Account::default();
 
-    let post = post_state(&ShardStateDiff::new(
-        pre,
-        BalanceDiff::Add(0),
-        written.clone(),
-    ))
-    .unwrap();
+    account
+        .splice(&ShardStateDiff::new(
+            pre,
+            BalanceDiff::Add(0),
+            written.clone(),
+        ))
+        .unwrap();
 
-    assert_eq!(post.shard, Some(written));
+    assert_eq!(account.shard(program), &written);
 }
 
 #[test]

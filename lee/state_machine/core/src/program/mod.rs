@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
     account::{
-        Account, AccountId, BalanceDiff, BalanceDiffError, Data, Input, Position, PositionState,
+        Account, AccountId, BalanceDiff, BalanceDiffError, Data, Input, Position,
         apply_balance_diff,
     },
     encryption::ViewingPublicKey,
@@ -839,11 +839,11 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
 /// Whether a callee's journalled `pre_states` name exactly the positions in the call
 /// in the appropriate order.
 #[must_use]
-pub fn pre_states_match_positions(positions: &[Position], pre_states: &[Input]) -> bool {
+pub fn pre_states_match_positions(positions: &[Position], diffs: &[ShardStateDiff]) -> bool {
     positions
         .iter()
         .copied()
-        .eq(pre_states.iter().map(Position::from))
+        .eq(diffs.iter().map(|diff| Position::from(&diff.pre)))
 }
 
 /// A deployed program is whatever the loader's shard at `account_id` decodes to.
@@ -954,18 +954,6 @@ pub fn validate_execution(
     }
 
     Ok(())
-}
-
-/// The state a diff leaves its position in: the balance applied, and the named shard as written
-/// or as it was.
-pub fn post_state(diff: &ShardStateDiff) -> Result<PositionState, BalanceDiffError> {
-    Ok(PositionState {
-        balance: apply_balance_diff(diff.pre.balance, Some(diff.post_balance_diff))?,
-        shard: match (&diff.pre.shard, &diff.post_data) {
-            (None, _) => None,
-            (Some(_), Some(data)) | (Some((_, data)), None) => Some(data.clone()),
-        },
-    })
 }
 
 #[cfg(test)]

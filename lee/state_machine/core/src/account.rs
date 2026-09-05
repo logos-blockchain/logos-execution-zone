@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use thiserror::Error;
 
-use crate::NullifierSecretKey;
+use crate::{NullifierSecretKey, program::ShardStateDiff};
 
 pub mod data;
 
@@ -146,14 +146,15 @@ impl Account {
         self
     }
 
-    pub fn splice(&mut self, position: Position, post: PositionState) {
-        self.balance = post.balance;
-        if let Some(program) = position.program {
+    pub fn splice(&mut self, diff: &ShardStateDiff) -> Result<(), BalanceDiffError> {
+        self.balance = apply_balance_diff(diff.pre.balance, Some(diff.post_balance_diff))?;
+        if let Some((program, pre_data)) = &diff.pre.shard {
             self.set_shard(
-                program,
-                post.shard.expect("a named position carries its shard"),
+                *program,
+                diff.post_data.clone().unwrap_or_else(|| pre_data.clone()),
             );
         }
+        Ok(())
     }
 
     #[must_use]
@@ -286,22 +287,6 @@ impl From<&Input> for Position {
         Self {
             account_id: input.account_id,
             program: input.namespace(),
-        }
-    }
-}
-
-/// The state a position is left in by a call.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct PositionState {
-    pub balance: Balance,
-    pub shard: Option<Data>,
-}
-
-impl From<&Input> for PositionState {
-    fn from(input: &Input) -> Self {
-        Self {
-            balance: input.balance,
-            shard: input.shard.as_ref().map(|(_, data)| data.clone()),
         }
     }
 }
@@ -595,13 +580,19 @@ mod tests {
         }
         .with_shard(program, b"record".to_vec().try_into().unwrap());
 
-        account.splice(
-            Position::new(AccountId::new([1; 32]), program),
-            PositionState {
-                balance: 7,
-                shard: Some(Data::empty()),
-            },
-        );
+        account
+            .splice(&ShardStateDiff::new(
+                Input::named(
+                    AccountId::new([1; 32]),
+                    true,
+                    10,
+                    program,
+                    b"record".to_vec().try_into().unwrap(),
+                ),
+                BalanceDiff::Sub(3),
+                Data::empty(),
+            ))
+            .unwrap();
 
         assert!(!account.shards.contains_key(&program));
         assert_eq!(
