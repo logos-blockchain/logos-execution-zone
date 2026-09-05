@@ -78,7 +78,6 @@ fn initial_state() -> lee::V03State {
         (
             id,
             Account {
-                program_owner: programs::authenticated_transfer().id().into(),
                 balance,
                 ..Account::default()
             },
@@ -105,7 +104,7 @@ fn initial_state() -> lee::V03State {
 
     // simulate the producer's stake so charged blocks
     // can credit its reward account
-    public_accounts.push(common::test_utils::claimed_producer_seed());
+    public_accounts.push(common::test_utils::producer_seed());
 
     lee::V03State::new()
         .with_public_accounts(public_accounts)

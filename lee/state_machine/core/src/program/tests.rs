@@ -126,7 +126,7 @@ fn validity_window_from_range_full() {
 
 #[test]
 fn program_output_try_with_block_validity_window_range() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![])
+    let output = ProgramOutput::new(AccountId::default(), None, vec![], vec![])
         .try_with_block_validity_window(10_u64..100)
         .unwrap();
     assert_eq!(output.block_validity_window.start(), Some(10));
@@ -135,7 +135,7 @@ fn program_output_try_with_block_validity_window_range() {
 
 #[test]
 fn program_output_with_block_validity_window_range_from() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![])
+    let output = ProgramOutput::new(AccountId::default(), None, vec![], vec![])
         .with_block_validity_window(10_u64..);
     assert_eq!(output.block_validity_window.start(), Some(10));
     assert_eq!(output.block_validity_window.end(), None);
@@ -143,7 +143,7 @@ fn program_output_with_block_validity_window_range_from() {
 
 #[test]
 fn program_output_with_block_validity_window_range_to() {
-    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![])
+    let output = ProgramOutput::new(AccountId::default(), None, vec![], vec![])
         .with_block_validity_window(..100_u64);
     assert_eq!(output.block_validity_window.start(), None);
     assert_eq!(output.block_validity_window.end(), Some(100));
@@ -151,22 +151,36 @@ fn program_output_with_block_validity_window_range_to() {
 
 #[test]
 fn program_output_try_with_block_validity_window_empty_range_fails() {
-    let result = ProgramOutput::new(DEFAULT_PROGRAM_ID.into(), None, vec![], vec![])
+    let result = ProgramOutput::new(AccountId::default(), None, vec![], vec![])
         .try_with_block_validity_window(5_u64..5);
     assert!(result.is_err());
 }
 
 #[test]
-fn account_state_diff_new_constructor() {
-    let pre_state = AccountWithMetadata::new(Account::default(), true, AccountId::new([7; 32]));
-    let post_balance_diff = BalanceDiff::Add(1337);
+fn shard_state_diff_constructors() {
+    let program = AccountId::new([9; 32]);
+    let pre_data: Data = b"record".to_vec().try_into().unwrap();
+    let pre = Input::named(AccountId::new([7; 32]), true, 5, program, pre_data.clone());
     let post_data: Data = vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap();
 
-    let diff = AccountStateDiff::new(pre_state.clone(), post_balance_diff, post_data.clone());
+    let unchanged = ShardStateDiff::unchanged(pre.clone());
+    assert_eq!(unchanged.post_balance_diff, BalanceDiff::Add(0));
+    assert_eq!(unchanged.post_data, None);
 
-    assert_eq!(diff.pre_state, pre_state);
-    assert_eq!(diff.post_balance_diff, post_balance_diff);
-    assert_eq!(diff.post_data, Some(post_data));
+    let balance_only = ShardStateDiff::balance_only(pre.clone(), BalanceDiff::Sub(2));
+    assert_eq!(balance_only.post_balance_diff, BalanceDiff::Sub(2));
+    assert_eq!(balance_only.post_data, None);
+
+    // `new` never elides data equal to the pre-state's.
+    let written = ShardStateDiff::new(pre.clone(), BalanceDiff::Add(1337), pre_data.clone());
+    assert_eq!(written.pre, pre);
+    assert_eq!(written.post_balance_diff, BalanceDiff::Add(1337));
+    assert_eq!(written.post_data, Some(pre_data));
+
+    assert_eq!(
+        ShardStateDiff::new(pre, BalanceDiff::Add(0), post_data.clone()).post_data,
+        Some(post_data)
+    );
 }
 
 // ---- validate_execution tests ----
@@ -175,20 +189,8 @@ fn account_state_diff_new_constructor() {
 fn validate_execution_rejects_insufficient_balance_even_if_globally_conserved() {
     let executing_program_id: AccountId = AccountId::from([1; 8]);
     let account_id = AccountId::new([7; 32]);
-    let pre_state = AccountWithMetadata::new(
-        Account {
-            program_owner: executing_program_id,
-            balance: 5,
-            ..Account::default()
-        },
-        true,
-        account_id,
-    );
-    let state_diffs = [AccountStateDiff::new(
-        pre_state.clone(),
-        BalanceDiff::Sub(10),
-        pre_state.account.data,
-    )];
+    let pre = Input::named(account_id, true, 5, executing_program_id, Data::empty());
+    let state_diffs = [ShardStateDiff::balance_only(pre, BalanceDiff::Sub(10))];
 
     let result = validate_execution(&state_diffs, executing_program_id);
 
@@ -202,20 +204,14 @@ fn validate_execution_rejects_insufficient_balance_even_if_globally_conserved() 
 fn validate_execution_rejects_add_overflow() {
     let executing_program_id: AccountId = AccountId::from([1; 8]);
     let account_id = AccountId::new([7; 32]);
-    let pre_state = AccountWithMetadata::new(
-        Account {
-            program_owner: executing_program_id,
-            balance: u128::MAX,
-            ..Account::default()
-        },
-        false,
+    let pre = Input::named(
         account_id,
+        false,
+        u128::MAX,
+        executing_program_id,
+        Data::empty(),
     );
-    let state_diffs = [AccountStateDiff::new(
-        pre_state.clone(),
-        BalanceDiff::Add(1),
-        pre_state.account.data,
-    )];
+    let state_diffs = [ShardStateDiff::balance_only(pre, BalanceDiff::Add(1))];
 
     let result = validate_execution(&state_diffs, executing_program_id);
 
@@ -223,6 +219,209 @@ fn validate_execution_rejects_add_overflow() {
         result,
         Err(ExecutionValidationError::InvalidBalanceDiff { account_id: id, .. }) if id == account_id
     ));
+}
+
+#[test]
+fn a_data_write_on_a_foreign_namespace_is_rejected() {
+    let executing_account_id = AccountId::new([2; 32]);
+    let account_id = AccountId::new([7; 32]);
+    let pre = Input::named(account_id, true, 5, AccountId::new([1; 32]), Data::empty());
+    let state_diffs = [ShardStateDiff::new(
+        pre,
+        BalanceDiff::Add(0),
+        b"record".to_vec().try_into().unwrap(),
+    )];
+
+    let result = validate_execution(&state_diffs, executing_account_id);
+
+    assert!(matches!(
+        result,
+        Err(ExecutionValidationError::ForeignShardWrite {
+            account_id: id,
+            executing_account_id: executing,
+        }) if id == account_id && executing == executing_account_id
+    ));
+}
+
+#[test]
+fn a_data_write_on_the_executing_namespace_is_accepted() {
+    let executing_account_id = AccountId::new([2; 32]);
+    let pre = Input::named(
+        AccountId::new([7; 32]),
+        true,
+        5,
+        executing_account_id,
+        Data::empty(),
+    );
+    let state_diffs = [ShardStateDiff::new(
+        pre,
+        BalanceDiff::Add(0),
+        b"record".to_vec().try_into().unwrap(),
+    )];
+
+    assert!(validate_execution(&state_diffs, executing_account_id).is_ok());
+}
+
+#[test]
+fn a_balance_only_position_cannot_carry_data() {
+    let executing_account_id = AccountId::new([2; 32]);
+    let account_id = AccountId::new([7; 32]);
+    let pre = Input::balance_only(account_id, true, 5);
+    let state_diffs = [ShardStateDiff::new(
+        pre,
+        BalanceDiff::Add(0),
+        b"record".to_vec().try_into().unwrap(),
+    )];
+
+    let result = validate_execution(&state_diffs, executing_account_id);
+
+    assert!(matches!(
+        result,
+        Err(ExecutionValidationError::ForeignShardWrite { account_id: id, .. }) if id == account_id
+    ));
+}
+
+#[test]
+fn two_positions_of_one_account_in_a_call_are_rejected() {
+    let executing_account_id = AccountId::new([2; 32]);
+    let account_id = AccountId::new([7; 32]);
+    let state_diffs = [
+        ShardStateDiff::unchanged(Input::named(
+            account_id,
+            true,
+            5,
+            executing_account_id,
+            Data::empty(),
+        )),
+        ShardStateDiff::unchanged(Input::balance_only(account_id, true, 5)),
+    ];
+
+    let result = validate_execution(&state_diffs, executing_account_id);
+
+    assert!(matches!(
+        result,
+        Err(ExecutionValidationError::DuplicatePosition { account_id: id }) if id == account_id
+    ));
+}
+
+#[test]
+fn pre_states_match_positions_compares_namespaces() {
+    let account_id = AccountId::new([7; 32]);
+    let program = AccountId::new([2; 32]);
+    let diffs = [ShardStateDiff::unchanged(Input::named(
+        account_id,
+        true,
+        5,
+        program,
+        Data::empty(),
+    ))];
+
+    assert!(pre_states_match_positions(
+        &[Position::new(account_id, program)],
+        &diffs
+    ));
+    assert!(!pre_states_match_positions(
+        &[Position::new(account_id, AccountId::new([3; 32]))],
+        &diffs
+    ));
+    assert!(!pre_states_match_positions(
+        &[Position::balance_only(account_id)],
+        &diffs
+    ));
+}
+
+#[test]
+fn splice_keeps_the_pre_shard_when_nothing_is_written() {
+    let program = AccountId::new([2; 32]);
+    let data: Data = b"record".to_vec().try_into().unwrap();
+    let pre = Input::named(AccountId::new([7; 32]), true, 5, program, data.clone());
+    let mut account = Account::default();
+
+    account
+        .splice(&ShardStateDiff::balance_only(pre, BalanceDiff::Sub(2)))
+        .unwrap();
+
+    assert_eq!(account.balance, 3);
+    assert_eq!(account.shard(program), &data);
+}
+
+#[test]
+fn splice_of_a_balance_only_position_carries_no_shard() {
+    let pre = Input::balance_only(AccountId::new([7; 32]), true, 5);
+    let mut account = Account::default();
+
+    account
+        .splice(&ShardStateDiff::balance_only(pre, BalanceDiff::Add(2)))
+        .unwrap();
+
+    assert_eq!(account.balance, 7);
+    assert!(account.shards.is_empty());
+}
+
+#[test]
+fn splice_replaces_the_written_shard() {
+    let program = AccountId::new([2; 32]);
+    let pre = Input::named(
+        AccountId::new([7; 32]),
+        true,
+        5,
+        program,
+        b"old".to_vec().try_into().unwrap(),
+    );
+    let written: Data = b"new".to_vec().try_into().unwrap();
+    let mut account = Account::default();
+
+    account
+        .splice(&ShardStateDiff::new(
+            pre,
+            BalanceDiff::Add(0),
+            written.clone(),
+        ))
+        .unwrap();
+
+    assert_eq!(account.shard(program), &written);
+}
+
+#[test]
+fn get_program_via_reads_the_loader_shard() {
+    let program_account = AccountId::new([1; 32]);
+    let segment_account = AccountId::new([2; 32]);
+    let header = ProgramHeader {
+        image_id: [7; 8],
+        program_first_segment: segment_account,
+        immutable: false,
+    };
+    let segment = ProgramSegment {
+        bytecode: vec![1, 2, 3],
+        next_segment: None,
+    };
+    let shard = |id: AccountId, bytes: Vec<u8>| {
+        Account::default().with_shard(id, bytes.try_into().unwrap())
+    };
+
+    let lookup = |id| {
+        if id == program_account {
+            shard(PROGRAM_LOADER_ACCOUNT_ID, header.to_bytes())
+        } else if id == segment_account {
+            shard(PROGRAM_LOADER_ACCOUNT_ID, segment.to_bytes())
+        } else {
+            Account::default()
+        }
+    };
+    assert_eq!(
+        get_program_via(program_account, lookup),
+        Some(([7; 8], vec![1, 2, 3]))
+    );
+
+    // The same bytes in any other namespace are not a deployed program.
+    let foreign_shard = |id| {
+        if id == program_account {
+            shard(AccountId::new([3; 32]), header.to_bytes())
+        } else {
+            Account::default()
+        }
+    };
+    assert_eq!(get_program_via(program_account, foreign_shard), None);
 }
 
 // ---- AccountId::for_private_pda tests ----
@@ -411,11 +610,6 @@ fn account_id_from_program_id_reinterprets_words_as_le_bytes() {
 }
 
 #[test]
-fn account_id_from_default_program_id_is_default_program_owner() {
-    assert_eq!(AccountId::from(DEFAULT_PROGRAM_ID), DEFAULT_PROGRAM_OWNER);
-}
-
-#[test]
 fn program_id_from_account_id_reinterprets_le_bytes_as_words() {
     let account_id = AccountId::new([
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
@@ -449,29 +643,25 @@ fn program_id_account_id_conversion_round_trips() {
     assert_eq!(ProgramId::from(AccountId::from(program_id)), program_id);
 }
 
-/// A byte-identical echo of an unowned account with history must validate.
+fn foreign_shard_with_history() -> Input {
+    Input::named(
+        AccountId::new([7; 32]),
+        true,
+        55,
+        AccountId::new([2; 32]),
+        b"record".to_vec().try_into().unwrap(),
+    )
+}
+
+/// A byte-identical echo of a foreign shard with history must validate.
 #[test]
-fn an_unowned_account_with_history_may_be_echoed_byte_identically() {
-    let account_id = AccountId::new([7; 32]);
-    let account = Account {
-        nonce: 1_u128.into(),
-        balance: 55,
-        ..Account::default()
-    };
-    let pre = AccountWithMetadata::new(account, true, account_id);
-    let diff = AccountStateDiff::unchanged(pre);
+fn a_foreign_shard_with_history_may_be_echoed_byte_identically() {
+    let diff = ShardStateDiff::unchanged(foreign_shard_with_history());
     assert!(validate_execution(&[diff], AccountId::new([9; 32])).is_ok());
 }
 
 #[test]
-fn an_unowned_account_echoed_with_sub_zero_may_still_validate() {
-    let account_id = AccountId::new([7; 32]);
-    let account = Account {
-        nonce: 1_u128.into(),
-        balance: 55,
-        ..Account::default()
-    };
-    let pre = AccountWithMetadata::new(account, true, account_id);
-    let diff = AccountStateDiff::new(pre.clone(), BalanceDiff::Sub(0), pre.account.data);
+fn a_foreign_shard_echoed_with_sub_zero_may_still_validate() {
+    let diff = ShardStateDiff::balance_only(foreign_shard_with_history(), BalanceDiff::Sub(0));
     assert!(validate_execution(&[diff], AccountId::new([9; 32])).is_ok());
 }

@@ -1,36 +1,41 @@
 use lee_core::{
-    account::{AccountId, AccountWithMetadata},
-    program::{AccountStateDiff, ChainedCall},
+    account::{AccountId, Input, Position},
+    program::{ChainedCall, ShardStateDiff},
 };
 use token_core::TokenHolding;
 
 pub fn burn_from_associated_token_account(
-    owner: AccountWithMetadata,
-    holder_ata: AccountWithMetadata,
-    token_definition: AccountWithMetadata,
-    ata_program_id: AccountId,
+    owner: Input,
+    holder_ata: Input,
+    token_definition: Input,
+    self_account_id: AccountId,
+    token_program_id: AccountId,
     amount: u128,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
-    let token_program_id: AccountId = holder_ata.account.program_owner;
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     assert!(owner.is_authorized, "Owner authorization is missing");
-    let definition_id = TokenHolding::try_from(&holder_ata.account.data)
+    let definition_id = TokenHolding::try_from(holder_ata.shard_of(token_program_id))
         .expect("Holder ATA must hold a valid token")
         .definition_id();
     let seed = associated_token_account_core::verify_ata_and_get_seed(
         &holder_ata,
         &owner,
         definition_id,
-        ata_program_id,
+        self_account_id,
+        token_program_id,
     );
 
+    let burn_positions = vec![
+        Position::from(&token_definition),
+        Position::from(&holder_ata),
+    ];
     let post_diffs = vec![
-        AccountStateDiff::unchanged(owner.clone()),
-        AccountStateDiff::unchanged(holder_ata.clone()),
-        AccountStateDiff::unchanged(token_definition.clone()),
+        ShardStateDiff::unchanged(owner),
+        ShardStateDiff::unchanged(holder_ata),
+        ShardStateDiff::unchanged(token_definition),
     ];
     let chained_call = ChainedCall::new(
         token_program_id,
-        vec![token_definition.account_id, holder_ata.account_id],
+        burn_positions,
         &token_core::Instruction::Burn {
             amount_to_burn: amount,
         },

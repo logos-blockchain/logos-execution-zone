@@ -1,8 +1,9 @@
 use borsh::to_vec;
 use lee_core::{
     Timestamp,
+    account::Position,
     program::{
-        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
         read_lee_call, respond_unsupported_call,
     },
 };
@@ -29,13 +30,13 @@ fn main() {
 
     let state_diffs: Vec<_> = pre_states
         .iter()
-        .map(|pre| AccountStateDiff::unchanged(pre.clone()))
+        .map(|pre| ShardStateDiff::unchanged(pre.clone()))
         .collect();
 
     let chained_call = ChainedCall {
         program_account_id: clock_program_id.into(),
         instruction_data: to_vec(&timestamp).unwrap(),
-        pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
+        positions: pre_states.iter().map(Position::from).collect(),
         pda_seeds: vec![],
     };
 

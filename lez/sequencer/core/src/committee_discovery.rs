@@ -112,7 +112,9 @@ pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig>
         warn!("sequencer_stake config account is absent");
         return None;
     };
-    let config = SequencerStakeConfig::from_bytes(account.data.as_ref());
+    let sequencer_stake_program_id: lee::AccountId = programs::sequencer_stake().id().into();
+    let config =
+        SequencerStakeConfig::from_bytes(account.shard(sequencer_stake_program_id).as_ref());
     if config.is_none() {
         warn!("sequencer_stake config account did not decode as SequencerStakeConfig");
     }
@@ -129,7 +131,8 @@ pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::Cha
 /// whatever release is pending against it.
 fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<StakeRecord> {
     let account = state.get_account_by_id_ref(ownership_id)?;
-    StakeRecord::from_bytes(account.data.as_ref())
+    let sequencer_stake_program_id: lee::AccountId = programs::sequencer_stake().id().into();
+    StakeRecord::from_bytes(account.shard(sequencer_stake_program_id).as_ref())
 }
 
 #[must_use]
@@ -187,28 +190,31 @@ mod tests {
     /// LEZ state holding the config account plus one ownership account per key.
     fn state_with(stakes: impl IntoIterator<Item = Staked>) -> lee::V03State {
         let stakes: Vec<Staked> = stakes.into_iter().collect();
+        let sequencer_stake_program_id: lee::AccountId = programs::sequencer_stake().id().into();
 
         let ownership_accounts = stakes.iter().map(|staked| {
             (
                 staked.account_id,
                 Account {
-                    program_owner: programs::sequencer_stake().id().into(),
                     balance: staked.balance,
-                    data: StakeRecord {
+                    ..Account::default()
+                }
+                .with_shard(
+                    sequencer_stake_program_id,
+                    StakeRecord {
                         sequencer_key: staked.key,
                         pending_unstake: staked.pending,
                     }
                     .to_bytes()
                     .try_into()
                     .expect("stake record fits"),
-                    ..Account::default()
-                },
+                ),
             )
         });
 
-        let config = Account {
-            program_owner: programs::sequencer_stake().id().into(),
-            data: SequencerStakeConfig {
+        let config = Account::default().with_shard(
+            sequencer_stake_program_id,
+            SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {
                     minimum_sequencer_stake: MINIMUM,
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
@@ -233,8 +239,7 @@ mod tests {
             .to_bytes()
             .try_into()
             .expect("config fits"),
-            ..Account::default()
-        };
+        );
 
         lee::V03State::new()
             .with_public_accounts(ownership_accounts)

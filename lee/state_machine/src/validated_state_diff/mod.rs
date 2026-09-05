@@ -8,11 +8,11 @@ use std::{
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim,
     PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata, Cycles},
+    account::{Account, AccountId, Cycles, Input, Position},
     program::{
-        CallKind, CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER, PROGRAM_LOADER_ACCOUNT_ID,
-        ProgramOutput, TransactionEvent, compute_public_authorized_pdas, get_program_via,
-        is_ownership_settled, post_state, pre_states_match_accounts, validate_execution,
+        CallKind, CallerData, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramOutput,
+        TransactionEvent, compute_public_authorized_pdas, get_program_via,
+        pre_states_match_positions, validate_execution,
     },
 };
 use log::debug;
@@ -141,7 +141,7 @@ impl ValidatedStateDiff {
         let mut cycles_used: u64 = 0;
         let result = Self::execute_authorized(
             message.program_account_id,
-            &message.account_ids,
+            &message.positions,
             &message.instruction_data,
             &authorized,
             signers.clone(),
@@ -185,7 +185,7 @@ impl ValidatedStateDiff {
     /// `is_authorized` set — the payer for the reserve, empty for the refund.
     pub fn from_fee_settlement_invocation(
         program_account_id: AccountId,
-        account_ids: &[AccountId],
+        positions: &[Position],
         instruction_data: &[u8],
         authorized: &HashSet<AccountId>,
         state: &V03State,
@@ -195,7 +195,7 @@ impl ValidatedStateDiff {
         let mut cycles_used = 0; // dont care
         Self::execute_authorized(
             program_account_id,
-            account_ids,
+            positions,
             instruction_data,
             authorized,
             Vec::new(), // no nonces to advance!
@@ -221,7 +221,7 @@ impl ValidatedStateDiff {
         let authorized: HashSet<AccountId> = signer_account_ids.iter().copied().collect();
         Self::execute_authorized(
             message.program_account_id,
-            &message.account_ids,
+            &message.positions,
             &message.instruction_data,
             &authorized,
             signer_account_ids,
@@ -243,7 +243,7 @@ impl ValidatedStateDiff {
     )]
     fn execute_authorized(
         program_account_id: AccountId,
-        account_ids: &[AccountId],
+        positions: &[Position],
         instruction_data: &[u8],
         authorized: &HashSet<AccountId>,
         nonce_bearers: Vec<AccountId>,
@@ -254,24 +254,35 @@ impl ValidatedStateDiff {
         cycles_used: &mut u64,
     ) -> Result<Self, LeeError> {
         ensure!(
-            !account_ids.is_empty(),
+            !positions.is_empty(),
             LeeError::InvalidInput("Public transaction must have at least one account".into())
         );
 
         // All account_ids must be different
         ensure!(
-            account_ids.iter().collect::<HashSet<_>>().len() == account_ids.len(),
+            positions
+                .iter()
+                .map(|position| position.account_id)
+                .collect::<HashSet<_>>()
+                .len()
+                == positions.len(),
             LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
         );
 
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
-        let declared_account_ids: HashSet<AccountId> = account_ids.iter().copied().collect();
+        let declared: HashSet<AccountId> = positions
+            .iter()
+            .map(|position| position.account_id)
+            .collect();
+        // Which declared positions a program actually received. A balance-only position leaves
+        // the account untouched, so presence in the diff cannot stand in for having been seen.
+        let mut positions_seen: HashSet<Position> = HashSet::new();
         let mut events: Vec<TransactionEvent> = Vec::new();
 
         let initial_call = ChainedCall {
             program_account_id,
             instruction_data: instruction_data.to_vec(),
-            pre_state_ids: account_ids.to_vec(),
+            positions: positions.to_vec(),
             pda_seeds: vec![],
         };
 
@@ -300,32 +311,29 @@ impl ValidatedStateDiff {
                     || caller_data.authorized_accounts.contains(account_id)
             };
 
-            // The caller only names which accounts to call with (`pre_state_ids`); resolve their
-            // actual values from the protocol's own tracked state, not from anything it asserts.
-            // Resolvable only if declared up front or already touched in this transaction —
-            // never merely because it exists somewhere in global state.
-            let real_pre_states: Vec<AccountWithMetadata> = chained_call
-                .pre_state_ids
+            // The caller only names positions; resolve each one's actual value from the
+            // protocol's own tracked state, not from anything it asserts. Resolvable only if
+            // declared up front or already touched in this transaction — never merely because
+            // it exists somewhere in global state.
+            let real_pre_states: Vec<Input> = chained_call
+                .positions
                 .iter()
-                .map(|account_id| {
-                    let account = match state_diff.get(account_id) {
+                .map(|position| {
+                    let account_id = position.account_id;
+                    let account = match state_diff.get(&account_id) {
                         Some(account) => account.clone(),
-                        None if declared_account_ids.contains(account_id) => {
-                            state.get_account_by_id(*account_id)
+                        None if declared.contains(&account_id) => {
+                            state.get_account_by_id(account_id)
                         }
                         None => {
                             return Err(LeeError::from(
                                 InvalidProgramBehaviorError::UnknownChainedCallAccount {
-                                    account_id: *account_id,
+                                    account_id,
                                 },
                             ));
                         }
                     };
-                    Ok(AccountWithMetadata::new(
-                        account,
-                        is_authorized(account_id),
-                        *account_id,
-                    ))
+                    Ok(Input::at(*position, is_authorized(&account_id), &account))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
@@ -376,31 +384,26 @@ impl ValidatedStateDiff {
                 chained_call.program_account_id, program_output
             );
 
-            // A chained callee must account for exactly the accounts its caller named, in
+            // A chained callee must account for exactly the positions its caller named, in
             // order. The top-level call has no caller, so it's exempt here.
             ensure!(
                 caller_data.account_id.is_none()
-                    || pre_states_match_accounts(
-                        &chained_call.pre_state_ids,
-                        &program_output
-                            .state_diffs
-                            .iter()
-                            .map(|diff| diff.pre_state.clone())
-                            .collect::<Vec<_>>()
+                    || pre_states_match_positions(
+                        &chained_call.positions,
+                        &program_output.state_diffs
                     ),
                 InvalidProgramBehaviorError::ChainedCallAccountsMismatch {
                     program_account_id: chained_call.program_account_id
                 }
             );
 
-            let named_accounts: HashSet<AccountId> =
-                chained_call.pre_state_ids.iter().copied().collect();
-
-            for pre in program_output
-                .state_diffs
+            let named_accounts: HashSet<AccountId> = chained_call
+                .positions
                 .iter()
-                .map(|diff| &diff.pre_state)
-            {
+                .map(|position| position.account_id)
+                .collect();
+
+            for pre in program_output.state_diffs.iter().map(|diff| &diff.pre) {
                 let account_id = pre.account_id;
                 ensure!(
                     named_accounts.contains(&account_id),
@@ -411,17 +414,21 @@ impl ValidatedStateDiff {
                 );
 
                 // Check that the program output pre_states coincide with the values in the public
-                // state or with any modifications to those values during the chain of calls.
-                let expected_pre = state_diff
+                // state or with any modifications to those values during the chain of calls. Only
+                // the named shard is compared — a shard the position never named is invisible to
+                // the guest and so cannot be reported.
+                let position = Position::from(pre);
+                let expected = state_diff
                     .get(&account_id)
                     .cloned()
                     .unwrap_or_else(|| state.get_account_by_id(account_id));
+                let expected_pre = Input::at(position, pre.is_authorized, &expected);
                 ensure!(
-                    pre.account == expected_pre,
+                    expected_pre == *pre,
                     InvalidProgramBehaviorError::InconsistentAccountPreState {
                         account_id,
                         expected: Box::new(expected_pre),
-                        actual: Box::new(pre.account.clone())
+                        actual: Box::new(pre.clone())
                     }
                 );
 
@@ -438,6 +445,8 @@ impl ValidatedStateDiff {
                         account_id
                     }
                 );
+
+                positions_seen.insert(position);
             }
 
             // Verify that the program output's self_account_id matches the expected address.
@@ -482,12 +491,15 @@ impl ValidatedStateDiff {
                 LeeError::OutOfValidityWindow
             );
 
-            // Update the state diff, acquiring ownership of every unowned account this call
-            // wrote data to.
+            // Splice each named position into its account: a shard no position named must
+            // survive the call untouched.
             for diff in &program_output.state_diffs {
-                let post = post_state(diff, chained_call.program_account_id)
+                let account_id = diff.pre.account_id;
+                state_diff
+                    .entry(account_id)
+                    .or_insert_with(|| state.get_account_by_id(account_id))
+                    .splice(diff)
                     .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-                state_diff.insert(diff.pre_state.account_id, post);
             }
 
             // Write all the output event data into a proper event struct,
@@ -503,7 +515,7 @@ impl ValidatedStateDiff {
             );
 
             // Source from `program_output.state_diffs` (the callee's own checked echo), not
-            // `chained_call.pre_state_ids` (bare ids the caller supplied, carrying no
+            // `chained_call.positions` (bare positions the caller supplied, carrying no
             // authorization claim at all and forgeable, audit-issue 91) — the loop above
             // already gates program_output's `is_authorized` via the `!pre.is_authorized ||
             // is_indeed_authorized` check.
@@ -516,7 +528,7 @@ impl ValidatedStateDiff {
                 program_output
                     .state_diffs
                     .iter()
-                    .map(|diff| &diff.pre_state)
+                    .map(|diff| &diff.pre)
                     .filter(|pre| pre.is_authorized)
                     .map(|pre| pre.account_id),
             );
@@ -535,30 +547,12 @@ impl ValidatedStateDiff {
                 .expect("we check the max depth at the beginning of the loop");
         }
 
-        // Check that all programs writing data to default accounts claimed ownership.
-        for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
-            let pre = state.get_account_by_id(*account_id);
-            if pre.program_owner != DEFAULT_PROGRAM_OWNER {
-                return None;
-            }
-            if pre == *post {
-                return None;
-            }
-            Some((*account_id, post))
-        }) {
+        // Every position the caller declared must have reached a program.
+        for position in positions {
             ensure!(
-                is_ownership_settled(post),
-                InvalidProgramBehaviorError::DataBearingUnownedAccount { account_id }
-            );
-        }
-
-        // Every account the caller declared as part of the transaction must appear in the final
-        // diff.
-        for account_id in account_ids {
-            ensure!(
-                state_diff.contains_key(account_id),
+                positions_seen.contains(position),
                 InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput {
-                    account_id: *account_id
+                    account_id: position.account_id
                 }
             );
         }
@@ -642,15 +636,19 @@ impl ValidatedStateDiff {
             LeeError::OutOfValidityWindow
         );
 
-        // Build pre_states for proof verification
-        let public_pre_states: Vec<_> = public_account_ids
+        // Rebuild what the circuit journalled per public account: `pre` is this chain's own
+        // value restricted to the namespaces the action touched, so a namespace the transaction
+        // never named is neither anchored nor written.
+        let public_actions: Vec<PublicAction> = message
+            .public_actions
             .iter()
-            .map(|account_id| {
-                AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
-                    *account_id,
-                )
+            .map(|action| PublicAction {
+                account_id: action.account_id,
+                is_authorized: signer_account_ids.contains(&action.account_id),
+                pre: state
+                    .get_account_by_id(action.account_id)
+                    .project(action.post.shards.keys().copied()),
+                post: action.post.clone(),
             })
             .collect();
 
@@ -658,7 +656,7 @@ impl ValidatedStateDiff {
         check_privacy_preserving_circuit_proof_is_valid(
             state,
             &witness_set.proof,
-            &public_pre_states,
+            public_actions,
             message,
         )?;
 
@@ -671,7 +669,11 @@ impl ValidatedStateDiff {
         let public_diff = message
             .public_actions
             .iter()
-            .map(|action| (action.account_id, action.post_state.clone()))
+            .map(|action| {
+                let mut account = state.get_account_by_id(action.account_id);
+                account.apply(&action.post);
+                (action.account_id, account)
+            })
             .collect();
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
@@ -700,7 +702,7 @@ impl ValidatedStateDiff {
 
 /// Runs `program_loader`'s instruction as native Rust rather than a guest ELF, producing the same
 /// [`ProgramOutput`] shape a guest call would — so the rest of the dispatch loop (chained-call
-/// bookkeeping, `validate_execution`, ownership acquisition) treats it identically either way.
+/// bookkeeping, `validate_execution`, splicing) treats it identically either way.
 ///
 /// `program_loader_core`'s functions panic on malformed input, mirroring the assert-based style
 /// every other `*_core` crate uses under its guest's sandbox. There is no zkVM sandbox here, so
@@ -709,7 +711,7 @@ impl ValidatedStateDiff {
 fn execute_program_loader(
     self_account_id: AccountId,
     caller_account_id: Option<AccountId>,
-    pre_states: &[AccountWithMetadata],
+    pre_states: &[Input],
     instruction_data: &[u8],
 ) -> Result<ProgramOutput, LeeError> {
     let instruction: ProgramLoaderInstruction = borsh::from_slice(instruction_data)
@@ -782,7 +784,7 @@ fn authenticate_public_transaction_signers(
 fn check_privacy_preserving_circuit_proof_is_valid(
     state: &V03State,
     proof: &Proof,
-    public_pre_states: &[AccountWithMetadata],
+    public_actions: Vec<PublicAction>,
     message: &Message,
 ) -> Result<(), LeeError> {
     // Anchor each claimed image_id to real chain state: reconstruct the claims using the
@@ -807,15 +809,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         .collect::<Result<Vec<_>, LeeError>>()?;
 
     let output = PrivacyPreservingCircuitOutput {
-        public_actions: public_pre_states
-            .iter()
-            .cloned()
-            .zip(&message.public_actions)
-            .map(|(pre, action)| PublicAction {
-                pre,
-                post: action.post_state.clone(),
-            })
-            .collect(),
+        public_actions,
         private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,

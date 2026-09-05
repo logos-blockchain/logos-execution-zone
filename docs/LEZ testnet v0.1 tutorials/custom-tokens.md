@@ -60,7 +60,7 @@ wallet token new \
 wallet account get --account-id Public/4X9kAcnCZ1Ukkbm3nywW9xfCNPK8XaMWCk3zfs1sP4J7
 
 # Output:
-Definition account owned by token program
+Token program definition record
 {"account_type":"Token definition","name":"TOKENA","total_supply":1337}
 ```
 
@@ -68,7 +68,7 @@ Definition account owned by token program
 wallet account get --account-id Public/9RRSMm3w99uCD2Jp2Mqqf6dfc8me2tkFRE9HeU2DFftw
 
 # Output:
-Holding account owned by token program
+Token program holding record
 {"account_type":"Token holding","definition_id":"4X9kAcnCZ1Ukkbm3nywW9xfCNPK8XaMWCk3zfs1sP4J7","balance":1337}
 ```
 
@@ -111,7 +111,7 @@ wallet token new \
 wallet account get --account-id Public/GQ3C8rbprTtQUCvkuVBRu3v9wvUvjafCMFqoSPvTEVii
 
 # Output:
-Definition account owned by token program
+Token program definition record
 {"account_type":"Token definition","name":"TOKENB","total_supply":7331}
 ```
 
@@ -119,7 +119,7 @@ Definition account owned by token program
 wallet account get --account-id Private/HMRHZdPw4pbyPVZHNGrV6K5AA95wACFsHTRST84fr3CF
 
 # Output:
-Holding account owned by token program
+Token program holding record
 {"account_type":"Token holding","definition_id":"GQ3C8rbprTtQUCvkuVBRu3v9wvUvjafCMFqoSPvTEVii","balance":7331}
 ```
 
@@ -154,6 +154,6 @@ wallet token send \
 wallet account get --account-id Public/88f2zeTgiv9LUthQwPJbrmufb9SiDfmpCs47B7vw6Gd6
 
 # Output:
-Holding account owned by token program
+Token program holding record
 {"account_type":"Token holding","definition_id":"GQ3C8rbprTtQUCvkuVBRu3v9wvUvjafCMFqoSPvTEVii","balance":1000}
 ```

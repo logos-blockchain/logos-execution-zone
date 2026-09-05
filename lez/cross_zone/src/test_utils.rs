@@ -7,7 +7,7 @@ use lee::{
     GENESIS_BLOCK_ID, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use lee_core::account::AccountId;
+use lee_core::account::{AccountId, Position};
 use ping_core::{SenderInstruction, ping_record_pda, receiver_config_account_id};
 
 /// The peer's hash-linked chain from its genesis up to and including `last`,
@@ -36,8 +36,8 @@ pub fn ping_emission(
         target_zone,
         target_account_id,
         target_accounts: vec![
-            receiver_config_account_id(receiver_id).into_value(),
-            ping_record_pda(receiver_id).into_value(),
+            Position::new(receiver_config_account_id(receiver_id), receiver_id),
+            Position::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload: payload.to_vec(),
         ordinal: 0,

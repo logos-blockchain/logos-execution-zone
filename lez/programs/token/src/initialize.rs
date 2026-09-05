@@ -1,36 +1,33 @@
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff, Data},
-    program::AccountStateDiff,
+    account::{AccountId, BalanceDiff, Data, Input},
+    program::ShardStateDiff,
 };
 use token_core::{TokenDefinition, TokenHolding};
 
 #[must_use]
 pub fn initialize_account(
-    definition_account: &AccountWithMetadata,
-    account_to_initialize: &AccountWithMetadata,
-) -> Vec<AccountStateDiff> {
+    definition_account: &Input,
+    account_to_initialize: &Input,
+    self_account_id: AccountId,
+) -> Vec<ShardStateDiff> {
     assert!(
-        account_to_initialize.account.data.is_empty(),
+        account_to_initialize.shard_of(self_account_id).is_empty(),
         "Only Uninitialized accounts can be initialized"
     );
 
-    // TODO: #212 We should check that this is an account owned by the token program.
-    // This check can't be done here since the ID of the program is known only after compiling it
-    //
-    // Check definition account is valid
-    let definition = TokenDefinition::try_from(&definition_account.account.data)
+    let definition = TokenDefinition::try_from(definition_account.shard_of(self_account_id))
         .expect("Definition account must be valid");
     let holding =
         TokenHolding::zeroized_from_definition(definition_account.account_id, &definition);
 
-    let holding_diff = AccountStateDiff::new(
+    let holding_diff = ShardStateDiff::new(
         account_to_initialize.clone(),
         BalanceDiff::Add(0),
         Data::from(&holding),
     );
 
     vec![
-        AccountStateDiff::unchanged(definition_account.clone()),
+        ShardStateDiff::unchanged(definition_account.clone()),
         holding_diff,
     ]
 }

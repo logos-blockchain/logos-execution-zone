@@ -142,13 +142,24 @@ typedef struct FfiProgramId {
 
 typedef struct FfiBytes32 FfiAccountId;
 
-typedef struct FfiVec_FfiAccountId {
-  FfiAccountId *entries;
+/**
+ * Position of a message: an account, and optionally one program's namespace at it.
+ * `program` is only meaningful when `has_program` is set, mirroring
+ * [`FfiFeeDeclaration`]/`has_fee`.
+ */
+typedef struct FfiPosition {
+  FfiAccountId account_id;
+  bool has_program;
+  FfiAccountId program;
+} FfiPosition;
+
+typedef struct FfiVec_FfiPosition {
+  struct FfiPosition *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiAccountId;
+} FfiVec_FfiPosition;
 
-typedef struct FfiVec_FfiAccountId FfiAccountIdList;
+typedef struct FfiVec_FfiPosition FfiPositionList;
 
 /**
  * U128 - 16 bytes little endian.
@@ -189,7 +200,7 @@ typedef struct FfiFeeDeclaration {
 
 typedef struct FfiPublicMessage {
   struct FfiProgramId program_id;
-  FfiAccountIdList account_ids;
+  FfiPositionList positions;
   FfiNonceList nonces;
   FfiInstructionDataList instruction_data;
   bool has_fee;
@@ -216,38 +227,47 @@ typedef struct FfiPublicTransactionBody {
 } FfiPublicTransactionBody;
 
 /**
- * Account data structure - C-compatible version of lee Account.
- *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
- * byte arrays since C doesn't have native u128 support.
+ * One program's shard on an account - C-compatible version of one entry in lee's
+ * `Account.shards` / `AccountView.shards`.
  */
-typedef struct FfiAccount {
-  struct FfiBytes32 program_owner;
+typedef struct FfiShard {
+  struct FfiBytes32 program;
+  /**
+   * Pointer to shard data bytes.
+   */
+  uint8_t *data;
+  /**
+   * Length of shard data.
+   */
+  uintptr_t data_len;
+  /**
+   * Capacity of shard data.
+   */
+  uintptr_t data_cap;
+} FfiShard;
+
+/**
+ * An account minus its nonce, restricted to the namespaces a transaction touched -
+ * C-compatible version of lee `AccountView`.
+ */
+typedef struct FfiAccountView {
   /**
    * Balance as little-endian [u8; 16].
    */
   struct FfiU128 balance;
   /**
-   * Pointer to account data bytes.
+   * Pointer to the account's shards.
    */
-  uint8_t *data;
+  struct FfiShard *shards;
   /**
-   * Length of account data.
+   * Number of shards.
    */
-  uintptr_t data_len;
-  /**
-   * Capacity of account data.
-   */
-  uintptr_t data_cap;
-  /**
-   * Nonce as little-endian [u8; 16].
-   */
-  struct FfiU128 nonce;
-} FfiAccount;
+  uintptr_t shards_len;
+} FfiAccountView;
 
 typedef struct FfiPublicAction {
   FfiAccountId account_id;
-  struct FfiAccount post_state;
+  struct FfiAccountView post;
 } FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction {
@@ -339,6 +359,31 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
   FfiBlockOpt *value;
   enum OperationStatus error;
 } PointerResult_FfiBlockOpt__OperationStatus;
+
+/**
+ * Account data structure - C-compatible version of lee Account.
+ *
+ * Note: `balance` and `nonce` are u128 values represented as little-endian
+ * byte arrays since C doesn't have native u128 support.
+ */
+typedef struct FfiAccount {
+  /**
+   * Balance as little-endian [u8; 16].
+   */
+  struct FfiU128 balance;
+  /**
+   * Nonce as little-endian [u8; 16].
+   */
+  struct FfiU128 nonce;
+  /**
+   * Pointer to the account's shards.
+   */
+  struct FfiShard *shards;
+  /**
+   * Number of shards.
+   */
+  uintptr_t shards_len;
+} FfiAccount;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -726,9 +771,8 @@ struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus query_events(cons
  * Frees the resources associated with the given ffi account.
  *
  * Takes ownership of the whole allocation produced by a `query_*` call: the
- * outer `Box<FfiAccount>` (the `PointerResult.value` pointer) *and* its inner
- * data buffer. Passing the struct by value previously freed only the inner
- * buffer and leaked the outer box.
+ * outer `Box<FfiAccount>` (the `PointerResult.value` pointer), the shard
+ * array, and each shard's data buffer.
  *
  * # Arguments
  *

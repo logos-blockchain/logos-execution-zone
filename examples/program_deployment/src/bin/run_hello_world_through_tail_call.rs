@@ -1,6 +1,6 @@
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, PublicTransaction,
+    AccountId, Position, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
@@ -48,9 +48,11 @@ async fn main() {
     let instruction_data = ();
     let nonces = vec![];
     let signing_keys = [];
+    // `simple_tail_call` never reads this account's own shard, only the account address it
+    // hands to its chained call — so this position is balance-only.
     let message = Message::try_new(
         program.id().into(),
-        vec![account_id],
+        vec![Position::balance_only(account_id)],
         nonces,
         instruction_data,
     )

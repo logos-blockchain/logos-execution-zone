@@ -1,7 +1,7 @@
 use lee_core::{
     account::BalanceDiff,
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -29,17 +29,8 @@ fn main() {
         return;
     };
 
-    let recipient_diff = AccountStateDiff::new(
-        recipient.clone(),
-        BalanceDiff::Add(amount),
-        recipient.account.data,
-    );
-
-    let source_diff = AccountStateDiff::new(
-        source.clone(),
-        BalanceDiff::Sub(amount),
-        source.account.data,
-    );
+    let recipient_diff = ShardStateDiff::balance_only(recipient, BalanceDiff::Add(amount));
+    let source_diff = ShardStateDiff::balance_only(source, BalanceDiff::Sub(amount));
 
     ProgramOutput::new(
         self_account_id,

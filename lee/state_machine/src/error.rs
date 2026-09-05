@@ -1,6 +1,6 @@
 use std::io;
 
-use lee_core::account::{Account, AccountId, BalanceDiffError, Cycles};
+use lee_core::account::{AccountId, BalanceDiffError, Cycles, Input};
 use thiserror::Error;
 
 #[macro_export]
@@ -115,8 +115,8 @@ pub enum InvalidProgramBehaviorError {
     InconsistentAccountPreState {
         account_id: AccountId,
         // Boxed to reduce the size of the error type
-        expected: Box<Account>,
-        actual: Box<Account>,
+        expected: Box<Input>,
+        actual: Box<Input>,
     },
 
     #[error("Unauthorized account marked as authorized")]
@@ -142,9 +142,6 @@ pub enum InvalidProgramBehaviorError {
 
     #[error(transparent)]
     ExecutionValidationFailed(#[from] lee_core::program::ExecutionValidationError),
-
-    #[error("Unowned account {account_id} carries data in its final state")]
-    DataBearingUnownedAccount { account_id: AccountId },
 
     #[error("Called program {program_account_id} which is not listed in dependencies")]
     UndeclaredProgramDependency { program_account_id: AccountId },

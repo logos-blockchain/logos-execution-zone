@@ -14,7 +14,7 @@ use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
 use lee_core::{
     account::BalanceDiff,
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -67,10 +67,16 @@ fn main() {
     // Check the clock account is the system clock account
     assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
-    let clock_data = ClockAccountData::from_bytes(&clock_pre.account.data);
+    // A production program pins the program whose record it reads, the way the AMM pins its token
+    // program; this test guest reads whatever record the clock position names.
+    let (_, clock_bytes) = clock_pre
+        .shard
+        .as_ref()
+        .expect("the clock position must name a record");
+    let clock_data = ClockAccountData::from_bytes(clock_bytes);
     let current_timestamp = clock_data.timestamp;
 
-    let cooldown_state = CooldownState::from_bytes(&state.account.data);
+    let cooldown_state = CooldownState::from_bytes(state.shard_of(self_account_id));
 
     // Enforce cooldown: the elapsed time since the last run must exceed the cooldown period.
     let elapsed = current_timestamp.saturating_sub(cooldown_state.last_run_timestamp);
@@ -85,7 +91,7 @@ fn main() {
         last_run_timestamp: current_timestamp,
         ..cooldown_state
     };
-    let state_diff = AccountStateDiff::new(
+    let state_diff = ShardStateDiff::new(
         state,
         BalanceDiff::Add(0),
         updated_state
@@ -95,7 +101,7 @@ fn main() {
     );
 
     // Clock account is read-only.
-    let clock_diff = AccountStateDiff::unchanged(clock_pre);
+    let clock_diff = ShardStateDiff::unchanged(clock_pre);
 
     ProgramOutput::new(
         self_account_id,

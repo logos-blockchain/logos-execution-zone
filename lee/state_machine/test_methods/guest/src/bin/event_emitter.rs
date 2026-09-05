@@ -1,8 +1,8 @@
 use lee_core::{
-    account::AccountId,
+    account::{AccountId, Position},
     program::{
-        AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramEvent, ProgramInput,
-        ProgramOutput, read_lee_call, respond_unsupported_call,
+        ChainedCall, InstructionData, ProgramCall, ProgramEvent, ProgramInput, ProgramOutput,
+        ShardStateDiff, read_lee_call, respond_unsupported_call,
     },
 };
 
@@ -29,15 +29,15 @@ fn main() {
 
     let state_diffs = pre_states
         .iter()
-        .map(|account| AccountStateDiff::unchanged(account.clone()))
+        .map(|account| ShardStateDiff::unchanged(account.clone()))
         .collect();
 
-    let pre_state_ids: Vec<_> = pre_states.iter().map(|pre| pre.account_id).collect();
+    let positions: Vec<_> = pre_states.iter().map(Position::from).collect();
     let chained_calls = chain
         .into_iter()
         .map(|(program_account_id, call_instruction_data)| ChainedCall {
             program_account_id,
-            pre_state_ids: pre_state_ids.clone(),
+            positions: positions.clone(),
             instruction_data: call_instruction_data,
             pda_seeds: vec![],
         })

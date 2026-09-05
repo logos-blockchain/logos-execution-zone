@@ -3,12 +3,13 @@
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, BlockIngestError,
-    Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData,
-    EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState,
-    Nullifier, PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    PrivateAction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
-    PublicTransaction, Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    Account, AccountId, AccountView, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
+    BlockIngestError, Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt, Data,
+    EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus,
+    IndexerSyncState, Nullifier, PeerHealth, PeerStatus, Position, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, ProgramId, Proof, PublicActionWithID, PublicKey,
+    PublicMessage, PublicTransaction, Selector, Signature, StallReason, Transaction,
+    ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -45,17 +46,18 @@ impl From<AccountId> for lee_core::account::AccountId {
 impl From<lee_core::account::Account> for Account {
     fn from(value: lee_core::account::Account) -> Self {
         let lee_core::account::Account {
-            program_owner,
             balance,
-            data,
             nonce,
+            shards,
         } = value;
 
         Self {
-            program_owner: program_owner.into(),
             balance,
-            data: data.into(),
             nonce: nonce.0,
+            shards: shards
+                .into_iter()
+                .map(|(program, data)| (program.into(), data.into()))
+                .collect(),
         }
     }
 }
@@ -65,18 +67,77 @@ impl TryFrom<Account> for lee_core::account::Account {
 
     fn try_from(value: Account) -> Result<Self, Self::Error> {
         let Account {
-            program_owner,
             balance,
-            data,
             nonce,
+            shards,
         } = value;
 
         Ok(Self {
-            program_owner: program_owner.into(),
             balance,
-            data: data.try_into()?,
             nonce: Nonce(nonce),
+            shards: shards
+                .into_iter()
+                .map(|(program, data)| Ok((program.into(), data.try_into()?)))
+                .collect::<Result<_, Self::Error>>()?,
         })
+    }
+}
+
+impl From<lee_core::account::AccountView> for AccountView {
+    fn from(value: lee_core::account::AccountView) -> Self {
+        let lee_core::account::AccountView { balance, shards } = value;
+
+        Self {
+            balance,
+            shards: shards
+                .into_iter()
+                .map(|(program, data)| (program.into(), data.into()))
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<AccountView> for lee_core::account::AccountView {
+    type Error = lee_core::account::data::DataTooBigError;
+
+    fn try_from(value: AccountView) -> Result<Self, Self::Error> {
+        let AccountView { balance, shards } = value;
+
+        Ok(Self {
+            balance,
+            shards: shards
+                .into_iter()
+                .map(|(program, data)| Ok((program.into(), data.try_into()?)))
+                .collect::<Result<_, Self::Error>>()?,
+        })
+    }
+}
+
+impl From<lee_core::account::Position> for Position {
+    fn from(value: lee_core::account::Position) -> Self {
+        let lee_core::account::Position {
+            account_id,
+            program,
+        } = value;
+
+        Self {
+            account_id: account_id.into(),
+            program: program.map(Into::into),
+        }
+    }
+}
+
+impl From<Position> for lee_core::account::Position {
+    fn from(value: Position) -> Self {
+        let Position {
+            account_id,
+            program,
+        } = value;
+
+        Self {
+            account_id: account_id.into(),
+            program: program.map(Into::into),
+        }
     }
 }
 
@@ -275,14 +336,14 @@ impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::public_transaction::Message {
             program_account_id,
-            account_ids,
+            positions,
             nonces,
             instruction_data,
             fee,
         } = value;
         Self {
             program_id: ProgramId(program_account_id.into()),
-            account_ids: account_ids.into_iter().map(Into::into).collect(),
+            positions: positions.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
             fee: fee.map(Into::into),
@@ -294,14 +355,14 @@ impl From<PublicMessage> for lee::public_transaction::Message {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
             program_id,
-            account_ids,
+            positions,
             nonces,
             instruction_data,
             fee,
         } = value;
         Self::new_preserialized(
             lee::AccountId::from(program_id.0),
-            account_ids.into_iter().map(Into::into).collect(),
+            positions.into_iter().map(Into::into).collect(),
             nonces
                 .iter()
                 .map(|x| lee_core::account::Nonce(*x))
@@ -316,7 +377,7 @@ impl From<lee::privacy_preserving_transaction::message::PublicActionWithID> for 
     fn from(value: lee::privacy_preserving_transaction::message::PublicActionWithID) -> Self {
         Self {
             account_id: value.account_id.into(),
-            post_state: value.post_state.into(),
+            post: value.post.into(),
         }
     }
 }
@@ -363,8 +424,8 @@ impl TryFrom<PublicActionWithID>
     fn try_from(value: PublicActionWithID) -> Result<Self, Self::Error> {
         Ok(Self {
             account_id: value.account_id.into(),
-            post_state: value
-                .post_state
+            post: value
+                .post
                 .try_into()
                 .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
         })
@@ -990,7 +1051,7 @@ mod tests {
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
         let message = lee::public_transaction::Message::try_new_with_fees(
             [7_u32; 8].into(),
-            vec![signer_id],
+            vec![lee::Position::balance_only(signer_id)],
             vec![0_u128.into()],
             0_u32,
             fee,
@@ -1024,7 +1085,7 @@ mod tests {
 
         let message = lee::public_transaction::Message::try_new(
             [7_u32; 8].into(),
-            vec![signer_id],
+            vec![lee::Position::balance_only(signer_id)],
             vec![0_u128.into()],
             0_u32,
         )

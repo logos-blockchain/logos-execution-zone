@@ -1,14 +1,14 @@
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{AccountId, Input},
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
 
 /// Echoes its real `pre_states` unchanged, then appends one fabricated, untouched account never
 /// present in its own input — to test whether reporting it in `ProgramOutput.state_diffs` alone
-/// is enough to get it resolved, independent of `ChainedCall.pre_state_ids`.
+/// is enough to get it resolved, independent of `ChainedCall.positions`.
 type Instruction = AccountId;
 
 fn main() {
@@ -26,16 +26,16 @@ fn main() {
         respond_unsupported_call(call);
     };
 
-    let mut state_diffs: Vec<AccountStateDiff> = pre_states
+    let mut state_diffs: Vec<ShardStateDiff> = pre_states
         .into_iter()
-        .map(AccountStateDiff::unchanged)
+        .map(ShardStateDiff::unchanged)
         .collect();
 
-    state_diffs.push(AccountStateDiff::unchanged(AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: false,
-        account_id: fabricated_account_id,
-    }));
+    state_diffs.push(ShardStateDiff::unchanged(Input::balance_only(
+        fabricated_account_id,
+        false,
+        0,
+    )));
 
     ProgramOutput::new(
         self_account_id,

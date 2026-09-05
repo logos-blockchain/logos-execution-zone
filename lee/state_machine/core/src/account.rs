@@ -1,4 +1,4 @@
-use std::{fmt::Display, str::FromStr};
+use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use thiserror::Error;
 
-use crate::NullifierSecretKey;
+use crate::{NullifierSecretKey, program::ShardStateDiff};
 
 pub mod data;
 
@@ -112,52 +112,193 @@ pub enum BalanceDiffError {
     InsufficientBalance,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct PostStateEffects {
-    pub id: AccountId,
-    pub diff_balance: Option<BalanceDiff>,
-    pub new_data: Option<Data>,
-}
-
-impl PostStateEffects {
-    /// A diff that leaves `id`'s balance and data untouched.
-    #[must_use]
-    pub const fn new_unchanged(id: AccountId) -> Self {
-        Self {
-            id,
-            diff_balance: None,
-            new_data: None,
-        }
-    }
-}
-
 /// Account to be used both in public and private contexts.
+///
+/// `shards` is a `BTreeMap` and an emptied shard is always removed, so equal accounts always
+/// encode identically — the encoding is what every commitment and note is taken over.
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct Account {
-    pub program_owner: AccountId,
     pub balance: Balance,
-    pub data: Data,
     pub nonce: Nonce,
+    pub shards: BTreeMap<AccountId, Data>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct AccountWithMetadata {
-    pub account: Account,
-    pub is_authorized: bool,
-    pub account_id: AccountId,
-}
+impl Account {
+    #[must_use]
+    pub fn shard(&self, program: AccountId) -> &Data {
+        const EMPTY: &Data = &Data::empty();
+        self.shards.get(&program).unwrap_or(EMPTY)
+    }
 
-#[cfg(feature = "host")]
-impl AccountWithMetadata {
-    pub fn new(account: Account, is_authorized: bool, account_id: impl Into<AccountId>) -> Self {
-        Self {
-            account,
-            is_authorized,
-            account_id: account_id.into(),
+    pub fn set_shard(&mut self, program: AccountId, data: Data) {
+        if data.is_empty() {
+            self.shards.remove(&program);
+        } else {
+            self.shards.insert(program, data);
         }
     }
+
+    #[must_use]
+    pub fn with_shard(mut self, program: AccountId, data: Data) -> Self {
+        self.set_shard(program, data);
+        self
+    }
+
+    pub fn splice(&mut self, diff: &ShardStateDiff) -> Result<(), BalanceDiffError> {
+        self.balance = apply_balance_diff(diff.pre.balance, Some(diff.post_balance_diff))?;
+        if let Some((program, pre_data)) = &diff.pre.shard {
+            self.set_shard(
+                *program,
+                diff.post_data.clone().unwrap_or_else(|| pre_data.clone()),
+            );
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn project(&self, namespaces: impl IntoIterator<Item = AccountId>) -> AccountView {
+        AccountView {
+            balance: self.balance,
+            shards: namespaces
+                .into_iter()
+                .map(|namespace| (namespace, self.shard(namespace).clone()))
+                .collect(),
+        }
+    }
+
+    pub fn apply(&mut self, view: &AccountView) {
+        self.balance = view.balance;
+        for (namespace, data) in &view.shards {
+            self.set_shard(*namespace, data.clone());
+        }
+    }
+}
+
+/// What a message names: an account, and optionally one program's namespace at it.
+/// Authorization is account-granular — a signature over the account authorizes its balance and
+/// every namespace at it.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+pub struct Position {
+    pub account_id: AccountId,
+    pub program: Option<AccountId>,
+}
+
+impl Position {
+    #[must_use]
+    pub const fn new(account_id: AccountId, program: AccountId) -> Self {
+        Self {
+            account_id,
+            program: Some(program),
+        }
+    }
+
+    #[must_use]
+    pub const fn balance_only(account_id: AccountId) -> Self {
+        Self {
+            account_id,
+            program: None,
+        }
+    }
+}
+
+/// One position as handed to a guest: the account's shared balance plus the named shard, and
+/// nothing else of the account.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct Input {
+    pub account_id: AccountId,
+    pub is_authorized: bool,
+    pub balance: Balance,
+    pub shard: Option<(AccountId, Data)>,
+}
+
+impl Input {
+    #[must_use]
+    pub const fn named(
+        account_id: AccountId,
+        is_authorized: bool,
+        balance: Balance,
+        program: AccountId,
+        data: Data,
+    ) -> Self {
+        Self {
+            account_id,
+            is_authorized,
+            balance,
+            shard: Some((program, data)),
+        }
+    }
+
+    #[must_use]
+    pub const fn balance_only(
+        account_id: AccountId,
+        is_authorized: bool,
+        balance: Balance,
+    ) -> Self {
+        Self {
+            account_id,
+            is_authorized,
+            balance,
+            shard: None,
+        }
+    }
+
+    #[must_use]
+    pub fn at(position: Position, is_authorized: bool, account: &Account) -> Self {
+        Self {
+            account_id: position.account_id,
+            is_authorized,
+            balance: account.balance,
+            shard: position
+                .program
+                .map(|program| (program, account.shard(program).clone())),
+        }
+    }
+
+    #[must_use]
+    pub fn namespace(&self) -> Option<AccountId> {
+        self.shard.as_ref().map(|(program, _)| *program)
+    }
+
+    /// The named shard, checked to be `program`'s, so a guest handed another namespace reads an
+    /// error rather than an empty shard.
+    #[must_use]
+    pub fn shard_of(&self, program: AccountId) -> &Data {
+        let (named, data) = self.shard.as_ref().expect("Position names no shard");
+        assert_eq!(*named, program, "Position names another namespace");
+        data
+    }
+}
+
+impl From<&Input> for Position {
+    fn from(input: &Input) -> Self {
+        Self {
+            account_id: input.account_id,
+            program: input.namespace(),
+        }
+    }
+}
+
+/// An account minus its nonce, restricted to the namespaces a transaction touched. A touched
+/// namespace the account never held is present here, holding empty [`Data`].
+#[derive(
+    Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub struct AccountView {
+    pub balance: Balance,
+    pub shards: BTreeMap<AccountId, Data>,
 }
 
 #[derive(
@@ -169,10 +310,11 @@ impl AccountWithMetadata {
     PartialEq,
     Eq,
     Hash,
+    PartialOrd,
+    Ord,
     BorshSerialize,
     BorshDeserialize,
 )]
-#[cfg_attr(any(feature = "host", test), derive(PartialOrd, Ord))]
 pub struct AccountId {
     value: [u8; 32],
 }
@@ -252,7 +394,6 @@ pub fn apply_balance_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::DEFAULT_PROGRAM_ID;
 
     #[test]
     fn zero_balance_account_data_creation() {
@@ -269,36 +410,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_data_account_data_creation() {
+    fn default_account_has_no_shards() {
         let new_acc = Account::default();
 
-        assert!(new_acc.data.is_empty());
-    }
-
-    #[test]
-    fn default_program_owner_account_data_creation() {
-        let new_acc = Account::default();
-
-        assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_ID.into());
-    }
-
-    #[cfg(feature = "host")]
-    #[test]
-    fn account_with_metadata_constructor() {
-        let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-            balance: 1337,
-            data: b"testing_account_with_metadata_constructor"
-                .to_vec()
-                .try_into()
-                .unwrap(),
-            nonce: Nonce(0xdead_beef),
-        };
-        let fingerprint = AccountId::new([8; 32]);
-        let new_acc_with_metadata = AccountWithMetadata::new(account.clone(), true, fingerprint);
-        assert_eq!(new_acc_with_metadata.account, account);
-        assert!(new_acc_with_metadata.is_authorized);
-        assert_eq!(new_acc_with_metadata.account_id, fingerprint);
+        assert!(new_acc.shards.is_empty());
     }
 
     #[cfg(feature = "host")]
@@ -457,12 +572,174 @@ mod tests {
     }
 
     #[test]
-    fn account_diff_unchanged_has_no_balance_or_data_change() {
-        let id = AccountId::new([7; 32]);
-        let diff = PostStateEffects::new_unchanged(id);
+    fn splice_prunes_an_emptied_shard() {
+        let program = AccountId::new([3; 32]);
+        let mut account = Account {
+            balance: 10,
+            ..Account::default()
+        }
+        .with_shard(program, b"record".to_vec().try_into().unwrap());
 
-        assert_eq!(diff.id, id);
-        assert!(diff.diff_balance.is_none());
-        assert!(diff.new_data.is_none());
+        account
+            .splice(&ShardStateDiff::new(
+                Input::named(
+                    AccountId::new([1; 32]),
+                    true,
+                    10,
+                    program,
+                    b"record".to_vec().try_into().unwrap(),
+                ),
+                BalanceDiff::Sub(3),
+                Data::empty(),
+            ))
+            .unwrap();
+
+        assert!(!account.shards.contains_key(&program));
+        assert_eq!(
+            account,
+            Account {
+                balance: 7,
+                ..Account::default()
+            }
+        );
+    }
+
+    #[test]
+    fn set_shard_keeps_the_encoding_canonical() {
+        let program = AccountId::new([3; 32]);
+        let mut account = Account::default();
+
+        account.set_shard(program, b"record".to_vec().try_into().unwrap());
+        account.set_shard(program, Data::empty());
+
+        assert_eq!(account.to_bytes(), Account::default().to_bytes());
+    }
+
+    #[test]
+    fn input_at_reads_a_vacant_shard_as_empty() {
+        let account_id = AccountId::new([1; 32]);
+        let program = AccountId::new([3; 32]);
+        let account = Account {
+            balance: 42,
+            ..Account::default()
+        };
+
+        let input = Input::at(Position::new(account_id, program), true, &account);
+
+        assert_eq!(input.balance, 42);
+        assert_eq!(input.namespace(), Some(program));
+        assert!(input.shard_of(program).is_empty());
+    }
+
+    #[test]
+    fn input_at_of_a_balance_only_position_carries_no_shard() {
+        let account_id = AccountId::new([1; 32]);
+        let account = Account {
+            balance: 42,
+            ..Account::default()
+        }
+        .with_shard(
+            AccountId::new([3; 32]),
+            b"record".to_vec().try_into().unwrap(),
+        );
+
+        let input = Input::at(Position::balance_only(account_id), false, &account);
+
+        assert_eq!(input.balance, 42);
+        assert_eq!(input.namespace(), None);
+        assert!(input.shard.is_none());
+    }
+
+    #[test]
+    fn position_of_an_input_drops_what_it_holds() {
+        let account_id = AccountId::new([1; 32]);
+        let program = AccountId::new([3; 32]);
+        let named = Input::named(
+            account_id,
+            true,
+            5,
+            program,
+            b"record".to_vec().try_into().unwrap(),
+        );
+        let balance_only = Input::balance_only(account_id, true, 5);
+
+        assert_eq!(Position::from(&named), Position::new(account_id, program));
+        assert_eq!(
+            Position::from(&balance_only),
+            Position::balance_only(account_id)
+        );
+    }
+
+    #[test]
+    fn project_reads_absent_namespaces_as_empty() {
+        let held = AccountId::new([3; 32]);
+        let absent = AccountId::new([4; 32]);
+        let account = Account {
+            balance: 9,
+            ..Account::default()
+        }
+        .with_shard(held, b"record".to_vec().try_into().unwrap());
+
+        let view = account.project([held, absent]);
+
+        assert_eq!(view.balance, 9);
+        assert_eq!(view.shards.get(&absent), Some(&Data::empty()));
+        assert_eq!(view.shards.len(), 2);
+    }
+
+    #[test]
+    fn apply_keeps_the_nonce_and_prunes_emptied_shards() {
+        let program = AccountId::new([3; 32]);
+        let mut account = Account {
+            balance: 9,
+            nonce: Nonce(7),
+            ..Account::default()
+        }
+        .with_shard(program, b"record".to_vec().try_into().unwrap());
+
+        account.apply(&AccountView {
+            balance: 1,
+            shards: [(program, Data::empty())].into(),
+        });
+
+        assert_eq!(account.nonce, Nonce(7));
+        assert_eq!(account.balance, 1);
+        assert!(account.shards.is_empty());
+    }
+
+    #[test]
+    fn project_then_apply_is_identity_on_the_touched_namespaces() {
+        let touched = AccountId::new([3; 32]);
+        let untouched = AccountId::new([4; 32]);
+        let account = Account {
+            balance: 9,
+            nonce: Nonce(7),
+            ..Account::default()
+        }
+        .with_shard(touched, b"record".to_vec().try_into().unwrap())
+        .with_shard(untouched, b"other".to_vec().try_into().unwrap());
+
+        let mut applied = account.clone();
+        applied.apply(&account.project([touched]));
+
+        assert_eq!(applied, account);
+    }
+
+    #[test]
+    fn an_account_with_a_shard_round_trips_through_json() {
+        let account = Account {
+            balance: 9,
+            nonce: Nonce(7),
+            ..Account::default()
+        }
+        .with_shard(
+            AccountId::new([3; 32]),
+            b"record".to_vec().try_into().unwrap(),
+        );
+
+        let json = serde_json::to_string(&account).unwrap();
+        let restored: Account = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(account, restored);
     }
 }

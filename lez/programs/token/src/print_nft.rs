@@ -1,26 +1,27 @@
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff, Data},
-    program::AccountStateDiff,
+    account::{AccountId, BalanceDiff, Data, Input},
+    program::ShardStateDiff,
 };
 use token_core::TokenHolding;
 
 #[must_use]
 pub fn print_nft(
-    master_account: &AccountWithMetadata,
-    printed_account: &AccountWithMetadata,
-) -> Vec<AccountStateDiff> {
+    master_account: &Input,
+    printed_account: &Input,
+    self_account_id: AccountId,
+) -> Vec<ShardStateDiff> {
     assert!(
         master_account.is_authorized,
         "Master NFT Account must be authorized"
     );
 
     assert!(
-        printed_account.account.data.is_empty(),
+        printed_account.shard_of(self_account_id).is_empty(),
         "Printed Account must not already hold data"
     );
 
-    let mut master_account_data =
-        TokenHolding::try_from(&master_account.account.data).expect("Invalid Token Holding data");
+    let mut master_account_data = TokenHolding::try_from(master_account.shard_of(self_account_id))
+        .expect("Invalid Token Holding data");
 
     let TokenHolding::NftMaster {
         definition_id,
@@ -38,13 +39,13 @@ pub fn print_nft(
     );
     *print_balance = print_balance.checked_sub(1).expect("Checked above");
 
-    let master_diff = AccountStateDiff::new(
+    let master_diff = ShardStateDiff::new(
         master_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&master_account_data),
     );
 
-    let printed_diff = AccountStateDiff::new(
+    let printed_diff = ShardStateDiff::new(
         printed_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&TokenHolding::NftPrintedCopy {

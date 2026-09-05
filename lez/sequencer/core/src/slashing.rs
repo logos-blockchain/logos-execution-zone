@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use kameo::actor::ActorRef;
-use lee::{AccountId, PublicTransaction, public_transaction::Message};
+use lee::{AccountId, Position, PublicTransaction, public_transaction::Message};
 use log::{error, warn};
 use sequencer_stake_core::{SequencerKey, SlashApproval};
 use sequencer_storage_actor::{
@@ -165,10 +165,13 @@ pub(crate) fn build_slash_tx(
     let message = Message::try_new(
         program_id,
         vec![
-            ownership_id,
-            system_accounts::stake_funds_account_id(&ownership_id),
-            sequencer_stake_core::slash_sink_account_id(program_id),
-            system_accounts::sequencer_stake_config_account_id(),
+            Position::new(ownership_id, program_id),
+            Position::balance_only(system_accounts::stake_funds_account_id(&ownership_id)),
+            Position::balance_only(sequencer_stake_core::slash_sink_account_id(program_id)),
+            Position::new(
+                system_accounts::sequencer_stake_config_account_id(),
+                program_id,
+            ),
         ],
         vec![],
         sequencer_stake_core::Instruction::Slash {
@@ -232,9 +235,10 @@ mod tests {
 
     /// State whose config account accredits `key` with a stake to burn.
     fn state_staking(key: SequencerKey, ownership_id: AccountId) -> lee::V03State {
-        let config = Account {
-            program_owner: programs::sequencer_stake().id().into(),
-            data: SequencerStakeConfig {
+        let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
+        let config = Account::default().with_shard(
+            sequencer_stake_program_id,
+            SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {
                     minimum_sequencer_stake: 1,
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
@@ -253,8 +257,7 @@ mod tests {
             .to_bytes()
             .try_into()
             .expect("config fits"),
-            ..Account::default()
-        };
+        );
         lee::V03State::new()
             .with_public_accounts([(system_accounts::sequencer_stake_config_account_id(), config)])
     }

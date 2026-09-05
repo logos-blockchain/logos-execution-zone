@@ -37,9 +37,12 @@
 //! - `flash_swap_self_call_targets_correct_program`: zero-amount self-call isolation test
 //! - `flash_swap_standalone_invariant_check_rejected`: `caller_account_id` access control
 
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::Position,
+    program::{
+        ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -92,7 +95,7 @@ fn main() {
             };
 
             // Capture initial vault balance, the invariant check will verify it is restored.
-            let min_vault_balance = vault_pre.account.balance;
+            let min_vault_balance = vault_pre.balance;
 
             // Chained call 1: Token transfer (vault → receiver).
             // The vault is a PDA of this initiator program (seed = [0_u8; 32]), so we provide
@@ -101,7 +104,7 @@ fn main() {
                 borsh::to_vec(&amount_out).expect("transfer instruction serialization");
             let call_1 = ChainedCall {
                 program_account_id: token_program_id,
-                pre_state_ids: vec![vault_pre.account_id, receiver_pre.account_id],
+                positions: vec![Position::from(&vault_pre), Position::from(&receiver_pre)],
                 instruction_data: transfer_instruction,
                 pda_seeds: vec![PdaSeed::new([0_u8; 32])],
             };
@@ -110,7 +113,7 @@ fn main() {
             // etc.) and is expected to return funds to the vault.
             let call_2 = ChainedCall {
                 program_account_id: callback_program_id,
-                pre_state_ids: vec![vault_pre.account_id, receiver_pre.account_id],
+                positions: vec![Position::from(&vault_pre), Position::from(&receiver_pre)],
                 instruction_data: callback_instruction_data,
                 pda_seeds: vec![],
             };
@@ -126,7 +129,7 @@ fn main() {
                     .expect("invariant instruction serialization");
             let call_3 = ChainedCall {
                 program_account_id: self_account_id, // self-referential chained call
-                pre_state_ids: vec![vault_pre.account_id],
+                positions: vec![Position::from(&vault_pre)],
                 instruction_data: invariant_instruction,
                 pda_seeds: vec![],
             };
@@ -138,8 +141,8 @@ fn main() {
                 caller_account_id,
                 instruction_data,
                 vec![
-                    AccountStateDiff::unchanged(vault_pre),
-                    AccountStateDiff::unchanged(receiver_pre),
+                    ShardStateDiff::unchanged(vault_pre),
+                    ShardStateDiff::unchanged(receiver_pre),
                 ],
             )
             .with_chained_calls(vec![call_1, call_2, call_3])
@@ -167,9 +170,9 @@ fn main() {
             // If the callback returned funds, this passes. If not, this panics and
             // the entire transaction (including the prior token transfer) rolls back.
             assert!(
-                vault.account.balance >= min_vault_balance,
+                vault.balance >= min_vault_balance,
                 "Flash swap invariant violated: vault balance {} < minimum {}",
-                vault.account.balance,
+                vault.balance,
                 min_vault_balance
             );
 
@@ -178,7 +181,7 @@ fn main() {
                 self_account_id,
                 caller_account_id,
                 instruction_data,
-                vec![AccountStateDiff::unchanged(vault)],
+                vec![ShardStateDiff::unchanged(vault)],
             )
             .write();
         }

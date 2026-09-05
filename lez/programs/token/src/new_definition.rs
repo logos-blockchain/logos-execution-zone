@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff, Data},
-    program::AccountStateDiff,
+    account::{AccountId, BalanceDiff, Data, Input},
+    program::ShardStateDiff,
 };
 use token_core::{
     NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding, TokenMetadata,
@@ -8,18 +8,21 @@ use token_core::{
 
 #[must_use]
 pub fn new_fungible_definition(
-    definition_target_account: &AccountWithMetadata,
-    holding_target_account: &AccountWithMetadata,
+    definition_target_account: &Input,
+    holding_target_account: &Input,
+    self_account_id: AccountId,
     name: String,
     total_supply: u128,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
-        definition_target_account.account.data.is_empty(),
+        definition_target_account
+            .shard_of(self_account_id)
+            .is_empty(),
         "Definition target account must not already hold data"
     );
 
     assert!(
-        holding_target_account.account.data.is_empty(),
+        holding_target_account.shard_of(self_account_id).is_empty(),
         "Holding target account must not already hold data"
     );
 
@@ -33,13 +36,13 @@ pub fn new_fungible_definition(
         balance: total_supply,
     };
 
-    let definition_diff = AccountStateDiff::new(
+    let definition_diff = ShardStateDiff::new(
         definition_target_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&token_definition),
     );
 
-    let holding_diff = AccountStateDiff::new(
+    let holding_diff = ShardStateDiff::new(
         holding_target_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&token_holding),
@@ -50,24 +53,27 @@ pub fn new_fungible_definition(
 
 #[must_use]
 pub fn new_definition_with_metadata(
-    definition_target_account: &AccountWithMetadata,
-    holding_target_account: &AccountWithMetadata,
-    metadata_target_account: &AccountWithMetadata,
+    definition_target_account: &Input,
+    holding_target_account: &Input,
+    metadata_target_account: &Input,
+    self_account_id: AccountId,
     new_definition: NewTokenDefinition,
     metadata: NewTokenMetadata,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
-        definition_target_account.account.data.is_empty(),
+        definition_target_account
+            .shard_of(self_account_id)
+            .is_empty(),
         "Definition target account must not already hold data"
     );
 
     assert!(
-        holding_target_account.account.data.is_empty(),
+        holding_target_account.shard_of(self_account_id).is_empty(),
         "Holding target account must not already hold data"
     );
 
     assert!(
-        metadata_target_account.account.data.is_empty(),
+        metadata_target_account.shard_of(self_account_id).is_empty(),
         "Metadata target account must not already hold data"
     );
 
@@ -107,19 +113,19 @@ pub fn new_definition_with_metadata(
         primary_sale_date: 0_u64, // TODO #261: future works to implement this
     };
 
-    let definition_diff = AccountStateDiff::new(
+    let definition_diff = ShardStateDiff::new(
         definition_target_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&token_definition),
     );
 
-    let holding_diff = AccountStateDiff::new(
+    let holding_diff = ShardStateDiff::new(
         holding_target_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&token_holding),
     );
 
-    let metadata_diff = AccountStateDiff::new(
+    let metadata_diff = ShardStateDiff::new(
         metadata_target_account.clone(),
         BalanceDiff::Add(0),
         Data::from(&token_metadata),

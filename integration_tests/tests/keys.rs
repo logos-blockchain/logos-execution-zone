@@ -155,9 +155,9 @@ async fn restore_keys_from_seed() -> Result<()> {
     assert_public_account_restored(&ctx, to_account_id3, "Acc 3");
     assert_public_account_restored(&ctx, to_account_id4, "Acc 4");
 
-    // Funding does not write data, so recipients stays unowned.
-    assert_eq!(acc1.account.program_owner, lee::AccountId::default());
-    assert_eq!(acc2.account.program_owner, lee::AccountId::default());
+    // Funding does not write data, so recipients hold no shard.
+    assert!(acc1.account.shards.is_empty());
+    assert!(acc2.account.shards.is_empty());
 
     assert_eq!(acc1.account.balance, 100);
     assert_eq!(acc2.account.balance, 101);

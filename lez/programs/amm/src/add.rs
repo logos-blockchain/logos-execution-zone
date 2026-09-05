@@ -2,27 +2,29 @@ use std::num::NonZeroU128;
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed};
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountStateDiff, ChainedCall},
+    account::{AccountId, BalanceDiff, Data, Input, Position},
+    program::{ChainedCall, ShardStateDiff},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn add_liquidity(
-    pool: &AccountWithMetadata,
-    vault_a: &AccountWithMetadata,
-    vault_b: &AccountWithMetadata,
-    pool_definition_lp: &AccountWithMetadata,
-    user_holding_a: &AccountWithMetadata,
-    user_holding_b: &AccountWithMetadata,
-    user_holding_lp: &AccountWithMetadata,
+    pool: &Input,
+    vault_a: &Input,
+    vault_b: &Input,
+    pool_definition_lp: &Input,
+    user_holding_a: &Input,
+    user_holding_b: &Input,
+    user_holding_lp: &Input,
     min_amount_liquidity: NonZeroU128,
     max_amount_to_add_token_a: u128,
     max_amount_to_add_token_b: u128,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+    self_account_id: AccountId,
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     // 1. Fetch Pool state
-    let pool_def_data = PoolDefinition::try_from(&pool.account.data)
+    let pool_def_data = PoolDefinition::try_from(pool.shard_of(self_account_id))
         .expect("Add liquidity: AMM Program expects valid Pool Definition Account");
+    let token_program_id = pool_def_data.token_program_id;
 
     assert_eq!(
         vault_a.account_id, pool_def_data.vault_a_id,
@@ -45,8 +47,9 @@ pub fn add_liquidity(
     );
 
     // 2. Determine deposit amount
-    let vault_b_token_holding = token_core::TokenHolding::try_from(&vault_b.account.data)
-        .expect("Add liquidity: AMM Program expects valid Token Holding Account for Vault B");
+    let vault_b_token_holding =
+        token_core::TokenHolding::try_from(vault_b.shard_of(token_program_id))
+            .expect("Add liquidity: AMM Program expects valid Token Holding Account for Vault B");
     let token_core::TokenHolding::Fungible {
         definition_id: _,
         balance: vault_b_balance,
@@ -57,8 +60,9 @@ pub fn add_liquidity(
         );
     };
 
-    let vault_a_token_holding = token_core::TokenHolding::try_from(&vault_a.account.data)
-        .expect("Add liquidity: AMM Program expects valid Token Holding Account for Vault A");
+    let vault_a_token_holding =
+        token_core::TokenHolding::try_from(vault_a.shard_of(token_program_id))
+            .expect("Add liquidity: AMM Program expects valid Token Holding Account for Vault A");
     let token_core::TokenHolding::Fungible {
         definition_id: _,
         balance: vault_a_balance,
@@ -131,12 +135,10 @@ pub fn add_liquidity(
         ..pool_def_data
     };
 
-    let token_program_id: AccountId = user_holding_a.account.program_owner;
-
     // Chain call for Token A (UserHoldingA -> Vault_A)
     let call_token_a = ChainedCall::new(
         token_program_id,
-        vec![user_holding_a.account_id, vault_a.account_id],
+        vec![Position::from(user_holding_a), Position::from(vault_a)],
         &token_core::Instruction::Transfer {
             amount_to_transfer: actual_amount_a,
         },
@@ -144,7 +146,7 @@ pub fn add_liquidity(
     // Chain call for Token B (UserHoldingB -> Vault_B)
     let call_token_b = ChainedCall::new(
         token_program_id,
-        vec![user_holding_b.account_id, vault_b.account_id],
+        vec![Position::from(user_holding_b), Position::from(vault_b)],
         &token_core::Instruction::Transfer {
             amount_to_transfer: actual_amount_b,
         },
@@ -152,7 +154,10 @@ pub fn add_liquidity(
     // Chain call for LP (mint new tokens for user_holding_lp)
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_definition_lp.account_id, user_holding_lp.account_id],
+        vec![
+            Position::from(pool_definition_lp),
+            Position::from(user_holding_lp),
+        ],
         &token_core::Instruction::Mint {
             amount_to_mint: delta_lp,
         },
@@ -162,17 +167,17 @@ pub fn add_liquidity(
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_diffs = vec![
-        AccountStateDiff::new(
+        ShardStateDiff::new(
             pool.clone(),
             BalanceDiff::Add(0),
             Data::from(&pool_post_definition),
         ),
-        AccountStateDiff::unchanged(vault_a.clone()),
-        AccountStateDiff::unchanged(vault_b.clone()),
-        AccountStateDiff::unchanged(pool_definition_lp.clone()),
-        AccountStateDiff::unchanged(user_holding_a.clone()),
-        AccountStateDiff::unchanged(user_holding_b.clone()),
-        AccountStateDiff::unchanged(user_holding_lp.clone()),
+        ShardStateDiff::unchanged(vault_a.clone()),
+        ShardStateDiff::unchanged(vault_b.clone()),
+        ShardStateDiff::unchanged(pool_definition_lp.clone()),
+        ShardStateDiff::unchanged(user_holding_a.clone()),
+        ShardStateDiff::unchanged(user_holding_b.clone()),
+        ShardStateDiff::unchanged(user_holding_lp.clone()),
     ];
 
     (post_diffs, chained_calls)

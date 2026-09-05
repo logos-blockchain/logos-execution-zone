@@ -1,7 +1,7 @@
 use lee_core::{
     account::BalanceDiff,
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -9,13 +9,10 @@ use lee_core::{
 // Hello-world example program.
 //
 // This program reads an arbitrary sequence of bytes as its instruction
-// and appends those bytes to the `data` field of the single input account.
+// and appends those bytes to this program's own shard on the single input account.
 //
-// Execution succeeds only if the input account is either:
-// - uninitialized, or
-// - already owned by this program.
-//
-// Writing data to an unowned input account is what makes this program its owner.
+// A program may always read and write its own shard on an account, whatever else the
+// account holds.
 //
 // The updated account is emitted as the sole post-state.
 
@@ -44,15 +41,15 @@ fn main() {
 
     // Construct the new data value: the existing data with the greeting appended.
     let new_data = {
-        let mut bytes = pre_state.account.data.clone().into_inner();
+        let mut bytes = pre_state.shard_of(self_account_id).clone().into_inner();
         bytes.extend_from_slice(&greeting);
         bytes
             .try_into()
             .expect("Data should fit within the allowed limits")
     };
 
-    // Wrap the diff inside an `AccountStateDiff` instance.
-    let post_state = AccountStateDiff::new(pre_state, BalanceDiff::Add(0), new_data);
+    // Wrap the diff inside a `ShardStateDiff` instance.
+    let post_state = ShardStateDiff::new(pre_state, BalanceDiff::Add(0), new_data);
 
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms

@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee::{AccountId, V03State, ValidatedStateDiff};
+use lee::{AccountId, Position, V03State, ValidatedStateDiff};
 use lee_core::{BlockId, Timestamp, program::TransactionEvent};
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -189,7 +189,9 @@ pub struct TxEvents {
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
         programs::clock().id().into(),
-        clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
+        clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
+            .map(|id| Position::new(id, programs::clock().id().into()))
+            .to_vec(),
         vec![],
         timestamp,
     )
@@ -290,11 +292,18 @@ pub fn fee_invocation(
     summary: fee_core::BlockFeeSummary,
     producer: lee::AccountId,
 ) -> lee::PublicTransaction {
-    let mut account_ids = system_accounts::fee_account_ids().to_vec();
-    account_ids.push(producer); // this is the 4th account
+    let fee_program_id: AccountId = programs::fee().id().into();
+    // The fee program reads its state record; the escrow, the inbox and the producer move
+    // balance only.
+    let positions = vec![
+        Position::new(system_accounts::fee_state_account_id(), fee_program_id),
+        Position::balance_only(system_accounts::fee_escrow_account_id()),
+        Position::balance_only(system_accounts::fee_inbox_account_id()),
+        Position::balance_only(producer),
+    ];
     let message = lee::public_transaction::Message::try_new(
-        programs::fee().id().into(),
-        account_ids,
+        fee_program_id,
+        positions,
         vec![],
         fee_core::Instruction::Distribute(summary),
     )
@@ -310,10 +319,10 @@ pub fn fee_invocation(
 pub fn fee_invocation_producer(fee_tx: &lee::PublicTransaction) -> Option<lee::AccountId> {
     fee_tx
         .message()
-        .account_ids
-        // get the 4th account, which is the producer
-        .get(system_accounts::fee_account_ids().len())
-        .copied()
+        .positions
+        // the producer is the fourth position `fee_invocation` builds
+        .get(3)
+        .map(|position| position.account_id)
 }
 
 /// Validates that the block reward target is not a restricted system account.
@@ -348,7 +357,10 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
     // itself, instead of fixing the auth transfer program here
     lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id().into(),
-        vec![payer, system_accounts::fee_inbox_account_id()],
+        vec![
+            Position::balance_only(payer),
+            Position::balance_only(system_accounts::fee_inbox_account_id()),
+        ],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
     )
@@ -358,12 +370,15 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
 /// The fee refund: return `amount` from the fee inbox to `payer`.
 ///
 /// Runs the fee program as a fee-settlement invocation needing no authorization
-/// — the fee program owns the inbox it debits.
+/// — the inbox PDA's seed is the fee program's own.
 #[must_use]
 pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
     lee::public_transaction::Message::try_new(
         programs::fee().id().into(),
-        vec![system_accounts::fee_inbox_account_id(), payer],
+        vec![
+            Position::balance_only(system_accounts::fee_inbox_account_id()),
+            Position::balance_only(payer),
+        ],
         vec![],
         fee_core::Instruction::Refund { amount },
     )
@@ -464,8 +479,8 @@ mod tests {
 
     #[test]
     fn a_restricted_system_account_is_not_a_valid_reward_target() {
-        // A plain account is a fine reward target, claimed or not — a producer
-        // picks its own payout account.
+        // A plain account is a fine reward target — a producer picks its own
+        // payout account.
         validate_reward_target(AccountId::new([1; 32]))
             .expect("an ordinary account is a valid reward target");
 

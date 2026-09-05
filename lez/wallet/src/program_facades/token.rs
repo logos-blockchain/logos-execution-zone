@@ -18,12 +18,16 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_pub_tx(
-                vec![definition, supply],
+                vec![
+                    definition.in_namespace(token_program_id),
+                    supply.in_namespace(token_program_id),
+                ],
                 instruction_data,
-                programs::token().id().into(),
+                token_program_id,
             )
             .await
     }
@@ -38,14 +42,16 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(definition_account_id),
+                    AccountIdentity::Public(definition_account_id).in_namespace(token_program_id),
                     self.0
                         .resolve_private_account(supply_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -70,14 +76,16 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::Public(supply_account_id),
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
+                    AccountIdentity::Public(supply_account_id).in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -102,16 +110,19 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                     self.0
                         .resolve_private_account(supply_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -136,12 +147,16 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_pub_tx(
-                vec![sender, recipient],
+                vec![
+                    sender.in_namespace(token_program_id),
+                    recipient.in_namespace(token_program_id),
+                ],
                 instruction_data,
-                programs::token().id().into(),
+                token_program_id,
             )
             .await
     }
@@ -157,16 +172,19 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
                     self.0
                         .resolve_private_account(sender_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                     self.0
                         .resolve_private_account(recipient_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -193,18 +211,21 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
                     self.0
                         .resolve_private_account(sender_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                     AccountIdentity::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
                         identifier: recipient_identifier,
-                    },
+                    }
+                    .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -229,14 +250,16 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
                     self.0
                         .resolve_private_account(sender_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::Public(recipient_account_id),
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
+                    AccountIdentity::Public(recipient_account_id).in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -262,13 +285,15 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    sender,
+                    sender.in_namespace(token_program_id),
                     self.0
                         .resolve_private_account(recipient_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -296,15 +321,17 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    sender,
+                    sender.in_namespace(token_program_id),
                     AccountIdentity::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
                         identifier: recipient_identifier,
-                    },
+                    }
+                    .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -330,12 +357,17 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_pub_tx(
-                vec![AccountIdentity::PublicNoSign(definition_account_id), holder],
+                vec![
+                    AccountIdentity::PublicNoSign(definition_account_id)
+                        .in_namespace(token_program_id),
+                    holder.in_namespace(token_program_id),
+                ],
                 instruction_data,
-                programs::token().id().into(),
+                token_program_id,
             )
             .await
     }
@@ -351,16 +383,19 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                     self.0
                         .resolve_private_account(holder_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -385,14 +420,16 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::Public(holder_account_id),
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
+                    AccountIdentity::Public(holder_account_id).in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -418,14 +455,16 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(definition_account_id),
+                    AccountIdentity::Public(definition_account_id).in_namespace(token_program_id),
                     self.0
                         .resolve_private_account(holder_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -451,12 +490,16 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_pub_tx(
-                vec![definition, holder],
+                vec![
+                    definition.in_namespace(token_program_id),
+                    holder.in_namespace(token_program_id),
+                ],
                 instruction_data,
-                programs::token().id().into(),
+                token_program_id,
             )
             .await
     }
@@ -472,16 +515,19 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                     self.0
                         .resolve_private_account(holder_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -508,18 +554,21 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                     AccountIdentity::PrivateForeign {
                         npk: holder_npk,
                         vpk: holder_vpk,
                         identifier: holder_identifier,
-                    },
+                    }
+                    .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -544,14 +593,16 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
                     self.0
                         .resolve_private_account(definition_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::Public(holder_account_id),
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
+                    AccountIdentity::Public(holder_account_id).in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -577,14 +628,16 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(definition_account_id),
+                    AccountIdentity::Public(definition_account_id).in_namespace(token_program_id),
                     self.0
                         .resolve_private_account(holder_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),
@@ -612,16 +665,18 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let token_program_id: AccountId = programs::token().id().into();
 
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(definition_account_id),
+                    AccountIdentity::Public(definition_account_id).in_namespace(token_program_id),
                     AccountIdentity::PrivateForeign {
                         npk: holder_npk,
                         vpk: holder_vpk,
                         identifier: holder_identifier,
-                    },
+                    }
+                    .in_namespace(token_program_id),
                 ],
                 instruction_data,
                 &programs::token().into(),

@@ -1,7 +1,7 @@
 use lee_core::{
     account::BalanceDiff,
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -31,7 +31,7 @@ fn main() {
     let post_data = data
         .try_into()
         .expect("provided data should fit into data limit");
-    let diff_output = AccountStateDiff::new(pre, BalanceDiff::Add(0), post_data);
+    let diff_output = ShardStateDiff::new(pre, BalanceDiff::Add(0), post_data);
 
     ProgramOutput::new(
         self_account_id,

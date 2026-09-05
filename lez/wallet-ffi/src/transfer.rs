@@ -32,8 +32,9 @@ fn optional_c_str(ptr: *const c_char) -> Option<String> {
 ///
 /// Transfers tokens from one public account to another on the network.
 ///
-/// If `to` is a fresh, unclaimed account whose key this wallet holds, the
-/// transfer also signs with that key and claims the account.
+/// Only the two balances move; neither position names a program's record. If this wallet holds
+/// `to`'s key the transfer signs with it too, which authorizes but does not otherwise change the
+/// destination.
 ///
 /// # Parameters
 /// - `handle`: Valid wallet handle

@@ -392,7 +392,7 @@ fn open_with(home: &Path, filter: EventFilter) -> IndexerStore {
     IndexerStore::open_db(
         home,
         true,
-        vec![common::test_utils::claimed_producer_seed()],
+        vec![common::test_utils::producer_seed()],
         filter,
     )
     .expect("open store")
@@ -506,7 +506,7 @@ fn settled_test_block(
 #[cfg(test)]
 fn claimed_build_state() -> lee::V03State {
     testnet_initial_state::initial_state(true)
-        .with_public_accounts([common::test_utils::claimed_producer_seed()])
+        .with_public_accounts([common::test_utils::producer_seed()])
 }
 
 #[cfg(test)]
@@ -514,6 +514,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
+    use lee::Position;
     use lee_core::program::{InstructionData, ProgramEvent};
     use storage::{DBIO as _, indexer::indexer_cells::EventFilterSegmentsCellOwned};
     use tempfile::tempdir;
@@ -559,7 +560,10 @@ mod tests {
 
         let segment_message = lee::public_transaction::Message::try_new_with_fees(
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-            vec![segment_id],
+            vec![Position::new(
+                segment_id,
+                lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            )],
             vec![lee_core::account::Nonce(0), lee_core::account::Nonce(0)],
             program_loader_core::Instruction::WriteSegment {
                 bytecode: test_methods::EVENT_EMITTER_ELF.to_vec(),
@@ -579,7 +583,10 @@ mod tests {
 
         let header_message = lee::public_transaction::Message::try_new_with_fees(
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-            vec![header_id, segment_id],
+            vec![
+                Position::new(header_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+                Position::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+            ],
             vec![lee_core::account::Nonce(0), lee_core::account::Nonce(1)],
             program_loader_core::Instruction::CreateHeader {
                 first_segment: segment_id,
@@ -605,7 +612,7 @@ mod tests {
         let payer = &initial_pub_accounts_private_keys()[0];
         let message = lee::public_transaction::Message::try_new_with_fees(
             emitter_header_account_id(),
-            vec![AccountId::new([42; 32])],
+            vec![Position::balance_only(AccountId::new([42; 32]))],
             vec![2_u128.into()],
             EmitterInstruction {
                 events,
@@ -1186,6 +1193,7 @@ mod tests {
 #[cfg(test)]
 mod accept_tests {
     use common::{HashType, block::HashableBlockData, test_utils::produce_dummy_block};
+    use lee::Position;
 
     use super::*;
 
@@ -1580,8 +1588,8 @@ mod accept_tests {
             let message = lee::public_transaction::Message::try_new(
                 programs::bridge().id().into(),
                 vec![
-                    lee::AccountId::new([1_u8; 32]),
-                    lee::AccountId::new([2_u8; 32]),
+                    Position::balance_only(lee::AccountId::new([1_u8; 32])),
+                    Position::balance_only(lee::AccountId::new([2_u8; 32])),
                 ],
                 vec![],
                 bridge_core::Instruction::Deposit {

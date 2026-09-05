@@ -7,7 +7,6 @@ fn transition_from_authenticated_transfer_program_invocation_default_account_des
     let initial_data = [(
         account_id,
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -34,12 +33,11 @@ fn transition_from_authenticated_transfer_program_invocation_default_account_des
 fn transition_from_authenticated_transfer_program_invocation_insuficient_balance() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-    // Owned by the executing program, or UnauthorizedBalanceDecrease fires before
-    // apply_balance_diff gets a chance to.
+    // The sender signs, or UnauthorizedBalanceDecrease fires before apply_balance_diff gets a
+    // chance to.
     let initial_data = [(
         account_id,
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -82,7 +80,6 @@ fn transition_from_authenticated_transfer_program_invocation_non_default_account
         (
             account_id1,
             Account {
-                program_owner: crate::test_methods::simple_balance_transfer().id().into(),
                 balance: 100,
                 ..Account::default()
             },
@@ -90,7 +87,6 @@ fn transition_from_authenticated_transfer_program_invocation_non_default_account
         (
             account_id2,
             Account {
-                program_owner: crate::test_methods::simple_balance_transfer().id().into(),
                 balance: 200,
                 ..Account::default()
             },
@@ -124,7 +120,6 @@ fn transition_from_sequence_of_authenticated_transfer_program_invocations() {
     let initial_data = [(
         account_id1,
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
             balance: 100,
             ..Account::default()
         },

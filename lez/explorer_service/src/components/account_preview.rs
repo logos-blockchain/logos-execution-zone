@@ -17,8 +17,9 @@ pub fn AccountPreview(account_id: AccountId, account: Account) -> impl IntoView 
                     </div>
                 </div>
                 {move || {
-                    let Account { program_owner, balance, data, nonce } = &account;
-                    let program_id = program_owner.to_string();
+                    let Account { balance, nonce, shards } = &account;
+                    let shards_len = shards.len();
+                    let shards_bytes: usize = shards.values().map(|data| data.0.len()).sum();
                     view! {
                         <div class="account-preview-body">
                             <div class="account-field">
@@ -26,17 +27,13 @@ pub fn AccountPreview(account_id: AccountId, account: Account) -> impl IntoView 
                                 <span class="field-value">{balance.to_string()}</span>
                             </div>
                             <div class="account-field">
-                                <span class="field-label">"Program: "</span>
-                                <span class="field-value hash">{program_id}</span>
-                            </div>
-                            <div class="account-field">
                                 <span class="field-label">"Nonce: "</span>
                                 <span class="field-value">{nonce.to_string()}</span>
                             </div>
                             <div class="account-field">
-                                <span class="field-label">"Data: "</span>
+                                <span class="field-label">"Shards: "</span>
                                 <span class="field-value">
-                                    {format!("{} bytes", data.0.len())}
+                                    {format!("{shards_len} programs, {shards_bytes} bytes total")}
                                 </span>
                             </div>
                         </div>

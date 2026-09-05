@@ -23,6 +23,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id: AccountId = programs::amm().id().into();
+        let token_program_id: AccountId = programs::token().id().into();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -34,22 +35,26 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let definition_token_a_id = TokenHolding::try_from(&user_a_acc.data)
+        let definition_token_a_id = TokenHolding::try_from(user_a_acc.shard(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(a_id))?
             .definition_id();
-        let definition_token_b_id = TokenHolding::try_from(&user_b_acc.data)
+        let definition_token_b_id = TokenHolding::try_from(user_b_acc.shard(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
-        let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
+        let amm_pool = compute_pool_pda(
+            amm_program_id,
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id,
+        );
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);
         let instruction = amm_core::Instruction::NewDefinition {
             token_a_amount: balance_a,
             token_b_amount: balance_b,
-            amm_program_id,
+            token_program_id,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -57,13 +62,13 @@ impl Amm<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::PublicNoSign(amm_pool),
-                    AccountIdentity::PublicNoSign(vault_holding_a),
-                    AccountIdentity::PublicNoSign(vault_holding_b),
-                    AccountIdentity::PublicNoSign(pool_lp),
-                    user_holding_a,
-                    user_holding_b,
-                    user_holding_lp,
+                    AccountIdentity::PublicNoSign(amm_pool).in_namespace(amm_program_id),
+                    AccountIdentity::PublicNoSign(vault_holding_a).in_namespace(token_program_id),
+                    AccountIdentity::PublicNoSign(vault_holding_b).in_namespace(token_program_id),
+                    AccountIdentity::PublicNoSign(pool_lp).in_namespace(token_program_id),
+                    user_holding_a.in_namespace(token_program_id),
+                    user_holding_b.in_namespace(token_program_id),
+                    user_holding_lp.in_namespace(token_program_id),
                 ],
                 instruction_data,
                 amm_program_id,
@@ -87,6 +92,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id: AccountId = programs::amm().id().into();
+        let token_program_id: AccountId = programs::token().id().into();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -98,15 +104,19 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let definition_token_a_id = TokenHolding::try_from(&user_a_acc.data)
+        let definition_token_a_id = TokenHolding::try_from(user_a_acc.shard(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(a_id))?
             .definition_id();
-        let definition_token_b_id = TokenHolding::try_from(&user_b_acc.data)
+        let definition_token_b_id = TokenHolding::try_from(user_b_acc.shard(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
-        let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
+        let amm_pool = compute_pool_pda(
+            amm_program_id,
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id,
+        );
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let instruction = amm_core::Instruction::SwapExactInput {
@@ -140,11 +150,11 @@ impl Amm<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::PublicNoSign(amm_pool),
-                    AccountIdentity::PublicNoSign(vault_holding_a),
-                    AccountIdentity::PublicNoSign(vault_holding_b),
-                    user_a_signing_identity,
-                    user_b_signing_identity,
+                    AccountIdentity::PublicNoSign(amm_pool).in_namespace(amm_program_id),
+                    AccountIdentity::PublicNoSign(vault_holding_a).in_namespace(token_program_id),
+                    AccountIdentity::PublicNoSign(vault_holding_b).in_namespace(token_program_id),
+                    user_a_signing_identity.in_namespace(token_program_id),
+                    user_b_signing_identity.in_namespace(token_program_id),
                 ],
                 instruction_data,
                 amm_program_id,
@@ -168,6 +178,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id: AccountId = programs::amm().id().into();
+        let token_program_id: AccountId = programs::token().id().into();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -179,15 +190,19 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let definition_token_a_id = TokenHolding::try_from(&user_a_acc.data)
+        let definition_token_a_id = TokenHolding::try_from(user_a_acc.shard(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(a_id))?
             .definition_id();
-        let definition_token_b_id = TokenHolding::try_from(&user_b_acc.data)
+        let definition_token_b_id = TokenHolding::try_from(user_b_acc.shard(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
-        let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
+        let amm_pool = compute_pool_pda(
+            amm_program_id,
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id,
+        );
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let instruction = amm_core::Instruction::SwapExactOutput {
@@ -221,11 +236,11 @@ impl Amm<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::PublicNoSign(amm_pool),
-                    AccountIdentity::PublicNoSign(vault_holding_a),
-                    AccountIdentity::PublicNoSign(vault_holding_b),
-                    user_a_signing_identity,
-                    user_b_signing_identity,
+                    AccountIdentity::PublicNoSign(amm_pool).in_namespace(amm_program_id),
+                    AccountIdentity::PublicNoSign(vault_holding_a).in_namespace(token_program_id),
+                    AccountIdentity::PublicNoSign(vault_holding_b).in_namespace(token_program_id),
+                    user_a_signing_identity.in_namespace(token_program_id),
+                    user_b_signing_identity.in_namespace(token_program_id),
                 ],
                 instruction_data,
                 amm_program_id,
@@ -250,6 +265,7 @@ impl Amm<'_> {
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let amm_program_id: AccountId = programs::amm().id().into();
+        let token_program_id: AccountId = programs::token().id().into();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -261,15 +277,19 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let definition_token_a_id = TokenHolding::try_from(&user_a_acc.data)
+        let definition_token_a_id = TokenHolding::try_from(user_a_acc.shard(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(a_id))?
             .definition_id();
-        let definition_token_b_id = TokenHolding::try_from(&user_b_acc.data)
+        let definition_token_b_id = TokenHolding::try_from(user_b_acc.shard(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
-        let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
+        let amm_pool = compute_pool_pda(
+            amm_program_id,
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id,
+        );
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);
@@ -284,13 +304,13 @@ impl Amm<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::PublicNoSign(amm_pool),
-                    AccountIdentity::PublicNoSign(vault_holding_a),
-                    AccountIdentity::PublicNoSign(vault_holding_b),
-                    AccountIdentity::PublicNoSign(pool_lp),
-                    user_holding_a,
-                    user_holding_b,
-                    user_holding_lp,
+                    AccountIdentity::PublicNoSign(amm_pool).in_namespace(amm_program_id),
+                    AccountIdentity::PublicNoSign(vault_holding_a).in_namespace(token_program_id),
+                    AccountIdentity::PublicNoSign(vault_holding_b).in_namespace(token_program_id),
+                    AccountIdentity::PublicNoSign(pool_lp).in_namespace(token_program_id),
+                    user_holding_a.in_namespace(token_program_id),
+                    user_holding_b.in_namespace(token_program_id),
+                    user_holding_lp.in_namespace(token_program_id),
                 ],
                 instruction_data,
                 amm_program_id,
@@ -308,6 +328,7 @@ impl Amm<'_> {
         min_amount_to_remove_token_b: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
         let amm_program_id: AccountId = programs::amm().id().into();
+        let token_program_id: AccountId = programs::token().id().into();
         let user_a_acc = self
             .0
             .get_account_public(user_holding_a)
@@ -319,15 +340,19 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let definition_token_a_id = TokenHolding::try_from(&user_a_acc.data)
+        let definition_token_a_id = TokenHolding::try_from(user_a_acc.shard(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(user_holding_a))?
             .definition_id();
-        let definition_token_b_id = TokenHolding::try_from(&user_b_acc.data)
+        let definition_token_b_id = TokenHolding::try_from(user_b_acc.shard(token_program_id))
             .map_err(|_err| ExecutionFailureKind::AccountDataError(user_holding_b))?
             .definition_id();
 
-        let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
+        let amm_pool = compute_pool_pda(
+            amm_program_id,
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id,
+        );
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);
@@ -342,13 +367,13 @@ impl Amm<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::PublicNoSign(amm_pool),
-                    AccountIdentity::PublicNoSign(vault_holding_a),
-                    AccountIdentity::PublicNoSign(vault_holding_b),
-                    AccountIdentity::PublicNoSign(pool_lp),
-                    AccountIdentity::PublicNoSign(user_holding_a),
-                    AccountIdentity::PublicNoSign(user_holding_b),
-                    user_holding_lp,
+                    AccountIdentity::PublicNoSign(amm_pool).in_namespace(amm_program_id),
+                    AccountIdentity::PublicNoSign(vault_holding_a).in_namespace(token_program_id),
+                    AccountIdentity::PublicNoSign(vault_holding_b).in_namespace(token_program_id),
+                    AccountIdentity::PublicNoSign(pool_lp).in_namespace(token_program_id),
+                    AccountIdentity::PublicNoSign(user_holding_a).in_namespace(token_program_id),
+                    AccountIdentity::PublicNoSign(user_holding_b).in_namespace(token_program_id),
+                    user_holding_lp.in_namespace(token_program_id),
                 ],
                 instruction_data,
                 amm_program_id,

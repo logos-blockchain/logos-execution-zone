@@ -45,7 +45,7 @@ impl PublicTransaction {
             .signer_account_ids()
             .into_iter()
             .collect::<HashSet<_>>();
-        acc_set.extend(&self.message.account_ids);
+        acc_set.extend(self.message.positions.iter().map(|p| p.account_id));
 
         acc_set.into_iter().collect()
     }
@@ -61,6 +61,7 @@ impl PublicTransaction {
 
 #[cfg(test)]
 pub mod tests {
+    use lee_core::account::Position;
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
@@ -92,7 +93,7 @@ pub mod tests {
         let instruction = 1337;
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
-            vec![addr1, addr2],
+            vec![Position::balance_only(addr1), Position::balance_only(addr2)],
             nonces,
             instruction,
         )
@@ -170,7 +171,7 @@ pub mod tests {
         let instruction = 1337;
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
-            vec![addr1, addr1],
+            vec![Position::balance_only(addr1), Position::balance_only(addr1)],
             nonces,
             instruction,
         )
@@ -190,7 +191,7 @@ pub mod tests {
         let instruction = 1337;
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
-            vec![addr1, addr2],
+            vec![Position::balance_only(addr1), Position::balance_only(addr2)],
             nonces,
             instruction,
         )
@@ -210,7 +211,7 @@ pub mod tests {
         let instruction = 1337;
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
-            vec![addr1, addr2],
+            vec![Position::balance_only(addr1), Position::balance_only(addr2)],
             nonces,
             instruction,
         )
@@ -231,7 +232,7 @@ pub mod tests {
         let instruction = 1337;
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
-            vec![addr1, addr2],
+            vec![Position::balance_only(addr1), Position::balance_only(addr2)],
             nonces,
             instruction,
         )
@@ -266,8 +267,13 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let unknown_program_id: AccountId = [0xdead_beef; 8].into();
-        let message =
-            Message::try_new(unknown_program_id, vec![addr1, addr2], nonces, instruction).unwrap();
+        let message = Message::try_new(
+            unknown_program_id,
+            vec![Position::balance_only(addr1), Position::balance_only(addr2)],
+            nonces,
+            instruction,
+        )
+        .unwrap();
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);

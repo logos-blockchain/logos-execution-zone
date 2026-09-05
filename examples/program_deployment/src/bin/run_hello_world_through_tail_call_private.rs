@@ -52,7 +52,9 @@ async fn main() {
     let program_with_dependencies =
         ProgramWithDependencies::new(simple_tail_call, simple_tail_call_id, dependencies);
 
-    let accounts = vec![AccountIdentity::PrivateOwned(account_id)];
+    // `simple_tail_call` never reads this account's own shard, only the account address it
+    // hands to its chained call — so this position is balance-only.
+    let accounts = vec![AccountIdentity::PrivateOwned(account_id).balance_only()];
 
     // Construct and submit the privacy-preserving transaction
     let instruction = ();

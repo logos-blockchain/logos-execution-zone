@@ -63,13 +63,26 @@ fn new_includes_nullifiers_for_private_accounts() {
 fn insert_program() {
     let mut state = V03State::new();
     let program_to_insert = crate::test_methods::simple_balance_transfer();
-    let program_id = program_to_insert.id();
-    let account_id = lee_core::account::AccountId::from(program_id);
+    let account_id = AccountId::from(program_to_insert.id());
     assert!(!state.public_state.contains_key(&account_id));
 
     state.insert_program(&program_to_insert);
 
-    assert!(state.public_state.contains_key(&account_id));
+    let header = ProgramHeader::from_bytes(
+        state
+            .get_account_by_id(account_id)
+            .shard(PROGRAM_LOADER_ACCOUNT_ID),
+    )
+    .expect("the header lands in the loader's shard at the bijection address");
+    assert_eq!(header.image_id, program_to_insert.id());
+    let segment = ProgramSegment::from_bytes(
+        state
+            .get_account_by_id(header.program_first_segment)
+            .shard(PROGRAM_LOADER_ACCOUNT_ID),
+    )
+    .expect("the segment lands in the loader's shard at the address the header names");
+    assert_eq!(segment.bytecode, program_to_insert.elf());
+    assert_eq!(segment.next_segment, None);
 }
 
 #[test]
@@ -79,7 +92,6 @@ fn get_account_by_account_id_non_default_account() {
     let initial_data = [(
         account_id,
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -109,7 +121,7 @@ fn state_serialization_roundtrip() {
     let account_id_2 = AccountId::new([2; 32]);
     let initial_data = [(account_id_1, 100_u128), (account_id_2, 151_u128)];
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&initial_data))
+        .with_public_account_balances(initial_data)
         .with_test_programs();
     let bytes = borsh::to_vec(&state).unwrap();
     let state_from_bytes: V03State = borsh::from_slice(&bytes).unwrap();

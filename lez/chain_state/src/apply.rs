@@ -278,10 +278,9 @@ fn collect_tx_events(
 #[must_use]
 pub fn opening_fee_state(state: &V03State) -> FeeState {
     FeeState::from_bytes(
-        &state
+        state
             .get_account_by_id(system_accounts::fee_state_account_id())
-            .data
-            .into_inner(),
+            .shard(system_accounts::fee_program_id()),
     )
 }
 
@@ -429,7 +428,7 @@ fn settle_charged_transaction(
     let payer_authorized = HashSet::from([payer]);
     let reserve_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
         reserve_msg.program_account_id,
-        &reserve_msg.account_ids,
+        &reserve_msg.positions,
         &reserve_msg.instruction_data,
         &payer_authorized,
         state,
@@ -496,7 +495,7 @@ fn settle_charged_transaction(
         let refund_msg = fee_refund_invocation(payer, refund);
         let refund_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
             refund_msg.program_account_id,
-            &refund_msg.account_ids,
+            &refund_msg.positions,
             &refund_msg.instruction_data,
             &HashSet::new(),
             state,
@@ -642,10 +641,9 @@ mod tests {
         }
 
         let fee_state = fee_core::state::FeeState::from_bytes(
-            &state
+            state
                 .get_account_by_id(system_accounts::fee_state_account_id())
-                .data
-                .into_inner(),
+                .shard(system_accounts::fee_program_id()),
         );
         // Five blocks applied: height tracks the chain; zero load holds the floor.
         assert_eq!(fee_state.height, 5);
@@ -732,7 +730,7 @@ mod tests {
         // stake a real sequencer holds before producing, so the charged blocks
         // below can credit it (crediting an unclaimed account is rejected).
         let mut state =
-            initial_state(true).with_public_accounts([common::test_utils::claimed_producer_seed()]);
+            initial_state(true).with_public_accounts([common::test_utils::producer_seed()]);
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
@@ -802,10 +800,9 @@ mod tests {
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
-            &state
+            state
                 .get_account_by_id(system_accounts::fee_state_account_id())
-                .data
-                .into_inner(),
+                .shard(system_accounts::fee_program_id()),
         );
 
         // Accrue real revenue in the inbox with one legitimate charged transfer.
@@ -828,7 +825,10 @@ mod tests {
             .program_account_id;
         let message = lee::public_transaction::Message::try_new_with_fees(
             fee_program_id,
-            vec![system_accounts::fee_inbox_account_id(), attacker],
+            vec![
+                lee::Position::balance_only(system_accounts::fee_inbox_account_id()),
+                lee::Position::balance_only(attacker),
+            ],
             vec![state.get_account_by_id(attacker).nonce],
             fee_core::Instruction::Refund {
                 amount: inbox_revenue,
@@ -864,10 +864,9 @@ mod tests {
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
-            &state
+            state
                 .get_account_by_id(system_accounts::fee_state_account_id())
-                .data
-                .into_inner(),
+                .shard(system_accounts::fee_program_id()),
         );
         let sender_before = state.get_account_by_id(sender).balance;
         let recipient_before = state.get_account_by_id(recipient).balance;
@@ -903,10 +902,9 @@ mod tests {
         let recipient = accounts[1].account_id;
 
         let opening = FeeState::from_bytes(
-            &state
+            state
                 .get_account_by_id(system_accounts::fee_state_account_id())
-                .data
-                .into_inner(),
+                .shard(system_accounts::fee_program_id()),
         );
 
         let payer_before = state.get_account_by_id(payer).balance;

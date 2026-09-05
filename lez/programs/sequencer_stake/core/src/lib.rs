@@ -71,8 +71,8 @@ impl borsh::BorshDeserialize for SequencerKey {
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum Instruction {
     /// Locks `amount` into the stake funds account of `sequencer_key`'s
-    /// ownership account. First use acquires the ownership account; the funds
-    /// PDA is balance-only and stays unowned.
+    /// ownership account. First use writes the ownership record; the funds
+    /// PDA is balance-only and holds no record.
     Stake {
         sequencer_key: SequencerKey,
         amount: u128,
@@ -117,7 +117,7 @@ pub struct SlashApproval {
     pub signature: Vec<u8>,
 }
 
-/// Tag written into a claimed ownership account: which key it backs, plus any pending unstake.
+/// The record written at an ownership account: which key it backs, plus any pending unstake.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct StakeRecord {
     pub sequencer_key: SequencerKey,
@@ -170,8 +170,8 @@ pub struct ChannelParams {
     pub posting_timeout: u32,
 }
 
-/// The single program-owned config account: minimum stake plus per-key standing, kept current
-/// incrementally.
+/// The single config account, under this program's namespace: minimum stake plus per-key
+/// standing, kept current incrementally.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct SequencerStakeConfig {
     /// `None` until genesis runs [`Instruction::InitChannelParams`], which is
