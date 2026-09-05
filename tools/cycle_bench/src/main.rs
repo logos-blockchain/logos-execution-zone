@@ -373,6 +373,7 @@ fn amm_pool_id() -> AccountId {
         programs::amm().id().into(),
         amm_token_a_def_id(),
         amm_token_b_def_id(),
+        programs::token().id().into(),
     )
 }
 fn amm_vault_a_id() -> AccountId {

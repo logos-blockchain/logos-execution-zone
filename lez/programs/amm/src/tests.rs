@@ -481,6 +481,7 @@ impl IdForTests {
             AMM_PROGRAM_ID,
             Self::token_a_definition_id(),
             Self::token_b_definition_id(),
+            TOKEN_PROGRAM_ID,
         )
     }
 
@@ -1022,6 +1023,7 @@ impl IdForExeTests {
             programs::amm().id().into(),
             Self::token_a_definition_id(),
             Self::token_b_definition_id(),
+            programs::token().id().into(),
         )
     }
 
@@ -1533,11 +1535,13 @@ fn pool_pda_produces_unique_id_for_token_pair() {
         amm_core::compute_pool_pda(
             AMM_PROGRAM_ID,
             IdForTests::token_a_definition_id(),
-            IdForTests::token_b_definition_id()
+            IdForTests::token_b_definition_id(),
+            TOKEN_PROGRAM_ID
         ) == compute_pool_pda(
             AMM_PROGRAM_ID,
             IdForTests::token_b_definition_id(),
-            IdForTests::token_a_definition_id()
+            IdForTests::token_a_definition_id(),
+            TOKEN_PROGRAM_ID
         )
     );
 }

@@ -42,8 +42,12 @@ impl Amm<'_> {
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
-        let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
+        let amm_pool = compute_pool_pda(
+            amm_program_id,
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id,
+        );
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);
@@ -107,8 +111,12 @@ impl Amm<'_> {
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
-        let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
+        let amm_pool = compute_pool_pda(
+            amm_program_id,
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id,
+        );
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let instruction = amm_core::Instruction::SwapExactInput {
@@ -189,8 +197,12 @@ impl Amm<'_> {
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
-        let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
+        let amm_pool = compute_pool_pda(
+            amm_program_id,
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id,
+        );
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let instruction = amm_core::Instruction::SwapExactOutput {
@@ -272,8 +284,12 @@ impl Amm<'_> {
             .map_err(|_err| ExecutionFailureKind::AccountDataError(b_id))?
             .definition_id();
 
-        let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
+        let amm_pool = compute_pool_pda(
+            amm_program_id,
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id,
+        );
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);
@@ -331,8 +347,12 @@ impl Amm<'_> {
             .map_err(|_err| ExecutionFailureKind::AccountDataError(user_holding_b))?
             .definition_id();
 
-        let amm_pool =
-            compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
+        let amm_pool = compute_pool_pda(
+            amm_program_id,
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id,
+        );
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);

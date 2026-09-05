@@ -43,7 +43,8 @@ pub fn new_definition(
         compute_pool_pda(
             self_account_id,
             definition_token_a_id,
-            definition_token_b_id
+            definition_token_b_id,
+            token_program_id
         ),
         "Pool Definition Account ID does not match PDA"
     );
