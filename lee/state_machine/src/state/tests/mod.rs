@@ -74,32 +74,6 @@ impl V03State {
     }
 
     #[must_use]
-    pub fn with_non_default_accounts(mut self) -> Self {
-        self.force_insert_account(
-            AccountId::new([255; 32]),
-            Account {
-                balance: 100,
-                ..Account::default()
-            },
-        );
-        self.force_insert_account(
-            AccountId::new([254; 32]),
-            Account {
-                nonce: Nonce(37),
-                ..Account::default()
-            },
-        );
-        self.force_insert_account(
-            AccountId::new([253; 32]),
-            Account::default().with_shard(
-                AccountId::new([252; 32]),
-                vec![0xca, 0xfe].try_into().unwrap(),
-            ),
-        );
-        self
-    }
-
-    #[must_use]
     pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
         let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
         let commitment = Commitment::new(&account_id, account);
@@ -250,16 +224,6 @@ pub fn init_pda_witness(
             commitment_root: DUMMY_COMMITMENT_HASH,
         },
     }
-}
-
-/// Registers `program` in `state` at its own bijection address, as a single-segment
-/// `program_loader` deploy writing the loader's shard at header and segment.
-/// `check_privacy_preserving_circuit_proof_is_valid` claims every top-level/dependency program
-/// against real chain state, so any test that runs a privacy-preserving transaction through
-/// `V03State::transition_from_privacy_preserving_transaction` needs the program registered here
-/// first, not just known to the local prover.
-pub fn register_program(state: &mut V03State, program: &Program) {
-    state.insert_program(program);
 }
 
 fn shielded_balance_transfer_for_tests(
@@ -438,7 +402,7 @@ fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransact
     };
     let recipient_keys = test_private_account_keys_2();
     let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
-    register_program(&mut state, &crate::test_methods::simple_balance_transfer());
+    state.insert_program(&crate::test_methods::simple_balance_transfer());
     let tx = private_balance_transfer_for_tests(
         &sender_keys,
         &sender_private_account,

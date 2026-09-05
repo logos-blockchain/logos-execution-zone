@@ -55,7 +55,7 @@ fn an_unused_private_witness_is_rejected() {
         matches!(
             &result,
             Err(LeeError::CircuitProvingError(msg))
-                if msg.contains("was never touched by the execution")
+                if msg.contains("must be touched by the execution")
         ),
         "refused for the wrong reason: {:?}",
         result.err()
@@ -1146,7 +1146,7 @@ fn private_accounts_can_only_be_initialized_once() {
     let recipient_keys = test_private_account_keys_2();
 
     let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
-    register_program(&mut state, &crate::test_methods::simple_balance_transfer());
+    state.insert_program(&crate::test_methods::simple_balance_transfer());
 
     let balance_to_move = 37;
     let balance_to_move_2 = 30;
@@ -1391,8 +1391,8 @@ fn two_private_pda_family_members_receive_and_spend() {
     let recipient_signing_key = test_public_account_keys_2().signing_key;
 
     let mut state = V03State::new().with_public_account_balances([(funder_id, 500)]);
-    register_program(&mut state, &simple_transfer);
-    register_program(&mut state, &proxy);
+    state.insert_program(&simple_transfer);
+    state.insert_program(&proxy);
 
     let alice_pda_0_account = Account {
         balance: amount,

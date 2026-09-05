@@ -291,16 +291,6 @@ impl ExecutionState {
             );
         }
 
-        // A witness names an account to spend and re-create. One the tree never touched has no
-        // state to carry into its note, so the input is malformed.
-        if let Some(account_id) = execution_state
-            .witness_by_account
-            .keys()
-            .find(|account_id| !execution_state.tracked.contains_key(*account_id))
-        {
-            panic!("Private witness for {account_id} was never touched by the execution");
-        }
-
         execution_state
     }
 

@@ -405,14 +405,14 @@ fn get_program_via_reads_the_loader_shard() {
     );
 
     // The same bytes in any other namespace are not a deployed program.
-    let squatted = |id| {
+    let foreign_shard = |id| {
         if id == program_account {
             shard(AccountId::new([3; 32]), header.to_bytes())
         } else {
             Account::default()
         }
     };
-    assert_eq!(get_program_via(program_account, squatted), None);
+    assert_eq!(get_program_via(program_account, foreign_shard), None);
 }
 
 // ---- AccountId::for_private_pda tests ----
@@ -634,29 +634,25 @@ fn program_id_account_id_conversion_round_trips() {
     assert_eq!(ProgramId::from(AccountId::from(program_id)), program_id);
 }
 
-/// A byte-identical echo of a foreign account with history must validate.
-#[test]
-fn an_unowned_account_with_history_may_be_echoed_byte_identically() {
-    let pre = Input::named(
+fn foreign_shard_with_history() -> Input {
+    Input::named(
         AccountId::new([7; 32]),
         true,
         55,
         AccountId::new([2; 32]),
         b"record".to_vec().try_into().unwrap(),
-    );
-    let diff = ShardStateDiff::unchanged(pre);
+    )
+}
+
+/// A byte-identical echo of a foreign shard with history must validate.
+#[test]
+fn a_foreign_shard_with_history_may_be_echoed_byte_identically() {
+    let diff = ShardStateDiff::unchanged(foreign_shard_with_history());
     assert!(validate_execution(&[diff], AccountId::new([9; 32])).is_ok());
 }
 
 #[test]
-fn an_unowned_account_echoed_with_sub_zero_may_still_validate() {
-    let pre = Input::named(
-        AccountId::new([7; 32]),
-        true,
-        55,
-        AccountId::new([2; 32]),
-        b"record".to_vec().try_into().unwrap(),
-    );
-    let diff = ShardStateDiff::balance_only(pre, BalanceDiff::Sub(0));
+fn a_foreign_shard_echoed_with_sub_zero_may_still_validate() {
+    let diff = ShardStateDiff::balance_only(foreign_shard_with_history(), BalanceDiff::Sub(0));
     assert!(validate_execution(&[diff], AccountId::new([9; 32])).is_ok());
 }

@@ -36,7 +36,7 @@ fn main() {
 
     // Make exactly one chained call based on the input instruction, forwarding whatever
     // pda_seeds it was given (typically none, so the target PDAs are never authorized) —
-    // this program never claims or otherwise touches the accounts it forwards.
+    // this program never writes to the accounts it forwards.
     ProgramOutput::new(
         self_account_id,
         caller_account_id,

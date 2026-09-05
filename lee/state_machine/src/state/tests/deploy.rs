@@ -233,12 +233,12 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
     assert_eq!(
         state.get_account_by_id(header_account_id),
         Account::default(),
-        "the header account must remain unclaimed after a rejected deploy"
+        "the header account must be untouched after a rejected deploy"
     );
 }
 
 /// The full deploy lifecycle through native dispatch: `WriteSegment` writes the bytecode,
-/// `CreateHeader` claims the header pointing at it, and the resulting program then dispatches
+/// `CreateHeader` writes the header pointing at it, and the resulting program then dispatches
 /// and executes exactly like any other — no guest, no proving, all via `program_loader_core`.
 #[test]
 fn write_segment_then_create_header_deploys_a_dispatchable_program() {

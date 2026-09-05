@@ -201,6 +201,9 @@ impl V03State {
     /// (`AccountId::from(program.id())`) so existing call sites addressing builtins by `ProgramId`
     /// keep working; the segment's address is this function's own internal convention, never
     /// independently recomputed elsewhere.
+    // Verifying a privacy-preserving proof re-resolves every program's image id from chain state,
+    // so a test driving one through `transition_from_privacy_preserving_transaction` must seed the
+    // program here — knowing it in the local prover is not enough.
     pub(crate) fn insert_program(&mut self, program: &Program) {
         let header_account_id = AccountId::from(program.id());
         let segment_account_id = genesis_segment_account_id(header_account_id);

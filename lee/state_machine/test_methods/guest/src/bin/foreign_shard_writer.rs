@@ -28,14 +28,12 @@ fn main() {
         return;
     };
 
-    let target_diff = ShardStateDiff {
-        pre: target,
-        post_balance_diff: BalanceDiff::Add(0),
-        post_data: Some(
-            data.try_into()
-                .expect("provided data should fit into data limit"),
-        ),
-    };
+    let target_diff = ShardStateDiff::new(
+        target,
+        BalanceDiff::Add(0),
+        data.try_into()
+            .expect("provided data should fit into data limit"),
+    );
 
     ProgramOutput::new(
         self_account_id,

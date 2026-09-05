@@ -275,7 +275,7 @@ impl ChainedCall {
 ///
 /// Lives at whatever account address the deployer chose — never a fixed bijection of the
 /// bytecode, so the same bytecode may be deployed more than once at different addresses, each a
-/// distinct instance for dispatch, PDA-derivation, and ownership purposes.
+/// distinct instance for dispatch and PDA-derivation purposes.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramHeader {
     /// The bytecode's real `image_id`, always recomputed from the segment chain at

@@ -1,12 +1,10 @@
 #[cfg(feature = "host")]
 use std::io::Cursor;
-#[cfg(feature = "host")]
-use std::io::Read as _;
 
 #[cfg(feature = "host")]
 use crate::Nullifier;
 #[cfg(feature = "host")]
-use crate::encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN};
+use crate::encryption::EphemeralPublicKey;
 #[cfg(feature = "host")]
 use crate::error::LeeCoreError;
 use crate::{
@@ -42,14 +40,6 @@ impl Commitment {
     pub const fn from_byte_array(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
-    /// Deserializes a commitment from a cursor.
-    #[cfg(feature = "host")]
-    pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        let mut bytes = [0_u8; 32];
-        cursor.read_exact(&mut bytes)?;
-        Ok(Self(bytes))
-    }
 }
 
 impl NullifierPublicKey {
@@ -65,13 +55,6 @@ impl Nullifier {
     #[must_use]
     pub const fn from_byte_array(bytes: [u8; 32]) -> Self {
         Self(bytes)
-    }
-
-    /// Deserializes a nullifier from a cursor.
-    pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        let mut bytes = [0_u8; 32];
-        cursor.read_exact(&mut bytes)?;
-        Ok(Self(bytes))
     }
 }
 
@@ -99,21 +82,6 @@ impl Ciphertext {
     pub const fn from_inner(inner: Vec<u8>) -> Self {
         Self(inner)
     }
-
-    #[cfg(feature = "host")]
-    /// Deserializes ciphertext from a cursor.
-    pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        let mut u32_bytes = [0; 4];
-
-        cursor.read_exact(&mut u32_bytes)?;
-        let ciphertext_lenght = u32::from_le_bytes(u32_bytes);
-        let ciphertext_length =
-            usize::try_from(ciphertext_lenght).expect("ciphertext length fits in usize");
-        let mut ciphertext = vec![0; ciphertext_length];
-        cursor.read_exact(&mut ciphertext)?;
-
-        Ok(Self(ciphertext))
-    }
 }
 
 #[cfg(feature = "host")]
@@ -122,14 +90,6 @@ impl EphemeralPublicKey {
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         self.0.clone()
-    }
-
-    /// Deserializes an ML-KEM-768 ciphertext from a cursor.
-    /// Reads exactly 1088 bytes — the fixed ciphertext size for ML-KEM-768.
-    pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        let mut value = vec![0_u8; ML_KEM_768_CIPHERTEXT_LEN];
-        cursor.read_exact(&mut value)?;
-        Ok(Self(value))
     }
 }
 
@@ -192,26 +152,6 @@ mod tests {
 
         let bytes = nullifier.to_byte_array();
         assert_eq!(expected_bytes, bytes);
-    }
-
-    #[cfg(feature = "host")]
-    #[test]
-    fn commitment_to_bytes_roundtrip() {
-        let commitment = Commitment((0..32).collect::<Vec<u8>>().try_into().unwrap());
-        let bytes = commitment.to_byte_array();
-        let mut cursor = Cursor::new(bytes.as_ref());
-        let commitment_from_cursor = Commitment::from_cursor(&mut cursor).unwrap();
-        assert_eq!(commitment, commitment_from_cursor);
-    }
-
-    #[cfg(feature = "host")]
-    #[test]
-    fn nullifier_to_bytes_roundtrip() {
-        let nullifier = Nullifier((0..32).collect::<Vec<u8>>().try_into().unwrap());
-        let bytes = nullifier.to_byte_array();
-        let mut cursor = Cursor::new(bytes.as_ref());
-        let nullifier_from_cursor = Nullifier::from_cursor(&mut cursor).unwrap();
-        assert_eq!(nullifier, nullifier_from_cursor);
     }
 
     #[cfg(feature = "host")]
