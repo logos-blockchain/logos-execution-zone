@@ -3327,3 +3327,26 @@ fn simple_amm_swap_2() {
     assert_eq!(user_token_a_post, expected_user_token_a);
     assert_eq!(user_token_b_post, expected_user_token_b);
 }
+
+#[test]
+fn the_pool_of_a_stranger_program_is_a_different_address() {
+    // Whoever creates a pool pins the token program every later add, remove and swap forwards
+    // positions to. Deriving the address from that program keeps a caller naming a stranger off
+    // the pool real balances sit in.
+    let stranger = AccountId::new([0xEE; 32]);
+    assert_ne!(
+        amm_core::compute_pool_pda(
+            AMM_PROGRAM_ID,
+            IdForTests::token_a_definition_id(),
+            IdForTests::token_b_definition_id(),
+            TOKEN_PROGRAM_ID
+        ),
+        amm_core::compute_pool_pda(
+            AMM_PROGRAM_ID,
+            IdForTests::token_a_definition_id(),
+            IdForTests::token_b_definition_id(),
+            stranger
+        ),
+        "each token program must get its own pool for a pair"
+    );
+}
