@@ -16,14 +16,15 @@ Feature: Authenticated transfers
     Then I stop the runtime
 
   @auth_transfer_ci
-  # Mirrors integration_tests/tests/auth_transfer/public.rs::failed_transfer_with_insufficient_balance.
-  # Coverage is equivalent or stronger: it uses 10001 rather than 1_000_000, and also verifies
-  # indexer convergence and explicit runtime teardown.
+  # Mirrors integration_tests/tests/auth_transfer/public.rs::transfer_beyond_balance_is_refused_client_side.
+  # The attempted amount is twice the observed sender balance, so this remains factual if the
+  # configured genesis balances or fee policy changes.
   Scenario: Reject a public transfer with insufficient sender balance
     Given a LEZ stack with configured public accounts
-    When I attempt to transfer 10001 from the first configured public account to the second
+    When I attempt to transfer twice the first configured public account balance to the second
     Then the transfer is rejected
     And the sender balance remains unchanged
+    And the sender nonce remains unchanged
     And the receiver balance remains unchanged
     And the indexer catches up to the sequencer within 120 seconds
     Then I stop the runtime
