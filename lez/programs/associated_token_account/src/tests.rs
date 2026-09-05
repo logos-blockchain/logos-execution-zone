@@ -144,3 +144,35 @@ fn get_associated_token_account_id_differs_by_definition() {
     );
     assert_ne!(id1, id2);
 }
+
+#[test]
+fn the_ata_of_a_stranger_program_is_a_different_address() {
+    let stranger = AccountId::new([0xEEu8; 32]);
+    assert_ne!(
+        get_associated_token_account_id(
+            &ATA_PROGRAM_ID,
+            &compute_ata_seed(owner_id(), definition_id(), TOKEN_PROGRAM_ID),
+        ),
+        get_associated_token_account_id(
+            &ATA_PROGRAM_ID,
+            &compute_ata_seed(owner_id(), definition_id(), stranger),
+        ),
+        "each token program must get its own ATA family"
+    );
+}
+
+#[test]
+#[should_panic(expected = "ATA account ID does not match expected derivation")]
+fn create_naming_a_stranger_program_cannot_reach_the_real_ata() {
+    // The address is the one the token program's holdings really live at. Naming a stranger
+    // program alongside it must not mint that address's seed: the grant would let the stranger
+    // authorize the ATA and move the balance out through the real token program.
+    let stranger = AccountId::new([0xEEu8; 32]);
+    crate::create::create_associated_token_account(
+        owner_account(),
+        definition_account(),
+        Input::named(ata_id(), false, 0, stranger, Data::empty()),
+        ATA_PROGRAM_ID,
+        stranger,
+    );
+}
