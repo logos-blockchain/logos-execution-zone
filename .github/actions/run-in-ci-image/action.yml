@@ -35,9 +35,12 @@ runs:
           env_args+=(--env "$pair")
         done <<< "$INPUT_ENV"
 
-        # Cargo's registry is the only part of CARGO_HOME worth sharing with the
-        # host: mounting all of it would shadow the tools baked into the image.
-        mkdir -p "$HOME/.cargo/registry"
+        # Share Cargo and Logos build state between disposable containers. The
+        # workspace target already persists through the $PWD bind mount.
+        mkdir -p \
+          "$HOME/.cargo/registry" \
+          "$HOME/.cargo/git" \
+          "$HOME/.cache/logos/blockchain"
 
         # Mounting the workspace on its own path is what makes this work. The
         # daemon resolves compose bind mounts against the host, and the test
@@ -52,6 +55,8 @@ runs:
           --volume /var/run/docker.sock:/var/run/docker.sock \
           --volume "$PWD:$PWD" \
           --volume "$HOME/.cargo/registry:/usr/local/cargo/registry" \
+          --volume "$HOME/.cargo/git:/usr/local/cargo/git" \
+          --volume "$HOME/.cache/logos/blockchain:/root/.cache/logos/blockchain" \
           --workdir "$PWD" \
           "${env_args[@]}" \
           "$INPUT_IMAGE" \

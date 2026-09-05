@@ -8,15 +8,16 @@ use sequencer_service_rpc::RpcClient as _;
 use super::{
     super::log_step,
     helpers::{
-        assert_private_balance_delta, assert_public_balance_delta, expected_public_signing_key,
-        get_transfer_transaction, rejected_transfer_details, transfer_artifact, transfer_details,
+        assert_private_balance_delta, assert_public_balance_delta, assert_sender_paid_fee,
+        expected_balance_after, expected_public_signing_key, get_transfer_transaction,
+        rejected_transfer_details, transfer_artifact, transfer_details,
         wait_for_transfer_inclusion,
     },
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
     steps::transfers::helpers::assert_private_commitment_in_state,
-    world::CucumberWorld,
+    world::{CucumberWorld, TransferArtifact},
 };
 
 fn two_transfer_details(
@@ -24,7 +25,7 @@ fn two_transfer_details(
     first_name: &str,
     second_name: &str,
     sender: bool,
-) -> Result<(lee::AccountId, u128, u128), StepError> {
+) -> Result<(lee::AccountId, TransferArtifact, TransferArtifact), StepError> {
     let first = transfer_artifact(world, first_name)?;
     let second = transfer_artifact(world, second_name)?;
     let first_account = if sender { first.sender } else { first.receiver };
@@ -41,21 +42,7 @@ fn two_transfer_details(
             ),
         });
     }
-    let amount =
-        first
-            .amount
-            .checked_add(second.amount)
-            .ok_or_else(|| StepError::AssertionFailed {
-                message: format!(
-                    "combined amount for transfers '{first_name}' and '{second_name}' overflowed"
-                ),
-            })?;
-    let initial_balance = if sender {
-        first.sender_balance_before
-    } else {
-        first.receiver_balance_before
-    };
-    Ok((first_account, initial_balance, amount))
+    Ok((first_account, first, second))
 }
 
 #[then(expr = "the sender balance for transfer {string} decreases by {int}")]
@@ -113,18 +100,41 @@ async fn assert_sender_balance_decreased_across_transfers(
     expected_amount: u128,
 ) -> StepResult {
     log_step(step);
-    let (sender, initial_balance, amount) =
-        two_transfer_details(world, &first_name, &second_name, true)?;
-    let observed_balance = assert_public_balance_delta(
-        world,
-        sender,
-        initial_balance,
+    let (sender, first, second) = two_transfer_details(world, &first_name, &second_name, true)?;
+    let amount =
+        first
+            .amount
+            .checked_add(second.amount)
+            .ok_or_else(|| StepError::AssertionFailed {
+                message: format!(
+                    "combined amount for transfers '{first_name}' and '{second_name}' overflowed"
+                ),
+            })?;
+    expected_balance_after(
+        first.sender_balance_before,
         amount,
         expected_amount,
         false,
         "sender",
-    )
-    .await?;
+    )?;
+    let observed_balance = world
+        .lez()?
+        .sequencer_client()
+        .get_account_balance(sender)
+        .await
+        .map_err(StepError::query_failed)?;
+    assert_sender_paid_fee(
+        first.sender_balance_before,
+        second.sender_balance_before,
+        first.amount,
+        "sender for first transfer",
+    )?;
+    assert_sender_paid_fee(
+        second.sender_balance_before,
+        observed_balance,
+        second.amount,
+        "sender for second transfer",
+    )?;
     world.environment.accounts.sender_observed_balance = Some(observed_balance);
     Ok(())
 }
@@ -138,12 +148,20 @@ async fn assert_receiver_balance_increased_across_transfers(
     expected_amount: u128,
 ) -> StepResult {
     log_step(step);
-    let (receiver, initial_balance, amount) =
-        two_transfer_details(world, &first_name, &second_name, false)?;
+    let (receiver, first, second) = two_transfer_details(world, &first_name, &second_name, false)?;
+    let amount =
+        first
+            .amount
+            .checked_add(second.amount)
+            .ok_or_else(|| StepError::AssertionFailed {
+                message: format!(
+                    "combined amount for transfers '{first_name}' and '{second_name}' overflowed"
+                ),
+            })?;
     let observed_balance = assert_public_balance_delta(
         world,
         receiver,
-        initial_balance,
+        first.receiver_balance_before,
         amount,
         expected_amount,
         true,
@@ -291,7 +309,7 @@ fn assert_transfer_is_rejected(world: &mut CucumberWorld, step: &Step) -> StepRe
 #[then("the sender balance remains unchanged")]
 async fn assert_sender_balance_unchanged(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
-    let (sender, initial_balance, _) = rejected_transfer_details(world, true)?;
+    let (sender, initial_balance, _, _) = rejected_transfer_details(world, true)?;
     let observed_balance = world
         .lez()?
         .sequencer_client()
@@ -309,10 +327,39 @@ async fn assert_sender_balance_unchanged(world: &mut CucumberWorld, step: &Step)
     Ok(())
 }
 
+#[then("the sender nonce remains unchanged")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn assert_sender_nonce_unchanged(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    let (sender, _, _, initial_nonce) = rejected_transfer_details(world, true)?;
+    let observed_nonce = world
+        .lez()?
+        .sequencer_client()
+        .get_accounts_nonces(vec![sender])
+        .await
+        .map_err(StepError::query_failed)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| StepError::QueryFailed {
+            message: format!("no nonce returned for sender {sender:?}"),
+        })?;
+    if observed_nonce != initial_nonce {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "sender {sender:?} has nonce {observed_nonce:?}, expected unchanged nonce {initial_nonce:?}"
+            ),
+        });
+    }
+    Ok(())
+}
+
 #[then("the receiver balance remains unchanged")]
 async fn assert_receiver_balance_unchanged(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
-    let (receiver, initial_balance, _) = rejected_transfer_details(world, false)?;
+    let (receiver, initial_balance, _, _) = rejected_transfer_details(world, false)?;
     let observed_balance = world
         .lez()?
         .sequencer_client()
