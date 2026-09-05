@@ -32,110 +32,118 @@ struct IdForTests;
 struct AccountForTests;
 
 impl AccountForTests {
-    fn definition_account_auth() -> Input {
+    fn holding(account_id: AccountId, is_authorized: bool, holding: &TokenHolding) -> Input {
         Input::named(
+            account_id,
+            is_authorized,
+            0,
+            TOKEN_PROGRAM_ID,
+            Data::from(holding),
+        )
+    }
+
+    fn definition(
+        account_id: AccountId,
+        is_authorized: bool,
+        definition: &TokenDefinition,
+    ) -> Input {
+        Input::named(
+            account_id,
+            is_authorized,
+            0,
+            TOKEN_PROGRAM_ID,
+            Data::from(definition),
+        )
+    }
+
+    fn definition_account_auth() -> Input {
+        Self::definition(
             IdForTests::pool_definition_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenDefinition::Fungible {
+            &TokenDefinition::Fungible {
                 name: String::from("test"),
                 total_supply: BalanceForTests::init_supply(),
                 metadata_id: None,
-            }),
+            },
         )
     }
 
     fn definition_account_without_auth() -> Input {
-        Input::named(
+        Self::definition(
             IdForTests::pool_definition_id(),
             false,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenDefinition::Fungible {
+            &TokenDefinition::Fungible {
                 name: String::from("test"),
                 total_supply: BalanceForTests::init_supply(),
                 metadata_id: None,
-            }),
+            },
         )
     }
 
     fn holding_different_definition() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id_diff(),
                 balance: BalanceForTests::holding_balance(),
-            }),
+            },
         )
     }
 
     fn holding_same_definition_with_authorization() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::holding_balance(),
-            }),
+            },
         )
     }
 
     fn holding_same_definition_without_authorization() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             false,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::holding_balance(),
-            }),
+            },
         )
     }
 
     fn holding_same_definition_without_authorization_overflow() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             false,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::init_supply(),
-            }),
+            },
         )
     }
 
     fn definition_account_post_burn() -> Input {
-        Input::named(
+        Self::definition(
             IdForTests::pool_definition_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenDefinition::Fungible {
+            &TokenDefinition::Fungible {
                 name: String::from("test"),
                 total_supply: BalanceForTests::init_supply_burned(),
                 metadata_id: None,
-            }),
+            },
         )
     }
 
     fn holding_account_post_burn() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             false,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::holding_balance_burned(),
-            }),
+            },
         )
     }
 
@@ -150,69 +158,59 @@ impl AccountForTests {
     }
 
     fn init_mint() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             false,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::mint_success(),
-            }),
+            },
         )
     }
 
     fn holding_account_same_definition_mint() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::pool_definition_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::holding_balance_mint(),
-            }),
+            },
         )
     }
 
     fn definition_account_mint() -> Input {
-        Input::named(
+        Self::definition(
             IdForTests::pool_definition_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenDefinition::Fungible {
+            &TokenDefinition::Fungible {
                 name: String::from("test"),
                 total_supply: BalanceForTests::init_supply_mint(),
                 metadata_id: None,
-            }),
+            },
         )
     }
 
     fn holding_same_definition_with_authorization_and_large_balance() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::pool_definition_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::mint_overflow(),
-            }),
+            },
         )
     }
 
     fn definition_account_with_authorization_nonfungible() -> Input {
-        Input::named(
+        Self::definition(
             IdForTests::pool_definition_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenDefinition::NonFungible {
+            &TokenDefinition::NonFungible {
                 name: String::from("test"),
                 printable_supply: BalanceForTests::printable_copies(),
                 metadata_id: AccountId::new([0; 32]),
-            }),
+            },
         )
     }
 
@@ -227,132 +225,112 @@ impl AccountForTests {
     }
 
     fn holding_account_init() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::init_supply(),
-            }),
+            },
         )
     }
 
     fn holding_account2_init() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id_2(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::init_supply(),
-            }),
+            },
         )
     }
 
     fn holding_account2_init_post_transfer() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id_2(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::recipient_post_transfer(),
-            }),
+            },
         )
     }
 
     fn holding_account_init_post_transfer() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            &TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id(),
                 balance: BalanceForTests::sender_post_transfer(),
-            }),
+            },
         )
     }
 
     fn holding_account_master_nft() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::NftMaster {
+            &TokenHolding::NftMaster {
                 definition_id: IdForTests::pool_definition_id(),
                 print_balance: BalanceForTests::printable_copies(),
-            }),
+            },
         )
     }
 
     fn holding_account_master_nft_insufficient_balance() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::NftMaster {
+            &TokenHolding::NftMaster {
                 definition_id: IdForTests::pool_definition_id(),
                 print_balance: 1,
-            }),
+            },
         )
     }
 
     fn holding_account_master_nft_after_print() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::NftMaster {
+            &TokenHolding::NftMaster {
                 definition_id: IdForTests::pool_definition_id(),
                 print_balance: BalanceForTests::printable_copies() - 1,
-            }),
+            },
         )
     }
 
     fn holding_account_printed_nft() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             false,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::NftPrintedCopy {
+            &TokenHolding::NftPrintedCopy {
                 definition_id: IdForTests::pool_definition_id(),
                 owned: true,
-            }),
+            },
         )
     }
 
     fn holding_account_with_master_nft_transferred_to() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id_2(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::NftMaster {
+            &TokenHolding::NftMaster {
                 definition_id: IdForTests::pool_definition_id(),
                 print_balance: BalanceForTests::printable_copies(),
-            }),
+            },
         )
     }
 
     fn holding_account_master_nft_post_transfer() -> Input {
-        Input::named(
+        Self::holding(
             IdForTests::holding_id(),
             true,
-            0_u128,
-            TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::NftMaster {
+            &TokenHolding::NftMaster {
                 definition_id: IdForTests::pool_definition_id(),
                 print_balance: 0,
-            }),
+            },
         )
     }
 }
