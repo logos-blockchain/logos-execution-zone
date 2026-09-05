@@ -82,6 +82,7 @@ impl From<Program> for ProgramWithDependencies {
 }
 
 /// Everything the prover supplies for one privacy-preserving execution.
+#[derive(Default)]
 pub struct ProvingInput {
     pub positions: Vec<Position>,
     pub signers: HashSet<AccountId>,

@@ -254,44 +254,26 @@ fn private_chained_call(number_of_calls: u32) {
                 Position::balance_only(to_account_id),
                 Position::balance_only(from_account_id),
             ],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![
-                PrivateWitness {
-                    account: from_pre,
-                    vpk: from_keys.vpk(),
-                    random_seed: [0; 32],
-                    identifier: 0,
-                    kind: WitnessKind::Regular {
-                        ask: Some(from_keys.ask),
-                    },
-                    nullifier: NullifierWitness::Update {
-                        view_tag: 0,
-                        nsk: from_keys.nsk(),
-                        membership_proof: state
-                            .get_proof_for_commitment(&from_commitment)
-                            .expect("from's commitment must be in state"),
-                    },
-                },
-                PrivateWitness {
-                    account: to_pre,
-                    vpk: to_keys.vpk(),
-                    random_seed: [0; 32],
-                    identifier: 0,
-                    kind: WitnessKind::Regular {
-                        ask: Some(to_keys.ask),
-                    },
-                    nullifier: NullifierWitness::Update {
-                        view_tag: 0,
-                        nsk: to_keys.nsk(),
-                        membership_proof: state
-                            .get_proof_for_commitment(&to_commitment)
-                            .expect("to's commitment must be in state"),
-                    },
-                },
+                update_witness(
+                    &from_keys,
+                    0,
+                    from_pre,
+                    state
+                        .get_proof_for_commitment(&from_commitment)
+                        .expect("from's commitment must be in state"),
+                ),
+                update_witness(
+                    &to_keys,
+                    0,
+                    to_pre,
+                    state
+                        .get_proof_for_commitment(&to_commitment)
+                        .expect("to's commitment must be in state"),
+                ),
             ],
             instruction_data: Program::serialize_instruction(instruction).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program_with_deps,
     )

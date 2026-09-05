@@ -65,9 +65,8 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
             ],
             signers: [sender_id, recipient_id].into(),
             public_accounts: [(sender_id, sender_account)].into(),
-            private_witnesses: Vec::new(),
             instruction_data,
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &pwd,
     )?)
@@ -131,9 +130,8 @@ fn prove_chain_caller(
             positions,
             signers: [recipient_id, sender_id].into(),
             public_accounts: [(sender_id, sender_account)].into(),
-            private_witnesses: Vec::new(),
             instruction_data,
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &pwd,
     )?)

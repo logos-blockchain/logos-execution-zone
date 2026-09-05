@@ -2,8 +2,8 @@
 
 use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
-    Nullifier, NullifierPublicKey, NullifierWitness, PrivacyPreservingCircuitOutput,
-    PrivateWitness, SharedSecretKey, WitnessKind,
+    Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness, SharedSecretKey,
+    WitnessKind,
     account::{Account, AccountId, AccountView, Nonce},
     program::{PdaSeed, PrivateAccountKind},
 };
@@ -15,7 +15,10 @@ use crate::{
     program::Program,
     state::{
         CommitmentSet,
-        tests::{init_pda_witness, test_private_account_keys_1, test_private_account_keys_2},
+        tests::{
+            init_pda_witness, init_witness, test_private_account_keys_1,
+            test_private_account_keys_2, update_pda_witness, update_witness,
+        },
     },
 };
 
@@ -86,21 +89,9 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
             ],
             signers: [sender_id].into(),
             public_accounts: [(sender_id, sender_account)].into(),
-            private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
-                vpk: recipient_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(recipient_keys.ask),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk: recipient_keys.npk(),
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }],
+            private_witnesses: vec![init_witness(&recipient_keys, 0, Account::default())],
             instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )
@@ -190,41 +181,19 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
                 Position::balance_only(sender_account_id),
                 Position::balance_only(recipient_account_id),
             ],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![
-                PrivateWitness {
-                    account: sender_pre_account,
-                    vpk: sender_keys.vpk(),
-                    random_seed: [0; 32],
-                    identifier: 0,
-                    kind: WitnessKind::Regular {
-                        ask: Some(sender_keys.ask),
-                    },
-                    nullifier: NullifierWitness::Update {
-                        view_tag: 0,
-                        nsk: sender_keys.nsk(),
-                        membership_proof: commitment_set
-                            .get_proof_for(&commitment_sender)
-                            .expect("sender's commitment must be in the set"),
-                    },
-                },
-                PrivateWitness {
-                    account: Account::default(),
-                    vpk: recipient_keys.vpk(),
-                    random_seed: [0; 32],
-                    identifier: 0,
-                    kind: WitnessKind::Regular {
-                        ask: Some(recipient_keys.ask),
-                    },
-                    nullifier: NullifierWitness::Init {
-                        npk: recipient_keys.npk(),
-                        commitment_root: DUMMY_COMMITMENT_HASH,
-                    },
-                },
+                update_witness(
+                    &sender_keys,
+                    0,
+                    sender_pre_account,
+                    commitment_set
+                        .get_proof_for(&commitment_sender)
+                        .expect("sender's commitment must be in the set"),
+                ),
+                init_witness(&recipient_keys, 0, Account::default()),
             ],
             instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )
@@ -286,23 +255,9 @@ fn init_note_view_tag_is_derived_from_account_keys() {
     let (output, proof) = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
-            private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
-                vpk: keys.vpk(),
-                random_seed: [0; 32],
-                identifier,
-                kind: WitnessKind::Regular {
-                    ask: Some(keys.ask),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk: keys.npk(),
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }],
+            private_witnesses: vec![init_witness(&keys, identifier, Account::default())],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )
@@ -337,8 +292,6 @@ fn update_note_view_tag_is_the_supplied_value() {
     let (output, proof) = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![PrivateWitness {
                 account,
                 vpk: keys.vpk(),
@@ -354,7 +307,7 @@ fn update_note_view_tag_is_the_supplied_value() {
                 },
             }],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )
@@ -395,23 +348,9 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     let result = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
-            private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
-                vpk: account_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(account_keys.ask),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk: account_keys.npk(),
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }],
+            private_witnesses: vec![init_witness(&account_keys, 0, Account::default())],
             instruction_data: instruction,
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program_with_deps,
     );
@@ -442,23 +381,14 @@ fn private_pda_with_custom_identifier_encrypts_correct_kind() {
     let (output, _proof) = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
-            private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
-                vpk: keys.vpk(),
-                random_seed: [0; 32],
+            private_witnesses: vec![init_pda_witness(
+                &keys,
                 identifier,
-                kind: WitnessKind::Pda {
-                    binding: (program.id().into(), seed),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk,
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }],
+                (program.id().into(), seed),
+                Account::default(),
+            )],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.clone().into(),
     )
@@ -501,8 +431,6 @@ fn private_pda_init() {
     let result = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(pda_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 0,
@@ -510,7 +438,7 @@ fn private_pda_init() {
                 Account::default(),
             )],
             instruction_data: instruction,
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program_with_deps,
     );
@@ -565,7 +493,7 @@ fn private_pda_withdraw() {
                 Account::default(),
             )],
             instruction_data: instruction,
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program_with_deps,
     );
@@ -607,21 +535,13 @@ fn shared_account_receives_via_simple_transfer() {
             ],
             signers: [sender_id].into(),
             public_accounts: [(sender_id, sender_account)].into(),
-            private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
-                vpk: shared_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: shared_identifier,
-                kind: WitnessKind::Regular {
-                    ask: Some(shared_keys.ask),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk: shared_npk,
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }],
+            private_witnesses: vec![init_witness(
+                &shared_keys,
+                shared_identifier,
+                Account::default(),
+            )],
             instruction_data: instruction,
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );
@@ -650,23 +570,9 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
     let (output, _) = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
-            private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
-                vpk: keys.vpk(),
-                random_seed: [0; 32],
-                identifier,
-                kind: WitnessKind::Regular {
-                    ask: Some(keys.ask),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk: NullifierPublicKey::from(&keys.nsk()),
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }],
+            private_witnesses: vec![init_witness(&keys, identifier, Account::default())],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )
@@ -697,23 +603,9 @@ fn private_foreign_init_encrypts_regular_kind_with_identifier() {
     let (output, _) = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(recipient_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
-            private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
-                vpk: keys.vpk(),
-                random_seed: [0; 32],
-                identifier,
-                kind: WitnessKind::Regular {
-                    ask: Some(keys.ask),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk: keys.npk(),
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }],
+            private_witnesses: vec![init_witness(&keys, identifier, Account::default())],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )
@@ -750,24 +642,14 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
     let (output, _) = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
-            private_witnesses: vec![PrivateWitness {
-                account,
-                vpk: keys.vpk(),
-                random_seed: [0; 32],
+            private_witnesses: vec![update_witness(
+                &keys,
                 identifier,
-                kind: WitnessKind::Regular {
-                    ask: Some(keys.ask),
-                },
-                nullifier: NullifierWitness::Update {
-                    view_tag: 0,
-                    nsk: keys.nsk(),
-                    membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
-                },
-            }],
+                account,
+                commitment_set.get_proof_for(&commitment).unwrap(),
+            )],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )
@@ -808,8 +690,6 @@ fn private_regular_update_without_ask_is_spendable() {
     execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![PrivateWitness {
                 account,
                 vpk: keys.vpk(),
@@ -823,7 +703,7 @@ fn private_regular_update_without_ask_is_spendable() {
                 },
             }],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )
@@ -843,7 +723,6 @@ fn private_regular_witness_without_ask_cannot_assert_authorization() {
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
             signers: [account_id].into(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![PrivateWitness {
                 account,
                 vpk: keys.vpk(),
@@ -857,7 +736,7 @@ fn private_regular_witness_without_ask_cannot_assert_authorization() {
                 },
             }],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );
@@ -876,8 +755,6 @@ fn regular_update_with_wrong_ask_nsk_is_rejected() {
     let result = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![PrivateWitness {
                 account,
                 vpk: keys.vpk(),
@@ -893,7 +770,7 @@ fn regular_update_with_wrong_ask_nsk_is_rejected() {
                 },
             }],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );
@@ -912,8 +789,6 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
     let result = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![PrivateWitness {
                 account: Account::default(),
                 vpk: keys.vpk(),
@@ -928,7 +803,7 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
                 },
             }],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );
@@ -947,8 +822,6 @@ fn auth_asserting_program_rejects_unauthorized_regular_private_account() {
     let result = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![PrivateWitness {
                 account,
                 vpk: keys.vpk(),
@@ -962,7 +835,7 @@ fn auth_asserting_program_rejects_unauthorized_regular_private_account() {
                 },
             }],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );
@@ -1027,23 +900,16 @@ fn pda_update_attempt(
                 (recipient_id, Account::default()),
             ]
             .into(),
-            private_witnesses: vec![PrivateWitness {
-                account: pda_account,
-                vpk: keys.vpk(),
-                random_seed: [0; 32],
-                identifier: witness_identifier,
-                kind: WitnessKind::Pda {
-                    binding: (program_id, seed),
-                },
-                nullifier: NullifierWitness::Update {
-                    view_tag: 0,
-                    nsk: keys.nsk(),
-                    membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
-                },
-            }],
+            private_witnesses: vec![update_pda_witness(
+                &keys,
+                witness_identifier,
+                (program_id, seed),
+                pda_account,
+                commitment_set.get_proof_for(&pda_commitment).unwrap(),
+            )],
             instruction_data: Program::serialize_instruction((seed, 1_u128, simple_transfer_id))
                 .unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program_with_deps,
     )
@@ -1099,8 +965,6 @@ fn private_pda_init_identifier_mismatch_fails() {
     let result = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 99,
@@ -1108,7 +972,7 @@ fn private_pda_init_identifier_mismatch_fails() {
                 Account::default(),
             )],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );
@@ -1135,22 +999,14 @@ fn private_pda_init_at_root_call_may_not_declare_authorization() {
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
             signers: [account_id].into(),
-            public_accounts: HashMap::new(),
-            private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
-                vpk: keys.vpk(),
-                random_seed: [0; 32],
+            private_witnesses: vec![init_pda_witness(
+                &keys,
                 identifier,
-                kind: WitnessKind::Pda {
-                    binding: (program.id().into(), seed),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk,
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }],
+                (program.id().into(), seed),
+                Account::default(),
+            )],
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );

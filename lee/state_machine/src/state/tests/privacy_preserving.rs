@@ -257,9 +257,8 @@ fn burner_program_should_fail_in_privacy_preserving_circuit() {
                 },
             )]
             .into(),
-            private_witnesses: Vec::new(),
             instruction_data: Program::serialize_instruction(10_u128).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );
@@ -276,10 +275,8 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
             signers: [account_id].into(),
-            public_accounts: HashMap::new(),
-            private_witnesses: Vec::new(),
             instruction_data: Program::serialize_instruction(()).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );
@@ -302,11 +299,8 @@ fn a_data_write_on_a_foreign_namespace_is_rejected_in_the_circuit() {
                 Position::new(target_id, foreign_namespace),
                 Position::balance_only(other_id),
             ],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
-            private_witnesses: Vec::new(),
             instruction_data: Program::serialize_instruction(vec![7_u8; 4]).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );
@@ -332,10 +326,8 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
         ProvingInput {
             positions: vec![Position::new(account_id, program_id)],
             signers: [account_id].into(),
-            public_accounts: HashMap::new(),
-            private_witnesses: Vec::new(),
             instruction_data: Program::serialize_instruction(large_data).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );
@@ -364,9 +356,8 @@ fn unauthorized_debit_should_fail_in_privacy_preserving_circuit() {
                 },
             )]
             .into(),
-            private_witnesses: Vec::new(),
             instruction_data: Program::serialize_instruction(10_u128).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     );

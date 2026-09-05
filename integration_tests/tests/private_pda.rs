@@ -82,7 +82,7 @@ async fn fund_private_pda(
                 },
             }],
             instruction_data: instruction,
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         auth_transfer,
     )

@@ -4,12 +4,12 @@
     reason = "We don't care about it in tests"
 )]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use lee_core::{
-    AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier, Nullifier,
-    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, Timestamp,
-    WitnessKind,
+    AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
+    MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
+    PrivateWitness, Timestamp, WitnessKind,
     account::{Account, AccountId, Balance, Input, Nonce, Position, data::Data},
     encryption::ViewingPublicKey,
     program::{
@@ -226,6 +226,69 @@ pub fn init_pda_witness(
     }
 }
 
+pub fn update_pda_witness(
+    keys: &TestPrivateKeys,
+    identifier: Identifier,
+    binding: (AccountId, PdaSeed),
+    account: Account,
+    membership_proof: MembershipProof,
+) -> PrivateWitness {
+    PrivateWitness {
+        account,
+        vpk: keys.vpk(),
+        random_seed: [0; 32],
+        identifier,
+        kind: WitnessKind::Pda { binding },
+        nullifier: NullifierWitness::Update {
+            view_tag: 0,
+            nsk: keys.nsk(),
+            membership_proof,
+        },
+    }
+}
+
+pub fn init_witness(
+    keys: &TestPrivateKeys,
+    identifier: Identifier,
+    account: Account,
+) -> PrivateWitness {
+    PrivateWitness {
+        account,
+        vpk: keys.vpk(),
+        random_seed: [0; 32],
+        identifier,
+        kind: WitnessKind::Regular {
+            ask: Some(keys.ask),
+        },
+        nullifier: NullifierWitness::Init {
+            npk: keys.npk(),
+            commitment_root: DUMMY_COMMITMENT_HASH,
+        },
+    }
+}
+
+pub fn update_witness(
+    keys: &TestPrivateKeys,
+    identifier: Identifier,
+    account: Account,
+    membership_proof: MembershipProof,
+) -> PrivateWitness {
+    PrivateWitness {
+        account,
+        vpk: keys.vpk(),
+        random_seed: [0; 32],
+        identifier,
+        kind: WitnessKind::Regular {
+            ask: Some(keys.ask),
+        },
+        nullifier: NullifierWitness::Update {
+            view_tag: 0,
+            nsk: keys.nsk(),
+            membership_proof,
+        },
+    }
+}
+
 fn shielded_balance_transfer_for_tests(
     sender_keys: &TestPublicKeys,
     recipient_keys: &TestPrivateKeys,
@@ -246,21 +309,9 @@ fn shielded_balance_transfer_for_tests(
             ],
             signers: [sender_id].into(),
             public_accounts: [(sender_id, sender_account)].into(),
-            private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
-                vpk: recipient_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(recipient_keys.ask),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk: recipient_keys.npk(),
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }],
+            private_witnesses: vec![init_witness(recipient_keys, 0, Account::default())],
             instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &crate::test_methods::simple_balance_transfer().into(),
     )
@@ -292,41 +343,19 @@ fn private_balance_transfer_for_tests(
                 Position::balance_only(sender_id),
                 Position::balance_only(recipient_id),
             ],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![
-                PrivateWitness {
-                    account: sender_private_account.clone(),
-                    vpk: sender_keys.vpk(),
-                    random_seed: [0; 32],
-                    identifier: 0,
-                    kind: WitnessKind::Regular {
-                        ask: Some(sender_keys.ask),
-                    },
-                    nullifier: NullifierWitness::Update {
-                        view_tag: 0,
-                        nsk: sender_keys.nsk(),
-                        membership_proof: state
-                            .get_proof_for_commitment(&sender_commitment)
-                            .expect("sender's commitment must be in state"),
-                    },
-                },
-                PrivateWitness {
-                    account: Account::default(),
-                    vpk: recipient_keys.vpk(),
-                    random_seed: [0; 32],
-                    identifier: 0,
-                    kind: WitnessKind::Regular {
-                        ask: Some(recipient_keys.ask),
-                    },
-                    nullifier: NullifierWitness::Init {
-                        npk: recipient_keys.npk(),
-                        commitment_root: DUMMY_COMMITMENT_HASH,
-                    },
-                },
+                update_witness(
+                    sender_keys,
+                    0,
+                    sender_private_account.clone(),
+                    state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                ),
+                init_witness(recipient_keys, 0, Account::default()),
             ],
             instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )
@@ -357,30 +386,21 @@ fn deshielded_balance_transfer_for_tests(
                 Position::balance_only(sender_id),
                 Position::balance_only(*recipient_account_id),
             ],
-            signers: HashSet::new(),
             public_accounts: [(
                 *recipient_account_id,
                 state.get_account_by_id(*recipient_account_id),
             )]
             .into(),
-            private_witnesses: vec![PrivateWitness {
-                account: sender_private_account.clone(),
-                vpk: sender_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(sender_keys.ask),
-                },
-                nullifier: NullifierWitness::Update {
-                    view_tag: 0,
-                    nsk: sender_keys.nsk(),
-                    membership_proof: state
-                        .get_proof_for_commitment(&sender_commitment)
-                        .expect("sender's commitment must be in state"),
-                },
-            }],
+            private_witnesses: vec![update_witness(
+                sender_keys,
+                0,
+                sender_private_account.clone(),
+                state
+                    .get_proof_for_commitment(&sender_commitment)
+                    .expect("sender's commitment must be in state"),
+            )],
             instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )

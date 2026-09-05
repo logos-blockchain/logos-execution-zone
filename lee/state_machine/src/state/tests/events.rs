@@ -266,27 +266,13 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
     let (output, proof) = execute_and_prove(
         ProvingInput {
             positions: vec![Position::balance_only(account_id)],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
-            private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
-                vpk: keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(keys.ask),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk: keys.npk(),
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }],
+            private_witnesses: vec![init_witness(&keys, 0, Account::default())],
             instruction_data: Program::serialize_instruction(EmitterInstruction {
                 events: vec![emitted(0), emitted(1)],
                 chain: vec![],
             })
             .unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &emitter.clone().into(),
     )

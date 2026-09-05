@@ -9,10 +9,7 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{
-    collections::{HashMap, HashSet},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
@@ -272,8 +269,6 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 Position::balance_only(sender_id),
                 Position::balance_only(recipient_id),
             ],
-            signers: HashSet::new(),
-            public_accounts: HashMap::new(),
             private_witnesses: vec![
                 PrivateWitness {
                     account: sender_account,
@@ -309,7 +304,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 },
             )
             .unwrap(),
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )

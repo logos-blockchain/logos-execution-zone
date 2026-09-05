@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
-};
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -613,7 +610,6 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
                 Position::balance_only(faucet_account_id),
                 Position::balance_only(attacker_private_id),
             ],
-            signers: HashSet::new(),
             public_accounts: HashMap::from([(faucet_account_id, faucet_account)]),
             private_witnesses: vec![PrivateWitness {
                 account: attacker_account,
@@ -627,7 +623,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
                 },
             }],
             instruction_data: instruction,
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program_with_deps,
     );
@@ -673,7 +669,7 @@ async fn prove_init_with_commitment_root(
             instruction_data: Program::serialize_instruction(
                 authenticated_transfer_core::Instruction::Transfer { amount: 1 },
             )?,
-            dummy_inputs: Vec::new(),
+            ..Default::default()
         },
         &program.into(),
     )?;

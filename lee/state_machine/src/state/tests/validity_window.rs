@@ -133,23 +133,9 @@ fn validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = execute_and_prove(
             ProvingInput {
                 positions: vec![Position::balance_only(account_id)],
-                signers: HashSet::new(),
-                public_accounts: HashMap::new(),
-                private_witnesses: vec![PrivateWitness {
-                    account: Account::default(),
-                    vpk: account_keys.vpk(),
-                    random_seed: [0; 32],
-                    identifier: 0,
-                    kind: WitnessKind::Regular {
-                        ask: Some(account_keys.ask),
-                    },
-                    nullifier: NullifierWitness::Init {
-                        npk: account_keys.npk(),
-                        commitment_root: DUMMY_COMMITMENT_HASH,
-                    },
-                }],
+                private_witnesses: vec![init_witness(&account_keys, 0, Account::default())],
                 instruction_data: Program::serialize_instruction(instruction).unwrap(),
-                dummy_inputs: Vec::new(),
+                ..Default::default()
             },
             &validity_window_program.into(),
         )
@@ -206,23 +192,9 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = execute_and_prove(
             ProvingInput {
                 positions: vec![Position::balance_only(account_id)],
-                signers: HashSet::new(),
-                public_accounts: HashMap::new(),
-                private_witnesses: vec![PrivateWitness {
-                    account: Account::default(),
-                    vpk: account_keys.vpk(),
-                    random_seed: [0; 32],
-                    identifier: 0,
-                    kind: WitnessKind::Regular {
-                        ask: Some(account_keys.ask),
-                    },
-                    nullifier: NullifierWitness::Init {
-                        npk: account_keys.npk(),
-                        commitment_root: DUMMY_COMMITMENT_HASH,
-                    },
-                }],
+                private_witnesses: vec![init_witness(&account_keys, 0, Account::default())],
                 instruction_data: Program::serialize_instruction(instruction).unwrap(),
-                dummy_inputs: Vec::new(),
+                ..Default::default()
             },
             &validity_window_program.into(),
         )
