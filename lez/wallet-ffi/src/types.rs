@@ -317,21 +317,10 @@ impl Default for FfiAccountIdentity {
 /// An identity, plus the namespace it is named under. `has_namespace == false` means the call
 /// only moves the account's balance or checks its address, and `namespace` is then ignored.
 #[repr(C)]
-#[derive(Default)]
 pub struct FfiAccountMention {
     pub identity: FfiAccountIdentity,
     pub namespace: FfiBytes32,
     pub has_namespace: bool,
-}
-
-impl From<AccountMention> for FfiAccountMention {
-    fn from(value: AccountMention) -> Self {
-        Self {
-            identity: value.identity.into(),
-            namespace: value.namespace.map(Into::into).unwrap_or_default(),
-            has_namespace: value.namespace.is_some(),
-        }
-    }
 }
 
 impl TryFrom<&FfiAccountMention> for AccountMention {

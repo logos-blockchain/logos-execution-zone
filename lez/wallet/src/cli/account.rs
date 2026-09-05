@@ -642,46 +642,34 @@ fn print_account_details(account: &Account, indent: &str) {
         "{indent}Balance {}, nonce {}",
         account.balance, account.nonce.0
     );
-    for (description, json_view) in format_account_details(account) {
+    let token_prog_id: AccountId = programs::token().id().into();
+    for (program, data) in &account.shards {
+        let (description, json_view) = if *program == token_prog_id {
+            TokenDefinition::try_from(data)
+                .map(|token_def| {
+                    (
+                        "Token program definition record".to_owned(),
+                        serde_json::to_string(&token_def).unwrap(),
+                    )
+                })
+                .or_else(|_err| {
+                    TokenHolding::try_from(data).map(|token_hold| {
+                        (
+                            "Token program holding record".to_owned(),
+                            serde_json::to_string(&token_hold).unwrap(),
+                        )
+                    })
+                })
+                .unwrap_or_else(|_err| {
+                    (
+                        "Unrecognized token program record".to_owned(),
+                        hex::encode(data),
+                    )
+                })
+        } else {
+            (format!("Record of program {program}"), hex::encode(data))
+        };
         println!("{indent}{description}");
         println!("{indent}{json_view}");
     }
-}
-
-/// Formats an account's records for display — one `(description, json_view)` pair per program
-/// that holds a shard here, in shard order. An account holding no records yields an empty vec.
-fn format_account_details(account: &Account) -> Vec<(String, String)> {
-    let token_prog_id: AccountId = programs::token().id().into();
-
-    account
-        .shards
-        .iter()
-        .map(|(program, data)| {
-            if *program == token_prog_id {
-                TokenDefinition::try_from(data)
-                    .map(|token_def| {
-                        (
-                            "Token program definition record".to_owned(),
-                            serde_json::to_string(&token_def).unwrap(),
-                        )
-                    })
-                    .or_else(|_err| {
-                        TokenHolding::try_from(data).map(|token_hold| {
-                            (
-                                "Token program holding record".to_owned(),
-                                serde_json::to_string(&token_hold).unwrap(),
-                            )
-                        })
-                    })
-                    .unwrap_or_else(|_err| {
-                        (
-                            "Unrecognized token program record".to_owned(),
-                            hex::encode(data),
-                        )
-                    })
-            } else {
-                (format!("Record of program {program}"), hex::encode(data))
-            }
-        })
-        .collect()
 }

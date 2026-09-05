@@ -68,14 +68,12 @@ pub fn write_segment(
     next_segment: Option<AccountId>,
 ) -> Vec<ShardStateDiff> {
     let expected_len = if next_segment.is_some() { 2 } else { 1 };
-    let (target, rest) = pre_states
-        .split_first()
-        .unwrap_or_else(|| panic!("WriteSegment requires exactly {expected_len} account(s)"));
     assert_eq!(
         pre_states.len(),
         expected_len,
         "WriteSegment requires exactly {expected_len} account(s)"
     );
+    let (target, rest) = pre_states.split_first().expect("length checked above");
     assert!(
         target.shard_of(PROGRAM_LOADER_ACCOUNT_ID).is_empty(),
         "segment target already deployed"

@@ -1983,11 +1983,10 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let clock_chain_caller_id: AccountId = clock_chain_caller.id().into();
 
     // Deploy the clock_chain_caller test program through `program_loader`, at its bijection
-    // address: a `WriteSegment` claiming a fresh segment account, then a `CreateHeader` naming
-    // `clock_chain_caller_id` as the header — no signature needed from either, since claiming an
-    // unowned account is permissionless (the write is the claim); a funded genesis account signs
-    // and pays the fee for both, since neither freshly-claimed account holds anything to self-pay
-    // with.
+    // address: a `WriteSegment` writing a fresh segment account, then a `CreateHeader` naming
+    // `clock_chain_caller_id` as the header — no signature needed from either, since both ask
+    // only that the loader's record at the target be empty; a funded genesis account signs and
+    // pays the fee for both, since neither fresh account holds anything to self-pay with.
     let payer = &initial_pub_accounts_private_keys()[0];
     let segment_key = lee::PrivateKey::try_new([210; 32]).unwrap();
     let segment_id = AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key));
@@ -2254,17 +2253,7 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
     let mut state =
         state_with_clock_and_program(test_programs::time_locked_transfer(), clock_timestamp);
 
-    // The recipient must be a non-default account so the program may credit it without
-    // claiming it.
     let recipient_id = AccountId::new([42; 32]);
-    state.force_insert_account(
-        recipient_id,
-        Account::default().with_shard(
-            programs::authenticated_transfer().id().into(),
-            vec![1].try_into().expect("1 byte fits in account data"),
-        ),
-    );
-
     let key1 = PrivateKey::try_new([1; 32]).unwrap();
     let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
     state.force_insert_account(
@@ -2272,11 +2261,7 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
         Account {
             balance: 100,
             ..Account::default()
-        }
-        .with_shard(
-            test_programs::time_locked_transfer().id().into(),
-            vec![1].try_into().expect("1 byte fits in account data"),
-        ),
+        },
     );
 
     let amount = 100;
@@ -2309,14 +2294,6 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
         state_with_clock_and_program(test_programs::time_locked_transfer(), clock_timestamp);
 
     let recipient_id = AccountId::new([42; 32]);
-    state.force_insert_account(
-        recipient_id,
-        Account::default().with_shard(
-            programs::authenticated_transfer().id().into(),
-            vec![1].try_into().expect("1 byte fits in account data"),
-        ),
-    );
-
     let key1 = PrivateKey::try_new([1; 32]).unwrap();
     let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
     state.force_insert_account(
@@ -2324,11 +2301,7 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
         Account {
             balance: 100,
             ..Account::default()
-        }
-        .with_shard(
-            test_programs::time_locked_transfer().id().into(),
-            vec![1].try_into().expect("1 byte fits in account data"),
-        ),
+        },
     );
 
     let amount = 100;
@@ -3920,13 +3893,13 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
     );
 }
 
-/// Diagnostic repro: exercises `sequencer_stake`'s `Stake` instruction (claim
-/// on the outer call, hand off to a mover chained call, self-chained confirm)
-/// directly through `V03State::transition_from_public_transaction`, with no
-/// sequencer/mempool/Bedrock machinery involved, to isolate whether the LEE
-/// state machine itself claims the ownership account correctly.
+/// Diagnostic repro: exercises `sequencer_stake`'s `Stake` instruction (the outer call writes
+/// the stake record, hands off to a mover chained call, self-chained confirm) directly through
+/// `V03State::transition_from_public_transaction`, with no sequencer/mempool/Bedrock machinery
+/// involved, to isolate whether the LEE state machine itself writes the ownership account's
+/// record correctly.
 #[test]
-fn diag_sequencer_stake_claims_ownership_account() {
+fn diag_sequencer_stake_writes_the_ownership_account_record() {
     let funding_key = PrivateKey::try_new([21; 32]).unwrap();
     let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
     let ownership_key = PrivateKey::try_new([22; 32]).unwrap();
@@ -3964,7 +3937,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
     assert_eq!(
         state.get_account_by_id(ownership_id),
         Account::default(),
-        "ownership account must start out fresh/unclaimed"
+        "ownership account must start out fresh"
     );
 
     let mover_instruction_data =
@@ -4004,7 +3977,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
         !ownership_account
             .shard(programs::sequencer_stake().id().into())
             .is_empty(),
-        "ownership account should be claimed by sequencer_stake"
+        "ownership account should hold sequencer_stake's record"
     );
     assert_eq!(
         ownership_account.balance, 0,
@@ -4166,8 +4139,8 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
         .transition_from_public_transaction(&stake, 1, 0)
         .expect("Stake should succeed");
 
-    // Donate into the claimed funds PDA, which is where the stake actually
-    // sits: a balance increase needs no ownership of the target.
+    // Donate into the funds PDA, which is where the stake actually sits: a
+    // balance increase needs no record at the target.
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     let message = lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id().into(),
@@ -4431,11 +4404,11 @@ fn a_fully_exited_ownership_account_can_stake_again() {
             .get_account_by_id(ownership_id)
             .shard(programs::sequencer_stake().id().into())
             .is_empty(),
-        "the ownership account stays claimed after a full exit"
+        "the ownership account keeps sequencer_stake's record after a full exit"
     );
 
-    // Both the ownership account and its funds PDA are still claimed, so the
-    // re-stake goes through the same accounts rather than needing fresh ones.
+    // Both accounts still carry sequencer_stake's record, so the re-stake goes
+    // through the same accounts rather than needing fresh ones.
     let restake = stake_transaction(
         &state,
         (funding_id, &funding_key),
@@ -4703,8 +4676,9 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
     );
 }
 
-/// Squats `ownership_id`'s funds PDA: a stranger's data write takes the address.
-fn squat_stake_funds(state: &mut V03State, ownership_id: AccountId) -> AccountId {
+/// Writes a stranger program's record on `ownership_id`'s funds PDA — a namespace the stake
+/// program never reads and never disturbs.
+fn write_stranger_shard_on_stake_funds(state: &mut V03State, ownership_id: AccountId) -> AccountId {
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     let mut funds = state.get_account_by_id(funds_id);
     funds.set_shard(
@@ -4716,10 +4690,10 @@ fn squat_stake_funds(state: &mut V03State, ownership_id: AccountId) -> AccountId
 }
 
 #[test]
-fn a_slash_burns_from_a_squatted_funds_pda() {
+fn a_slash_burns_from_funds_carrying_a_stranger_shard() {
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let (mut state, sequencer_key, ownership_id, _ownership_key) = slashable_state(amount);
-    let funds_id = squat_stake_funds(&mut state, ownership_id);
+    let funds_id = write_stranger_shard_on_stake_funds(&mut state, ownership_id);
 
     let slash = slash_transaction(
         ownership_id,
@@ -4728,7 +4702,7 @@ fn a_slash_burns_from_a_squatted_funds_pda() {
     );
     state
         .transition_from_public_transaction(&slash, 2, 0)
-        .expect("a squatted funds PDA still burns");
+        .expect("a stranger record does not block the burn");
 
     assert_eq!(state.get_account_by_id(funds_id).balance, 0);
     assert_eq!(state.get_account_by_id(slash_sink_id()).balance, amount);
@@ -4737,12 +4711,12 @@ fn a_slash_burns_from_a_squatted_funds_pda() {
             .get_account_by_id(funds_id)
             .shard(AccountId::new([66; 32]))
             .is_empty(),
-        "the squatter keeps the address"
+        "the stranger record is left untouched"
     );
 }
 
 #[test]
-fn a_finalize_unstake_releases_from_a_squatted_funds_pda() {
+fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_shard() {
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let (mut state, sequencer_key, ownership_id, ownership_key) = slashable_state(amount);
     let destination = AccountId::new([67; 32]);
@@ -4756,7 +4730,7 @@ fn a_finalize_unstake_releases_from_a_squatted_funds_pda() {
     state
         .transition_from_public_transaction(&request, 2, 0)
         .expect("UnstakeRequest should succeed");
-    let funds_id = squat_stake_funds(&mut state, ownership_id);
+    let funds_id = write_stranger_shard_on_stake_funds(&mut state, ownership_id);
 
     let finalize = build_finalize_unstake_tx(
         ownership_id,
@@ -4771,7 +4745,7 @@ fn a_finalize_unstake_releases_from_a_squatted_funds_pda() {
     };
     state
         .transition_from_public_transaction(&finalize, 3, 0)
-        .expect("a squatted funds PDA still releases");
+        .expect("a stranger record does not block the release");
 
     assert_eq!(state.get_account_by_id(funds_id).balance, 0);
     assert_eq!(state.get_account_by_id(destination).balance, amount);

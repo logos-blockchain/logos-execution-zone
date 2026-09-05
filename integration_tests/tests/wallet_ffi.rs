@@ -793,7 +793,7 @@ fn wallet_ffi_base58_to_account_id() -> Result<()> {
 }
 
 #[test]
-fn wallet_ffi_public_account_is_credited_without_being_claimed() -> Result<()> {
+fn wallet_ffi_public_account_is_credited_without_gaining_a_record() -> Result<()> {
     let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -820,18 +820,18 @@ fn wallet_ffi_public_account_is_credited_without_being_claimed() -> Result<()> {
     };
     assert!(account.shards.is_empty());
 
-    // There is no registration step: a credit lands on the fresh account and
-    // leaves it unowned.
+    // There is no registration step: a credit lands on the fresh account and adds no record
+    // to it.
     let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
-    let mut claim_result = FfiTransferResult::default();
+    let mut credit_result = FfiTransferResult::default();
     unsafe {
         wallet_ffi_transfer_public(
             wallet_ffi_handle,
             &raw const from,
             &raw const out_account_id,
             &raw const amount,
-            &raw mut claim_result,
+            &raw mut credit_result,
         )
         .unwrap();
     }
@@ -853,7 +853,7 @@ fn wallet_ffi_public_account_is_credited_without_being_claimed() -> Result<()> {
     assert_eq!(ffi_balance(wallet_ffi_handle, &out_account_id, true), 100);
 
     unsafe {
-        wallet_ffi_free_transfer_result(&raw mut claim_result);
+        wallet_ffi_free_transfer_result(&raw mut credit_result);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 

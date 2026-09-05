@@ -1286,8 +1286,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             .expect("Timestamp must be positive");
 
         // The reward target is this sequencer's own stake ownership account,
-        // already claimed when it staked. Look it up by our own sequencer key
-        // (our Bedrock signing key) in the live stake config.
+        // which carries the stake record its stake tx wrote. Look it up by our
+        // own sequencer key (our Bedrock signing key) in the live stake config.
         let own_sequencer_key = sequencer_stake_core::SequencerKey::new(
             self.bedrock_signing_key.public_key().to_bytes(),
         )
@@ -2164,7 +2164,7 @@ fn build_genesis_state(
     // Config txs seed the config accounts by transaction, so every node
     // reconstructs them by replaying the genesis block. Every cross-zone config
     // is initialized: each builtin has a user-callable InitConfig, so a default
-    // config PDA would be claimable by the first initializer. The inbox's is
+    // config PDA would be left for whoever calls it first. The inbox's is
     // receiving-zones-only.
     let cross_zone_declared = config.cross_zone.as_ref();
     assert!(
@@ -2245,14 +2245,15 @@ fn build_genesis_state(
     .collect();
 
     // The genesis fee tx credits the first staked sequencer's ownership
-    // account, already claimed by its stake tx above (which ran earlier in this
-    // same genesis block), so no separate initialization is needed.
+    // account, which its stake tx above (running earlier in this same genesis
+    // block) already gave sequencer_stake's record, so no separate
+    // initialization is needed.
     //
     // A stakeless genesis (e.g. a sequencer reconstructing an existing channel
     // it did not bootstrap) has no staked account to reward, so it falls back to
     // the signing key's account: this genesis is a throwaway placeholder (the real
     // one is replayed from the channel), the summary is the default, so the
-    // credit is zero and the unclaimed account is left untouched.
+    // credit is zero and the account is left untouched.
     let producer = staked.first().map_or_else(
         || lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key)),
         |(_, ownership_public_key, _)| lee::AccountId::from(ownership_public_key),

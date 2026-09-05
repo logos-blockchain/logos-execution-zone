@@ -295,12 +295,12 @@ pub fn fee_invocation(
     let fee_program_id: AccountId = programs::fee().id().into();
     // The fee program reads its state record; the escrow, the inbox and the producer move
     // balance only.
-    let mut positions = vec![
+    let positions = vec![
         Position::new(system_accounts::fee_state_account_id(), fee_program_id),
         Position::balance_only(system_accounts::fee_escrow_account_id()),
         Position::balance_only(system_accounts::fee_inbox_account_id()),
+        Position::balance_only(producer),
     ];
-    positions.push(Position::balance_only(producer)); // this is the 4th account
     let message = lee::public_transaction::Message::try_new(
         fee_program_id,
         positions,
@@ -320,8 +320,8 @@ pub fn fee_invocation_producer(fee_tx: &lee::PublicTransaction) -> Option<lee::A
     fee_tx
         .message()
         .positions
-        // get the 4th account, which is the producer
-        .get(system_accounts::fee_account_ids().len())
+        // the producer is the fourth position `fee_invocation` builds
+        .get(3)
         .map(|position| position.account_id)
 }
 
@@ -479,8 +479,8 @@ mod tests {
 
     #[test]
     fn a_restricted_system_account_is_not_a_valid_reward_target() {
-        // A plain account is a fine reward target, claimed or not — a producer
-        // picks its own payout account.
+        // A plain account is a fine reward target — a producer picks its own
+        // payout account.
         validate_reward_target(AccountId::new([1; 32]))
             .expect("an ordinary account is a valid reward target");
 

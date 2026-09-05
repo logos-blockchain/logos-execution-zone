@@ -331,14 +331,7 @@ fn token_transfer_pre_states() -> Vec<Input> {
     vec![sender, recipient]
 }
 
-fn token_mint_pre_states() -> Vec<Input> {
-    let def_id = AccountId::new([15; 32]);
-    let def = token_definition(def_id, 100_000, true);
-    let holding = token_holding(def_id, AccountId::new([17; 32]), 1_000, true);
-    vec![def, holding]
-}
-
-fn token_burn_pre_states() -> Vec<Input> {
+fn token_definition_and_holding_pre_states() -> Vec<Input> {
     let def_id = AccountId::new([15; 32]);
     let def = token_definition(def_id, 100_000, true);
     let holding = token_holding(def_id, AccountId::new([17; 32]), 1_000, true);
@@ -495,7 +488,7 @@ fn main() -> Result<()> {
             "token",
             "Mint",
             programs::token(),
-            token_mint_pre_states(),
+            token_definition_and_holding_pre_states(),
             &token_core::Instruction::Mint {
                 amount_to_mint: 5_000,
             },
@@ -504,7 +497,7 @@ fn main() -> Result<()> {
             "token",
             "Burn",
             programs::token(),
-            token_burn_pre_states(),
+            token_definition_and_holding_pre_states(),
             &token_core::Instruction::Burn {
                 amount_to_burn: 500,
             },

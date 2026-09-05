@@ -862,28 +862,6 @@ impl InputsForTests {
         )
     }
 
-    fn pool_definition_swap_exact_output_test_2() -> Input {
-        Input::named(
-            IdForTests::pool_definition_id(),
-            true,
-            0,
-            AMM_PROGRAM_ID,
-            Data::from(&PoolDefinition {
-                token_program_id: TOKEN_PROGRAM_ID,
-                definition_token_a_id: IdForTests::token_a_definition_id(),
-                definition_token_b_id: IdForTests::token_b_definition_id(),
-                vault_a_id: IdForTests::vault_a_id(),
-                vault_b_id: IdForTests::vault_b_id(),
-                liquidity_pool_id: IdForTests::token_lp_definition_id(),
-                liquidity_pool_supply: BalanceForTests::lp_supply_init(),
-                reserve_a: BalanceForTests::vault_a_swap_test_2(),
-                reserve_b: BalanceForTests::vault_b_swap_test_2(),
-                fees: 0_u128,
-                active: true,
-            }),
-        )
-    }
-
     fn pool_definition_add_zero_lp() -> Input {
         Input::named(
             IdForTests::pool_definition_id(),
@@ -1016,28 +994,6 @@ impl InputsForTests {
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForTests::token_b_definition_id(),
                 balance: BalanceForTests::vault_b_reserve_init(),
-            }),
-        )
-    }
-
-    fn pool_definition_active() -> Input {
-        Input::named(
-            IdForTests::pool_definition_id(),
-            true,
-            0,
-            AMM_PROGRAM_ID,
-            Data::from(&PoolDefinition {
-                token_program_id: TOKEN_PROGRAM_ID,
-                definition_token_a_id: IdForTests::token_a_definition_id(),
-                definition_token_b_id: IdForTests::token_b_definition_id(),
-                vault_a_id: IdForTests::vault_a_id(),
-                vault_b_id: IdForTests::vault_b_id(),
-                liquidity_pool_id: IdForTests::token_lp_definition_id(),
-                liquidity_pool_supply: BalanceForTests::lp_supply_init(),
-                reserve_a: BalanceForTests::vault_a_reserve_init(),
-                reserve_b: BalanceForTests::vault_b_reserve_init(),
-                fees: 0_u128,
-                active: true,
             }),
         )
     }
@@ -1267,12 +1223,7 @@ impl IdForExeTests {
 
 impl AccountsForExeTests {
     fn user_token_a_holding() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_a_definition_id(),
@@ -1282,12 +1233,7 @@ impl AccountsForExeTests {
     }
 
     fn user_token_b_holding() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_b_definition_id(),
@@ -1297,12 +1243,7 @@ impl AccountsForExeTests {
     }
 
     fn pool_definition_init() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::amm().id().into(),
             Data::from(&PoolDefinition {
                 token_program_id: programs::token().id().into(),
@@ -1321,12 +1262,7 @@ impl AccountsForExeTests {
     }
 
     fn token_a_definition_account() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
@@ -1337,12 +1273,7 @@ impl AccountsForExeTests {
     }
 
     fn token_b_definition_acc() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
@@ -1353,12 +1284,7 @@ impl AccountsForExeTests {
     }
 
     fn token_lp_definition_acc() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenDefinition::Fungible {
                 name: String::from("LP Token"),
@@ -1369,12 +1295,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_a_init() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_a_definition_id(),
@@ -1384,12 +1305,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_b_init() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_b_definition_id(),
@@ -1399,12 +1315,7 @@ impl AccountsForExeTests {
     }
 
     fn user_token_lp_holding() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_lp_definition_id(),
@@ -1414,12 +1325,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_a_swap_1() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_a_definition_id(),
@@ -1429,12 +1335,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_b_swap_1() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_b_definition_id(),
@@ -1444,12 +1345,7 @@ impl AccountsForExeTests {
     }
 
     fn pool_definition_swap_1() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::amm().id().into(),
             Data::from(&PoolDefinition {
                 token_program_id: programs::token().id().into(),
@@ -1468,12 +1364,7 @@ impl AccountsForExeTests {
     }
 
     fn user_token_a_holding_swap_1() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_a_definition_id(),
@@ -1484,7 +1375,6 @@ impl AccountsForExeTests {
 
     fn user_token_b_holding_swap_1() -> Account {
         Account {
-            balance: 0,
             nonce: 1_u128.into(),
             ..Account::default()
         }
@@ -1498,12 +1388,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_a_swap_2() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_a_definition_id(),
@@ -1513,12 +1398,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_b_swap_2() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_b_definition_id(),
@@ -1528,12 +1408,7 @@ impl AccountsForExeTests {
     }
 
     fn pool_definition_swap_2() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::amm().id().into(),
             Data::from(&PoolDefinition {
                 token_program_id: programs::token().id().into(),
@@ -1553,7 +1428,6 @@ impl AccountsForExeTests {
 
     fn user_token_a_holding_swap_2() -> Account {
         Account {
-            balance: 0,
             nonce: 1_u128.into(),
             ..Account::default()
         }
@@ -1567,12 +1441,7 @@ impl AccountsForExeTests {
     }
 
     fn user_token_b_holding_swap_2() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_b_definition_id(),
@@ -1582,12 +1451,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_a_add() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_a_definition_id(),
@@ -1597,12 +1461,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_b_add() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_b_definition_id(),
@@ -1612,12 +1471,7 @@ impl AccountsForExeTests {
     }
 
     fn pool_definition_add() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::amm().id().into(),
             Data::from(&PoolDefinition {
                 token_program_id: programs::token().id().into(),
@@ -1637,7 +1491,6 @@ impl AccountsForExeTests {
 
     fn user_token_a_holding_add() -> Account {
         Account {
-            balance: 0,
             nonce: 1_u128.into(),
             ..Account::default()
         }
@@ -1652,7 +1505,6 @@ impl AccountsForExeTests {
 
     fn user_token_b_holding_add() -> Account {
         Account {
-            balance: 0,
             nonce: 1_u128.into(),
             ..Account::default()
         }
@@ -1666,12 +1518,7 @@ impl AccountsForExeTests {
     }
 
     fn user_token_lp_holding_add() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_lp_definition_id(),
@@ -1681,12 +1528,7 @@ impl AccountsForExeTests {
     }
 
     fn token_lp_definition_add() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenDefinition::Fungible {
                 name: String::from("LP Token"),
@@ -1697,12 +1539,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_a_remove() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_a_definition_id(),
@@ -1712,12 +1549,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_b_remove() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_b_definition_id(),
@@ -1727,12 +1559,7 @@ impl AccountsForExeTests {
     }
 
     fn pool_definition_remove() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::amm().id().into(),
             Data::from(&PoolDefinition {
                 token_program_id: programs::token().id().into(),
@@ -1751,12 +1578,7 @@ impl AccountsForExeTests {
     }
 
     fn user_token_a_holding_remove() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_a_definition_id(),
@@ -1766,12 +1588,7 @@ impl AccountsForExeTests {
     }
 
     fn user_token_b_holding_remove() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_b_definition_id(),
@@ -1782,7 +1599,6 @@ impl AccountsForExeTests {
 
     fn user_token_lp_holding_remove() -> Account {
         Account {
-            balance: 0,
             nonce: 1_u128.into(),
             ..Account::default()
         }
@@ -1796,12 +1612,7 @@ impl AccountsForExeTests {
     }
 
     fn token_lp_definition_remove() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenDefinition::Fungible {
                 name: String::from("LP Token"),
@@ -1812,12 +1623,7 @@ impl AccountsForExeTests {
     }
 
     fn token_lp_definition_init_inactive() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenDefinition::Fungible {
                 name: String::from("LP Token"),
@@ -1828,12 +1634,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_a_init_inactive() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_a_definition_id(),
@@ -1843,12 +1644,7 @@ impl AccountsForExeTests {
     }
 
     fn vault_b_init_inactive() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenHolding::Fungible {
                 definition_id: IdForExeTests::token_b_definition_id(),
@@ -1858,12 +1654,7 @@ impl AccountsForExeTests {
     }
 
     fn pool_definition_inactive() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::amm().id().into(),
             Data::from(&PoolDefinition {
                 token_program_id: programs::token().id().into(),
@@ -1883,7 +1674,6 @@ impl AccountsForExeTests {
 
     fn user_token_a_holding_new_init() -> Account {
         Account {
-            balance: 0,
             nonce: 1_u128.into(),
             ..Account::default()
         }
@@ -1898,7 +1688,6 @@ impl AccountsForExeTests {
 
     fn user_token_b_holding_new_init() -> Account {
         Account {
-            balance: 0,
             nonce: 1_u128.into(),
             ..Account::default()
         }
@@ -1913,7 +1702,6 @@ impl AccountsForExeTests {
 
     fn user_token_lp_holding_new_init() -> Account {
         Account {
-            balance: 0,
             nonce: 1_u128.into(),
             ..Account::default()
         }
@@ -1927,12 +1715,7 @@ impl AccountsForExeTests {
     }
 
     fn token_lp_definition_new_init() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::token().id().into(),
             Data::from(&TokenDefinition::Fungible {
                 name: String::from("LP Token"),
@@ -1943,12 +1726,7 @@ impl AccountsForExeTests {
     }
 
     fn pool_definition_new_init() -> Account {
-        Account {
-            balance: 0,
-            nonce: 0_u128.into(),
-            ..Account::default()
-        }
-        .with_shard(
+        Account::default().with_shard(
             programs::amm().id().into(),
             Data::from(&PoolDefinition {
                 token_program_id: programs::token().id().into(),
@@ -1968,7 +1746,6 @@ impl AccountsForExeTests {
 
     fn user_token_lp_holding_init_zero() -> Account {
         Account {
-            balance: 0,
             nonce: 1.into(),
             ..Account::default()
         }
@@ -2571,7 +2348,7 @@ fn call_new_definition_wrong_vault_id_2() {
 #[test]
 fn call_new_definition_cannot_initialize_active_pool() {
     let _post_diffs = new_definition(
-        &InputsForTests::pool_definition_active(),
+        &InputsForTests::pool_definition_init(),
         &InputsForTests::vault_a_init(),
         &InputsForTests::vault_b_init(),
         &InputsForTests::pool_lp_init(),
@@ -2589,7 +2366,7 @@ fn call_new_definition_cannot_initialize_active_pool() {
 #[test]
 fn call_new_definition_chained_call_successful() {
     let (post_diffs, chained_calls) = new_definition(
-        &InputsForTests::pool_definition_active(),
+        &InputsForTests::pool_definition_init(),
         &InputsForTests::vault_a_init(),
         &InputsForTests::vault_b_init(),
         &InputsForTests::pool_lp_init(),
@@ -3006,7 +2783,7 @@ fn call_swap_exact_output_chained_call_successful_2() {
 
     assert_eq!(
         effective_post_data(&pool_post),
-        InputsForTests::pool_definition_swap_exact_output_test_2()
+        InputsForTests::pool_definition_swap_test_2()
             .shard
             .expect("named position")
             .1

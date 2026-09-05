@@ -2420,7 +2420,7 @@ fn a_shared_authority_serves_both_targets() {
     );
     assert!(
         state.get_account_by_id(authority).shards.is_empty(),
-        "the authority stays unowned across both targets"
+        "the authority holds no record from either target"
     );
 
     let receiver_renounce = via_proxy(
