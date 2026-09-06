@@ -9,7 +9,7 @@
 pub use actor::unscreened_mempool_submit;
 pub use actor::{
     GetConnectedPeers, GossipActor, GossipTxPublisher, IngestSubmit, PublishTransaction,
-    WatchdogGuard, spawn_l1_only_watchdog,
+    WatchdogGuard, spawn_gossip_outage_watchdog,
 };
 pub use libp2p::Multiaddr;
 
