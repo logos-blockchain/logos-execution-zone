@@ -4,9 +4,8 @@ use common::transaction::LeeTransaction;
 use kameo::actor::ActorRef;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use mempool::MemPool;
-use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
-
 use sequencer_core::{TransactionOrigin, config::GossipConfig};
+use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
 use crate::{GetConnectedPeers, GossipActor, GossipTxPublisher};
 

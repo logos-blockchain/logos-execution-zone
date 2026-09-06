@@ -14,7 +14,6 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
 };
-
 use sequencer_core::config::BedrockConfig;
 
 pub trait AccreditedKeysProvider: Send + 'static {
