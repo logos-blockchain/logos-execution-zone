@@ -15,7 +15,6 @@ pub use libp2p::Multiaddr;
 
 pub mod accreditation;
 pub mod actor;
-pub mod message;
 pub mod seen_cache;
 pub mod validation;
 

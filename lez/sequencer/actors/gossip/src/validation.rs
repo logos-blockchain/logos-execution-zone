@@ -4,7 +4,6 @@
 //! side effects (those live in the gossip actor). Testable without a swarm.
 
 use common::transaction::LeeTransaction;
-
 use sequencer_core::config::BLOCK_OVERHEAD;
 
 #[derive(Debug)]

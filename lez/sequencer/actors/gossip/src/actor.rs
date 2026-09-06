@@ -27,11 +27,10 @@ use libp2p::{
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 #[cfg(test)]
 use mempool::MemPoolHandle;
-use tokio::select;
-
 #[cfg(test)]
 use sequencer_core::TransactionOrigin;
 use sequencer_core::config::GossipConfig;
+use tokio::select;
 
 use crate::seen_cache::SeenCache;
 
@@ -294,15 +293,12 @@ impl GossipActor {
         self.local_peer_id
     }
 
-    /// Sorted Ed25519 public keys of currently connected, identified peers.
+    /// Ed25519 public keys of currently connected, identified peers.
     fn connected_pubkeys(&self) -> Vec<[u8; 32]> {
-        let mut peers: Vec<[u8; 32]> = self
-            .connected
+        self.connected
             .iter()
             .filter_map(|peer_id| self.pubkeys.get(peer_id).copied())
-            .collect();
-        peers.sort_unstable();
-        peers
+            .collect()
     }
 
     #[expect(
@@ -581,21 +577,20 @@ pub(crate) fn peer_id_from_ed25519(
         .map(|key| libp2p::identity::PublicKey::from(key).to_peer_id())
 }
 
-/// Observes the gossip actor and, if it stops for any reason other than a
-/// requested stop or kill, warns operators every few minutes that the node
-/// is running L1-only — the actor is deliberately outside the service's
-/// failure aggregation, so nothing else reports it.
+/// Warns operators periodically while the gossip actor is down.
+///
+/// If the actor stops for any reason other than a requested stop or kill,
+/// this logs every few minutes that the node is running L1-only — the actor
+/// is deliberately outside the service's failure aggregation, so nothing
+/// else reports it.
+#[must_use]
 pub fn spawn_l1_only_watchdog(actor_ref: ActorRef<GossipActor>) -> WatchdogGuard {
     WatchdogGuard(tokio::spawn(async move {
-        #[expect(
-            clippy::wildcard_enum_match_arm,
-            reason = "every abnormal stop reason warns the same way"
-        )]
-        let crashed = match actor_ref.wait_for_shutdown_result().await {
-            Ok(ActorStopReason::Normal | ActorStopReason::Killed) => false,
-            _ => true,
-        };
-        if !crashed {
+        let stopped_cleanly = matches!(
+            actor_ref.wait_for_shutdown_result().await,
+            Ok(ActorStopReason::Normal | ActorStopReason::Killed)
+        );
+        if stopped_cleanly {
             return;
         }
         loop {
@@ -658,9 +653,9 @@ async fn wait_for_listen_addr(swarm: &mut Swarm<GossipBehaviour>) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+    use sequencer_core::config::GossipConfig;
 
     use super::*;
-    use sequencer_core::config::GossipConfig;
 
     const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
 

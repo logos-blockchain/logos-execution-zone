@@ -30,17 +30,17 @@ pub struct SequencerHandle {
     // NOTE: Order of fields matters as it affects drop order.
     scheduler: ActorHandle<Scheduler>,
     rpc_server: ActorHandle<RpcServerActor>,
-    /// Deliberately NOT part of [`Self::failed`]/[`Self::is_healthy`]: gossip
-    /// going down degrades the node to L1-only, it never halts it (the
-    /// watchdog warns operators instead). `None` when gossip is unconfigured.
-    gossip: Option<ActorHandle<sequencer_gossip_actor::GossipActor>>,
     executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
     slasher: ActorHandle<SlasherActor>,
     storage: ActorHandle<StorageActor>,
     addr: SocketAddr,
+    /// Deliberately NOT part of [`Self::failed`]/[`Self::is_healthy`]: gossip
+    /// going down degrades the node to L1-only, it never halts it (the
+    /// watchdog warns operators instead). `None` when gossip is unconfigured.
+    gossip: Option<ActorHandle<sequencer_gossip_actor::GossipActor>>,
     gossip_bootstrap_addrs: Option<Vec<sequencer_gossip_actor::Multiaddr>>,
     /// Aborts the L1-only outage warner when the handle is dropped.
-    _gossip_watchdog: Option<sequencer_gossip_actor::WatchdogGuard>,
+    gossip_watchdog: Option<sequencer_gossip_actor::WatchdogGuard>,
 }
 
 impl SequencerHandle {
@@ -53,18 +53,18 @@ impl SequencerHandle {
         storage: ActorHandle<StorageActor>,
         addr: SocketAddr,
         gossip_bootstrap_addrs: Option<Vec<sequencer_gossip_actor::Multiaddr>>,
-        _gossip_watchdog: Option<sequencer_gossip_actor::WatchdogGuard>,
+        gossip_watchdog: Option<sequencer_gossip_actor::WatchdogGuard>,
     ) -> Self {
         Self {
             scheduler,
             rpc_server,
-            gossip,
             executor,
             slasher,
             storage,
             addr,
+            gossip,
             gossip_bootstrap_addrs,
-            _gossip_watchdog,
+            gossip_watchdog,
         }
     }
 
@@ -80,7 +80,7 @@ impl SequencerHandle {
             storage,
             addr: _,
             gossip_bootstrap_addrs: _,
-            _gossip_watchdog: _,
+            gossip_watchdog: _,
         } = self;
 
         // NOTE: Order of shutdown matters. Make sure it follows the order of fields in the struct.
@@ -110,7 +110,7 @@ impl SequencerHandle {
             // A gossip failure never halts the node; see the field docs.
             gossip: _,
             gossip_bootstrap_addrs: _,
-            _gossip_watchdog: _,
+            gossip_watchdog: _,
         } = self;
 
         select! {
@@ -148,7 +148,7 @@ impl SequencerHandle {
             // A gossip failure never halts the node; see the field docs.
             gossip: _,
             gossip_bootstrap_addrs: _,
-            _gossip_watchdog: _,
+            gossip_watchdog: _,
         } = self;
 
         executor.is_healthy()
