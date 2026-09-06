@@ -37,18 +37,22 @@ pub struct SequencerHandle {
     /// watchdog warns operators instead). `None` when gossip is unconfigured.
     gossip: Option<ActorHandle<sequencer_gossip_actor::GossipActor>>,
     gossip_bootstrap_addrs: Option<Vec<sequencer_gossip_actor::Multiaddr>>,
-    /// Aborts the L1-only outage warner when the handle is dropped.
-    gossip_watchdog: Option<sequencer_gossip_actor::WatchdogGuard>,
+    /// Aborts the gossip outage warner when the handle is dropped.
+    _gossip_watchdog: Option<sequencer_gossip_actor::WatchdogGuard>,
 }
 
 impl SequencerHandle {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One argument per field; the three gossip parts are only absent together, when gossip is unconfigured"
+    )]
     const fn new(
         scheduler: ActorHandle<Scheduler>,
         rpc_server: ActorHandle<RpcServerActor>,
-        gossip: Option<ActorHandle<sequencer_gossip_actor::GossipActor>>,
         executor: ActorHandle<ExecutorActor<BlockPublisher>>,
         storage: ActorHandle<StorageActor>,
         addr: SocketAddr,
+        gossip: Option<ActorHandle<sequencer_gossip_actor::GossipActor>>,
         gossip_bootstrap_addrs: Option<Vec<sequencer_gossip_actor::Multiaddr>>,
         gossip_watchdog: Option<sequencer_gossip_actor::WatchdogGuard>,
     ) -> Self {
@@ -60,7 +64,7 @@ impl SequencerHandle {
             addr,
             gossip,
             gossip_bootstrap_addrs,
-            gossip_watchdog,
+            _gossip_watchdog: gossip_watchdog,
         }
     }
 
@@ -75,7 +79,7 @@ impl SequencerHandle {
             storage,
             addr: _,
             gossip_bootstrap_addrs: _,
-            gossip_watchdog: _,
+            _gossip_watchdog: _,
         } = self;
 
         // NOTE: Order of shutdown matters. Make sure it follows the order of fields in the struct.
@@ -103,7 +107,7 @@ impl SequencerHandle {
             // A gossip failure never halts the node; see the field docs.
             gossip: _,
             gossip_bootstrap_addrs: _,
-            gossip_watchdog: _,
+            _gossip_watchdog: _,
         } = self;
 
         select! {
@@ -137,7 +141,7 @@ impl SequencerHandle {
             // A gossip failure never halts the node; see the field docs.
             gossip: _,
             gossip_bootstrap_addrs: _,
-            gossip_watchdog: _,
+            _gossip_watchdog: _,
         } = self;
 
         executor.is_healthy()
@@ -227,7 +231,7 @@ pub fn run(
                 let bootstrap_addrs = gossip_actor.bootstrap_addrs();
                 let gossip_ref = sequencer_gossip_actor::GossipActor::spawn(gossip_actor);
                 info!("Gossip Actor spawned");
-                let watchdog = sequencer_gossip_actor::spawn_l1_only_watchdog(gossip_ref.clone());
+                let watchdog = sequencer_gossip_actor::spawn_gossip_outage_watchdog(gossip_ref.clone());
                 (
                     Some(ActorHandle::new(gossip_ref.clone())),
                     Some(sequencer_gossip_actor::GossipTxPublisher::new(gossip_ref)),
@@ -266,10 +270,10 @@ pub fn run(
         Ok(SequencerHandle::new(
             ActorHandle::new(scheduler_ref),
             ActorHandle::new(rpc_server_ref),
-            gossip,
             ActorHandle::new(executor_ref),
             ActorHandle::new(storage_ref),
             addr,
+            gossip,
             gossip_bootstrap_addrs,
             gossip_watchdog,
         ))

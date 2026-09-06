@@ -68,7 +68,7 @@ struct GossipBehaviour {
 ///
 /// Stopping the actor (or killing it via its handle) shuts the swarm down.
 /// A gossip failure never halts the node: the service keeps this actor out
-/// of its health/failure aggregation and a [`spawn_l1_only_watchdog`] warns
+/// of its health/failure aggregation and a [`spawn_gossip_outage_watchdog`] warns
 /// operators instead.
 pub struct GossipActor {
     swarm: Swarm<GossipBehaviour>,
@@ -584,7 +584,7 @@ pub(crate) fn peer_id_from_ed25519(
 /// is deliberately outside the service's failure aggregation, so nothing
 /// else reports it.
 #[must_use]
-pub fn spawn_l1_only_watchdog(actor_ref: ActorRef<GossipActor>) -> WatchdogGuard {
+pub fn spawn_gossip_outage_watchdog(actor_ref: ActorRef<GossipActor>) -> WatchdogGuard {
     WatchdogGuard(tokio::spawn(async move {
         let stopped_cleanly = matches!(
             actor_ref.wait_for_shutdown_result().await,
