@@ -4873,6 +4873,7 @@ dependencies = [
  "testing-framework-core",
  "testnet_initial_state",
  "thiserror 2.0.18",
+ "token_core",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",

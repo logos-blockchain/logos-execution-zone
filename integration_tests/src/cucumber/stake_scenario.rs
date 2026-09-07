@@ -82,6 +82,8 @@ pub enum AccountRole {
     Funding,
     /// The ownership account of the scenario's sequencer key.
     Ownership,
+    /// The stake funds PDA custodying the stake of the ownership account.
+    Funds,
     /// The ownership account of the second staked key.
     SecondOwnership,
 }
@@ -94,6 +96,7 @@ impl FromStr for AccountRole {
             "config" => Ok(Self::Config),
             "funding" => Ok(Self::Funding),
             "ownership" => Ok(Self::Ownership),
+            "funds" => Ok(Self::Funds),
             "second ownership" => Ok(Self::SecondOwnership),
             other => Err(StepError::LogicalError {
                 message: format!("unknown account role '{other}'"),
@@ -164,8 +167,16 @@ impl StakeScenario {
             AccountRole::Config => Ok(system_accounts::sequencer_stake_config_account_id()),
             AccountRole::Funding => self.funding_id(),
             AccountRole::Ownership => self.ownership_id(),
+            AccountRole::Funds => self.funds_id(),
             AccountRole::SecondOwnership => self.second_ownership_id(),
         }
+    }
+
+    /// Returns the stake funds PDA of the ownership account, where a `Stake`
+    /// custodies the staked balance.
+    pub fn funds_id(&self) -> Result<AccountId, StepError> {
+        self.ownership_id()
+            .map(|ownership_id| system_accounts::stake_funds_account_id(&ownership_id))
     }
 
     /// Returns the scenario's sequencer key.
@@ -324,8 +335,21 @@ pub fn stake_instruction(
     })
 }
 
+/// Serialized `token::NewFungibleDefinition`. Its two accounts, the definition
+/// and the holding account, both receive data, and a data write is what
+/// claims a default-owned account for the writing program.
+pub fn token_definition_instruction() -> Result<InstructionData, StepError> {
+    Program::serialize_instruction(token_core::Instruction::NewFungibleDefinition {
+        name: "stake-scenario-token".to_owned(),
+        total_supply: 1,
+    })
+    .map_err(|error| StepError::LogicalError {
+        message: format!("failed to serialize the token definition instruction: {error}"),
+    })
+}
+
 /// Serialized `sequencer_stake::ConfirmStake` expecting
-/// `expected_balance_after` on the ownership account.
+/// `expected_balance_after` on the stake funds account.
 pub fn confirm_stake_instruction(
     expected_balance_after: u128,
 ) -> Result<InstructionData, StepError> {

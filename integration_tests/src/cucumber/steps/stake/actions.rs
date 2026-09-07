@@ -4,7 +4,7 @@ use wallet::AccountIdentity;
 
 use super::{
     super::log_step,
-    helpers::{get_account, submit_and_record},
+    helpers::{first_configured_public_account, get_account, submit_and_record},
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
@@ -14,12 +14,14 @@ use crate::cucumber::{
     world::CucumberWorld,
 };
 
-/// The standard `Stake` account list: signing funding and ownership accounts
-/// plus the unsigned config account.
+/// The standard `Stake` account list: signing funding and ownership accounts,
+/// then the unsigned stake funds PDA of the ownership account and the unsigned
+/// config account.
 fn stake_accounts(funding_id: AccountId, ownership_id: AccountId) -> Vec<AccountIdentity> {
     vec![
         AccountIdentity::Public(funding_id),
         AccountIdentity::Public(ownership_id),
+        AccountIdentity::PublicNoSign(system_accounts::stake_funds_account_id(&ownership_id)),
         AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id()),
     ]
 }
@@ -60,9 +62,11 @@ async fn submit_stake_unsigned_ownership(
 ) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;
+    let ownership_id = scenario.ownership_id()?;
     let accounts = vec![
         AccountIdentity::Public(scenario.funding_id()?),
-        AccountIdentity::PublicNoSign(scenario.ownership_id()?),
+        AccountIdentity::PublicNoSign(ownership_id),
+        AccountIdentity::PublicNoSign(system_accounts::stake_funds_account_id(&ownership_id)),
         AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id()),
     ];
     submit_stake_with_accounts(world, &expression, accounts).await
@@ -79,9 +83,11 @@ async fn submit_stake_with_ownership_as_config(
 ) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;
+    let ownership_id = scenario.ownership_id()?;
     let accounts = vec![
         AccountIdentity::Public(scenario.funding_id()?),
-        AccountIdentity::Public(scenario.ownership_id()?),
+        AccountIdentity::Public(ownership_id),
+        AccountIdentity::PublicNoSign(system_accounts::stake_funds_account_id(&ownership_id)),
         AccountIdentity::PublicNoSign(scenario.second_ownership_id()?),
     ];
     submit_stake_with_accounts(world, &expression, accounts).await
@@ -98,7 +104,7 @@ async fn submit_stake_with_account_count(
     let scenario = world.stake()?;
     let canonical = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
     // Deterministic, unsigned filler accounts pad the pre-state list past the
-    // canonical three; the program rejects on the account count before
+    // canonical four; the program rejects on the account count before
     // touching them. The high byte pattern keeps them clear of other fixed
     // test account ids.
     let filler_account = |index: usize| {
@@ -120,16 +126,20 @@ async fn submit_stake_with_account_count(
     submit_stake_with_accounts(world, &expression, accounts).await
 }
 
-#[when(
-    "a ConfirmStake matching the current ownership balance is submitted as a top-level transaction"
-)]
+#[when("a ConfirmStake matching the current funds balance is submitted as a top-level transaction")]
 async fn submit_confirm_stake_top_level(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;
     let ownership_id = scenario.ownership_id()?;
-    // The expected balance matches the current one so the caller check is the
-    // only assert that can reject it.
-    let balance = get_account(world.lez()?, ownership_id).await?.balance;
+    // The expected balance matches the stake funds account, the account
+    // ConfirmStake reads, so the balance check could not reject it. The
+    // caller check is the handler's first assert and fires before the account
+    // list is looked at; the ownership account signs only because the wallet
+    // needs a signer for any top-level transaction, since the funds PDA has
+    // no key.
+    let balance = get_account(world.lez()?, scenario.funds_id()?)
+        .await?
+        .balance;
     let accounts = vec![AccountIdentity::Public(ownership_id)];
     let instruction = confirm_stake_instruction(balance)?;
     submit_and_record(
@@ -166,12 +176,15 @@ async fn submit_donation_to_unclaimed_ownership(
     donation: u128,
 ) -> StepResult {
     log_step(step);
-    let scenario = world.stake()?;
+    let ownership_id = world.stake()?.ownership_id()?;
     // The recipient deliberately does not sign: a donation is a plain
-    // transfer someone else pushes at the account.
+    // transfer someone else pushes at the account. The donor is a genesis
+    // supply account rather than the funding account: unlike Stake, a plain
+    // transfer is fee-charged, and the funding account holds only its stake.
+    let donor_id = first_configured_public_account(world.lez()?).await?;
     let accounts = vec![
-        AccountIdentity::Public(scenario.funding_id()?),
-        AccountIdentity::PublicNoSign(scenario.ownership_id()?),
+        AccountIdentity::Public(donor_id),
+        AccountIdentity::PublicNoSign(ownership_id),
     ];
     let instruction = transfer_instruction(donation)?;
     submit_and_record(
