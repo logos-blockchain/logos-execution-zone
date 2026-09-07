@@ -277,16 +277,16 @@ impl StakeScenario {
     }
 }
 
-/// Serde mirror of `sequencer_stake_core::Instruction::Stake` with the
+/// Borsh mirror of `sequencer_stake_core::Instruction::Stake` with the
 /// `SequencerKey` field widened to raw bytes, so an off-curve key can be
 /// serialized into otherwise well-formed instruction data (case P-24). The
 /// variant index and field order match the real instruction.
-#[derive(serde::Serialize)]
+#[derive(borsh::BorshSerialize)]
 enum RawStakeInstruction {
     Stake {
         sequencer_key: [u8; 32],
         amount: u128,
-        mover_program_id: lee_core::program::ProgramId,
+        mover_account_id: AccountId,
         mover_instruction_data: InstructionData,
     },
 }
@@ -316,7 +316,7 @@ pub fn stake_instruction(
     Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
         sequencer_key,
         amount,
-        mover_program_id: programs::authenticated_transfer().id(),
+        mover_account_id: programs::authenticated_transfer().id().into(),
         mover_instruction_data: transfer_instruction(amount)?,
     })
     .map_err(|error| StepError::LogicalError {
@@ -346,7 +346,7 @@ pub fn raw_stake_instruction(
     Program::serialize_instruction(RawStakeInstruction::Stake {
         sequencer_key: key_bytes,
         amount,
-        mover_program_id: programs::authenticated_transfer().id(),
+        mover_account_id: programs::authenticated_transfer().id().into(),
         mover_instruction_data: transfer_instruction(amount)?,
     })
     .map_err(|error| StepError::LogicalError {
@@ -360,18 +360,20 @@ pub fn raw_stake_instruction(
 /// make every raw instruction fail to decode and case P-24 pass vacuously.
 fn assert_raw_stake_layout_matches(amount: u128) -> Result<(), StepError> {
     let control_key = sequencer_key_from_seed(SEQUENCER_KEY_SEED);
-    let words = raw_stake_instruction(control_key.to_bytes(), amount)?;
-    let decoded = risc0_zkvm::serde::from_slice::<sequencer_stake_core::Instruction, u32>(&words)
-        .map_err(|error| StepError::LogicalError {
-        message: format!(
-            "RawStakeInstruction no longer mirrors Instruction::Stake: an on-curve control \
-                 key fails to decode: {error}"
-        ),
-    })?;
+    let bytes = raw_stake_instruction(control_key.to_bytes(), amount)?;
+    let decoded =
+        borsh::from_slice::<sequencer_stake_core::Instruction>(&bytes).map_err(|error| {
+            StepError::LogicalError {
+                message: format!(
+                    "RawStakeInstruction no longer mirrors Instruction::Stake: an on-curve control \
+                     key fails to decode: {error}"
+                ),
+            }
+        })?;
     let expected = sequencer_stake_core::Instruction::Stake {
         sequencer_key: control_key,
         amount,
-        mover_program_id: programs::authenticated_transfer().id(),
+        mover_account_id: programs::authenticated_transfer().id().into(),
         mover_instruction_data: transfer_instruction(amount)?,
     };
     if decoded != expected {
@@ -386,7 +388,7 @@ fn assert_raw_stake_layout_matches(amount: u128) -> Result<(), StepError> {
 }
 
 /// Whether instruction data carrying `key_bytes` in the `SequencerKey`
-/// position fails to deserialize (the serde half of case P-24).
+/// position fails to deserialize (the instruction half of case P-24).
 ///
 /// Guarded by a positive control so the failure is attributable to
 /// `key_bytes` rather than to instruction-layout drift.
@@ -395,6 +397,6 @@ pub fn raw_key_instruction_fails_to_decode(
     amount: u128,
 ) -> Result<bool, StepError> {
     assert_raw_stake_layout_matches(amount)?;
-    let words = raw_stake_instruction(key_bytes, amount)?;
-    Ok(risc0_zkvm::serde::from_slice::<sequencer_stake_core::Instruction, u32>(&words).is_err())
+    let bytes = raw_stake_instruction(key_bytes, amount)?;
+    Ok(borsh::from_slice::<sequencer_stake_core::Instruction>(&bytes).is_err())
 }

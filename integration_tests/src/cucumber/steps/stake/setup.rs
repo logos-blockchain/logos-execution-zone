@@ -26,7 +26,13 @@ const OFF_CURVE_BYTES: [u8; 32] = [2; 32];
 #[given("the sequencer_stake config account is at the default minimum stake")]
 async fn config_account_at_default_minimum(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
-    let minimum = stake_config(world.lez()?).await?.minimum_sequencer_stake;
+    let minimum = stake_config(world.lez()?)
+        .await?
+        .channel_params
+        .ok_or_else(|| StepError::AssertionFailed {
+            message: "the config account carries no channel params".to_owned(),
+        })?
+        .minimum_sequencer_stake;
     if minimum != system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE {
         return Err(StepError::AssertionFailed {
             message: format!(

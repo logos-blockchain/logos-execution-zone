@@ -155,7 +155,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
 
   @stake_registration_ci @P-24 @P1 @L3
   # The borsh half mirrors sequencer_stake core's
-  # a_non_curve_point_is_not_a_sequencer_key; the serde/instruction half is
+  # a_non_curve_point_is_not_a_sequencer_key; the instruction half is
   # the 🆕 path of the plan: an off-curve Stake never reaches the handler
   # (the instruction decode panics inside the zkVM guest and surfaces as a
   # program-execution failure).
