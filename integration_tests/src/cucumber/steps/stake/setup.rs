@@ -45,11 +45,7 @@ async fn config_account_at_default_minimum(world: &mut CucumberWorld, step: &Ste
 }
 
 #[given(expr = "chain waits give up after {int} blocks")]
-fn chain_waits_give_up_after(
-    world: &mut CucumberWorld,
-    step: &Step,
-    blocks: u32,
-) -> StepResult {
+fn chain_waits_give_up_after(world: &mut CucumberWorld, step: &Step, blocks: u32) -> StepResult {
     log_step(step);
     let timeout = world.lez()?.block_create_timeout().saturating_mul(blocks);
     world.stake_mut()?.set_wait_timeout(timeout);
