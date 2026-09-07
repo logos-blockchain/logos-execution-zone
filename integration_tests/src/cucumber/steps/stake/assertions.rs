@@ -35,13 +35,17 @@ async fn stake_transaction_accepted(world: &mut CucumberWorld, step: &Step) -> S
     wait_for_inclusion(world.lez()?, hash).await
 }
 
-#[then("the stake transaction is not included in a block")]
-#[then("the donation transaction is not included in a block")]
-async fn transaction_not_included(world: &mut CucumberWorld, step: &Step) -> StepResult {
+#[then(expr = "the stake transaction is not included within the next {int} blocks")]
+#[then(expr = "the donation transaction is not included within the next {int} blocks")]
+async fn transaction_not_included(
+    world: &mut CucumberWorld,
+    step: &Step,
+    blocks: u64,
+) -> StepResult {
     log_step(step);
     let context = world.lez()?;
     let submission = world.stake()?.last_submission()?;
-    assert_not_included(context, submission).await
+    assert_not_included(context, submission, blocks).await
 }
 
 #[then("the config entry tracks the staked amount with no pending unstake")]

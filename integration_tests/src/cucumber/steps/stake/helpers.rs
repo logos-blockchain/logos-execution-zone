@@ -27,12 +27,6 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// posting-turn reclaim.
 const WAIT_TIMEOUT_BLOCKS: u32 = 60;
 
-/// Blocks past the post-admission tip that prove a dropped transaction: the
-/// builder pulls the whole mempool on every turn, so once two more blocks
-/// exist at least one pull happened after admission and the transaction was
-/// tried and dropped rather than still queued.
-const NON_INCLUSION_BLOCKS: u64 = 2;
-
 /// Upper bound on every wait, derived from the block cadence the deployed
 /// stack was configured with.
 const fn wait_timeout(context: &LezScenarioContext) -> Duration {
@@ -171,15 +165,15 @@ pub(super) async fn wait_for_inclusion(context: &LezScenarioContext, hash: HashT
     .await
 }
 
-/// Waits until the chain has moved [`NON_INCLUSION_BLOCKS`] past the
-/// post-admission tip and asserts the transaction is in none of them.
+/// Waits until the chain has moved `blocks` past the post-admission tip and
+/// asserts the transaction is in none of them. The scenario chooses `blocks`;
+/// see the feature file for why two blocks prove a dropped transaction.
 pub(super) async fn assert_not_included(
     context: &LezScenarioContext,
     submission: &SubmissionRecord,
+    blocks: u64,
 ) -> StepResult {
-    let target = submission
-        .submitted_at_block
-        .saturating_add(NON_INCLUSION_BLOCKS);
+    let target = submission.submitted_at_block.saturating_add(blocks);
     wait_until(
         POLL_INTERVAL,
         wait_timeout(context),
