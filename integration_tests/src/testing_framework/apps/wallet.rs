@@ -406,7 +406,7 @@ impl WalletActor {
                             } => {
                                 let result = components
                                     .wallet
-                                    .send_pub_tx(accounts, instruction_data, program_id)
+                                    .send_pub_tx(accounts, instruction_data, program_id.into())
                                     .await
                                     .map_err(|error| format!("{error:?}"));
                                 let _unused = response.send(result);

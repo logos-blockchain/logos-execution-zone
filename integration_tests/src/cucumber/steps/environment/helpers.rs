@@ -18,8 +18,8 @@ use crate::{
 const STACK_PRIORITY_FEE_PERCENT: u64 = 12;
 
 /// Base sequencer configuration for Cucumber LEZ deployments: framework
-/// defaults plus the stack-wide Bedrock priority fee. Scenario configs start
-/// from this base, so every field they set is honored as-is.
+/// defaults plus the stack-wide Bedrock priority fee percent. Scenario configs
+/// start from this base, so every field they set is honored as-is.
 pub(crate) fn base_sequencer_config() -> SequencerPartialConfig {
     SequencerPartialConfig {
         priority_fee_percent: STACK_PRIORITY_FEE_PERCENT,
