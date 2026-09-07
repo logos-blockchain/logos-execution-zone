@@ -28,7 +28,7 @@ impl TestNode {
     }
 
     fn publisher(&self) -> GossipTxPublisher {
-        GossipTxPublisher::new(self.actor_ref.clone())
+        GossipTxPublisher::new(self.actor_ref.clone().recipient())
     }
 }
 

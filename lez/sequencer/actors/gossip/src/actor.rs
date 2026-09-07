@@ -32,7 +32,10 @@ use sequencer_core::TransactionOrigin;
 use sequencer_core::config::GossipConfig;
 use tokio::select;
 
-use crate::seen_cache::SeenCache;
+use crate::{
+    protocol::{GetConnectedPeers, PublishTransaction},
+    seen_cache::SeenCache,
+};
 
 /// How long to wait for the first listen address before failing startup.
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -96,18 +99,6 @@ pub struct GossipActor {
 /// local head state, which drifts, so peers legitimately disagree.
 pub type IngestSubmit =
     Arc<dyn Fn(LeeTransaction) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
-
-/// Ask: Ed25519 public keys of currently connected peers.
-pub struct GetConnectedPeers;
-
-/// Tell: publish a locally-submitted transaction to the mesh.
-pub struct PublishTransaction(pub LeeTransaction);
-
-/// Handle for publishing locally-submitted transactions to the gossip mesh.
-/// `publish` is non-blocking: a full mailbox drops the transaction rather
-/// than back-pressuring the caller.
-#[derive(Clone)]
-pub struct GossipTxPublisher(ActorRef<GossipActor>);
 
 /// Aborts the watchdog task when dropped, silencing the L1-only warning on
 /// node shutdown.
@@ -525,19 +516,6 @@ impl Message<PublishTransaction> for GossipActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.publish_transaction(tx);
-    }
-}
-
-impl GossipTxPublisher {
-    #[must_use]
-    pub const fn new(actor_ref: ActorRef<GossipActor>) -> Self {
-        Self(actor_ref)
-    }
-
-    pub fn publish(&self, tx: LeeTransaction) {
-        if let Err(err) = self.0.tell(PublishTransaction(tx)).try_send() {
-            log::debug!("Dropping local tx publish: gossip mailbox full or closed: {err}");
-        }
     }
 }
 
