@@ -24,7 +24,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
   # Should the node ever gain a transaction status API (pending, included, or
   # dropped with a reason), replace the two-block window with it.
   #
-  # Registration cases not ported:
+  # Registration cases not yet covered here:
   # - P-15, P-16 need a bad-mover guest
   # - P-17, P-19 need a chained-caller guest
   # - P-21 needs a second mover program fitting Stake's two-account slot
@@ -134,7 +134,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
       | 4     |
 
   @stake_registration_ci @P-23 @P1 @L3
-  # ⚠️ Diverges further from the plan than the earlier L1 port did. The plan
+  # ⚠️ Diverges further from the plan than the earlier L1 test did. The plan
   # expects acceptance with expected_balance_after = donation + amount; at L1
   # the runtime instead rejected the Stake because the donation had made the
   # unclaimed ownership account non-default (validate_execution rule 6). At
