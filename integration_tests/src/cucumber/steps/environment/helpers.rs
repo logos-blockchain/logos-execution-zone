@@ -27,16 +27,9 @@ pub(crate) fn base_sequencer_config() -> SequencerPartialConfig {
     }
 }
 
+/// Deploys the Cucumber LEZ stack. `sequencer_config` falls back to
+/// [`base_sequencer_config`] when `None`.
 pub(crate) async fn deploy_lez_stack(
-    world: &mut CucumberWorld,
-    bedrock: BedrockApp,
-    initialize_private_accounts: bool,
-    step: &Step,
-) -> StepResult {
-    deploy_lez_stack_with_config(world, bedrock, initialize_private_accounts, None, step).await
-}
-
-pub(crate) async fn deploy_lez_stack_with_config(
     world: &mut CucumberWorld,
     bedrock: BedrockApp,
     initialize_private_accounts: bool,
