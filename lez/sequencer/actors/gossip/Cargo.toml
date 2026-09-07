@@ -11,7 +11,8 @@ workspace = true
 # Adds actor implementation.
 actor = ["dep:tokio", "dep:futures", "dep:hex", "dep:libp2p"]
 # Enable mDNS-based local peer discovery for gossip.
-mdns = []
+# All mDNS code lives in the actor, so this implies `actor`.
+mdns = ["actor"]
 
 [dependencies]
 common.workspace = true

@@ -284,12 +284,15 @@ impl GossipActor {
         self.local_peer_id
     }
 
-    /// Ed25519 public keys of currently connected, identified peers.
+    /// Sorted Ed25519 public keys of currently connected, identified peers.
     fn connected_pubkeys(&self) -> Vec<[u8; 32]> {
-        self.connected
+        let mut peers: Vec<[u8; 32]> = self
+            .connected
             .iter()
             .filter_map(|peer_id| self.pubkeys.get(peer_id).copied())
-            .collect()
+            .collect();
+        peers.sort_unstable();
+        peers
     }
 
     #[expect(

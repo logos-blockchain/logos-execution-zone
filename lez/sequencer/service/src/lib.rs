@@ -30,14 +30,14 @@ pub struct SequencerHandle {
     // NOTE: Order of fields matters as it affects drop order.
     scheduler: ActorHandle<Scheduler>,
     rpc_server: ActorHandle<RpcServerActor>,
-    executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
-    slasher: ActorHandle<SlasherActor>,
-    storage: ActorHandle<StorageActor>,
-    addr: SocketAddr,
     /// Deliberately NOT part of [`Self::failed`]/[`Self::is_healthy`]: gossip
     /// going down degrades the node to L1-only, it never halts it (the
     /// watchdog warns operators instead). `None` when gossip is unconfigured.
     gossip: Option<Gossip>,
+    executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
+    slasher: ActorHandle<SlasherActor>,
+    storage: ActorHandle<StorageActor>,
+    addr: SocketAddr,
 }
 
 /// The gossip actor and its companions.
@@ -52,20 +52,20 @@ impl SequencerHandle {
     const fn new(
         scheduler: ActorHandle<Scheduler>,
         rpc_server: ActorHandle<RpcServerActor>,
+        gossip: Option<Gossip>,
         executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
         slasher: ActorHandle<SlasherActor>,
         storage: ActorHandle<StorageActor>,
         addr: SocketAddr,
-        gossip: Option<Gossip>,
     ) -> Self {
         Self {
             scheduler,
             rpc_server,
+            gossip,
             executor,
             slasher,
             storage,
             addr,
-            gossip,
         }
     }
 
@@ -277,11 +277,11 @@ pub fn run(
         Ok(SequencerHandle::new(
             ActorHandle::new(scheduler_ref),
             ActorHandle::new(rpc_server_ref),
+            gossip,
             ActorHandle::new(executor_ref),
             ActorHandle::new(slasher_ref),
             ActorHandle::new(storage_ref),
             addr,
-            gossip,
         ))
     }
 }
