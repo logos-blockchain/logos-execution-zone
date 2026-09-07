@@ -49,6 +49,7 @@ async fn required_entry(world: &CucumberWorld) -> Result<SequencerEntry, StepErr
 }
 
 #[then("the stake transaction is accepted")]
+#[then("the donation transaction is accepted")]
 async fn stake_transaction_accepted(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;
@@ -162,21 +163,48 @@ async fn ownership_account_is_not_claimed(world: &mut CucumberWorld, step: &Step
     Ok(())
 }
 
-#[then("the ownership account balance increased by the staked amount")]
-async fn ownership_balance_increased(world: &mut CucumberWorld, step: &Step) -> StepResult {
+/// Asserts that the `role` account's balance moved by exactly the amount of
+/// the last submission relative to the pre-submission snapshot.
+#[then(regex = "^the ([a-z ]+) account balance increased by the (?:staked|donated) amount$")]
+async fn account_balance_increased(
+    world: &mut CucumberWorld,
+    step: &Step,
+    role: AccountRole,
+) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;
-    let ownership_id = scenario.ownership_id()?;
-    let balance_before = scenario.snapshot()?.account(ownership_id)?.balance;
+    let account_id = scenario.account_id(role)?;
+    let balance_before = scenario.snapshot()?.account(account_id)?.balance;
     let expected = balance_before
         .checked_add(scenario.last_submission()?.amount)
         .ok_or_else(|| StepError::AssertionFailed {
-            message: "expected ownership balance overflows".to_owned(),
+            message: format!("expected {role:?} balance overflows"),
         })?;
-    let observed = get_account(world.lez()?, ownership_id).await?.balance;
+    let observed = get_account(world.lez()?, account_id).await?.balance;
     if observed != expected {
         return Err(StepError::AssertionFailed {
-            message: format!("the ownership balance is {observed}, expected {expected}"),
+            message: format!("the {role:?} balance is {observed}, expected {expected}"),
+        });
+    }
+    Ok(())
+}
+
+/// Asserts that the `role` account's balance equals its pre-submission
+/// snapshot, whatever happened to its data or owner.
+#[then(regex = "^the ([a-z ]+) account balance is unchanged$")]
+async fn account_balance_unchanged(
+    world: &mut CucumberWorld,
+    step: &Step,
+    role: AccountRole,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let account_id = scenario.account_id(role)?;
+    let expected = scenario.snapshot()?.account(account_id)?.balance;
+    let observed = get_account(world.lez()?, account_id).await?.balance;
+    if observed != expected {
+        return Err(StepError::AssertionFailed {
+            message: format!("the {role:?} balance is {observed}, expected {expected}"),
         });
     }
     Ok(())

@@ -5,17 +5,18 @@
 
 use cucumber::{gherkin::Step, given};
 use lee::Account;
+use wallet::AccountIdentity;
 
 use super::{
     super::log_step,
     helpers::{
         config_entry, first_configured_public_account, get_account, stake_config,
-        submit_accepted_stake,
+        submit_accepted_stake, wait_for_inclusion,
     },
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
-    stake_scenario::StakeScenario,
+    stake_scenario::{StakeScenario, token_definition_instruction},
     world::CucumberWorld,
 };
 
@@ -105,26 +106,43 @@ async fn fund_funding_account(
     Ok(())
 }
 
-#[given("the ownership account is already claimed by the authenticated_transfer program")]
+#[given("the ownership account is already claimed by the token program")]
 async fn ownership_account_claimed_by_other_program(
     world: &mut CucumberWorld,
     step: &Step,
 ) -> StepResult {
     log_step(step);
-    let ownership_id = world.stake()?.ownership_id()?;
+    let scenario = world.stake()?;
+    let ownership_id = scenario.ownership_id()?;
+    let timeout = scenario.wait_timeout()?;
     let context = world.lez()?;
+    // Claiming is implicit on data writes, so a plain credit leaves the
+    // account unowned. A token definition writes data to both of its signing
+    // accounts; with the ownership account as the holding account, the token
+    // program claims it. The definition account is a throwaway, funded first
+    // because a token transaction, unlike Stake, is fee-charged and the
+    // wallet bills the first signer holding a balance.
     let supply_id = first_configured_public_account(context).await?;
-    // A transfer with the recipient signing claims a default-owned recipient
-    // for authenticated_transfer — the only foreign owner reachable through
-    // deployed programs.
+    let definition_id = context.new_public_account().await?;
     context
-        .public_transfer_to_new_account(supply_id, ownership_id, 1)
+        .public_transfer_to_new_account(supply_id, definition_id, wallet::DEFAULT_MAX_FEE)
         .await?;
+    let hash = context
+        .send_program_transaction(
+            vec![
+                AccountIdentity::Public(definition_id),
+                AccountIdentity::Public(ownership_id),
+            ],
+            token_definition_instruction()?,
+            programs::token().id(),
+        )
+        .await?;
+    wait_for_inclusion(context, hash, timeout).await?;
     let owner = get_account(context, ownership_id).await?.program_owner;
-    if owner != programs::authenticated_transfer().id().into() {
+    if owner != programs::token().id().into() {
         return Err(StepError::AssertionFailed {
             message: format!(
-                "the ownership account is owned by {owner}, expected authenticated_transfer"
+                "the ownership account is owned by {owner}, expected the token program"
             ),
         });
     }

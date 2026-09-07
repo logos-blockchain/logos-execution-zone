@@ -48,7 +48,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     And the config entry tracks the staked amount with no pending unstake
     And the config entry points at the ownership account
     And the ownership account is claimed by sequencer_stake backing the sequencer key with no pending unstake
-    And the ownership account balance increased by the staked amount
+    And the funds account balance increased by the staked amount
     And the funding account balance decreased by the staked amount
 
   @stake_registration_ci @P-02 @P0 @L3
@@ -75,13 +75,12 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     And the config, funding and ownership accounts are unchanged
 
   @stake_registration_ci @P-13 @P1 @L3
-  # In-program reason: "not a sequencer_stake ownership account". The plan
-  # names the token program as the foreign owner; at node level the only
-  # foreign owner reachable through deployed programs is
-  # authenticated_transfer, which claims a default-owned recipient on a
-  # signed transfer. The guest's owner check rejects both the same way.
+  # In-program reason: "not a sequencer_stake ownership account". Claiming is
+  # implicit on data writes, so a plain transfer leaves its recipient
+  # unowned; the token program claims the ownership account by writing a
+  # token holding into it, which is the foreign owner the plan names.
   Scenario: Ownership account owned by another program is rejected
-    Given the ownership account is already claimed by the authenticated_transfer program
+    Given the ownership account is already claimed by the token program
     When a Stake of "twice the minimum stake" is submitted
     Then the stake transaction is not included within the next 2 blocks
     And the config has no entry for the sequencer key
@@ -113,16 +112,20 @@ Feature: Sequencer registration — a first Stake turns balance into stake
 
   @stake_registration_ci @P-18 @P0 @L3
   # In-program reason: "ConfirmStake can only be invoked as a self-chained
-  # call". The ownership balance already matches the expected post-balance,
-  # so the caller check is the only assert that can reject it.
+  # call". The expected balance matches the stake funds account, the account
+  # ConfirmStake reads, and the caller check is the handler's first assert,
+  # so it is the one that rejects. The ownership account signs because a
+  # top-level transaction needs a signer and the funds PDA has no key.
   Scenario: ConfirmStake submitted top-level is rejected
-    When a ConfirmStake matching the current ownership balance is submitted as a top-level transaction
+    When a ConfirmStake matching the current funds balance is submitted as a top-level transaction
     Then the stake transaction is not included within the next 2 blocks
     And the config, funding and ownership accounts are unchanged
 
   @stake_registration_ci @P-20 @P2 @L3
   # In-program reason: "Stake requires a funding account, an ownership
-  # account, and the config account".
+  # account, the stake funds account, and the config account". The canonical
+  # count is 4, so the examples sit one short of and one past it; a
+  # 4-account list with a wrong funds slot is P-27, not this case.
   Scenario Outline: Wrong pre-state account count is rejected
     When a Stake of "the minimum stake" is submitted with <count> pre-state accounts
     Then the stake transaction is not included within the next 2 blocks
@@ -131,27 +134,29 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     Examples:
       | count |
       | 2     |
-      | 4     |
+      | 5     |
 
   @stake_registration_ci @P-23 @P1 @L3
-  # ⚠️ Diverges further from the plan than the earlier L1 test did. The plan
-  # expects acceptance with expected_balance_after = donation + amount; at L1
-  # the runtime instead rejected the Stake because the donation had made the
-  # unclaimed ownership account non-default (validate_execution rule 6). At
-  # node level even the donated pre-state is unreachable: claiming a
-  # default-owned recipient needs the recipient's signature, so a plain
-  # transfer at an unclaimed account is itself dropped
-  # (ClaimedUnauthorizedAccount) and the account stays fresh. This scenario
-  # pins that behaviour and shows registration is unaffected afterwards.
-  # Revisit with the plan's §12 decisions.
-  Scenario: A donation cannot reach an unclaimed ownership account before the first Stake
+  # The plan expects a donation made before the first Stake to be absorbed
+  # into the stake (expected_balance_after = donation + amount). Two dev
+  # changes move the goalposts: a credit leaves a default-owned account
+  # unowned (claiming is implicit on data writes only), so the donation lands
+  # and the first Stake still claims the account; and the stake is custodied
+  # in the funds PDA, so the donation stays on the ownership account and the
+  # entry tracks only the staked amount. Revisit with the plan's §15.8
+  # decision.
+  Scenario: A donation to the unclaimed ownership account stays outside the first Stake
     When a donation of 25 to the unclaimed ownership account is submitted
-    Then the donation transaction is not included within the next 2 blocks
+    Then the donation transaction is accepted
     And the ownership account is not claimed
-    And the config, funding and ownership accounts are unchanged
+    And the ownership account balance increased by the donated amount
+    And the config and funding accounts are unchanged
     When a Stake of "twice the minimum stake" is submitted
     Then the stake transaction is accepted
-    And the ownership account balance increased by the staked amount
+    And the config entry tracks the staked amount with no pending unstake
+    And the ownership account is claimed by sequencer_stake backing the sequencer key with no pending unstake
+    And the funds account balance increased by the staked amount
+    And the ownership account balance is unchanged
 
   @stake_registration_ci @P-24 @P1 @L3
   # The borsh half mirrors sequencer_stake core's

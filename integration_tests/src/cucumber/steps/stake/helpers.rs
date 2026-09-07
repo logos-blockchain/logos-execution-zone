@@ -87,8 +87,8 @@ pub(super) async fn last_block(context: &LezScenarioContext) -> Result<u64, Step
 }
 
 /// Snapshots the config account plus every scenario account introduced so
-/// far, immediately before a submission. The assertion step names which of
-/// these it compares.
+/// far, including the stake funds PDA of the ownership account, immediately
+/// before a submission. The assertion step names which of these it compares.
 pub(super) async fn scenario_snapshot(
     world: &CucumberWorld,
 ) -> Result<AccountsSnapshot, StepError> {
@@ -97,6 +97,7 @@ pub(super) async fn scenario_snapshot(
     let mut account_ids = vec![system_accounts::sequencer_stake_config_account_id()];
     account_ids.extend(scenario.funding_id().ok());
     account_ids.extend(scenario.ownership_id().ok());
+    account_ids.extend(scenario.funds_id().ok());
     account_ids.extend(scenario.second_ownership_id().ok());
 
     let accounts = try_join_all(account_ids.into_iter().map(|account_id| async move {
@@ -208,6 +209,9 @@ pub(super) async fn submit_accepted_stake(
             vec![
                 AccountIdentity::Public(funding_id),
                 AccountIdentity::Public(ownership_id),
+                AccountIdentity::PublicNoSign(system_accounts::stake_funds_account_id(
+                    &ownership_id,
+                )),
                 AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id()),
             ],
             stake_instruction(sequencer_key, amount)?,
