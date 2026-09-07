@@ -240,7 +240,8 @@ pub fn run(
                 let bootstrap_addrs = gossip_actor.bootstrap_addrs();
                 let gossip_ref = sequencer_gossip_actor::GossipActor::spawn(gossip_actor);
                 info!("Gossip Actor spawned");
-                let watchdog = sequencer_gossip_actor::spawn_gossip_outage_watchdog(gossip_ref.clone());
+                let watchdog =
+                    sequencer_gossip_actor::spawn_gossip_outage_watchdog(gossip_ref.clone());
                 (
                     Some(ActorHandle::new(gossip_ref.clone())),
                     Some(sequencer_gossip_actor::GossipTxPublisher::new(gossip_ref)),

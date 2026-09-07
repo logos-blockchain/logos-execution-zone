@@ -7,6 +7,19 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Adds actor implementation.
+actor = [
+  "dep:kameo",
+  "dep:tokio",
+  "dep:futures",
+  "dep:hex",
+  "dep:libp2p",
+  "dep:log",
+]
+# Enable mDNS-based local peer discovery for gossip.
+mdns = []
+
 [dependencies]
 common.workspace = true
 sequencer_core.workspace = true
@@ -15,20 +28,21 @@ logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 
-kameo.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 anyhow.workspace = true
 borsh.workspace = true
-futures.workspace = true
-hex.workspace = true
-libp2p.workspace = true
-log.workspace = true
-
-[features]
-# Enable mDNS-based local peer discovery for gossip.
-mdns = []
+kameo = { workspace = true, optional = true }
+tokio = { workspace = true, features = [
+  "macros",
+  "rt-multi-thread",
+  "time",
+], optional = true }
+futures = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+libp2p = { workspace = true, optional = true }
+log = { workspace = true, optional = true }
 
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }
 mempool.workspace = true
 testnet_initial_state.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
