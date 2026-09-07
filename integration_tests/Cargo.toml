@@ -18,7 +18,6 @@ sequencer_core.workspace = true
 wallet.workspace = true
 common.workspace = true
 key_protocol.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 faucet_core.workspace = true
 bridge_core.workspace = true
