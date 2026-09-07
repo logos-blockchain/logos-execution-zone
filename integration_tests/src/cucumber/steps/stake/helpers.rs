@@ -22,19 +22,6 @@ use crate::cucumber::{
 /// Cadence of the inclusion and non-inclusion polls.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Upper bound on every wait, in block periods; generous because a freshly
-/// accredited key with no node behind it slows block production down to the
-/// posting-turn reclaim.
-const WAIT_TIMEOUT_BLOCKS: u32 = 60;
-
-/// Upper bound on every wait, derived from the block cadence the deployed
-/// stack was configured with.
-const fn wait_timeout(context: &LezScenarioContext) -> Duration {
-    context
-        .block_create_timeout()
-        .saturating_mul(WAIT_TIMEOUT_BLOCKS)
-}
-
 /// Reads one account from the sequencer; an untouched account comes back with
 /// default values.
 pub(super) async fn get_account(
@@ -100,7 +87,8 @@ pub(super) async fn last_block(context: &LezScenarioContext) -> Result<u64, Step
 }
 
 /// Snapshots the config account plus every scenario account introduced so
-/// far, immediately before a submission.
+/// far, immediately before a submission. The assertion step names which of
+/// these it compares.
 pub(super) async fn scenario_snapshot(
     world: &CucumberWorld,
 ) -> Result<AccountsSnapshot, StepError> {
@@ -147,11 +135,15 @@ pub(super) async fn submit_and_record(
     Ok(())
 }
 
-/// Waits until `hash` appears in a block.
-pub(super) async fn wait_for_inclusion(context: &LezScenarioContext, hash: HashType) -> StepResult {
+/// Waits until `hash` appears in a block, giving up after `timeout`.
+pub(super) async fn wait_for_inclusion(
+    context: &LezScenarioContext,
+    hash: HashType,
+    timeout: Duration,
+) -> StepResult {
     wait_until(
         POLL_INTERVAL,
-        wait_timeout(context),
+        timeout,
         format!("transaction {hash} to be included"),
         || async move {
             Ok(context
@@ -166,17 +158,19 @@ pub(super) async fn wait_for_inclusion(context: &LezScenarioContext, hash: HashT
 }
 
 /// Waits until the chain has moved `blocks` past the post-admission tip and
-/// asserts the transaction is in none of them. The scenario chooses `blocks`;
-/// see the feature file for why two blocks prove a dropped transaction.
+/// asserts the transaction is in none of them, giving up after `timeout`. The
+/// scenario chooses both; see the feature file for why two blocks prove a
+/// dropped transaction.
 pub(super) async fn assert_not_included(
     context: &LezScenarioContext,
     submission: &SubmissionRecord,
     blocks: u64,
+    timeout: Duration,
 ) -> StepResult {
     let target = submission.submitted_at_block.saturating_add(blocks);
     wait_until(
         POLL_INTERVAL,
-        wait_timeout(context),
+        timeout,
         format!("the chain to reach block {target} proving non-inclusion"),
         || async move { Ok((last_block(context).await? >= target).then_some(())) },
     )
@@ -198,15 +192,16 @@ pub(super) async fn assert_not_included(
     Ok(())
 }
 
-/// Submits a fully signed, well-formed `Stake` and waits for its inclusion.
-/// Used by setup steps whose registrations must succeed; the submission is
-/// not recorded as the one under test.
+/// Submits a fully signed, well-formed `Stake` and waits for its inclusion,
+/// giving up after `timeout`. Used by setup steps whose registrations must
+/// succeed; the submission is not recorded as the one under test.
 pub(super) async fn submit_accepted_stake(
     context: &LezScenarioContext,
     funding_id: AccountId,
     ownership_id: AccountId,
     sequencer_key: SequencerKey,
     amount: u128,
+    timeout: Duration,
 ) -> StepResult {
     let hash = context
         .send_program_transaction(
@@ -219,5 +214,5 @@ pub(super) async fn submit_accepted_stake(
             programs::sequencer_stake().id(),
         )
         .await?;
-    wait_for_inclusion(context, hash).await
+    wait_for_inclusion(context, hash, timeout).await
 }

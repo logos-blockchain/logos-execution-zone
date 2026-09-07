@@ -14,6 +14,8 @@
 //! therefore assert non-inclusion plus unchanged accounts instead of the
 //! in-program rejection message.
 
+use std::{str::FromStr, time::Duration};
+
 use common::HashType;
 use lee::{Account, AccountId, program::Program};
 use lee_core::program::InstructionData;
@@ -70,11 +72,42 @@ impl AccountsSnapshot {
     }
 }
 
+/// Scenario-level name for one of the accounts a registration scenario can
+/// touch, as written in the feature file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountRole {
+    /// The `sequencer_stake` config account.
+    Config,
+    /// The account paying the stake.
+    Funding,
+    /// The ownership account of the scenario's sequencer key.
+    Ownership,
+    /// The ownership account of the second staked key.
+    SecondOwnership,
+}
+
+impl FromStr for AccountRole {
+    type Err = StepError;
+
+    fn from_str(role: &str) -> Result<Self, Self::Err> {
+        match role.trim() {
+            "config" => Ok(Self::Config),
+            "funding" => Ok(Self::Funding),
+            "ownership" => Ok(Self::Ownership),
+            "second ownership" => Ok(Self::SecondOwnership),
+            other => Err(StepError::LogicalError {
+                message: format!("unknown account role '{other}'"),
+            }),
+        }
+    }
+}
+
 /// Per-scenario cast of a registration scenario: one funding account, one
 /// ownership account, one sequencer key, plus the observations recorded by
 /// earlier steps.
 pub struct StakeScenario {
     minimum_stake: u128,
+    wait_timeout: Option<Duration>,
     sequencer_key: SequencerKey,
     second_sequencer_key: SequencerKey,
     funding_id: Option<AccountId>,
@@ -92,6 +125,7 @@ impl StakeScenario {
     pub fn new(minimum_stake: u128) -> Self {
         Self {
             minimum_stake,
+            wait_timeout: None,
             sequencer_key: sequencer_key_from_seed(SEQUENCER_KEY_SEED),
             second_sequencer_key: sequencer_key_from_seed(SECOND_SEQUENCER_KEY_SEED),
             funding_id: None,
@@ -107,6 +141,31 @@ impl StakeScenario {
     #[must_use]
     pub const fn minimum_stake(&self) -> u128 {
         self.minimum_stake
+    }
+
+    /// Stores the upper bound every inclusion and non-inclusion wait gives up
+    /// at, as declared by the scenario.
+    pub const fn set_wait_timeout(&mut self, timeout: Duration) {
+        self.wait_timeout = Some(timeout);
+    }
+
+    /// Returns the declared wait bound, or a typed error if the scenario has
+    /// not stated one.
+    pub fn wait_timeout(&self) -> Result<Duration, StepError> {
+        self.wait_timeout.ok_or(StepError::MissingObservation {
+            field: "chain wait timeout",
+        })
+    }
+
+    /// Resolves a scenario-level account role to the account id it currently
+    /// denotes, or a typed error if that account has not been set up.
+    pub fn account_id(&self, role: AccountRole) -> Result<AccountId, StepError> {
+        match role {
+            AccountRole::Config => Ok(system_accounts::sequencer_stake_config_account_id()),
+            AccountRole::Funding => self.funding_id(),
+            AccountRole::Ownership => self.ownership_id(),
+            AccountRole::SecondOwnership => self.second_ownership_id(),
+        }
     }
 
     /// Returns the scenario's sequencer key.

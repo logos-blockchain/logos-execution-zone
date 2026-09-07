@@ -37,6 +37,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     And a sequencer key with no config entry
     And a default-owned, unclaimed ownership account for the sequencer key
     And a funding account holding "ten times the minimum stake"
+    And chain waits give up after 60 blocks
 
   @stake_registration_ci @P-01 @P0 @L3
   # Mirrors the registration leg of tests/sequencer_stake_demo.rs,
@@ -57,7 +58,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     Then the stake transaction is not included within the next 2 blocks
     And the ownership account is not claimed
     And the config has no entry for the sequencer key
-    And the stake accounts are unchanged
+    And the config, funding and ownership accounts are unchanged
 
   @stake_registration_ci @P-03 @P0 @L3
   # The boundary is ≥ and genesis relies on it.
@@ -71,7 +72,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
   Scenario: Registration without the ownership account's signature is rejected
     When a Stake of "twice the minimum stake" is submitted without the ownership account's signature
     Then the stake transaction is not included within the next 2 blocks
-    And the stake accounts are unchanged
+    And the config, funding and ownership accounts are unchanged
 
   @stake_registration_ci @P-13 @P1 @L3
   # In-program reason: "not a sequencer_stake ownership account". The plan
@@ -84,7 +85,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     When a Stake of "twice the minimum stake" is submitted
     Then the stake transaction is not included within the next 2 blocks
     And the config has no entry for the sequencer key
-    And the stake accounts are unchanged
+    And the config, funding and ownership accounts are unchanged
 
   @stake_registration_ci @P-14 @P0 @L3
   # In-program reason: "not the sequencer_stake config account". Mirrors
@@ -96,7 +97,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     When a Stake of "twice the minimum stake" is submitted with the second ownership account standing in for the config account
     Then the stake transaction is not included within the next 2 blocks
     And the ownership account is not claimed
-    And the stake accounts are unchanged
+    And the config, funding, ownership and second ownership accounts are unchanged
 
   @stake_registration_ci @P-25 @P0 @L3
   # In-program reason: "Sender has insufficient balance" — the mover call
@@ -108,7 +109,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     Then the stake transaction is not included within the next 2 blocks
     And the ownership account is not claimed
     And the config has no entry for the sequencer key
-    And the stake accounts are unchanged
+    And the config, funding and ownership accounts are unchanged
 
   @stake_registration_ci @P-18 @P0 @L3
   # In-program reason: "ConfirmStake can only be invoked as a self-chained
@@ -117,7 +118,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
   Scenario: ConfirmStake submitted top-level is rejected
     When a ConfirmStake matching the current ownership balance is submitted as a top-level transaction
     Then the stake transaction is not included within the next 2 blocks
-    And the stake accounts are unchanged
+    And the config, funding and ownership accounts are unchanged
 
   @stake_registration_ci @P-20 @P2 @L3
   # In-program reason: "Stake requires a funding account, an ownership
@@ -125,7 +126,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
   Scenario Outline: Wrong pre-state account count is rejected
     When a Stake of "the minimum stake" is submitted with <count> pre-state accounts
     Then the stake transaction is not included within the next 2 blocks
-    And the stake accounts are unchanged
+    And the config, funding and ownership accounts are unchanged
 
     Examples:
       | count |
@@ -147,7 +148,7 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     When a donation of 25 to the unclaimed ownership account is submitted
     Then the donation transaction is not included within the next 2 blocks
     And the ownership account is not claimed
-    And the stake accounts are unchanged
+    And the config, funding and ownership accounts are unchanged
     When a Stake of "twice the minimum stake" is submitted
     Then the stake transaction is accepted
     And the ownership account balance increased by the staked amount
@@ -165,4 +166,4 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     And an Instruction carrying the bytes fails to deserialize
     When a Stake carrying the off-curve key bytes is submitted
     Then the stake transaction is not included within the next 2 blocks
-    And the stake accounts are unchanged
+    And the config, funding and ownership accounts are unchanged
