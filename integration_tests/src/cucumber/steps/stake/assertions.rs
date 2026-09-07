@@ -3,7 +3,9 @@
     reason = "Cucumber step handlers use the framework's mutable-world signature"
 )]
 
-use cucumber::{gherkin::Step, then};
+use std::str::FromStr;
+
+use cucumber::{Parameter, gherkin::Step, then};
 use futures::future::try_join_all;
 use lee::Account;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, StakeRecord};
@@ -14,9 +16,27 @@ use super::{
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
-    stake_scenario::raw_key_instruction_fails_to_decode,
+    stake_scenario::{AccountRole, raw_key_instruction_fails_to_decode},
     world::CucumberWorld,
 };
+
+/// Comma-and-`and`-separated list of account roles as written in a feature
+/// file, for example `config, funding and ownership`.
+#[derive(Debug, Parameter)]
+#[param(name = "account_roles", regex = r"[a-z ,]+")]
+struct AccountRoles(Vec<AccountRole>);
+
+impl FromStr for AccountRoles {
+    type Err = StepError;
+
+    fn from_str(list: &str) -> Result<Self, Self::Err> {
+        list.split(',')
+            .flat_map(|part| part.split(" and "))
+            .map(AccountRole::from_str)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Self)
+    }
+}
 
 /// Returns the config entry backing the scenario's sequencer key, or an
 /// assertion failure if there is none.
@@ -31,8 +51,9 @@ async fn required_entry(world: &CucumberWorld) -> Result<SequencerEntry, StepErr
 #[then("the stake transaction is accepted")]
 async fn stake_transaction_accepted(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
-    let hash = world.stake()?.last_submission()?.hash;
-    wait_for_inclusion(world.lez()?, hash).await
+    let scenario = world.stake()?;
+    let hash = scenario.last_submission()?.hash;
+    wait_for_inclusion(world.lez()?, hash, scenario.wait_timeout()?).await
 }
 
 #[then(expr = "the stake transaction is not included within the next {int} blocks")]
@@ -44,8 +65,14 @@ async fn transaction_not_included(
 ) -> StepResult {
     log_step(step);
     let context = world.lez()?;
-    let submission = world.stake()?.last_submission()?;
-    assert_not_included(context, submission, blocks).await
+    let scenario = world.stake()?;
+    assert_not_included(
+        context,
+        scenario.last_submission()?,
+        blocks,
+        scenario.wait_timeout()?,
+    )
+    .await
 }
 
 #[then("the config entry tracks the staked amount with no pending unstake")]
@@ -175,29 +202,27 @@ async fn funding_balance_decreased(world: &mut CucumberWorld, step: &Step) -> St
     Ok(())
 }
 
-#[then("the stake accounts are unchanged")]
-async fn stake_accounts_are_unchanged(world: &mut CucumberWorld, step: &Step) -> StepResult {
+#[then(expr = "the {account_roles} accounts are unchanged")]
+async fn accounts_are_unchanged(
+    world: &mut CucumberWorld,
+    step: &Step,
+    roles: AccountRoles,
+) -> StepResult {
     log_step(step);
     let context = world.lez()?;
-    let snapshot = world.stake()?.snapshot()?;
-    let current = try_join_all(
-        snapshot
-            .accounts()
-            .iter()
-            .map(|(account_id, before)| async move {
-                Ok::<_, StepError>((
-                    *account_id,
-                    before,
-                    get_account(context, *account_id).await?,
-                ))
-            }),
-    )
+    let scenario = world.stake()?;
+    let snapshot = scenario.snapshot()?;
+    let current = try_join_all(roles.0.into_iter().map(|role| async move {
+        let account_id = scenario.account_id(role)?;
+        let before = snapshot.account(account_id)?;
+        Ok::<_, StepError>((role, before, get_account(context, account_id).await?))
+    }))
     .await?;
-    for (account_id, before, after) in current {
+    for (role, before, after) in current {
         if after != *before {
             return Err(StepError::AssertionFailed {
                 message: format!(
-                    "account {account_id} differs from its pre-submission snapshot: \
+                    "the {role:?} account differs from its pre-submission snapshot: \
                      {before:?} -> {after:?}"
                 ),
             });

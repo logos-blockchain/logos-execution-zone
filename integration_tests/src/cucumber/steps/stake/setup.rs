@@ -38,6 +38,18 @@ async fn config_account_at_default_minimum(world: &mut CucumberWorld, step: &Ste
     world.set_stake(StakeScenario::new(minimum))
 }
 
+#[given(expr = "chain waits give up after {int} blocks")]
+async fn chain_waits_give_up_after(
+    world: &mut CucumberWorld,
+    step: &Step,
+    blocks: u32,
+) -> StepResult {
+    log_step(step);
+    let timeout = world.lez()?.block_create_timeout().saturating_mul(blocks);
+    world.stake_mut()?.set_wait_timeout(timeout);
+    Ok(())
+}
+
 #[given("a sequencer key with no config entry")]
 async fn sequencer_key_has_no_entry(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
@@ -124,6 +136,7 @@ async fn stake_second_sequencer_key(world: &mut CucumberWorld, step: &Step) -> S
     let funding_id = scenario.funding_id()?;
     let second_sequencer_key = scenario.second_sequencer_key();
     let amount = scenario.minimum_stake();
+    let timeout = scenario.wait_timeout()?;
     let context = world.lez()?;
     let second_ownership_id = context.new_public_account().await?;
     submit_accepted_stake(
@@ -132,6 +145,7 @@ async fn stake_second_sequencer_key(world: &mut CucumberWorld, step: &Step) -> S
         second_ownership_id,
         second_sequencer_key,
         amount,
+        timeout,
     )
     .await?;
     let owner = get_account(context, second_ownership_id)
