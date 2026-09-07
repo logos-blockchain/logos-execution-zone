@@ -9,7 +9,6 @@ use crate::{
         error::StepResult,
         steps::environment::helpers::{
             base_sequencer_config, deploy_lez_sequencer_registry, deploy_lez_stack,
-            deploy_lez_stack_with_config,
         },
         world::CucumberWorld,
     },
@@ -24,6 +23,7 @@ async fn deploy_lez_public_stack(world: &mut CucumberWorld, step: &Step) -> Step
         world,
         BedrockApp::nodes_with_blend_core_nodes(1, 0, world.test_context()),
         false,
+        None,
         step,
     )
     .await
@@ -41,7 +41,7 @@ async fn deploy_lez_public_stack_with_fast_blocks(
         block_create_timeout: Duration::from_secs(2),
         ..base_sequencer_config()
     };
-    deploy_lez_stack_with_config(
+    deploy_lez_stack(
         world,
         BedrockApp::nodes_with_blend_core_nodes(1, 0, world.test_context()),
         false,
@@ -79,6 +79,7 @@ async fn deploy_lez_private_stack(world: &mut CucumberWorld, step: &Step) -> Ste
         world,
         BedrockApp::nodes_with_blend_core_nodes(1, 0, world.test_context()),
         true,
+        None,
         step,
     )
     .await
@@ -91,6 +92,7 @@ async fn deploy_lez_multi_node_stack(world: &mut CucumberWorld, step: &Step) -> 
         world,
         BedrockApp::nodes_with_blend_core_nodes(5, 2, world.test_context()),
         false,
+        None,
         step,
     )
     .await
