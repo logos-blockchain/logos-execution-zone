@@ -71,7 +71,7 @@
           # Download the crate tarball from crates.io; the checksum from Cargo.lock
           # is the sha256 of the .crate file, so this is a verified fixed-output fetch.
           risc0CircuitRecursionCrate = pkgs.fetchurl {
-            url = "https://crates.io/api/v1/crates/risc0-circuit-recursion/${risc0CircuitRecursion.version}/download";
+            url = "https://static.crates.io/crates/risc0-circuit-recursion/${risc0CircuitRecursion.version}/download";
             sha256 = risc0CircuitRecursion.checksum;
             name = "risc0-circuit-recursion-${risc0CircuitRecursion.version}.crate";
           };
