@@ -45,7 +45,7 @@ async fn config_account_at_default_minimum(world: &mut CucumberWorld, step: &Ste
 }
 
 #[given(expr = "chain waits give up after {int} blocks")]
-async fn chain_waits_give_up_after(
+fn chain_waits_give_up_after(
     world: &mut CucumberWorld,
     step: &Step,
     blocks: u32,
