@@ -200,15 +200,20 @@ pub fn run(
 
         let scheduler_ref = Scheduler::spawn(Scheduler::new());
 
-        let (gossip, gossip_publisher) = setup_gossip(
-            gossip_config,
-            *bedrock_config.channel_id.as_ref(),
-            &sequencer_home,
-            max_block_size.as_u64(),
-            &executor_ref,
-            &scheduler_ref,
-        )
-        .await?
+        let (gossip, gossip_publisher) = match gossip_config {
+            None => None,
+            Some(gossip_config) => Some(
+                setup_gossip(
+                    gossip_config,
+                    *bedrock_config.channel_id.as_ref(),
+                    &sequencer_home,
+                    max_block_size.as_u64(),
+                    &executor_ref,
+                    &scheduler_ref,
+                )
+                .await?,
+            ),
+        }
         .unzip();
 
         let rpc_server = RpcServerActor::new(
@@ -251,20 +256,14 @@ pub fn run(
 /// Starts the gossip actor together with its outage watchdog and its
 /// scheduled bootstrap retries, returning its service handle and the
 /// recipient the RPC server publishes admitted transactions to.
-///
-/// Returns `None` when gossip is unconfigured.
 async fn setup_gossip(
-    gossip_config: Option<GossipConfig>,
+    gossip_config: GossipConfig,
     channel_id: [u8; 32],
     sequencer_home: &Path,
     max_block_size: u64,
     executor_ref: &ActorRef<ExecutorActor<StorageActor, BlockPublisher>>,
     scheduler_ref: &ActorRef<Scheduler>,
-) -> Result<Option<(Gossip, Recipient<PublishTransaction>)>> {
-    let Some(gossip_config) = gossip_config else {
-        return Ok(None);
-    };
-
+) -> Result<(Gossip, Recipient<PublishTransaction>)> {
     // The node's L1 bedrock signing key is deliberately reused as the
     // libp2p identity; `GossipActor::new` derives the keypair.
     let signing_key = load_or_create_signing_key(&sequencer_home.join("bedrock_signing_key"))?;
@@ -317,12 +316,12 @@ async fn setup_gossip(
         .await?;
 
     let publisher = gossip_ref.clone().recipient();
-    Ok(Some((
+    Ok((
         Gossip {
             actor: ActorHandle::new(gossip_ref),
             bootstrap_addrs,
             _watchdog: watchdog,
         },
         publisher,
-    )))
+    ))
 }
