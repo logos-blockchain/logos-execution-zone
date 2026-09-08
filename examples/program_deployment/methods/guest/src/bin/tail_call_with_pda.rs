@@ -1,20 +1,13 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::ProgramShardSelector,
+    program::{
+        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call, respond_unsupported_call,
+    },
 };
 
-// Tail Call with PDA example program.
-//
-// Demonstrates how to chain execution to another program using `ChainedCall`
-// while authorizing program-derived accounts.
-//
-// Expects a single input account whose Account ID is derived from this
-// program’s ID and the fixed PDA seed below (as defined by the
-// `<AccountId as From<(&ProgramId, &PdaSeed)>>` implementation).
-//
-// Emits this account unchanged, then performs a tail call to the
-// Hello-World-with-Authorization program with a fixed greeting, delegating the
-// PDA seed so the protocol authorizes the account for the callee.
+// Calls Hello World with Authorization on this program's PDA,
+// passing `PDA_SEED` to authorize the account for the callee.
 
 const HELLO_WORLD_WITH_AUTHORIZATION_PROGRAM_ID_HEX: &str =
     "1d95c761168a7fa62eb15a3cc74d3f075e6ec98e6c1ac25bd5bcc7e0a9426398";
@@ -57,11 +50,15 @@ fn main() {
     let chained_call_greeting: Vec<u8> =
         b"Hello from tail call with Program Derived Account ID".to_vec();
     let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
+    let hello_world_id = hello_world_program_id().into();
 
     let chained_call = ChainedCall {
-        program_account_id: hello_world_program_id().into(),
+        program_account_id: hello_world_id,
         instruction_data: chained_call_instruction_data,
-        pre_state_ids: vec![pre_state.account_id],
+        shard_selectors: vec![ProgramShardSelector::new(
+            pre_state.account_id,
+            hello_world_id,
+        )],
         pda_seeds: vec![PDA_SEED],
     };
 

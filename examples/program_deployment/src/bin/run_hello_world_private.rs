@@ -44,7 +44,8 @@ async fn main() {
     // Define the desired greeting in ASCII
     let greeting: Vec<u8> = vec![72, 111, 108, 97, 32, 109, 117, 110, 100, 111, 33];
 
-    let accounts = vec![AccountIdentity::PrivateOwned(account_id)];
+    let accounts =
+        vec![AccountIdentity::PrivateOwned(account_id).select_program_shard(program.id().into())];
 
     // Construct and submit the privacy-preserving transaction
     wallet_core

@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::ProgramShardSelector,
+    program::{
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
 // Tail Call example program.
@@ -53,10 +56,14 @@ fn main() {
     // Create the chained call
     let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();
     let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
+    let hello_world_id = hello_world_program_id().into();
     let chained_call = ChainedCall {
-        program_account_id: hello_world_program_id().into(),
+        program_account_id: hello_world_id,
         instruction_data: chained_call_instruction_data,
-        pre_state_ids: vec![pre_state_account_id],
+        shard_selectors: vec![ProgramShardSelector::new(
+            pre_state_account_id,
+            hello_world_id,
+        )],
         pda_seeds: vec![],
     };
 

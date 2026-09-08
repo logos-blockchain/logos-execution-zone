@@ -7,12 +7,12 @@ use std::{collections::HashMap, time::Instant};
 
 use borsh::to_vec;
 use lee::{
-    execute_and_prove,
-    privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof},
+    AccountData, execute_and_prove,
+    privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof, ProvingInput},
 };
 use lee_core::{
-    InputAccountIdentity, PrivacyPreservingCircuitOutput,
-    account::{Account, AccountId, AccountWithMetadata},
+    PrivacyPreservingCircuitOutput,
+    account::{Account, AccountId, ProgramShardSelector},
 };
 
 use super::PpeBenchResult;
@@ -43,37 +43,32 @@ pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
 
 pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
     let auth_transfer = programs::authenticated_transfer();
-    let auth_transfer_id = auth_transfer.id();
     let pwd = ProgramWithDependencies::from(auth_transfer);
 
-    // The sender's balance may only be decremented because it is authorized;
-    // its owner is incidental. The recipient stays default: a credit writes no
-    // data, so it acquires no owner.
-    let sender = AccountWithMetadata {
-        account: Account {
-            program_owner: auth_transfer_id.into(),
+    let sender_id = AccountId::new([1; 32]);
+    let recipient_id = AccountId::new([2; 32]);
+    let sender_account = Account {
+        data: AccountData {
             balance: 1_000_000,
-            ..Account::default()
+            ..AccountData::default()
         },
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
+        ..Account::default()
     };
-    let recipient = AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: true,
-        account_id: AccountId::new([2; 32]),
-    };
-    let pre_states = vec![sender, recipient];
 
     let instruction = authenticated_transfer_core::Instruction::Transfer { amount: 5_000 };
     let instruction_data = to_vec(&instruction)?;
 
-    let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
-
     Ok(execute_and_prove(
-        pre_states,
-        instruction_data,
-        account_identities,
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::balance_only(sender_id),
+                ProgramShardSelector::balance_only(recipient_id),
+            ],
+            signers: [sender_id, recipient_id].into(),
+            public_accounts: [(sender_id, sender_account)].into(),
+            instruction_data,
+            ..Default::default()
+        },
         &pwd,
     )?)
 }
@@ -113,38 +108,34 @@ fn prove_chain_caller(
     deps.insert(auth_transfer.id().into(), auth_transfer);
     let pwd = ProgramWithDependencies::new(chain_caller, chain_caller_id.into(), deps);
 
-    // Both accounts are seeded owned by auth_transfer.
-    let recipient_pre = AccountWithMetadata {
-        account: Account {
-            program_owner: auth_transfer_id.into(),
-            ..Account::default()
-        },
-        is_authorized: true,
-        account_id: AccountId::new([2; 32]),
-    };
-    let sender_pre = AccountWithMetadata {
-        account: Account {
-            program_owner: auth_transfer_id.into(),
+    let recipient_id = AccountId::new([2; 32]);
+    let sender_id = AccountId::new([1; 32]);
+    let sender_account = Account {
+        data: AccountData {
             balance: 1_000_000,
-            ..Account::default()
+            ..AccountData::default()
         },
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
+        ..Account::default()
     };
-    // chain_caller expects pre_states = [recipient, sender].
-    let pre_states = vec![recipient_pre, sender_pre];
+    // chain_caller expects shard selectors = [recipient, sender].
+    let shard_selectors = vec![
+        ProgramShardSelector::balance_only(recipient_id),
+        ProgramShardSelector::balance_only(sender_id),
+    ];
 
     let balance: u128 = 1;
     let pda_seed: Option<lee_core::program::PdaSeed> = None;
     let instruction = (balance, auth_transfer_id, num_chain_calls, pda_seed);
     let instruction_data = to_vec(&instruction)?;
 
-    let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
-
     Ok(execute_and_prove(
-        pre_states,
-        instruction_data,
-        account_identities,
+        ProvingInput {
+            shard_selectors,
+            signers: [recipient_id, sender_id].into(),
+            public_accounts: [(sender_id, sender_account)].into(),
+            instruction_data,
+            ..Default::default()
+        },
         &pwd,
     )?)
 }

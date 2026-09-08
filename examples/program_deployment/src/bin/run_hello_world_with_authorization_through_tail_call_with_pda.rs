@@ -5,7 +5,7 @@
 
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, PublicTransaction,
+    AccountId, ProgramShardSelector, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
@@ -47,12 +47,18 @@ async fn main() {
 
     // Compute the PDA to pass it as input account to the public execution
     let pda = AccountId::for_public_pda(&AccountId::from(program.id()), &PDA_SEED);
-    let account_ids = vec![pda];
+    // The caller only needs the account ID; the callee selects its shard.
+    let shard_selectors = vec![ProgramShardSelector::balance_only(pda)];
     let instruction_data = ();
     let nonces = vec![];
     let signing_keys = [];
-    let message =
-        Message::try_new(program.id().into(), account_ids, nonces, instruction_data).unwrap();
+    let message = Message::try_new(
+        program.id().into(),
+        shard_selectors,
+        nonces,
+        instruction_data,
+    )
+    .unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 

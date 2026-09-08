@@ -1,6 +1,6 @@
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, PublicTransaction,
+    AccountId, ProgramShardSelector, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
@@ -48,9 +48,10 @@ async fn main() {
     let instruction_data = ();
     let nonces = vec![];
     let signing_keys = [];
+    // The caller only needs the account ID; the callee selects its shard.
     let message = Message::try_new(
         program.id().into(),
-        vec![account_id],
+        vec![ProgramShardSelector::balance_only(account_id)],
         nonces,
         instruction_data,
     )

@@ -9,13 +9,7 @@ use lee_core::{
 // Hello-world example program.
 //
 // This program reads an arbitrary sequence of bytes as its instruction
-// and appends those bytes to the `data` field of the single input account.
-//
-// Execution succeeds only if the input account is either:
-// - uninitialized, or
-// - already owned by this program.
-//
-// Writing data to an unowned input account is what makes this program its owner.
+// and appends those bytes to this program's own shard on the single input account.
 //
 // The updated account is emitted as the sole post-state.
 
@@ -44,7 +38,7 @@ fn main() {
 
     // Construct the new data value: the existing data with the greeting appended.
     let new_data = {
-        let mut bytes = pre_state.account.data.clone().into_inner();
+        let mut bytes = pre_state.shard_of(self_account_id).clone().into_inner();
         bytes.extend_from_slice(&greeting);
         bytes
             .try_into()
