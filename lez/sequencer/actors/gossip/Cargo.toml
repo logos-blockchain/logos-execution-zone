@@ -9,7 +9,15 @@ workspace = true
 
 [features]
 # Adds actor implementation.
-actor = ["dep:tokio", "dep:futures", "dep:hex", "dep:libp2p"]
+actor = [
+  "dep:borsh",
+  "dep:futures",
+  "dep:hex",
+  "dep:kameo",
+  "dep:libp2p",
+  "dep:log",
+  "dep:tokio",
+]
 # Enable mDNS-based local peer discovery for gossip.
 # All mDNS code lives in the actor, so this implies `actor`.
 mdns = ["actor"]
@@ -23,9 +31,9 @@ logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 
 anyhow.workspace = true
-borsh.workspace = true
-kameo.workspace = true
-log.workspace = true
+borsh = { workspace = true, optional = true }
+kameo = { workspace = true, optional = true }
+log = { workspace = true, optional = true }
 tokio = { workspace = true, features = [
   "macros",
   "rt-multi-thread",

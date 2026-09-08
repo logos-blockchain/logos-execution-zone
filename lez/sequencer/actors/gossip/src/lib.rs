@@ -5,21 +5,15 @@
 //! down degrades to L1-only behavior, and a gossip failure after startup
 //! never halts the node.
 
-#[cfg(all(test, feature = "actor"))]
-pub use actor::unscreened_mempool_submit;
 #[cfg(feature = "actor")]
-pub use actor::{GossipActor, IngestSubmit, WatchdogGuard, spawn_gossip_outage_watchdog};
+pub use actor::{
+    BOOTSTRAP_RETRY_INTERVAL, GossipActor, IngestSubmit, MAILBOX_CAPACITY, WatchdogGuard,
+    spawn_gossip_outage_watchdog,
+};
 #[cfg(feature = "actor")]
 pub use libp2p::Multiaddr;
-pub use protocol::{GetConnectedPeers, GossipTxPublisher, PublishTransaction};
 
 pub mod accreditation;
 #[cfg(feature = "actor")]
 pub mod actor;
 pub mod protocol;
-pub mod seen_cache;
-pub mod validation;
-
-#[cfg(feature = "actor")]
-#[cfg(test)]
-mod tests;

@@ -1,13 +1,18 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
+use anyhow::Context as _;
 use common::transaction::LeeTransaction;
-use kameo::actor::ActorRef;
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use mempool::MemPool;
+use kameo::actor::{ActorRef, Spawn as _};
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+use mempool::{MemPool, MemPoolHandle};
 use sequencer_core::{TransactionOrigin, config::GossipConfig};
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
-use crate::{GetConnectedPeers, GossipActor, GossipTxPublisher};
+use super::{GossipActor, IngestSubmit, MAILBOX_CAPACITY, peer_id_from_ed25519};
+use crate::protocol::{GetConnectedPeers, PublishTransaction};
 
 const CHANNEL: [u8; 32] = [1; 32];
 const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
@@ -20,20 +25,52 @@ struct TestNode {
 }
 
 impl TestNode {
-    async fn connected_peers(&self) -> Vec<[u8; 32]> {
+    async fn connected_peers(&self) -> Vec<Ed25519PublicKey> {
         self.actor_ref
             .ask(GetConnectedPeers)
             .await
             .expect("gossip actor should be alive")
     }
 
-    fn publisher(&self) -> GossipTxPublisher {
-        GossipTxPublisher::new(self.actor_ref.clone().recipient())
+    fn publish(&self, tx: LeeTransaction) {
+        self.actor_ref
+            .tell(PublishTransaction(tx))
+            .try_send()
+            .expect("gossip mailbox should accept the publish");
     }
 }
 
-fn pubkey(secret: [u8; 32]) -> [u8; 32] {
-    Ed25519Key::from_bytes(&secret).public_key().to_bytes()
+fn pubkey(secret: [u8; 32]) -> Ed25519PublicKey {
+    Ed25519Key::from_bytes(&secret).public_key()
+}
+
+/// An [`IngestSubmit`] that pushes straight into `mempool` unscreened.
+fn unscreened_mempool_submit(
+    mempool: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+) -> IngestSubmit {
+    Arc::new(move |tx| {
+        let mempool = mempool.clone();
+        Box::pin(async move {
+            mempool
+                .try_push((TransactionOrigin::Gossip, tx))
+                .context("mempool is full")
+        })
+    })
+}
+
+fn spawn(actor: GossipActor) -> ActorRef<GossipActor> {
+    GossipActor::spawn_with_mailbox(actor, kameo::mailbox::bounded(MAILBOX_CAPACITY))
+}
+
+fn test_config() -> GossipConfig {
+    GossipConfig {
+        listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
+        bootstrap_peers: vec![],
+    }
+}
+
+fn test_mempool_handle() -> MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
+    MemPool::new(1000).1
 }
 
 /// A real, validly-signed transfer, reusing the same helper the RPC-side
@@ -75,13 +112,13 @@ async fn start_node(
         CHANNEL,
         Ed25519Key::from_bytes(&secret),
         TEST_MAX_BLOCK_SIZE,
-        crate::unscreened_mempool_submit(mempool_handle),
+        unscreened_mempool_submit(mempool_handle),
     )
     .await
     .expect("node should start");
     let listen_addrs = actor.listen_addrs();
     let local_peer_id = actor.local_peer_id();
-    let actor_ref = GossipActor::spawn(actor);
+    let actor_ref = spawn(actor);
     (
         TestNode {
             actor_ref,
@@ -105,6 +142,55 @@ async fn wait_for(timeout: Duration, mut condition: impl AsyncFnMut() -> bool) -
     false
 }
 
+#[test]
+fn libp2p_identity_matches_kms_public_key() {
+    // The PeerId derived from an Ed25519 public key must equal the
+    // PeerId the same secret produces as a libp2p identity.
+    let secret = [9; 32];
+    let kms_pubkey = Ed25519Key::from_bytes(&secret).public_key().to_bytes();
+    let mut secret_for_libp2p = secret;
+    let keypair = libp2p::identity::Keypair::ed25519_from_bytes(&mut secret_for_libp2p).unwrap();
+    assert_eq!(
+        peer_id_from_ed25519(&kms_pubkey).unwrap(),
+        keypair.public().to_peer_id()
+    );
+}
+
+#[tokio::test]
+async fn new_binds_and_reports_listen_addr() {
+    let actor = GossipActor::new(
+        test_config(),
+        [1; 32],
+        Ed25519Key::from_bytes(&[9; 32]),
+        TEST_MAX_BLOCK_SIZE,
+        unscreened_mempool_submit(test_mempool_handle()),
+    )
+    .await
+    .unwrap();
+    let addrs = actor.listen_addrs();
+    assert!(!addrs.is_empty());
+    assert!(addrs[0].to_string().contains("/udp/"));
+    assert!(actor.connected_pubkeys().is_empty());
+}
+
+#[tokio::test]
+async fn kill_stops_the_swarm() {
+    let actor = GossipActor::new(
+        test_config(),
+        [1; 32],
+        Ed25519Key::from_bytes(&[9; 32]),
+        TEST_MAX_BLOCK_SIZE,
+        unscreened_mempool_submit(test_mempool_handle()),
+    )
+    .await
+    .unwrap();
+    let actor_ref = spawn(actor);
+    actor_ref.kill();
+    tokio::time::timeout(Duration::from_secs(5), actor_ref.wait_for_shutdown())
+        .await
+        .expect("actor should stop when killed");
+}
+
 #[tokio::test]
 async fn nodes_discover_each_other_via_bootstrap() {
     let secrets = [[10; 32], [11; 32], [12; 32]];
@@ -126,7 +212,12 @@ async fn nodes_discover_each_other_via_bootstrap() {
         })
         .await,
         "A never connected to both B and C; A sees {:?}",
-        node_a.connected_peers().await
+        node_a
+            .connected_peers()
+            .await
+            .iter()
+            .map(Ed25519PublicKey::to_bytes)
+            .collect::<Vec<_>>()
     );
     drop((node_a, node_b, node_c));
 }
@@ -150,7 +241,7 @@ async fn transaction_submitted_to_one_node_reaches_others() {
 
     let tx = valid_transaction();
     let expected_hash = tx.hash();
-    node_a.publisher().publish(tx.clone());
+    node_a.publish(tx.clone());
 
     assert!(
         wait_for(Duration::from_secs(30), async || {
@@ -175,7 +266,7 @@ async fn transaction_submitted_to_one_node_reaches_others() {
 
 #[tokio::test]
 async fn invalid_transaction_is_not_propagated() {
-    // `GossipTxPublisher::publish` only accepts a `LeeTransaction`, so genuinely
+    // `PublishTransaction` only carries a `LeeTransaction`, so genuinely
     // undecodable bytes are not reachable through the public API; instead we
     // publish a structurally well-formed transaction with an invalid
     // signature, which still exercises the real gossip pipeline's rejection
@@ -200,7 +291,7 @@ async fn invalid_transaction_is_not_propagated() {
     // vacuously.
     let valid_tx = valid_transaction();
     let valid_hash = valid_tx.hash();
-    node_a.publisher().publish(valid_tx);
+    node_a.publish(valid_tx);
     assert!(
         wait_for(Duration::from_secs(30), async || {
             mempool_b
@@ -211,7 +302,7 @@ async fn invalid_transaction_is_not_propagated() {
         "B never received the valid transaction; gossip link not live"
     );
 
-    node_a.publisher().publish(invalidly_signed_transaction());
+    node_a.publish(invalidly_signed_transaction());
 
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(

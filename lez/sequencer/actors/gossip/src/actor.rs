@@ -1,12 +1,12 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     convert::Infallible,
     sync::Arc,
     time::Duration,
 };
 
 use anyhow::{Context as _, Result, anyhow};
-use common::transaction::LeeTransaction;
+use common::{bounded_vec_deque::BoundedVecDeque, transaction::LeeTransaction};
 use futures::{StreamExt as _, future::BoxFuture};
 use kameo::{
     Actor,
@@ -24,18 +24,17 @@ use libp2p::{
     multiaddr::Protocol,
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-#[cfg(test)]
-use mempool::MemPoolHandle;
-#[cfg(test)]
-use sequencer_core::TransactionOrigin;
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use sequencer_core::config::GossipConfig;
 use tokio::select;
 
-use crate::{
-    protocol::{GetConnectedPeers, PublishTransaction},
-    seen_cache::SeenCache,
-};
+use self::seen_cache::SeenCache;
+use crate::protocol::{GetConnectedPeers, PublishTransaction, RetryBootstrap};
+
+mod seen_cache;
+#[cfg(test)]
+mod tests;
+mod validation;
 
 /// How long to wait for the first listen address before failing startup.
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -43,15 +42,16 @@ const LISTEN_TIMEOUT: Duration = Duration::from_secs(5);
 const OUTAGE_WARN_INTERVAL: Duration = Duration::from_secs(300);
 /// Recently-seen gossiped transaction hashes kept for dedup.
 const SEEN_CACHE_CAPACITY: usize = 4096;
-/// Mailbox depth; sized for local-publish bursts, `try_send` drops on overflow.
-const MAILBOX_CAPACITY: usize = 1024;
+/// Mailbox depth to spawn the actor with; sized for local-publish bursts,
+/// `try_send` drops on overflow.
+pub const MAILBOX_CAPACITY: usize = 1024;
 /// Headroom over `max_block_size` for `GossipSub` protobuf framing (signature,
 /// source, seqno, topic) so a maximum-size transaction still fits the transmit
 /// limit instead of being dropped at the transport before validation.
 const GOSSIP_FRAME_MARGIN: u64 = 4096;
-/// How often to re-dial bootstrap peers while the node has no connected
-/// peers, so a node that starts before its bootstrap peer still joins.
-const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+/// How often to send [`RetryBootstrap`], so a node that starts before its
+/// bootstrap peer still joins once that peer is up.
+pub const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Local transactions whose publish failed (e.g. `InsufficientPeers` while
 /// the mesh is still forming), kept for republish once a peer subscribes.
 const PENDING_PUBLISH_CAPACITY: usize = 256;
@@ -65,29 +65,23 @@ struct GossipBehaviour {
     mdns: mdns::tokio::Behaviour,
 }
 
-/// The gossip network as an actor: owns the libp2p swarm and drives it from
-/// [`Actor::next`], interleaving swarm events with mailbox messages
-/// ([`PublishTransaction`], [`GetConnectedPeers`]).
-///
-/// Stopping the actor (or killing it via its handle) shuts the swarm down.
-/// A gossip failure never halts the node: the service keeps this actor out
-/// of its health/failure aggregation and a [`spawn_gossip_outage_watchdog`] warns
-/// operators instead.
+/// The gossip actor. Manages the libp2p swarm.
 pub struct GossipActor {
-    swarm: Swarm<GossipBehaviour>,
+    /// `Some` while the actor runs; released in `on_stop` so the sockets are
+    /// freed as soon as the actor is stopped, not when it is dropped.
+    swarm: Option<Swarm<GossipBehaviour>>,
     connected: HashSet<PeerId>,
     /// Ed25519 public keys of peers seen via Identify, keyed by `PeerId`.
-    pubkeys: HashMap<PeerId, [u8; 32]>,
+    pubkeys: HashMap<PeerId, Ed25519PublicKey>,
     topic: gossipsub::IdentTopic,
     seen: SeenCache,
     max_block_size: u64,
     submit: IngestSubmit,
     /// Configured bootstrap peers, re-dialed while the node is isolated.
     bootstrap: Vec<Multiaddr>,
-    bootstrap_retry: tokio::time::Interval,
     /// Local transactions whose publish failed, retried when a peer
-    /// subscribes to the topic. Bounded; the oldest is dropped on overflow.
-    pending_publish: VecDeque<LeeTransaction>,
+    /// subscribes to the topic; the oldest is dropped on overflow.
+    pending_publish: BoundedVecDeque<LeeTransaction>,
     listen_addrs: Vec<Multiaddr>,
     local_peer_id: PeerId,
 }
@@ -106,8 +100,7 @@ pub struct WatchdogGuard(tokio::task::JoinHandle<()>);
 
 impl GossipActor {
     /// Builds the swarm, binds `listen_addr`, seeds Kademlia and dials
-    /// bootstrap peers. Call [`Self::spawn`] on the result to start driving
-    /// it; the pre-spawn getters below expose the bound identity.
+    /// bootstrap peers.
     pub async fn new(
         config: GossipConfig,
         channel_id: [u8; 32],
@@ -226,17 +219,8 @@ impl GossipActor {
             log::debug!("Kademlia bootstrap skipped (no known peers yet): {err}");
         }
 
-        // `interval_at`: startup already dialed the bootstrap peers, so the
-        // first tick waits a full interval instead of firing immediately.
-        let bootstrap_retry = tokio::time::interval_at(
-            tokio::time::Instant::now()
-                .checked_add(BOOTSTRAP_RETRY_INTERVAL)
-                .expect("bootstrap retry deadline within Instant range"),
-            BOOTSTRAP_RETRY_INTERVAL,
-        );
-
         Ok(Self {
-            swarm,
+            swarm: Some(swarm),
             connected: HashSet::new(),
             pubkeys: HashMap::new(),
             topic,
@@ -244,19 +228,10 @@ impl GossipActor {
             max_block_size,
             submit,
             bootstrap,
-            bootstrap_retry,
-            pending_publish: VecDeque::new(),
+            pending_publish: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             listen_addrs,
             local_peer_id,
         })
-    }
-
-    /// Spawns the actor with a mailbox sized for local-publish bursts.
-    pub fn spawn(actor: Self) -> ActorRef<Self> {
-        <Self as kameo::actor::Spawn>::spawn_with_mailbox(
-            actor,
-            kameo::mailbox::bounded(MAILBOX_CAPACITY),
-        )
     }
 
     #[must_use]
@@ -284,14 +259,20 @@ impl GossipActor {
         self.local_peer_id
     }
 
+    const fn swarm_mut(&mut self) -> &mut Swarm<GossipBehaviour> {
+        self.swarm
+            .as_mut()
+            .expect("swarm is present until the actor stops")
+    }
+
     /// Sorted Ed25519 public keys of currently connected, identified peers.
-    fn connected_pubkeys(&self) -> Vec<[u8; 32]> {
-        let mut peers: Vec<[u8; 32]> = self
+    fn connected_pubkeys(&self) -> Vec<Ed25519PublicKey> {
+        let mut peers: Vec<Ed25519PublicKey> = self
             .connected
             .iter()
             .filter_map(|peer_id| self.pubkeys.get(peer_id).copied())
             .collect();
-        peers.sort_unstable();
+        peers.sort_unstable_by_key(Ed25519PublicKey::to_bytes);
         peers
     }
 
@@ -338,15 +319,17 @@ impl GossipActor {
                 self.flush_pending_publishes();
             }
             GossipBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-                if let Ok(ed25519_pubkey) = info.public_key.try_into_ed25519() {
-                    self.pubkeys.insert(peer_id, ed25519_pubkey.to_bytes());
+                if let Ok(pubkey) = info.public_key.try_into_ed25519()
+                    && let Ok(pubkey) = Ed25519PublicKey::from_bytes(&pubkey.to_bytes())
+                {
+                    self.pubkeys.insert(peer_id, pubkey);
                 }
                 for addr in info
                     .listen_addrs
                     .into_iter()
                     .filter(|addr| !is_unspecified(addr))
                 {
-                    self.swarm
+                    self.swarm_mut()
                         .behaviour_mut()
                         .kademlia
                         .add_address(&peer_id, addr);
@@ -355,7 +338,7 @@ impl GossipActor {
             #[cfg(feature = "mdns")]
             GossipBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                 for (peer_id, addr) in peers {
-                    if let Err(err) = self.swarm.dial(addr) {
+                    if let Err(err) = self.swarm_mut().dial(addr) {
                         log::debug!("Failed to dial mdns-discovered peer {peer_id}: {err}");
                     }
                 }
@@ -372,7 +355,7 @@ impl GossipActor {
         message_id: &gossipsub::MessageId,
         data: &[u8],
     ) {
-        use crate::validation::{TxEvaluation, evaluate_transaction};
+        use self::validation::{TxEvaluation, evaluate_transaction};
 
         let acceptance = match evaluate_transaction(data, self.max_block_size) {
             TxEvaluation::Reject(reason) => {
@@ -403,7 +386,7 @@ impl GossipActor {
         };
 
         _ = self
-            .swarm
+            .swarm_mut()
             .behaviour_mut()
             .gossipsub
             .report_message_validation_result(message_id, &source, acceptance);
@@ -416,11 +399,12 @@ impl GossipActor {
     fn publish_transaction(&mut self, tx: LeeTransaction) {
         let hash = tx.hash();
         let bytes = borsh::to_vec(&tx).expect("tx borsh serialization should not fail");
+        let topic = self.topic.clone();
         match self
-            .swarm
+            .swarm_mut()
             .behaviour_mut()
             .gossipsub
-            .publish(self.topic.clone(), bytes)
+            .publish(topic, bytes)
         {
             // Duplicate means the mesh already carries this message.
             Ok(_) | Err(gossipsub::PublishError::Duplicate) => {
@@ -428,15 +412,12 @@ impl GossipActor {
             }
             Err(err) => {
                 log::debug!("Queueing local tx publish {hash:?} for retry: {err}");
-                if self.pending_publish.len() >= PENDING_PUBLISH_CAPACITY
-                    && let Some(dropped) = self.pending_publish.pop_front()
-                {
+                if let Some(dropped) = self.pending_publish.push_back(tx) {
                     log::debug!(
                         "Pending publish queue full; dropping oldest tx {:?}",
                         dropped.hash()
                     );
                 }
-                self.pending_publish.push_back(tx);
             }
         }
     }
@@ -444,7 +425,7 @@ impl GossipActor {
     /// Retries queued local publishes; still-failing ones are re-queued by
     /// `publish_transaction`.
     fn flush_pending_publishes(&mut self) {
-        for tx in std::mem::take(&mut self.pending_publish) {
+        for tx in self.pending_publish.drain_all() {
             self.publish_transaction(tx);
         }
     }
@@ -461,11 +442,11 @@ impl GossipActor {
             self.bootstrap.len()
         );
         for addr in self.bootstrap.clone() {
-            if let Err(err) = self.swarm.dial(addr.clone()) {
+            if let Err(err) = self.swarm_mut().dial(addr.clone()) {
                 log::debug!("Failed to dial gossip bootstrap peer {addr}: {err}");
             }
         }
-        _ = self.swarm.behaviour_mut().kademlia.bootstrap();
+        _ = self.swarm_mut().behaviour_mut().kademlia.bootstrap();
     }
 }
 
@@ -477,8 +458,8 @@ impl Actor for GossipActor {
         Ok(args)
     }
 
-    /// The swarm drive loop: swarm events and bootstrap retries are handled
-    /// inline; a mailbox signal (message or stop) is handed back to kameo.
+    /// The swarm drive loop: swarm events are handled inline; a mailbox
+    /// signal (message or stop) is handed back to kameo.
     #[expect(
         clippy::integer_division_remainder_used,
         reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
@@ -491,15 +472,26 @@ impl Actor for GossipActor {
         loop {
             select! {
                 signal = mailbox_rx.recv() => return Ok(signal),
-                event = self.swarm.select_next_some() => self.on_swarm_event(event).await,
-                _ = self.bootstrap_retry.tick() => self.retry_bootstrap(),
+                event = self.swarm_mut().select_next_some() => self.on_swarm_event(event).await,
             }
         }
+    }
+
+    async fn on_stop(
+        &mut self,
+        _actor_ref: WeakActorRef<Self>,
+        _reason: ActorStopReason,
+    ) -> Result<(), Infallible> {
+        // Free the sockets eagerly: kameo reports the actor as stopped before
+        // the struct itself is dropped, and an observer of that shutdown must
+        // be able to e.g. rebind the listen address immediately.
+        drop(self.swarm.take());
+        Ok(())
     }
 }
 
 impl Message<GetConnectedPeers> for GossipActor {
-    type Reply = Vec<[u8; 32]>;
+    type Reply = Vec<Ed25519PublicKey>;
 
     async fn handle(
         &mut self,
@@ -519,6 +511,18 @@ impl Message<PublishTransaction> for GossipActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.publish_transaction(tx);
+    }
+}
+
+impl Message<RetryBootstrap> for GossipActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        RetryBootstrap: RetryBootstrap,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.retry_bootstrap();
     }
 }
 
@@ -548,7 +552,7 @@ fn is_unspecified(addr: &Multiaddr) -> bool {
     not(test),
     expect(
         dead_code,
-        reason = "unused by the mesh until a later gossip task; exercised by the identity test below"
+        reason = "unused by the mesh until a later gossip task; exercised by the identity test"
     )
 )]
 pub(crate) fn peer_id_from_ed25519(
@@ -584,23 +588,6 @@ pub fn spawn_gossip_outage_watchdog(actor_ref: ActorRef<GossipActor>) -> Watchdo
     }))
 }
 
-/// An [`IngestSubmit`] that pushes straight into `mempool` unscreened; for
-/// tests.
-#[cfg(test)]
-#[must_use]
-pub fn unscreened_mempool_submit(
-    mempool: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-) -> IngestSubmit {
-    Arc::new(move |tx| {
-        let mempool = mempool.clone();
-        Box::pin(async move {
-            mempool
-                .try_push((TransactionOrigin::Gossip, tx))
-                .context("mempool is full")
-        })
-    })
-}
-
 #[expect(
     clippy::integer_division_remainder_used,
     reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
@@ -628,76 +615,5 @@ async fn wait_for_listen_addr(swarm: &mut Swarm<GossipBehaviour>) -> Result<Vec<
                 anyhow::bail!("Timed out waiting for gossip listen address");
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-    use sequencer_core::config::GossipConfig;
-
-    use super::*;
-
-    const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
-
-    fn test_config() -> GossipConfig {
-        GossipConfig {
-            listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
-            bootstrap_peers: vec![],
-        }
-    }
-
-    fn test_mempool_handle() -> MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
-        mempool::MemPool::new(1000).1
-    }
-
-    #[test]
-    fn libp2p_identity_matches_kms_public_key() {
-        // The PeerId derived from an Ed25519 public key must equal the
-        // PeerId the same secret produces as a libp2p identity.
-        let secret = [9; 32];
-        let kms_pubkey = Ed25519Key::from_bytes(&secret).public_key().to_bytes();
-        let mut secret_for_libp2p = secret;
-        let keypair =
-            libp2p::identity::Keypair::ed25519_from_bytes(&mut secret_for_libp2p).unwrap();
-        assert_eq!(
-            peer_id_from_ed25519(&kms_pubkey).unwrap(),
-            keypair.public().to_peer_id()
-        );
-    }
-
-    #[tokio::test]
-    async fn new_binds_and_reports_listen_addr() {
-        let actor = GossipActor::new(
-            test_config(),
-            [1; 32],
-            Ed25519Key::from_bytes(&[9; 32]),
-            TEST_MAX_BLOCK_SIZE,
-            unscreened_mempool_submit(test_mempool_handle()),
-        )
-        .await
-        .unwrap();
-        let addrs = actor.listen_addrs();
-        assert!(!addrs.is_empty());
-        assert!(addrs[0].to_string().contains("/udp/"));
-        assert!(actor.connected_pubkeys().is_empty());
-    }
-
-    #[tokio::test]
-    async fn kill_stops_the_swarm() {
-        let actor = GossipActor::new(
-            test_config(),
-            [1; 32],
-            Ed25519Key::from_bytes(&[9; 32]),
-            TEST_MAX_BLOCK_SIZE,
-            unscreened_mempool_submit(test_mempool_handle()),
-        )
-        .await
-        .unwrap();
-        let actor_ref = GossipActor::spawn(actor);
-        actor_ref.kill();
-        tokio::time::timeout(Duration::from_secs(5), actor_ref.wait_for_shutdown())
-            .await
-            .expect("actor should stop when killed");
     }
 }
