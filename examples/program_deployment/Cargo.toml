@@ -8,9 +8,11 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+anyhow.workspace = true
 common.workspace = true
 lee.workspace = true
 lee_core.workspace = true
+program_loader_core.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 wallet.workspace = true
 

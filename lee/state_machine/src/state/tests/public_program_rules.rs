@@ -8,9 +8,9 @@ use super::*;
 /// account the caller declared in the transaction must appear somewhere in the final diff.
 #[test]
 fn program_should_fail_if_it_drops_a_declared_account() {
-    // Both accounts need a non-default program_owner: an account left at DEFAULT_PROGRAM_ID with
-    // non-default data would itself violate the protocl rule the moment it's echoed back.
-    // `with_public_account_balances` leaves program_owner at DEFAULT_PROGRAM_ID, so use
+    // Both accounts need a non-default program_owner: an account left at DEFAULT_PROGRAM_OWNER
+    // with non-default data would itself violate the protocol rule the moment it's echoed back.
+    // `with_public_account_balances` leaves program_owner at DEFAULT_PROGRAM_OWNER, so use
     // `with_public_accounts` to set it explicitly instead.
     let mut state = V03State::new()
         .with_public_accounts([

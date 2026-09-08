@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
 // Tail Call with PDA example program.
@@ -8,36 +11,29 @@ use lee_core::program::{
 // Demonstrates how to chain execution to another program using `ChainedCall`
 // while authorizing program-derived accounts.
 //
-// Expects a single input account whose Account ID is derived from this
-// program’s ID and the fixed PDA seed below (as defined by the
-// `<AccountId as From<(&ProgramId, &PdaSeed)>>` implementation).
+// Expects a single input account whose Account ID is derived from this program's deployed
+// address and the fixed PDA seed below (`AccountId::for_public_pda`).
 //
-// Emits this account unchanged, then performs a tail call to the
-// Hello-World-with-Authorization program with a fixed greeting, delegating the
-// PDA seed so the protocol authorizes the account for the callee.
+// Emits this account unchanged, then performs a tail call to the callee program named in this
+// program's own instruction data, with a fixed greeting, delegating the PDA seed so the protocol
+// authorizes the account for the callee.
+//
+// The callee's `AccountId` is caller-supplied: a deployed program's address isn't known until
+// deploy time, so it can't be a compile-time constant.
 
-const HELLO_WORLD_WITH_AUTHORIZATION_PROGRAM_ID_HEX: &str =
-    "1d95c761168a7fa62eb15a3cc74d3f075e6ec98e6c1ac25bd5bcc7e0a9426398";
 const PDA_SEED: PdaSeed = PdaSeed::new([37; 32]);
 
-fn hello_world_program_id() -> ProgramId {
-    let hello_world_program_id_bytes: [u8; 32] =
-        hex::decode(HELLO_WORLD_WITH_AUTHORIZATION_PROGRAM_ID_HEX)
-            .unwrap()
-            .try_into()
-            .unwrap();
-    bytemuck::cast(hello_world_program_id_bytes)
-}
+type Instruction = AccountId;
 
 fn main() {
     // Read inputs
-    let call = read_lee_call::<()>();
+    let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (),
+            instruction: callee_account_id,
         },
         instruction_data,
     ) = call
@@ -59,7 +55,7 @@ fn main() {
     let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
 
     let chained_call = ChainedCall {
-        program_account_id: hello_world_program_id().into(),
+        program_account_id: callee_account_id,
         instruction_data: chained_call_instruction_data,
         pre_state_ids: vec![pre_state.account_id],
         pda_seeds: vec![PDA_SEED],

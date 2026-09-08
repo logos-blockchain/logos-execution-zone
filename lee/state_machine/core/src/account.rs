@@ -252,7 +252,7 @@ pub fn apply_balance_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::DEFAULT_PROGRAM_ID;
+    use crate::program::DEFAULT_PROGRAM_OWNER;
 
     #[test]
     fn zero_balance_account_data_creation() {
@@ -279,7 +279,7 @@ mod tests {
     fn default_program_owner_account_data_creation() {
         let new_acc = Account::default();
 
-        assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_ID.into());
+        assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_OWNER);
     }
 
     #[cfg(feature = "host")]
