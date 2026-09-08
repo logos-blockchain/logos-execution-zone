@@ -3,7 +3,10 @@
 //! cross-zone message minting the wrapped token on the target zone.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{account::AccountId, program::PdaSeed};
+use lee_core::{
+    account::{AccountId, ProgramShardSelector},
+    program::PdaSeed,
+};
 
 const ESCROW_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeLockEscrow/0000/";
 const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeLockCfg/0000000/";
@@ -29,13 +32,12 @@ pub enum Instruction {
         amount: u128,
         target_zone: [u8; 32],
         target_account_id: AccountId,
-        target_accounts: Vec<[u8; 32]>,
+        target_accounts: Vec<ProgramShardSelector>,
         payload: Vec<u8>,
         ordinal: u32,
     },
-    /// Pins the outbox program and the mint target, written once into a default
-    /// config PDA at genesis. A re-run naming different programs is refused; an
-    /// identical one is a no-op, which is what genesis replay does.
+    /// Sets the outbox program and mint target in the config shard at genesis.
+    /// Repeating the same configuration is a no-op; a different one is rejected.
     ///
     /// Required accounts (1): the config PDA.
     InitConfig {

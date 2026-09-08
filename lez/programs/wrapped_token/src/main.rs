@@ -1,6 +1,6 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff},
+    account::{AccountInput, BalanceDiff},
     program::{
         AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
@@ -61,13 +61,13 @@ fn main() {
 fn mint(
     self_account_id: lee_core::account::AccountId,
     caller_account_id: Option<lee_core::account::AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     instruction_data: Vec<u8>,
     recipient: [u8; 32],
     amount: u128,
 ) {
-    // pre_states: [source marker, config PDA, recipient holding PDA].
-    let [marker, config, holding] = <[AccountWithMetadata; 3]>::try_from(pre_states)
+    // Only the source marker's account ID is used.
+    let [marker, config, holding] = <[AccountInput; 3]>::try_from(pre_states)
         .expect("Mint requires the source marker, config, and recipient holding accounts");
 
     // The config PDA is genesis-seeded with the authorized minter (the cross-zone
@@ -77,7 +77,7 @@ fn mint(
         config_account_id(self_account_id),
         "second account must be the wrapped-token config PDA"
     );
-    let mut cfg = WrappedTokenConfig::from_bytes(&config.account.data)
+    let mut cfg = WrappedTokenConfig::from_bytes(config.shard_of(self_account_id))
         .expect("config account holds a wrapped-token config");
     assert_eq!(
         caller_account_id,
@@ -112,10 +112,6 @@ fn mint(
     }
     source.minted = minted;
 
-    // TODO(squatting): the holding address is derivable from the recipient
-    // alone, so a program can write data to it first and own it, after which
-    // every mint to that recipient fails. Accepted: there is no reclaim path
-    // today.
     assert_eq!(
         holding.account_id,
         holding_account_id(self_account_id, &recipient),
@@ -127,7 +123,7 @@ fn mint(
         "mint amount exceeds the per-mint cap"
     );
     // The backstop against accumulation, which the per-mint cap does not bound.
-    let new_balance = read_balance(&holding.account.data)
+    let new_balance = read_balance(holding.shard_of(self_account_id))
         .checked_add(amount)
         .expect("wrapped-token balance overflow");
     let holding_post = AccountStateDiff::new(
@@ -165,7 +161,7 @@ fn mint(
 fn renounce_authority(
     self_account_id: lee_core::account::AccountId,
     caller_account_id: Option<lee_core::account::AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     instruction_data: Vec<u8>,
 ) {
     // The config is read before the account list is validated, so who may call
@@ -178,7 +174,7 @@ fn renounce_authority(
         config_account_id(self_account_id),
         "first account must be the wrapped-token config PDA"
     );
-    let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data)
+    let mut cfg = WrappedTokenConfig::from_bytes(config_meta.shard_of(self_account_id))
         .expect("config account holds a wrapped-token config");
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
@@ -187,7 +183,7 @@ fn renounce_authority(
         "the authority acts at top level, or through the configured governance program"
     );
 
-    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+    let [config, authority] = <[AccountInput; 2]>::try_from(pre_states)
         .expect("this instruction requires exactly the config and authority accounts");
 
     let Some(expected) = cfg.authority else {
@@ -225,7 +221,7 @@ fn renounce_authority(
 fn update_sources(
     self_account_id: lee_core::account::AccountId,
     caller_account_id: Option<lee_core::account::AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     instruction_data: Vec<u8>,
     sources: Vec<SourcePolicy>,
 ) {
@@ -239,7 +235,7 @@ fn update_sources(
         config_account_id(self_account_id),
         "first account must be the wrapped-token config PDA"
     );
-    let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data)
+    let mut cfg = WrappedTokenConfig::from_bytes(config_meta.shard_of(self_account_id))
         .expect("config account holds a wrapped-token config");
     // Top-level, or the governance program the config names; see
     // `WrappedTokenConfig::governance` for why the escape hatch exists.
@@ -248,7 +244,7 @@ fn update_sources(
         "the authority acts at top level, or through the configured governance program"
     );
 
-    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+    let [config, authority] = <[AccountInput; 2]>::try_from(pre_states)
         .expect("this instruction requires exactly the config and authority accounts");
 
     let Some(expected) = cfg.authority else {
@@ -312,7 +308,7 @@ fn update_sources(
 fn init_config(
     self_account_id: lee_core::account::AccountId,
     caller_account_id: Option<lee_core::account::AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     instruction_data: Vec<u8>,
     config_value: &WrappedTokenConfig,
 ) {
@@ -322,26 +318,21 @@ fn init_config(
     );
 
     // pre_states: [config PDA].
-    let [config] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitConfig requires the config account");
+    let [config] =
+        <[AccountInput; 1]>::try_from(pre_states).expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
         config_account_id(self_account_id),
         "account must be the wrapped-token config PDA"
     );
-    // Init-once, idempotent under genesis replay: an empty config is a first init;
-    // a written config must already hold exactly this minter (the genesis block is
+    // Init-once, idempotent under genesis replay: an empty shard is a first init;
+    // a written one must already hold exactly this configuration (the genesis block is
     // replayed onto seeded state during multi-sequencer reconstruction), otherwise
-    // reject a post-genesis attempt to set a different minter. Implicit ownership
-    // alone would not stop the owning program from rewriting its own config data
-    // on a later call.
-    if !config.account.data.is_empty() {
+    // reject a post-genesis attempt to set a different configuration.
+    let existing = config.shard_of(self_account_id);
+    if !existing.is_empty() {
         assert_eq!(
-            config.account.program_owner, self_account_id,
-            "wrapped-token config PDA is owned by another program"
-        );
-        assert_eq!(
-            *config.account.data,
+            **existing,
             config_value.to_bytes(),
             "wrapped-token config already initialized differently"
         );

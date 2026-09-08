@@ -4,16 +4,15 @@
 //! Three accounts are maintained, updated at different block intervals (every 1, 10, and 50
 //! blocks), allowing programs to read recent timestamps at various granularities.
 //!
-//! This program can only be invoked exclusively by the sequencer as the last transaction in every
-//! block. Clock accounts are assigned to the clock program at genesis, so no claiming is required
-//! here.
+//! Only the sequencer may invoke this program, as the last transaction in every block.
+//! Each clock account uses this program's shard.
 
 use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     ClockAccountData, Instruction,
 };
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff},
+    account::{AccountInput, BalanceDiff},
     program::{
         AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
@@ -21,7 +20,7 @@ use lee_core::{
 };
 
 fn update_if_multiple(
-    pre: AccountWithMetadata,
+    pre: AccountInput,
     divisor: u64,
     current_block_id: u64,
     updated_data: &[u8],
@@ -64,15 +63,7 @@ fn main() {
         panic!("Invalid input accounts");
     }
 
-    // Verify all clock accounts are owned by this program (assigned at genesis).
-    if pre_01.account.program_owner != self_account_id
-        || pre_10.account.program_owner != self_account_id
-        || pre_50.account.program_owner != self_account_id
-    {
-        panic!("Clock accounts must be owned by the clock program");
-    }
-
-    let prev_data = ClockAccountData::from_bytes(&pre_01.account.data);
+    let prev_data = ClockAccountData::from_bytes(pre_01.shard_of(self_account_id));
     let current_block_id = prev_data
         .block_id
         .checked_add(1)

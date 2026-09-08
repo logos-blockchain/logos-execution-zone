@@ -1,6 +1,6 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, BalanceDiff},
+    account::{AccountId, AccountInput, BalanceDiff},
     program::{
         AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
@@ -57,12 +57,12 @@ fn main() {
 fn record(
     self_account_id: AccountId,
     caller_account_id: Option<AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     instruction_data: Vec<u8>,
     payload: Vec<u8>,
 ) {
-    // pre_states: [source marker, config PDA, record PDA].
-    let [marker, config, record] = <[AccountWithMetadata; 3]>::try_from(pre_states)
+    // Only the source marker's account ID is used.
+    let [marker, config, record] = <[AccountInput; 3]>::try_from(pre_states)
         .expect("Record requires the source marker, config, and record accounts");
 
     assert_eq!(
@@ -70,7 +70,7 @@ fn record(
         receiver_config_account_id(self_account_id),
         "second account must be the receiver config PDA"
     );
-    let cfg = ReceiverConfig::from_bytes(&config.account.data)
+    let cfg = ReceiverConfig::from_bytes(config.shard_of(self_account_id))
         .expect("config account holds a receiver config");
     assert_eq!(
         caller_account_id,
@@ -113,7 +113,7 @@ fn record(
 fn renounce_authority(
     self_account_id: AccountId,
     caller_account_id: Option<AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     instruction_data: Vec<u8>,
 ) {
     // The config is read before the account list is validated, so who may call
@@ -126,7 +126,7 @@ fn renounce_authority(
         receiver_config_account_id(self_account_id),
         "first account must be the receiver config PDA"
     );
-    let mut cfg = ReceiverConfig::from_bytes(&config_meta.account.data)
+    let mut cfg = ReceiverConfig::from_bytes(config_meta.shard_of(self_account_id))
         .expect("config account holds a receiver config");
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
@@ -135,7 +135,7 @@ fn renounce_authority(
         "the authority acts at top level, or through the configured governance program"
     );
 
-    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+    let [config, authority] = <[AccountInput; 2]>::try_from(pre_states)
         .expect("this instruction requires exactly the config and authority accounts");
 
     let Some(expected) = cfg.authority else {
@@ -173,7 +173,7 @@ fn renounce_authority(
 fn update_sources(
     self_account_id: AccountId,
     caller_account_id: Option<AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     instruction_data: Vec<u8>,
     sources: Vec<([u8; 32], AccountId)>,
 ) {
@@ -187,7 +187,7 @@ fn update_sources(
         receiver_config_account_id(self_account_id),
         "first account must be the receiver config PDA"
     );
-    let mut cfg = ReceiverConfig::from_bytes(&config_meta.account.data)
+    let mut cfg = ReceiverConfig::from_bytes(config_meta.shard_of(self_account_id))
         .expect("config account holds a receiver config");
     // Top-level, or the governance program the config names; see
     // `ReceiverConfig::governance` for why the escape hatch exists.
@@ -196,7 +196,7 @@ fn update_sources(
         "the authority acts at top level, or through the configured governance program"
     );
 
-    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+    let [config, authority] = <[AccountInput; 2]>::try_from(pre_states)
         .expect("this instruction requires exactly the config and authority accounts");
 
     let Some(expected) = cfg.authority else {
@@ -234,7 +234,7 @@ fn update_sources(
 fn init_config(
     self_account_id: AccountId,
     caller_account_id: Option<AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     instruction_data: Vec<u8>,
     config_value: &ReceiverConfig,
 ) {
@@ -244,24 +244,20 @@ fn init_config(
     );
 
     // pre_states: [config PDA].
-    let [config] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitConfig requires the config account");
+    let [config] =
+        <[AccountInput; 1]>::try_from(pre_states).expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
         receiver_config_account_id(self_account_id),
         "account must be the receiver config PDA"
     );
-    // Init-once, idempotent under genesis replay: an empty config is a first init;
+    // Init-once, idempotent under genesis replay: an empty shard is a first init;
     // a written one must already hold exactly this, since genesis is replayed onto
-    // seeded state during multi-sequencer reconstruction. Implicit ownership alone
-    // would not stop a later self-owned rewrite.
-    if !config.account.data.is_empty() {
+    // seeded state during multi-sequencer reconstruction.
+    let existing = config.shard_of(self_account_id);
+    if !existing.is_empty() {
         assert_eq!(
-            config.account.program_owner, self_account_id,
-            "receiver config PDA is owned by another program"
-        );
-        assert_eq!(
-            *config.account.data,
+            **existing,
             config_value.to_bytes(),
             "receiver config already initialized differently"
         );

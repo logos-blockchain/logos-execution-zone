@@ -4,16 +4,12 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff},
+    account::{AccountInput, BalanceDiff, ProgramShardSelector},
     program::{
         AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
-
-fn unchanged(pre: &AccountWithMetadata) -> AccountStateDiff {
-    AccountStateDiff::unchanged(pre.clone())
-}
 
 fn main() {
     let call = read_lee_call::<Instruction>();
@@ -57,24 +53,20 @@ fn main() {
 ///
 /// The inbox does not decide who may deliver what. It authenticates transport
 /// and nothing else: any program this zone hosts can be named as a target, with
-/// instruction bytes and account ids the peer chose. So a program meant to be
+/// instruction bytes and shard selectors the peer chose. So a program meant to be
 /// reachable across zones MUST check the marker at position 0 against sources it
 /// authorized itself, the way `wrapped_token` and `ping_receiver` do. A program
 /// not meant to be reachable has only whatever its own code happens to do. Some
 /// refuse: four assert `caller_account_id` is none, several chain into the
 /// marker's zero program id and are stopped by the host, and the rest are saved
-/// by an address assert on a PDA. Others no longer do — a target that used to be
-/// stopped only because it claimed the marker without its authorization now runs,
-/// since ownership follows a data write and needs no claim. What such a target
-/// can be made to do is write state at addresses the peer names, which is the
-/// squatting any locally deployed program can already do, at no local fee. None
-/// of that was written with cross-zone delivery in mind. User-deployed programs
-/// are reachable too, and were written with no expectation of an inbox caller at
-/// all.
+/// by an address assert on a PDA. What a target without such a check can be made
+/// to do is write its own shard at the addresses the peer names. None of that
+/// was written with cross-zone delivery in mind. User-deployed programs are
+/// reachable too, and were written with no expectation of an inbox caller at all.
 fn dispatch(
     self_account_id: lee_core::account::AccountId,
     caller_account_id: Option<lee_core::account::AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     instruction_data: Vec<u8>,
     msg: &CrossZoneMessage,
 ) {
@@ -88,7 +80,7 @@ fn dispatch(
     let config = accounts.next().expect("config account required");
     let seen = accounts.next().expect("seen shard account required");
     let marker = accounts.next().expect("source marker account required");
-    let target_accounts: Vec<AccountWithMetadata> = accounts.collect();
+    let target_accounts: Vec<AccountInput> = accounts.collect();
 
     assert_eq!(
         config.account_id,
@@ -109,17 +101,20 @@ fn dispatch(
         "Third account must be the source marker PDA for this message"
     );
 
-    let cfg = InboxConfig::from_bytes(&config.account.data).expect("inbox config decodes");
+    let cfg =
+        InboxConfig::from_bytes(config.shard_of(self_account_id)).expect("inbox config decodes");
 
     assert!(
         msg.src_zone != cfg.self_zone,
         "Source zone must not be this zone"
     );
-    // Mirrors the bridge receipt.
-    let mut shard = if seen.account.program_owner == self_account_id {
-        SeenShard::from_bytes(&seen.account.data).expect("seen shard decodes")
-    } else {
-        SeenShard::default()
+    let mut shard = {
+        let bytes = seen.shard_of(self_account_id);
+        if bytes.is_empty() {
+            SeenShard::default()
+        } else {
+            SeenShard::from_bytes(bytes).expect("seen shard decodes")
+        }
     };
 
     // One block id, one delivering block. The address binds the zone and block
@@ -138,7 +133,7 @@ fn dispatch(
 
     // On replay this is a no-op: the seen shard is untouched and no call is made.
     let (seen_post, chained_calls) = if already_seen {
-        (unchanged(&seen), vec![])
+        (AccountStateDiff::unchanged(seen), vec![])
     } else {
         shard.insert(msg.src_block_hash, msg.src_tx_index);
         let seen_post = AccountStateDiff::new(
@@ -153,21 +148,24 @@ fn dispatch(
         // The payload carries the target instruction as borsh bytes: its instruction_data verbatim.
         let call_instruction_data = msg.payload.clone();
 
-        // The marker leads, so a target reads its source at a fixed position
-        // without knowing anything about the accounts that follow it.
-        let mut call_accounts = vec![marker.account_id];
-        call_accounts.extend(target_accounts.iter().map(|a| a.account_id));
+        // Put the source marker first, followed by the requested shard selectors.
+        let mut shard_selectors = vec![ProgramShardSelector::balance_only(marker.account_id)];
+        shard_selectors.extend(target_accounts.iter().map(ProgramShardSelector::from));
         let call = ChainedCall {
             program_account_id: msg.target_account_id,
-            pre_state_ids: call_accounts,
+            shard_selectors,
             instruction_data: call_instruction_data,
             pda_seeds: vec![],
         };
         (seen_post, vec![call])
     };
 
-    let mut post_diffs = vec![unchanged(&config), seen_post, unchanged(&marker)];
-    post_diffs.extend(target_accounts.iter().map(unchanged));
+    let mut post_diffs = vec![
+        AccountStateDiff::unchanged(config),
+        seen_post,
+        AccountStateDiff::unchanged(marker),
+    ];
+    post_diffs.extend(target_accounts.into_iter().map(AccountStateDiff::unchanged));
 
     ProgramOutput::new(
         self_account_id,
@@ -183,30 +181,25 @@ fn dispatch(
 fn init_config(
     self_account_id: lee_core::account::AccountId,
     caller_account_id: Option<lee_core::account::AccountId>,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     instruction_data: Vec<u8>,
     config: &InboxConfig,
 ) {
     // pre_states: [config PDA].
-    let [config_meta] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("InitConfig requires the config account");
+    let [config_meta] =
+        <[AccountInput; 1]>::try_from(pre_states).expect("InitConfig requires the config account");
     assert_eq!(
         config_meta.account_id,
         inbox_config_account_id(self_account_id),
         "account must be the inbox config PDA"
     );
-    // Init-once, idempotent under genesis replay: an empty config is a first init;
-    // a written config must already hold exactly this, since genesis is replayed
-    // onto seeded state during multi-sequencer reconstruction. Implicit ownership
-    // alone would not stop the owning program from rewriting its own config data
-    // on a later call.
-    if !config_meta.account.data.is_empty() {
+    // Init-once, idempotent under genesis replay: an empty shard is a first init;
+    // a written one must already hold exactly this, since genesis is replayed onto
+    // seeded state during multi-sequencer reconstruction.
+    let existing = config_meta.shard_of(self_account_id);
+    if !existing.is_empty() {
         assert_eq!(
-            config_meta.account.program_owner, self_account_id,
-            "inbox config PDA is owned by another program"
-        );
-        assert_eq!(
-            *config_meta.account.data,
+            **existing,
             config.to_bytes(),
             "inbox config already initialized differently"
         );
