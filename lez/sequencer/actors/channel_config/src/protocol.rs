@@ -1,5 +1,5 @@
 use kameo::Reply;
-use logos_blockchain_codec::{BinaryDecodeExt as _, BinaryEncode as _};
+use logos_blockchain_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
 use logos_blockchain_core::{
     mantle::{
         ops::channel::{Ed25519PublicKey, MsgId},
