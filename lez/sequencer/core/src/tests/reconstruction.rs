@@ -172,8 +172,8 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     let state_a = seq_a.chain().lock().await.head_state().clone();
     for account in initial_public_user_accounts() {
         assert_eq!(
-            state_b.get_account_by_id(account.account_id).balance,
-            state_a.get_account_by_id(account.account_id).balance,
+            state_b.get_account_by_id(account.account_id).data.balance,
+            state_a.get_account_by_id(account.account_id).data.balance,
         );
     }
 
@@ -982,10 +982,16 @@ async fn reconstructed_delivery_settles_its_pending_record() {
     );
 
     // The delivery landed exactly once, and the next turn does not re-emit it.
-    let record_id = ping_record_pda(programs::ping_receiver().id().into());
+    let ping_receiver_program_id: AccountId = programs::ping_receiver().id().into();
+    let record_id = ping_record_pda(ping_receiver_program_id);
     assert_eq!(
         seq_b
-            .with_state(|state| state.get_account_by_id(record_id).data.into_inner())
+            .with_state(|state| state
+                .get_account_by_id(record_id)
+                .data
+                .shard(ping_receiver_program_id)
+                .clone()
+                .into_inner())
             .await,
         payload,
         "the reconstructed delivery must reach its target program"

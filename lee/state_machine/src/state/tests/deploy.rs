@@ -40,9 +40,9 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
     for (i, chunk) in chunks.iter().enumerate().rev() {
         state.force_insert_account(
             segment_account_ids[i],
-            Account {
-                program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-                data: Data::try_from(
+            Account::default().with_shard(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                Data::try_from(
                     ProgramSegment {
                         bytecode: chunk.to_vec(),
                         next_segment: segment_account_ids.get(i + 1).copied(),
@@ -50,17 +50,16 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
                     .to_bytes(),
                 )
                 .unwrap(),
-                ..Account::default()
-            },
+            ),
         );
     }
 
     let header_account_id = AccountId::new([0xff; 32]);
     state.force_insert_account(
         header_account_id,
-        Account {
-            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(
+        Account::default().with_shard(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            Data::try_from(
                 ProgramHeader {
                     image_id: program.id(),
                     program_first_segment: segment_account_ids[0],
@@ -69,8 +68,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
                 .to_bytes(),
             )
             .unwrap(),
-            ..Account::default()
-        },
+        ),
     );
 
     let (found_image_id, reconstructed_binary) = state
@@ -93,10 +91,10 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         "the reconstructed binary must recompute to the same image_id"
     );
 
-    let pre_states = vec![AccountWithMetadata::new(
-        Account::default(),
-        true,
+    let pre_states = vec![AccountInput::balance_only(
         AccountId::new([21; 32]),
+        true,
+        0,
     )];
     let instruction_data = Program::serialize_instruction(()).unwrap();
 
@@ -141,9 +139,9 @@ fn program_with_more_than_max_segments_is_rejected() {
         };
         state.force_insert_account(
             segment_account_ids[i],
-            Account {
-                program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-                data: Data::try_from(
+            Account::default().with_shard(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                Data::try_from(
                     ProgramSegment {
                         bytecode: vec![],
                         next_segment,
@@ -151,17 +149,16 @@ fn program_with_more_than_max_segments_is_rejected() {
                     .to_bytes(),
                 )
                 .unwrap(),
-                ..Account::default()
-            },
+            ),
         );
     }
 
     let header_account_id = AccountId::new([0xff; 32]);
     state.force_insert_account(
         header_account_id,
-        Account {
-            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(
+        Account::default().with_shard(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            Data::try_from(
                 ProgramHeader {
                     image_id: [0; 8],
                     program_first_segment: segment_account_ids[0],
@@ -170,8 +167,7 @@ fn program_with_more_than_max_segments_is_rejected() {
                 .to_bytes(),
             )
             .unwrap(),
-            ..Account::default()
-        },
+        ),
     );
 
     assert!(
@@ -195,9 +191,9 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
     for i in (0..segment_account_ids.len()).rev() {
         state.force_insert_account(
             segment_account_ids[i],
-            Account {
-                program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-                data: Data::try_from(
+            Account::default().with_shard(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                Data::try_from(
                     ProgramSegment {
                         bytecode: vec![],
                         next_segment: segment_account_ids.get(i + 1).copied(),
@@ -205,19 +201,25 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
                     .to_bytes(),
                 )
                 .unwrap(),
-                ..Account::default()
-            },
+            ),
         );
     }
 
     let header_key = PrivateKey::try_new([0xAB; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
 
-    let mut account_ids = vec![header_account_id];
-    account_ids.extend_from_slice(&segment_account_ids);
+    let mut shard_selectors = vec![ProgramShardSelector::new(
+        header_account_id,
+        PROGRAM_LOADER_ACCOUNT_ID,
+    )];
+    shard_selectors.extend(
+        segment_account_ids
+            .iter()
+            .map(|id| ProgramShardSelector::new(*id, PROGRAM_LOADER_ACCOUNT_ID)),
+    );
     let message = public_transaction::Message::try_new(
         PROGRAM_LOADER_ACCOUNT_ID,
-        account_ids,
+        shard_selectors,
         vec![Nonce(0)],
         Instruction::CreateHeader {
             first_segment: segment_account_ids[0],
@@ -238,23 +240,24 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
     assert_eq!(
         state.get_account_by_id(header_account_id),
         Account::default(),
-        "the header account must remain unclaimed after a rejected deploy"
+        "the header account must be untouched after a rejected deploy"
     );
 }
 
-/// The full deploy lifecycle through native dispatch: `WriteSegment` writes the bytecode,
-/// `CreateHeader` claims the header pointing at it, and the resulting program then dispatches
-/// and executes exactly like any other — no guest, no proving, all via `program_loader_core`.
+/// Writes a segment and header through the native loader, then executes the program.
 #[test]
 fn write_segment_then_create_header_deploys_a_dispatchable_program() {
     let mut state = V03State::new();
     let program = crate::test_methods::noop();
 
-    let segment_key = PrivateKey::try_new([1_u8; 32]).unwrap();
+    let segment_key = PrivateKey::try_new([1; 32]).unwrap();
     let segment_account_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
     let write_segment_message = public_transaction::Message::try_new(
         PROGRAM_LOADER_ACCOUNT_ID,
-        vec![segment_account_id],
+        vec![ProgramShardSelector::new(
+            segment_account_id,
+            PROGRAM_LOADER_ACCOUNT_ID,
+        )],
         vec![Nonce(0)],
         Instruction::WriteSegment {
             bytecode: program.elf().to_vec(),
@@ -269,11 +272,14 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         .transition_from_public_transaction(&write_segment_tx, 1, 0)
         .expect("WriteSegment should succeed against a fresh account");
 
-    let header_key = PrivateKey::try_new([2_u8; 32]).unwrap();
+    let header_key = PrivateKey::try_new([2; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
     let create_header_message = public_transaction::Message::try_new(
         PROGRAM_LOADER_ACCOUNT_ID,
-        vec![header_account_id, segment_account_id],
+        vec![
+            ProgramShardSelector::new(header_account_id, PROGRAM_LOADER_ACCOUNT_ID),
+            ProgramShardSelector::new(segment_account_id, PROGRAM_LOADER_ACCOUNT_ID),
+        ],
         vec![Nonce(0)],
         Instruction::CreateHeader {
             first_segment: segment_account_id,
@@ -297,9 +303,13 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
     // Dispatch a top-level call to the freshly-deployed address, exactly like calling any
     // builtin — the loader's native handling of the deploy is invisible from here on.
     let target_id = AccountId::new([9; 32]);
-    let call_message =
-        public_transaction::Message::try_new(header_account_id, vec![target_id], vec![], ())
-            .expect("noop call instruction data should always be serializable");
+    let call_message = public_transaction::Message::try_new(
+        header_account_id,
+        vec![ProgramShardSelector::balance_only(target_id)],
+        vec![],
+        (),
+    )
+    .expect("noop call instruction data should always be serializable");
     let call_witness = public_transaction::WitnessSet::from_raw_parts(vec![]);
     let call_tx = PublicTransaction::new(call_message, call_witness);
     state

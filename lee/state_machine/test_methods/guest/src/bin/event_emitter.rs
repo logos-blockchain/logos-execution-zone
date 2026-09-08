@@ -1,5 +1,5 @@
 use lee_core::{
-    account::AccountId,
+    account::{AccountId, ProgramShardSelector},
     program::{
         AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramEvent, ProgramInput,
         ProgramOutput, read_lee_call, respond_unsupported_call,
@@ -32,12 +32,12 @@ fn main() {
         .map(|account| AccountStateDiff::unchanged(account.clone()))
         .collect();
 
-    let pre_state_ids: Vec<_> = pre_states.iter().map(|pre| pre.account_id).collect();
+    let shard_selectors: Vec<_> = pre_states.iter().map(ProgramShardSelector::from).collect();
     let chained_calls = chain
         .into_iter()
         .map(|(program_account_id, call_instruction_data)| ChainedCall {
             program_account_id,
-            pre_state_ids: pre_state_ids.clone(),
+            shard_selectors: shard_selectors.clone(),
             instruction_data: call_instruction_data,
             pda_seeds: vec![],
         })

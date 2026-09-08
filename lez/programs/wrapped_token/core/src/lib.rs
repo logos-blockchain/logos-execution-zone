@@ -210,7 +210,7 @@ mod tests {
         );
     }
 
-    /// An unclaimed config reads as empty, which must not decode to a config that
+    /// An unwritten config reads as empty, which must not decode to a config that
     /// authorizes anything.
     #[test]
     fn an_empty_config_does_not_decode() {

@@ -17,7 +17,7 @@ use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use cross_zone_outbox_core::outbox_pda;
 use integration_tests::config::{self, SequencerPartialConfig};
-use lee::{AccountId, PublicTransaction, public_transaction::Message};
+use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message};
 use ping_core::{
     ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
@@ -103,7 +103,7 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
 
     // Wait until zone B's sequencer records the delivered payload.
     let record_id = ping_record_pda(receiver_id);
-    let delivered = wait_for_delivery(seq_client_b.clone(), record_id).await?;
+    let delivered = wait_for_delivery(seq_client_b.clone(), record_id, receiver_id).await?;
 
     assert_eq!(
         delivered, PING_PAYLOAD,
@@ -128,8 +128,8 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
         target_zone,
         target_account_id: receiver_id,
         target_accounts: vec![
-            receiver_config_account_id(receiver_id).into_value(),
-            ping_record_pda(receiver_id).into_value(),
+            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
+            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
         ordinal,
@@ -139,7 +139,10 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
     let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
     let message = Message::try_new(
         sender_id,
-        vec![sender_config_account_id(sender_id), outbox_account],
+        vec![
+            ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
+            ProgramShardSelector::balance_only(outbox_account),
+        ],
         vec![],
         send,
     )
@@ -151,11 +154,15 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
 }
 
 /// Polls zone B's sequencer until the ping record PDA holds a payload.
-async fn wait_for_delivery(client: SequencerClient, record_id: AccountId) -> Result<Vec<u8>> {
+async fn wait_for_delivery(
+    client: SequencerClient,
+    record_id: AccountId,
+    receiver_id: AccountId,
+) -> Result<Vec<u8>> {
     let wait = async {
         loop {
             let account = client.get_account(record_id).await?;
-            let data = account.data.into_inner();
+            let data = account.data.shard(receiver_id).to_vec();
             if !data.is_empty() {
                 return Ok::<Vec<u8>, anyhow::Error>(data);
             }

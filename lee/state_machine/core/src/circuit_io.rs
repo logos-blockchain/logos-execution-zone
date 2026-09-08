@@ -201,48 +201,46 @@ mod tests {
     use super::*;
     use crate::{
         Commitment, Nullifier,
-        account::{Account, AccountId, AccountWithMetadata, Nonce},
+        account::{Account, AccountData, AccountId, Data},
         encryption::{Ciphertext, EphemeralPublicKey},
     };
 
     #[test]
     fn privacy_preserving_circuit_output_to_bytes_round_trips_via_borsh_frame() {
+        let touched = AccountId::new([8; 32]);
+        let also_touched = AccountId::new([9; 32]);
         let output = PrivacyPreservingCircuitOutput {
             public_actions: vec![
                 PublicAction {
-                    pre: AccountWithMetadata::new(
-                        Account {
-                            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-                            balance: 12_345_678_901_234_567_890,
-                            data: b"test data".to_vec().try_into().unwrap(),
-                            nonce: Nonce(0xFFFF_FFFF_FFFF_FFFE),
-                        },
-                        true,
-                        AccountId::new([0; 32]),
-                    ),
-                    post: Account {
-                        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
+                    account_id: AccountId::new([0; 32]),
+                    is_authorized: true,
+                    pre: AccountData {
+                        balance: 12_345_678_901_234_567_890,
+                        shards: [
+                            (touched, b"test data".to_vec().try_into().unwrap()),
+                            (also_touched, Data::empty()),
+                        ]
+                        .into(),
+                    },
+                    post: AccountData {
                         balance: 100,
-                        data: b"post state data".to_vec().try_into().unwrap(),
-                        nonce: Nonce(0xFFFF_FFFF_FFFF_FFFF),
+                        shards: [
+                            (touched, b"post state data".to_vec().try_into().unwrap()),
+                            (also_touched, b"fresh record".to_vec().try_into().unwrap()),
+                        ]
+                        .into(),
                     },
                 },
                 PublicAction {
-                    pre: AccountWithMetadata::new(
-                        Account {
-                            program_owner: [9, 9, 9, 8, 8, 8, 7, 7].into(),
-                            balance: 123_123_123_456_456_567_112,
-                            data: b"test data".to_vec().try_into().unwrap(),
-                            nonce: Nonce(9_999_999_999_999_999_999_999),
-                        },
-                        false,
-                        AccountId::new([1; 32]),
-                    ),
-                    post: Account {
-                        program_owner: [2, 3, 4, 5, 6, 7, 8, 9].into(),
+                    account_id: AccountId::new([1; 32]),
+                    is_authorized: false,
+                    pre: AccountData {
+                        balance: 123_123_123_456_456_567_112,
+                        ..AccountData::default()
+                    },
+                    post: AccountData {
                         balance: 200,
-                        data: b"post state data 2".to_vec().try_into().unwrap(),
-                        nonce: Nonce(0xFFFF_FFFF_FFFF_FFFD),
+                        ..AccountData::default()
                     },
                 },
             ],
@@ -272,5 +270,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output, decoded);
+    }
+
+    #[test]
+    fn private_witness_account_id_matches_its_derivation() {
+        let npk = NullifierPublicKey([3; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[1; 32], &[2; 32]);
+        let identifier: Identifier = 77;
+        let witness = |kind| PrivateWitness {
+            account: Account::default(),
+            vpk: vpk.clone(),
+            random_seed: [4; 32],
+            identifier,
+            kind,
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: [5; 32],
+            },
+        };
+        let program = AccountId::new([6; 32]);
+        let seed = PdaSeed::new([7; 32]);
+
+        let regular = witness(WitnessKind::Regular { ask: None });
+        assert!(!regular.is_pda());
+        assert_eq!(
+            regular.account_id(),
+            AccountId::for_regular_private_account(&npk, &vpk, identifier)
+        );
+
+        let pda = witness(WitnessKind::Pda {
+            binding: (program, seed),
+        });
+        assert!(pda.is_pda());
+        assert_eq!(
+            pda.account_id(),
+            AccountId::for_private_pda(&program, &seed, &npk, &vpk, identifier)
+        );
     }
 }

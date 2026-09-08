@@ -997,6 +997,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_nested_account_round_trips_through_the_indexer_mirror() {
+        let program = lee_core::account::AccountId::new([3; 32]);
+        let account = lee_core::account::Account {
+            nonce: lee_core::account::Nonce(u128::MAX),
+            data: lee_core::account::AccountData {
+                balance: u128::MAX,
+                ..lee_core::account::AccountData::default()
+            }
+            .with_shard(program, b"record".to_vec().try_into().unwrap()),
+        };
+
+        let mirrored = Account::from(account.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: Account = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.nonce, u128::MAX);
+        assert_eq!(restored.data.balance, u128::MAX);
+        assert_eq!(
+            lee_core::account::Account::try_from(restored).unwrap(),
+            account
+        );
+    }
+
+    #[test]
     fn from_tx_events_copies_block_and_tx_context_onto_every_record() {
         let event = |selector: u8| lee_core::program::TransactionEvent {
             account_id: lee_core::account::AccountId::from([7_u32; 8]),
@@ -1035,7 +1059,7 @@ mod tests {
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
         let message = lee::public_transaction::Message::try_new_with_fees(
             [7_u32; 8].into(),
-            vec![signer_id],
+            vec![lee::ProgramShardSelector::balance_only(signer_id)],
             vec![0_u128.into()],
             0_u32,
             fee,
@@ -1069,7 +1093,7 @@ mod tests {
 
         let message = lee::public_transaction::Message::try_new(
             [7_u32; 8].into(),
-            vec![signer_id],
+            vec![lee::ProgramShardSelector::balance_only(signer_id)],
             vec![0_u128.into()],
             0_u32,
         )

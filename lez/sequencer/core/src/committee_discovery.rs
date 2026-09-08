@@ -142,6 +142,7 @@ pub fn config_is_readable(state: &lee::V03State) -> bool {
 
 #[cfg(test)]
 mod tests {
+
     use lee_core::account::Account;
     use sequencer_stake_core::SequencerEntry;
 
@@ -190,28 +191,27 @@ mod tests {
     /// LEZ state holding the config account plus one ownership account per key.
     fn state_with(stakes: impl IntoIterator<Item = Staked>) -> lee::V03State {
         let stakes: Vec<Staked> = stakes.into_iter().collect();
+        let sequencer_stake_program_id: lee::AccountId = programs::sequencer_stake().id().into();
 
         let ownership_accounts = stakes.iter().map(|staked| {
             (
                 staked.account_id,
-                Account {
-                    program_owner: programs::sequencer_stake().id().into(),
-                    balance: staked.balance,
-                    data: StakeRecord {
+                Account::funded(staked.balance).with_shard(
+                    sequencer_stake_program_id,
+                    StakeRecord {
                         sequencer_key: staked.key,
                         pending_unstake: staked.pending,
                     }
                     .to_bytes()
                     .try_into()
                     .expect("stake record fits"),
-                    ..Account::default()
-                },
+                ),
             )
         });
 
-        let config = Account {
-            program_owner: programs::sequencer_stake().id().into(),
-            data: SequencerStakeConfig {
+        let config = Account::default().with_shard(
+            sequencer_stake_program_id,
+            SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {
                     minimum_sequencer_stake: MINIMUM,
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
@@ -236,8 +236,7 @@ mod tests {
             .to_bytes()
             .try_into()
             .expect("config fits"),
-            ..Account::default()
-        };
+        );
 
         lee::V03State::new()
             .with_public_accounts(ownership_accounts)

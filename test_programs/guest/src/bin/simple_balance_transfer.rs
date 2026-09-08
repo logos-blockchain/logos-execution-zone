@@ -45,16 +45,8 @@ fn main() {
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::new(
-                sender_pre.clone(),
-                BalanceDiff::Sub(balance),
-                sender_pre.account.data,
-            ),
-            AccountStateDiff::new(
-                receiver_pre.clone(),
-                BalanceDiff::Add(balance),
-                receiver_pre.account.data,
-            ),
+            AccountStateDiff::balance_only(sender_pre, BalanceDiff::Sub(balance)),
+            AccountStateDiff::balance_only(receiver_pre, BalanceDiff::Add(balance)),
         ],
     )
     .write();

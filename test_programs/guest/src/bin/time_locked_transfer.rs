@@ -44,7 +44,11 @@ fn main() {
     assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
     // Read the current timestamp from the clock account.
-    let clock_data = ClockAccountData::from_bytes(&clock_pre.account.data);
+    let (_, clock_bytes) = clock_pre
+        .shard
+        .as_ref()
+        .expect("the clock shard selector must name a record");
+    let clock_data = ClockAccountData::from_bytes(clock_bytes);
 
     assert!(
         clock_data.timestamp >= deadline,
@@ -57,16 +61,8 @@ fn main() {
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::new(
-                sender_pre.clone(),
-                BalanceDiff::Sub(amount),
-                sender_pre.account.data,
-            ),
-            AccountStateDiff::new(
-                receiver_pre.clone(),
-                BalanceDiff::Add(amount),
-                receiver_pre.account.data,
-            ),
+            AccountStateDiff::balance_only(sender_pre, BalanceDiff::Sub(amount)),
+            AccountStateDiff::balance_only(receiver_pre, BalanceDiff::Add(amount)),
             // Clock account is read-only: post state equals pre state.
             AccountStateDiff::unchanged(clock_pre),
         ],

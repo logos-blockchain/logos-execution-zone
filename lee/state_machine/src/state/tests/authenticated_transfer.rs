@@ -4,14 +4,7 @@ use super::*;
 fn transition_from_authenticated_transfer_program_invocation_default_account_destination() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-    let initial_data = [(
-        account_id,
-        Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-            balance: 100,
-            ..Account::default()
-        },
-    )];
+    let initial_data = [(account_id, Account::funded(100))];
     let mut state = V03State::new()
         .with_public_accounts(initial_data)
         .with_test_programs();
@@ -24,8 +17,8 @@ fn transition_from_authenticated_transfer_program_invocation_default_account_des
     let tx = transfer_transaction(from, &key, 0, to, &to_key, 0, balance_to_move);
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
-    assert_eq!(state.get_account_by_id(from).balance, 95);
-    assert_eq!(state.get_account_by_id(to).balance, 5);
+    assert_eq!(state.get_account_by_id(from).data.balance, 95);
+    assert_eq!(state.get_account_by_id(to).data.balance, 5);
     assert_eq!(state.get_account_by_id(from).nonce, Nonce(1));
     assert_eq!(state.get_account_by_id(to).nonce, Nonce(1));
 }
@@ -34,16 +27,9 @@ fn transition_from_authenticated_transfer_program_invocation_default_account_des
 fn transition_from_authenticated_transfer_program_invocation_insuficient_balance() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-    // Owned by the executing program, or UnauthorizedBalanceDecrease fires before
-    // apply_balance_diff gets a chance to.
-    let initial_data = [(
-        account_id,
-        Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-            balance: 100,
-            ..Account::default()
-        },
-    )];
+    // The sender signs, or UnauthorizedBalanceDecrease fires before apply_balance_diff gets a
+    // chance to.
+    let initial_data = [(account_id, Account::funded(100))];
     let mut state = V03State::new()
         .with_public_accounts(initial_data)
         .with_test_programs();
@@ -52,7 +38,7 @@ fn transition_from_authenticated_transfer_program_invocation_insuficient_balance
     let to_key = PrivateKey::try_new([2; 32]).unwrap();
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
     let balance_to_move = 101;
-    assert!(state.get_account_by_id(from).balance < balance_to_move);
+    assert!(state.get_account_by_id(from).data.balance < balance_to_move);
 
     let tx = transfer_transaction(from, &from_key, 0, to, &to_key, 0, balance_to_move);
     let result = state.transition_from_public_transaction(&tx, 1, 0);
@@ -66,8 +52,8 @@ fn transition_from_authenticated_transfer_program_invocation_insuficient_balance
             )
         ))
     ));
-    assert_eq!(state.get_account_by_id(from).balance, 100);
-    assert_eq!(state.get_account_by_id(to).balance, 0);
+    assert_eq!(state.get_account_by_id(from).data.balance, 100);
+    assert_eq!(state.get_account_by_id(to).data.balance, 0);
     assert_eq!(state.get_account_by_id(from).nonce, Nonce(0));
     assert_eq!(state.get_account_by_id(to).nonce, Nonce(0));
 }
@@ -79,22 +65,8 @@ fn transition_from_authenticated_transfer_program_invocation_non_default_account
     let account_id1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
     let account_id2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
     let initial_data = [
-        (
-            account_id1,
-            Account {
-                program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-                balance: 100,
-                ..Account::default()
-            },
-        ),
-        (
-            account_id2,
-            Account {
-                program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-                balance: 200,
-                ..Account::default()
-            },
-        ),
+        (account_id1, Account::funded(100)),
+        (account_id2, Account::funded(200)),
     ];
     let mut state = V03State::new()
         .with_public_accounts(initial_data)
@@ -109,8 +81,8 @@ fn transition_from_authenticated_transfer_program_invocation_non_default_account
     let tx = transfer_transaction(from, &from_key, 0, to, &to_key, 0, balance_to_move);
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
-    assert_eq!(state.get_account_by_id(from).balance, 192);
-    assert_eq!(state.get_account_by_id(to).balance, 108);
+    assert_eq!(state.get_account_by_id(from).data.balance, 192);
+    assert_eq!(state.get_account_by_id(to).data.balance, 108);
     assert_eq!(state.get_account_by_id(from).nonce, Nonce(1));
     assert_eq!(state.get_account_by_id(to).nonce, Nonce(1));
 }
@@ -121,14 +93,7 @@ fn transition_from_sequence_of_authenticated_transfer_program_invocations() {
     let account_id1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
     let key2 = PrivateKey::try_new([2; 32]).unwrap();
     let account_id2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
-    let initial_data = [(
-        account_id1,
-        Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-            balance: 100,
-            ..Account::default()
-        },
-    )];
+    let initial_data = [(account_id1, Account::funded(100))];
     let mut state = V03State::new()
         .with_public_accounts(initial_data)
         .with_test_programs();
@@ -158,9 +123,9 @@ fn transition_from_sequence_of_authenticated_transfer_program_invocations() {
     );
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
-    assert_eq!(state.get_account_by_id(account_id1).balance, 95);
-    assert_eq!(state.get_account_by_id(account_id2).balance, 2);
-    assert_eq!(state.get_account_by_id(account_id3).balance, 3);
+    assert_eq!(state.get_account_by_id(account_id1).data.balance, 95);
+    assert_eq!(state.get_account_by_id(account_id2).data.balance, 2);
+    assert_eq!(state.get_account_by_id(account_id3).data.balance, 3);
     assert_eq!(state.get_account_by_id(account_id1).nonce, Nonce(1));
     assert_eq!(state.get_account_by_id(account_id2).nonce, Nonce(2));
     assert_eq!(state.get_account_by_id(account_id3).nonce, Nonce(1));

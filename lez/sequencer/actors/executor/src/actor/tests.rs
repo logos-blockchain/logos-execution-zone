@@ -9,7 +9,8 @@ use common::{
 };
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
-    Account, AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
+    Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, Signature,
+    V03State,
     public_transaction::{Message, WitnessSet},
 };
 use mockall::predicate::{always, eq, function};
@@ -71,7 +72,10 @@ fn test_transaction() -> LeeTransaction {
     let instruction = 1337;
     let message = Message::try_new_with_fees(
         test_programs::simple_balance_transfer().id().into(),
-        vec![payer, acc2],
+        vec![
+            ProgramShardSelector::balance_only(payer),
+            ProgramShardSelector::balance_only(acc2),
+        ],
         nonces,
         instruction,
         common::test_utils::test_fee_declaration(payer),
@@ -107,8 +111,9 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
         [
             (
                 system_accounts::sequencer_stake_config_account_id(),
-                Account {
-                    data: sequencer_stake_core::SequencerStakeConfig {
+                Account::default().with_shard(
+                    programs::sequencer_stake().id().into(),
+                    sequencer_stake_core::SequencerStakeConfig {
                         channel_params: Some(sequencer_stake_core::ChannelParams {
                             minimum_sequencer_stake: 0,
                             posting_timeframe:
@@ -120,8 +125,7 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
                     .to_bytes()
                     .try_into()
                     .expect("Sequencer stake config must fit into Data"),
-                    ..Account::default()
-                },
+                ),
             ),
             (
                 system_accounts::fee_state_account_id(),
@@ -137,10 +141,7 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
                 .map(|acc| {
                     (
                         acc.account_id,
-                        Account {
-                            balance: acc.balance,
-                            ..Account::default()
-                        },
+                        Account::funded(acc.balance),
                     )
                 }),
         ),
@@ -413,7 +414,10 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let payer_key = accounts[0].pub_sign_key.clone();
     let message = Message::try_new_with_fees(
         test_programs::simple_balance_transfer().id().into(),
-        vec![payer, acc2],
+        vec![
+            ProgramShardSelector::balance_only(payer),
+            ProgramShardSelector::balance_only(acc2),
+        ],
         vec![0_u128.into(), 0_u128.into()],
         1337,
         lee::FeeDeclaration::new(payer, 2_000_000, 0, 0),

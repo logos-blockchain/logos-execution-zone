@@ -102,34 +102,18 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn foreign_shard_writer() -> Program {
+        Program::new_unchecked(
+            test_methods::FOREIGN_SHARD_WRITER_ID,
+            Cow::Borrowed(test_methods::FOREIGN_SHARD_WRITER_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn minter() -> Program {
         Program::new_unchecked(
             test_methods::MINTER_ID,
             Cow::Borrowed(test_methods::MINTER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn squatter() -> Program {
-        Program::new_unchecked(
-            test_methods::SQUATTER_ID,
-            Cow::Borrowed(test_methods::SQUATTER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn acquire_and_forward() -> Program {
-        Program::new_unchecked(
-            test_methods::ACQUIRE_AND_FORWARD_ID,
-            Cow::Borrowed(test_methods::ACQUIRE_AND_FORWARD_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn acquire_then_fund() -> Program {
-        Program::new_unchecked(
-            test_methods::ACQUIRE_THEN_FUND_ID,
-            Cow::Borrowed(test_methods::ACQUIRE_THEN_FUND_ELF),
         )
     }
 
@@ -162,6 +146,14 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::SELECTIVE_PDA_DELEGATOR_ID,
             Cow::Borrowed(test_methods::SELECTIVE_PDA_DELEGATOR_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn shard_forwarder() -> Program {
+        Program::new_unchecked(
+            test_methods::SHARD_FORWARDER_ID,
+            Cow::Borrowed(test_methods::SHARD_FORWARDER_ELF),
         )
     }
 

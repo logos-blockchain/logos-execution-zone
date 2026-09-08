@@ -6,7 +6,7 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention,
     utils::{account_balance, get_account, new_account, send},
 };
-use lee::{AccountId, PrivateKey, PublicKey, public_transaction};
+use lee::{AccountId, PrivateKey, ProgramShardSelector, PublicKey, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
@@ -371,7 +371,10 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
         programs::authenticated_transfer().id().into(),
-        vec![faucet_account_id, recipient],
+        vec![
+            ProgramShardSelector::balance_only(faucet_account_id),
+            ProgramShardSelector::balance_only(recipient),
+        ],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
     )?;
@@ -413,7 +416,10 @@ async fn cannot_execute_faucet_program() -> Result<()> {
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
         programs::faucet().id().into(),
-        vec![faucet_account_id, recipient],
+        vec![
+            ProgramShardSelector::balance_only(faucet_account_id),
+            ProgramShardSelector::balance_only(recipient),
+        ],
         vec![],
         faucet_core::Instruction::GenesisTransfer { amount },
     )?;
@@ -461,7 +467,10 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
 
     let segment_message = public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![segment_id],
+        vec![ProgramShardSelector::new(
+            segment_id,
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+        )],
         vec![lee_core::account::Nonce(0), payer_nonce],
         program_loader_core::Instruction::WriteSegment {
             bytecode: faucet_chain_caller.elf().to_vec(),
@@ -485,7 +494,13 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
 
     let header_message = public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![faucet_chain_caller_id, segment_id],
+        vec![
+            ProgramShardSelector::new(
+                faucet_chain_caller_id,
+                lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            ),
+            ProgramShardSelector::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+        ],
         vec![lee_core::account::Nonce(payer_nonce.0 + 1)],
         program_loader_core::Instruction::CreateHeader {
             first_segment: segment_id,
@@ -512,7 +527,10 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
 
     let message = public_transaction::Message::try_new(
         faucet_chain_caller_id,
-        vec![faucet_account_id, attacker],
+        vec![
+            ProgramShardSelector::balance_only(faucet_account_id),
+            ProgramShardSelector::balance_only(attacker),
+        ],
         vec![],
         (faucet_program_id, amount),
     )?;

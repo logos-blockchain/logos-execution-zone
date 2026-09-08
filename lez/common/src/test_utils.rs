@@ -4,9 +4,9 @@
 #[cfg(test)]
 use std::collections::HashMap;
 
-use lee::AccountId;
 #[cfg(test)]
 use lee::{Account, PrivateKey, PublicKey, V03State, ValidatedStateDiff};
+use lee::{AccountId, ProgramShardSelector};
 
 use crate::{
     HashType,
@@ -29,15 +29,10 @@ pub fn producer_account_for_testing() -> AccountId {
     ))
 }
 
-/// The test block-producer's reward account as a claimed genesis-seed entry, for
-/// stores that seed their state before any block credits fees to it.
+/// The test block producer's reward account and its initial state.
 #[must_use]
-pub fn claimed_producer_seed() -> (AccountId, lee::Account) {
-    let account = lee::Account {
-        program_owner: programs::authenticated_transfer().id().into(),
-        ..lee::Account::default()
-    };
-    (producer_account_for_testing(), account)
+pub fn producer_seed() -> (AccountId, lee::Account) {
+    (producer_account_for_testing(), lee::Account::default())
 }
 
 /// A syntactically valid `Public` transaction. Its contents are irrelevant to the
@@ -109,11 +104,11 @@ pub fn produce_dummy_block(
 #[must_use]
 pub fn produce_dummy_empty_transaction() -> LeeTransaction {
     let program_id = programs::authenticated_transfer().id().into();
-    let account_ids = vec![];
+    let shard_selectors = vec![];
     let nonces = vec![];
     let message = lee::public_transaction::Message::try_new(
         program_id,
-        account_ids,
+        shard_selectors,
         nonces,
         authenticated_transfer_core::Instruction::Transfer { amount: 0 },
     )
@@ -160,12 +155,15 @@ pub fn create_transaction_native_token_transfer_with_fees(
     signing_key: &lee::PrivateKey,
     fee_declaration: lee::FeeDeclaration,
 ) -> LeeTransaction {
-    let account_ids = vec![from, to];
+    let shard_selectors = vec![
+        ProgramShardSelector::balance_only(from),
+        ProgramShardSelector::balance_only(to),
+    ];
     let nonces = vec![nonce.into()];
     let program_id = programs::authenticated_transfer().id().into();
     let message = lee::public_transaction::Message::try_new_with_fees(
         program_id,
-        account_ids,
+        shard_selectors,
         nonces,
         authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,
@@ -194,7 +192,10 @@ pub fn create_transaction_native_token_transfer_without_fee(
 ) -> LeeTransaction {
     let message = lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id().into(),
-        vec![from, to],
+        vec![
+            ProgramShardSelector::balance_only(from),
+            ProgramShardSelector::balance_only(to),
+        ],
         vec![nonce.into()],
         authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,

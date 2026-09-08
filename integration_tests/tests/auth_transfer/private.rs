@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -12,14 +12,12 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, PrivateKey, PublicKey, execute_and_prove,
+    AccountId, PrivateKey, ProgramShardSelector, ProvingInput, PublicKey, execute_and_prove,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierWitness,
-    PrivateWitness, WitnessKind,
-    account::{Account, AccountWithMetadata},
-    encryption::ViewingPublicKey,
+    DUMMY_COMMITMENT_HASH, Nullifier, NullifierPublicKey, NullifierWitness, PrivateWitness,
+    WitnessKind, account::Account, encryption::ViewingPublicKey,
 };
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::initial_pub_accounts_private_keys;
@@ -108,7 +106,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         .wallet()
         .get_account_private(from)
         .context("Failed to get sender's private account")?;
-    assert_eq!(from_acc.balance, 10000);
+    assert_eq!(from_acc.data.balance, 10000);
     let to_before = account_balance(&ctx, to).await?;
 
     send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
@@ -126,7 +124,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
 
     // A deshielded transfer is a privacy-preserving transaction — fee-exempt
     // under the interim policy — so both sides move by exactly the amount.
-    assert_eq!(from_acc.balance, 9900);
+    assert_eq!(from_acc.data.balance, 9900);
     assert_eq!(acc_2_balance, to_before + 100);
 
     log::info!("Successfully deshielded transfer to public account");
@@ -227,7 +225,7 @@ async fn private_transfer_to_owned_account_over_foreign_keys() -> Result<()> {
         .wallet()
         .get_account_private(to_account_id)
         .context("Failed to get recipient's private account")?;
-    assert_eq!(to_res_acc.balance, 100);
+    assert_eq!(to_res_acc.data.balance, 100);
 
     log::info!("Successfully transferred over the foreign-keys path");
 
@@ -258,7 +256,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
     // A shielded transfer is a privacy-preserving transaction — fee-exempt
     // under the interim policy — so the public sender pays exactly the amount.
     assert_eq!(acc_from_balance, from_before - 100);
-    assert_eq!(acc_to.balance, 20100);
+    assert_eq!(acc_to.data.balance, 20100);
 
     log::info!("Successfully shielded transfer to owned private account");
 
@@ -364,7 +362,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         .get_account_private(to_account_id)
         .context("Failed to get receiver account")?;
 
-    assert_eq!(to_res_acc.balance, 100);
+    assert_eq!(to_res_acc.data.balance, 100);
 
     Ok(())
 }
@@ -471,14 +469,14 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
         .wallet()
         .get_account_private(account_id_1)
         .context("account for identifier 1 not found after sync")?;
-    assert_eq!(acc_1.balance, 100);
+    assert_eq!(acc_1.data.balance, 100);
 
     let account_id_2 = AccountId::for_regular_private_account(&npk, &vpk, identifier_2);
     let acc_2 = ctx
         .wallet()
         .get_account_private(account_id_2)
         .context("account for identifier 2 not found after sync")?;
-    assert_eq!(acc_2.balance, 200);
+    assert_eq!(acc_2.data.balance, 200);
 
     // Both account ids must resolve to the same key node.
     let found_acc1 = ctx
@@ -528,7 +526,10 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
 
     let segment_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![segment_id],
+        vec![ProgramShardSelector::new(
+            segment_id,
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+        )],
         vec![lee_core::account::Nonce(0), payer_nonce],
         program_loader_core::Instruction::WriteSegment {
             bytecode: faucet_chain_caller.elf().to_vec(),
@@ -552,7 +553,13 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
 
     let header_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![faucet_chain_caller_id, segment_id],
+        vec![
+            ProgramShardSelector::new(
+                faucet_chain_caller_id,
+                lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            ),
+            ProgramShardSelector::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+        ],
         vec![lee_core::account::Nonce(payer_nonce.0 + 1)],
         program_loader_core::Instruction::CreateHeader {
             first_segment: segment_id,
@@ -582,16 +589,8 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let attacker_private_id = AccountId::for_regular_private_account(&npk, &vpk, 1337);
     let amount: u128 = 1;
 
-    let faucet_pre = AccountWithMetadata::new(
-        get_account(&ctx, faucet_account_id).await?,
-        false,
-        faucet_account_id,
-    );
-    let recipient_pre = AccountWithMetadata::new(
-        get_account(&ctx, attacker_private_id).await?,
-        false,
-        attacker_private_id,
-    );
+    let faucet_account = get_account(&ctx, faucet_account_id).await?;
+    let attacker_account = get_account(&ctx, attacker_private_id).await?;
 
     let program_with_deps = ProgramWithDependencies::new(
         faucet_chain_caller,
@@ -606,11 +605,14 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let instruction = Program::serialize_instruction((faucet_program_id, amount))?;
 
     let res = execute_and_prove(
-        vec![faucet_pre, recipient_pre],
-        instruction,
-        vec![
-            InputAccountIdentity::Public,
-            InputAccountIdentity::Private(PrivateWitness {
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::balance_only(faucet_account_id),
+                ProgramShardSelector::balance_only(attacker_private_id),
+            ],
+            public_accounts: HashMap::from([(faucet_account_id, faucet_account)]),
+            private_witnesses: vec![PrivateWitness {
+                account: attacker_account,
                 vpk,
                 random_seed: [0; 32],
                 identifier: 1337,
@@ -619,8 +621,10 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
                     npk,
                     commitment_root: DUMMY_COMMITMENT_HASH,
                 },
-            }),
-        ],
+            }],
+            instruction_data: instruction,
+            ..Default::default()
+        },
         &program_with_deps,
     );
 
@@ -635,27 +639,24 @@ async fn prove_init_with_commitment_root(
 ) -> Result<lee_core::PrivacyPreservingCircuitOutput> {
     let program = programs::authenticated_transfer();
     let sender_id = ctx.existing_public_accounts()[0];
-    let sender_pre = AccountWithMetadata::new(
-        ctx.sequencer_client().get_account(sender_id).await?,
-        true,
-        sender_id,
-    );
+    let sender_account = ctx.sequencer_client().get_account(sender_id).await?;
 
     let ask = lee_core::AuthorizationSecretKey([7; 32]);
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
-    let recipient = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
 
     let (output, _) = execute_and_prove(
-        vec![sender_pre, recipient],
-        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-            amount: 1,
-        })?,
-        vec![
-            InputAccountIdentity::Public,
-            InputAccountIdentity::Private(PrivateWitness {
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::balance_only(sender_id),
+                ProgramShardSelector::balance_only(recipient_account_id),
+            ],
+            signers: [sender_id].into(),
+            public_accounts: HashMap::from([(sender_id, sender_account)]),
+            private_witnesses: vec![PrivateWitness {
+                account: Account::default(),
                 vpk,
                 random_seed: [0; 32],
                 identifier: 0,
@@ -664,8 +665,12 @@ async fn prove_init_with_commitment_root(
                     npk,
                     commitment_root,
                 },
-            }),
-        ],
+            }],
+            instruction_data: Program::serialize_instruction(
+                authenticated_transfer_core::Instruction::Transfer { amount: 1 },
+            )?,
+            ..Default::default()
+        },
         &program.into(),
     )?;
 

@@ -27,8 +27,7 @@ fn main() {
         return;
     };
 
-    let post_data = pre.account.data.clone();
-    let diff = AccountStateDiff::new(pre, BalanceDiff::Add(1), post_data);
+    let diff = AccountStateDiff::balance_only(pre, BalanceDiff::Add(1));
 
     ProgramOutput::new(
         self_account_id,

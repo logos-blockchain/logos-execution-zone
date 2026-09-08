@@ -37,4 +37,4 @@ test-case = "3.3.1"
 [features]
 default = []
 prove = ["risc0-zkvm/prove", "dep:semver"]
-test-utils = []
+test-utils = ["lee_core/test_utils"]

@@ -40,13 +40,8 @@ fn main() {
         return;
     };
 
-    let sender_post_data = sender_pre.account.data.clone();
-    let receiver_post_data = receiver_pre.account.data.clone();
-
-    let sender_diff =
-        AccountStateDiff::new(sender_pre, BalanceDiff::Sub(balance), sender_post_data);
-    let receiver_diff =
-        AccountStateDiff::new(receiver_pre, BalanceDiff::Add(balance), receiver_post_data);
+    let sender_diff = AccountStateDiff::balance_only(sender_pre, BalanceDiff::Sub(balance));
+    let receiver_diff = AccountStateDiff::balance_only(receiver_pre, BalanceDiff::Add(balance));
 
     ProgramOutput::new(
         self_account_id,

@@ -1416,7 +1416,7 @@ mod tests {
     use common::{HashType, test_utils::produce_dummy_block};
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
-    use lee::{AccountId, PrivateKey, PublicKey};
+    use lee::{AccountId, PrivateKey, ProgramShardSelector, PublicKey};
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
     use ping_core::{ping_record_pda, receiver_config_account_id};
@@ -1554,8 +1554,8 @@ mod tests {
             },
             receiver_id,
             &[
-                receiver_config_account_id(receiver_id).into_value(),
-                ping_record_pda(receiver_id).into_value(),
+                ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
+                ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
             ],
             payload.to_vec(),
         ))

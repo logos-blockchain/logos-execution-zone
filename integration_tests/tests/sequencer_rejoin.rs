@@ -21,7 +21,7 @@ use test_fixtures::{
     config::{self, MultiNodeTestContextConfig, SequencerPartialConfig},
 };
 use tokio::test;
-use wallet::AccountIdentity;
+use wallet::{AccountIdentity, AccountMention};
 
 /// What genesis stakes each founding sequencer.
 const STAKE: u128 = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
@@ -71,6 +71,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         .add_imported_public_account(owner_b);
 
     let config_id = system_accounts::sequencer_stake_config_account_id();
+    let stake_id: AccountId = programs::sequencer_stake().id().into();
 
     let settlement = AccountId::from(&PublicKey::new_from_private_key(
         &config::default_public_accounts_for_wallet()[0].0,
@@ -90,8 +91,8 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     send_stake_tx(
         &ctx,
         vec![
-            AccountIdentity::Public(ownership_b),
-            AccountIdentity::PublicNoSign(config_id),
+            AccountIdentity::Public(ownership_b).select_program_shard(stake_id),
+            AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
         ],
         &sequencer_stake_core::Instruction::UnstakeRequest {
             amount: STAKE,
@@ -112,7 +113,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B removed from the Bedrock committee");
 
     wait_until("B's stake to be released", || async {
-        Ok(get_account(&ctx, funds_b).await?.balance == 0)
+        Ok(get_account(&ctx, funds_b).await?.data.balance == 0)
     })
     .await?;
     ensure!(
@@ -134,10 +135,10 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     send_stake_tx(
         &ctx,
         vec![
-            AccountIdentity::Public(settlement),
-            AccountIdentity::Public(ownership_b),
-            AccountIdentity::PublicNoSign(funds_b),
-            AccountIdentity::PublicNoSign(config_id),
+            AccountIdentity::Public(settlement).balance_only(),
+            AccountIdentity::Public(ownership_b).select_program_shard(stake_id),
+            AccountIdentity::PublicNoSign(funds_b).balance_only(),
+            AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
         ],
         &sequencer_stake_core::Instruction::Stake {
             sequencer_key: stake_key_b,
@@ -150,7 +151,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     .context("Failed to submit B's re-stake")?;
 
     wait_until("B's re-stake to land", || async {
-        Ok(get_account(&ctx, funds_b).await?.balance == STAKE)
+        Ok(get_account(&ctx, funds_b).await?.data.balance == STAKE)
     })
     .await?;
     info!("B staked again");
@@ -190,7 +191,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
 /// Sends `instruction` to `sequencer_stake` over `accounts`.
 async fn send_stake_tx(
     ctx: &TestContext,
-    accounts: Vec<AccountIdentity>,
+    accounts: Vec<AccountMention>,
     instruction: &sequencer_stake_core::Instruction,
 ) -> Result<()> {
     let data = Program::serialize_instruction(instruction.clone())
@@ -210,7 +211,12 @@ async fn stake_entry(
     let account = get_account(ctx, system_accounts::sequencer_stake_config_account_id())
         .await
         .context("Failed to read the sequencer_stake config account")?;
-    let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(account.data.as_ref())
-        .context("config account data did not decode as a SequencerStakeConfig")?;
+    let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
+        account
+            .data
+            .shard(programs::sequencer_stake().id().into())
+            .as_ref(),
+    )
+    .context("config account data did not decode as a SequencerStakeConfig")?;
     Ok(config.entries.get(&sequencer_key).copied())
 }

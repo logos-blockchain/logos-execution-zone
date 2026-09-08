@@ -105,42 +105,47 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         hex::encode(demo_sequencer_key.to_bytes())
     );
     let config_id = system_accounts::sequencer_stake_config_account_id();
+    let stake_id: AccountId = programs::sequencer_stake().id().into();
     ctx.wallet()
         .send_pub_tx(
             vec![
-                AccountIdentity::Public(funding_id),
-                AccountIdentity::Public(ownership_id),
-                AccountIdentity::PublicNoSign(funds_id),
-                AccountIdentity::PublicNoSign(config_id),
+                AccountIdentity::Public(funding_id).balance_only(),
+                AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
+                AccountIdentity::PublicNoSign(funds_id).balance_only(),
+                AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
             ],
             stake_instruction_data,
-            programs::sequencer_stake().id().into(),
+            stake_id,
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
 
     info!("Waiting for the Stake transaction's block to land");
     poll_until("stake to take ownership", 30, || async {
-        Ok(get_account(&ctx, ownership_id).await?.program_owner
-            == programs::sequencer_stake().id().into())
+        Ok(!get_account(&ctx, ownership_id)
+            .await?
+            .data
+            .shard(stake_id)
+            .is_empty())
     })
     .await?;
 
     let ownership_account = get_account(&ctx, ownership_id)
         .await
         .context("Failed to read the stake ownership account")?;
-    assert_eq!(
-        ownership_account.program_owner,
-        programs::sequencer_stake().id().into(),
-        "ownership account should now be owned by sequencer_stake"
+    assert!(
+        !ownership_account.data.shard(stake_id).is_empty(),
+        "ownership account should now hold a sequencer_stake record"
     );
     let staked_balance = account_balance(&ctx, funds_id).await?;
     assert_eq!(
         staked_balance, FUNDING_BALANCE,
         "the funds PDA should hold the staked balance"
     );
-    let record = sequencer_stake_core::StakeRecord::from_bytes(ownership_account.data.as_ref())
-        .context("ownership account data did not decode as a StakeRecord")?;
+    let record = sequencer_stake_core::StakeRecord::from_bytes(
+        ownership_account.data.shard(stake_id).as_ref(),
+    )
+    .context("ownership account data did not decode as a StakeRecord")?;
     assert_eq!(record.sequencer_key, demo_stake_key);
     info!(
         "Ownership account confirmed: {staked_balance} staked for sequencer key {}",
@@ -254,11 +259,11 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     ctx.wallet()
         .send_pub_tx(
             vec![
-                AccountIdentity::Public(ownership_id),
-                AccountIdentity::PublicNoSign(config_id),
+                AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
+                AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
             ],
             unstake_request_data,
-            programs::sequencer_stake().id().into(),
+            stake_id,
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;
@@ -304,12 +309,13 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .await
         .context("Failed to read the ownership account after the release")?;
     assert_eq!(
-        drained_ownership_account.balance, 0,
+        drained_ownership_account.data.balance, 0,
         "the ownership account never custodies the stake"
     );
-    let drained_record =
-        sequencer_stake_core::StakeRecord::from_bytes(drained_ownership_account.data.as_ref())
-            .context("drained ownership account data did not decode as a StakeRecord")?;
+    let drained_record = sequencer_stake_core::StakeRecord::from_bytes(
+        drained_ownership_account.data.shard(stake_id).as_ref(),
+    )
+    .context("drained ownership account data did not decode as a StakeRecord")?;
     assert!(
         drained_record.pending_unstake.is_none(),
         "pending unstake should be cleared"
@@ -346,9 +352,13 @@ async fn stake_entry(
     let config_account = get_account(ctx, config_id)
         .await
         .context("Failed to read the sequencer_stake config account")?;
-    let config =
-        sequencer_stake_core::SequencerStakeConfig::from_bytes(config_account.data.as_ref())
-            .context("config account data did not decode as a SequencerStakeConfig")?;
+    let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
+        config_account
+            .data
+            .shard(programs::sequencer_stake().id().into())
+            .as_ref(),
+    )
+    .context("config account data did not decode as a SequencerStakeConfig")?;
     Ok(config.entries.get(&sequencer_key).copied())
 }
 

@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-
-use lee_core::account::{Account, AccountId, Nonce};
+use lee_core::account::{AccountId, Nonce, ProgramShardSelector};
 
 use crate::{
     PrivateKey, PublicKey, V03State,
@@ -8,23 +6,6 @@ use crate::{
     public_transaction::{Message, WitnessSet},
     validated_state_diff::ValidatedStateDiff,
 };
-
-fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<AccountId, Account> {
-    initial_data
-        .iter()
-        .copied()
-        .map(|(account_id, balance)| {
-            (
-                account_id,
-                Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-                    balance,
-                    ..Account::default()
-                },
-            )
-        })
-        .collect()
-}
 
 #[test]
 fn public_diff_reflects_a_successful_transfer() {
@@ -37,13 +18,21 @@ fn public_diff_reflects_a_successful_transfer() {
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[(from, 100)]))
+        .with_public_account_balances([(from, 100)])
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
     let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
-    let message =
-        Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
+    let message = Message::try_new(
+        program_id,
+        vec![
+            ProgramShardSelector::balance_only(from),
+            ProgramShardSelector::balance_only(to),
+        ],
+        vec![Nonce(0), Nonce(0)],
+        5_u128,
+    )
+    .unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
     let tx = crate::PublicTransaction::new(message, witness_set);
 
@@ -56,7 +45,7 @@ fn public_diff_reflects_a_successful_transfer() {
         "public_diff must contain the debited sender",
     );
     assert_eq!(
-        public_diff[&from].balance, 95,
+        public_diff[&from].data.balance, 95,
         "sender balance in the diff must reflect the debit",
     );
 }
@@ -128,13 +117,21 @@ fn metering_transfer_fixture() -> (V03State, crate::PublicTransaction) {
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[(from, 100)]))
+        .with_public_account_balances([(from, 100)])
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
     let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
-    let message =
-        Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
+    let message = Message::try_new(
+        program_id,
+        vec![
+            ProgramShardSelector::balance_only(from),
+            ProgramShardSelector::balance_only(to),
+        ],
+        vec![Nonce(0), Nonce(0)],
+        5_u128,
+    )
+    .unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
     (state, crate::PublicTransaction::new(message, witness_set))
 }
@@ -175,7 +172,7 @@ fn chained_calls_share_one_budget() {
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let to = AccountId::new([2_u8; 32]);
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[(from, 1_000), (to, 0)]))
+        .with_public_account_balances([(from, 1_000), (to, 0)])
         .with_test_programs();
     let instruction: (
         u128,
@@ -191,7 +188,10 @@ fn chained_calls_share_one_budget() {
     // The chain_caller program permutes the account order in the chain call.
     let message = Message::try_new(
         chain_caller.id().into(),
-        vec![to, from],
+        vec![
+            ProgramShardSelector::balance_only(to),
+            ProgramShardSelector::balance_only(from),
+        ],
         vec![Nonce(0)],
         instruction,
     )
@@ -242,14 +242,17 @@ fn metered_guest_panic_is_charged_the_full_budget() {
     let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&[(from, 100)]))
+        .with_public_account_balances([(from, 100)])
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
     let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
     let message = Message::try_new(
         program_id,
-        vec![from, to],
+        vec![
+            ProgramShardSelector::balance_only(from),
+            ProgramShardSelector::balance_only(to),
+        ],
         vec![Nonce(0), Nonce(0)],
         1_000_u128,
     )
@@ -276,7 +279,7 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     let to = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::try_new([2_u8; 32]).unwrap(),
     ));
-    let from_before = state.get_account_by_id(from).balance;
+    let from_before = state.get_account_by_id(from).data.balance;
 
     // A budget too small to finish the transfer: the action runs out of gas.
     let (outcome, result) =
@@ -295,7 +298,7 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     );
     drop(state.apply_state_diff(diff));
     assert_eq!(
-        state.get_account_by_id(from).balance,
+        state.get_account_by_id(from).data.balance,
         from_before,
         "the transfer was reverted"
     );

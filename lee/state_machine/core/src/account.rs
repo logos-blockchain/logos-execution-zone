@@ -129,6 +129,20 @@ impl Account {
     }
 }
 
+#[cfg(any(test, feature = "test_utils"))]
+impl Account {
+    #[must_use]
+    pub fn funded(balance: Balance) -> Self {
+        Self {
+            data: AccountData {
+                balance,
+                ..AccountData::default()
+            },
+            ..Self::default()
+        }
+    }
+}
+
 /// An account's balance and program shards.
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
@@ -402,13 +416,12 @@ pub fn apply_balance_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::DEFAULT_PROGRAM_ID;
 
     #[test]
     fn zero_balance_account_data_creation() {
         let new_acc = Account::default();
 
-        assert_eq!(new_acc.balance, 0);
+        assert_eq!(new_acc.data.balance, 0);
     }
 
     #[test]
@@ -419,36 +432,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_data_account_data_creation() {
+    fn default_account_has_no_shards() {
         let new_acc = Account::default();
 
-        assert!(new_acc.data.is_empty());
-    }
-
-    #[test]
-    fn default_program_owner_account_data_creation() {
-        let new_acc = Account::default();
-
-        assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_ID.into());
-    }
-
-    #[cfg(feature = "host")]
-    #[test]
-    fn account_with_metadata_constructor() {
-        let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-            balance: 1337,
-            data: b"testing_account_with_metadata_constructor"
-                .to_vec()
-                .try_into()
-                .unwrap(),
-            nonce: Nonce(0xdead_beef),
-        };
-        let fingerprint = AccountId::new([8; 32]);
-        let new_acc_with_metadata = AccountWithMetadata::new(account.clone(), true, fingerprint);
-        assert_eq!(new_acc_with_metadata.account, account);
-        assert!(new_acc_with_metadata.is_authorized);
-        assert_eq!(new_acc_with_metadata.account_id, fingerprint);
+        assert!(new_acc.data.shards.is_empty());
     }
 
     #[cfg(feature = "host")]
@@ -607,12 +594,181 @@ mod tests {
     }
 
     #[test]
-    fn account_diff_unchanged_has_no_balance_or_data_change() {
-        let id = AccountId::new([7; 32]);
-        let diff = PostStateEffects::new_unchanged(id);
+    fn apply_diff_prunes_an_emptied_shard() {
+        let program = AccountId::new([3; 32]);
+        let mut account =
+            Account::funded(10).with_shard(program, b"record".to_vec().try_into().unwrap());
 
-        assert_eq!(diff.id, id);
-        assert!(diff.diff_balance.is_none());
-        assert!(diff.new_data.is_none());
+        account
+            .data
+            .apply_diff(&AccountStateDiff::new(
+                AccountInput::with_shard(
+                    AccountId::new([1; 32]),
+                    true,
+                    10,
+                    program,
+                    b"record".to_vec().try_into().unwrap(),
+                ),
+                BalanceDiff::Sub(3),
+                Data::empty(),
+            ))
+            .unwrap();
+
+        assert!(!account.data.shards.contains_key(&program));
+        assert_eq!(account, Account::funded(7));
+    }
+
+    #[test]
+    fn set_shard_keeps_the_encoding_canonical() {
+        let program = AccountId::new([3; 32]);
+        let mut account = Account::default();
+
+        account
+            .data
+            .set_shard(program, b"record".to_vec().try_into().unwrap());
+        account.data.set_shard(program, Data::empty());
+
+        assert_eq!(account.to_bytes(), Account::default().to_bytes());
+    }
+
+    #[test]
+    fn input_at_reads_a_vacant_shard_as_empty() {
+        let account_id = AccountId::new([1; 32]);
+        let program = AccountId::new([3; 32]);
+        let data = AccountData {
+            balance: 42,
+            ..AccountData::default()
+        };
+
+        let input = AccountInput::at(ProgramShardSelector::new(account_id, program), true, &data);
+
+        assert_eq!(input.balance, 42);
+        assert_eq!(input.program_account_id(), Some(program));
+        assert!(input.shard_of(program).is_empty());
+    }
+
+    #[test]
+    fn input_at_of_a_balance_only_shard_selector_carries_no_shard() {
+        let account_id = AccountId::new([1; 32]);
+        let data = AccountData {
+            balance: 42,
+            ..AccountData::default()
+        }
+        .with_shard(
+            AccountId::new([3; 32]),
+            b"record".to_vec().try_into().unwrap(),
+        );
+
+        let input = AccountInput::at(ProgramShardSelector::balance_only(account_id), false, &data);
+
+        assert_eq!(input.balance, 42);
+        assert_eq!(input.program_account_id(), None);
+        assert!(input.shard.is_none());
+    }
+
+    #[test]
+    fn shard_selector_of_an_input_drops_what_it_holds() {
+        let account_id = AccountId::new([1; 32]);
+        let program = AccountId::new([3; 32]);
+        let named = AccountInput::with_shard(
+            account_id,
+            true,
+            5,
+            program,
+            b"record".to_vec().try_into().unwrap(),
+        );
+        let balance_only = AccountInput::balance_only(account_id, true, 5);
+
+        assert_eq!(
+            ProgramShardSelector::from(&named),
+            ProgramShardSelector::new(account_id, program)
+        );
+        assert_eq!(
+            ProgramShardSelector::from(&balance_only),
+            ProgramShardSelector::balance_only(account_id)
+        );
+    }
+
+    #[test]
+    fn project_reads_absent_shards_as_empty() {
+        let held = AccountId::new([3; 32]);
+        let absent = AccountId::new([4; 32]);
+        let data = AccountData {
+            balance: 9,
+            ..AccountData::default()
+        }
+        .with_shard(held, b"record".to_vec().try_into().unwrap());
+
+        let projection = data.project([held, absent]);
+
+        assert_eq!(projection.balance, 9);
+        assert_eq!(projection.shards.get(&absent), Some(&Data::empty()));
+        assert_eq!(projection.shards.len(), 2);
+    }
+
+    #[test]
+    fn apply_keeps_the_nonce_and_prunes_emptied_shards() {
+        let program = AccountId::new([3; 32]);
+        let mut account = Account {
+            nonce: Nonce(7),
+            ..Account::funded(9).with_shard(program, b"record".to_vec().try_into().unwrap())
+        };
+
+        account.data.apply(&AccountData {
+            balance: 1,
+            shards: [(program, Data::empty())].into(),
+        });
+
+        assert_eq!(account.nonce, Nonce(7));
+        assert_eq!(account.data.balance, 1);
+        assert!(account.data.shards.is_empty());
+    }
+
+    #[test]
+    fn project_then_apply_is_identity_on_the_touched_shards() {
+        let touched = AccountId::new([3; 32]);
+        let untouched = AccountId::new([4; 32]);
+        let data = AccountData {
+            balance: 9,
+            ..AccountData::default()
+        }
+        .with_shard(touched, b"record".to_vec().try_into().unwrap())
+        .with_shard(untouched, b"other".to_vec().try_into().unwrap());
+
+        let mut applied = data.clone();
+        applied.apply(&data.project([touched]));
+
+        assert_eq!(applied, data);
+    }
+
+    #[test]
+    fn an_account_json_round_trip_holds_the_largest_balance_and_nonce() {
+        let account = Account {
+            nonce: Nonce(u128::MAX),
+            ..Account::funded(u128::MAX).with_shard(
+                AccountId::new([3; 32]),
+                b"record".to_vec().try_into().unwrap(),
+            )
+        };
+
+        let json = serde_json::to_string(&account).unwrap();
+        let restored: Account = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(account, restored);
+        assert_eq!(restored.nonce, Nonce(u128::MAX));
+        assert_eq!(restored.data.balance, u128::MAX);
+    }
+
+    #[test]
+    fn an_account_serializes_with_its_data_nested() {
+        let account = Account {
+            nonce: Nonce(7),
+            ..Account::funded(9)
+        };
+
+        assert_eq!(
+            serde_json::to_string(&account).unwrap(),
+            r#"{"nonce":7,"data":{"balance":9,"shards":{}}}"#
+        );
     }
 }

@@ -462,7 +462,7 @@ pub fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) ->
 
 #[cfg(test)]
 mod tests {
-    use lee::{Account, AccountId, PrivateKey, PublicKey, V03State};
+    use lee::{Account, AccountData, AccountId, PrivateKey, PublicKey, V03State};
     use lee_core::account::Nonce;
 
     use super::{
@@ -473,8 +473,8 @@ mod tests {
 
     #[test]
     fn a_restricted_system_account_is_not_a_valid_reward_target() {
-        // A plain account is a fine reward target, claimed or not — a producer
-        // picks its own payout account.
+        // A plain account is a fine reward target — a producer picks its own
+        // payout account.
         validate_reward_target(AccountId::new([1; 32]))
             .expect("an ordinary account is a valid reward target");
 
@@ -499,13 +499,15 @@ mod tests {
         // must be accepted.
         let bridge_id = system_accounts::bridge_account_id();
         let pre = Account {
-            balance: 500,
             nonce: Nonce(7),
-            ..Account::default()
+            ..Account::funded(500)
         };
         let post = Account {
-            balance: 600,
-            ..pre.clone()
+            nonce: pre.nonce,
+            data: AccountData {
+                balance: 600,
+                ..pre.data.clone()
+            },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
@@ -521,14 +523,15 @@ mod tests {
         // increasing its balance must be rejected.
         let bridge_id = system_accounts::bridge_account_id();
         let pre = Account {
-            balance: 500,
             nonce: Nonce(7),
-            ..Account::default()
+            ..Account::funded(500)
         };
         let post = Account {
-            balance: 600,
             nonce: Nonce(8),
-            ..pre.clone()
+            data: AccountData {
+                balance: 600,
+                ..pre.data.clone()
+            },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
@@ -544,9 +547,8 @@ mod tests {
         // must be rejected — a zero-value deposit is not a real credit.
         let bridge_id = system_accounts::bridge_account_id();
         let pre = Account {
-            balance: 500,
             nonce: Nonce(7),
-            ..Account::default()
+            ..Account::funded(500)
         };
         let post = pre.clone();
         let (state, diff) = state_and_diff(bridge_id, pre, post);
@@ -563,13 +565,13 @@ mod tests {
         // non-public tx (private/deployment) that produces a bridge diff — even
         // a balance-only increase — must be rejected.
         let bridge_id = system_accounts::bridge_account_id();
-        let pre = Account {
-            balance: 500,
-            ..Account::default()
-        };
+        let pre = Account::funded(500);
         let post = Account {
-            balance: 600,
-            ..pre.clone()
+            nonce: pre.nonce,
+            data: AccountData {
+                balance: 600,
+                ..pre.data.clone()
+            },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
@@ -585,13 +587,13 @@ mod tests {
         // malicious block author would attempt, and the guard must reject it on
         // the apply path so followers do not accept the drained state.
         let bridge_id = system_accounts::bridge_account_id();
-        let pre = Account {
-            balance: 1_000,
-            ..Account::default()
-        };
+        let pre = Account::funded(1_000);
         let post = Account {
-            balance: 400,
-            ..pre.clone()
+            nonce: pre.nonce,
+            data: AccountData {
+                balance: 400,
+                ..pre.data.clone()
+            },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
@@ -608,15 +610,9 @@ mod tests {
         // treat a changed account as unchanged and wave it through (and would flag an *unchanged*
         // account instead).
         let clock_id = system_accounts::clock_account_ids()[0];
-        let pre = Account {
-            balance: 1_000,
-            ..Account::default()
-        };
+        let pre = Account::funded(1_000);
 
-        let changed = Account {
-            balance: 2_000,
-            ..Account::default()
-        };
+        let changed = Account::funded(2_000);
         let (state, diff) = state_and_diff(clock_id, pre.clone(), changed);
         assert!(
             validate_doesnt_modify_account(&state, &diff, clock_id).is_err(),

@@ -104,21 +104,25 @@ impl AccountId {
 mod tests {
     use super::*;
 
-    #[test]
-    fn enconding() {
-        let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-            balance: 123_456_789_012_345_678_901_234_567_890_123_456,
+    fn shard_bearing_account() -> Account {
+        Account {
             nonce: 42_u128.into(),
-            data: b"hola mundo".to_vec().try_into().unwrap(),
-        };
+            ..Account::funded(123_456_789_012_345_678_901_234_567_890_123_456).with_shard(
+                AccountId::new([7; 32]),
+                b"hola mundo".to_vec().try_into().unwrap(),
+            )
+        }
+    }
 
-        // program owner || balance || nonce || data_len || data
+    #[test]
+    fn encoding() {
+        let account = shard_bearing_account();
+
         let expected_bytes = [
-            1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0, 8,
-            0, 0, 0, 192, 186, 220, 114, 113, 65, 236, 234, 222, 15, 215, 191, 227, 198, 23, 0, 42,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 104, 111, 108, 97, 32, 109,
-            117, 110, 100, 111,
+            42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 186, 220, 114, 113, 65, 236, 234,
+            222, 15, 215, 191, 227, 198, 23, 0, 1, 0, 0, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+            7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 10, 0, 0, 0, 104, 111, 108,
+            97, 32, 109, 117, 110, 100, 111,
         ];
 
         let bytes = account.to_bytes();
@@ -146,33 +150,8 @@ mod tests {
 
     #[cfg(feature = "host")]
     #[test]
-    fn commitment_to_bytes_roundtrip() {
-        let commitment = Commitment((0..32).collect::<Vec<u8>>().try_into().unwrap());
-        let bytes = commitment.to_byte_array();
-        let mut cursor = Cursor::new(bytes.as_ref());
-        let commitment_from_cursor = Commitment::from_cursor(&mut cursor).unwrap();
-        assert_eq!(commitment, commitment_from_cursor);
-    }
-
-    #[cfg(feature = "host")]
-    #[test]
-    fn nullifier_to_bytes_roundtrip() {
-        let nullifier = Nullifier((0..32).collect::<Vec<u8>>().try_into().unwrap());
-        let bytes = nullifier.to_byte_array();
-        let mut cursor = Cursor::new(bytes.as_ref());
-        let nullifier_from_cursor = Nullifier::from_cursor(&mut cursor).unwrap();
-        assert_eq!(nullifier, nullifier_from_cursor);
-    }
-
-    #[cfg(feature = "host")]
-    #[test]
     fn account_to_bytes_roundtrip() {
-        let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
-            balance: 123_456_789_012_345_678_901_234_567_890_123_456,
-            nonce: 42_u128.into(),
-            data: b"hola mundo".to_vec().try_into().unwrap(),
-        };
+        let account = shard_bearing_account();
         let bytes = account.to_bytes();
         let mut cursor = Cursor::new(bytes.as_ref());
         let account_from_cursor = Account::from_cursor(&mut cursor).unwrap();

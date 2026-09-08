@@ -136,4 +136,5 @@ token_program = { path = "token", optional = true }
 build_utils = { workspace = true, optional = true }
 
 [dev-dependencies]
+lee_core = { workspace = true, features = ["test_utils"] }
 bridge_core = { workspace = true }

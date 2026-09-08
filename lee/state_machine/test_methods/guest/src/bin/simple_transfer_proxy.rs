@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::ProgramShardSelector,
+    program::{
+        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call, respond_unsupported_call,
+    },
 };
 
 /// PDA authorization program that delegates balance operations to `simple_transfer`.
@@ -60,7 +63,10 @@ fn main() {
         // private PDA (seed, npk) binding when pda_seeds match the private PDA derivation.
         let auth_call = ChainedCall::new(
             simple_transfer_id.into(),
-            vec![pda_pre.account_id, recipient_pre.account_id],
+            vec![
+                ProgramShardSelector::from(&pda_pre),
+                ProgramShardSelector::from(&recipient_pre),
+            ],
             &amount,
         )
         .with_pda_seeds(vec![pda_seed]);
@@ -83,9 +89,12 @@ fn main() {
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
         // to authorize the PDA.
-        let auth_call =
-            ChainedCall::new(simple_transfer_id.into(), vec![pda_pre.account_id], &amount)
-                .with_pda_seeds(vec![pda_seed]);
+        let auth_call = ChainedCall::new(
+            simple_transfer_id.into(),
+            vec![ProgramShardSelector::from(&pda_pre)],
+            &amount,
+        )
+        .with_pda_seeds(vec![pda_seed]);
 
         ProgramOutput::new(
             self_account_id,

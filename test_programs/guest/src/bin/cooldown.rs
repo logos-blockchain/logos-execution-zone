@@ -67,10 +67,14 @@ fn main() {
     // Check the clock account is the system clock account
     assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
-    let clock_data = ClockAccountData::from_bytes(&clock_pre.account.data);
+    let (_, clock_bytes) = clock_pre
+        .shard
+        .as_ref()
+        .expect("the clock shard selector must name a record");
+    let clock_data = ClockAccountData::from_bytes(clock_bytes);
     let current_timestamp = clock_data.timestamp;
 
-    let cooldown_state = CooldownState::from_bytes(&state.account.data);
+    let cooldown_state = CooldownState::from_bytes(state.shard_of(self_account_id));
 
     // Enforce cooldown: the elapsed time since the last run must exceed the cooldown period.
     let elapsed = current_timestamp.saturating_sub(cooldown_state.last_run_timestamp);

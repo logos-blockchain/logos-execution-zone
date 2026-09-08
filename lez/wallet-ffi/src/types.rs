@@ -762,8 +762,8 @@ impl From<FfiAccountIdWithPrivacy> for AccountIdWithPrivacy {
 mod tests {
     use lee::{AccountId, PrivateKey, PublicKey};
     use lee_core::{
-        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, NullifierSecretKey,
-        PrivateAccountKind,
+        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, NullifierPublicKey,
+        NullifierSecretKey, PrivateAccountKind,
     };
     use wallet::AccountIdentity;
 
@@ -783,12 +783,14 @@ mod tests {
 
         let private_reg_acc_id =
             AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier));
+        let pda_authority = AccountId::new([46; 32]);
+        let pda_seed = PdaSeed::new([47; 32]);
         let private_pda_acc_id = AccountId::for_private_account(
             &npk,
             &vpk,
             &PrivateAccountKind::Pda {
-                account_id: AccountId::new([46; 32]),
-                seed: PdaSeed::new([47; 32]),
+                account_id: pda_authority,
+                seed: pda_seed,
                 identifier,
             },
         );
@@ -805,14 +807,17 @@ mod tests {
         let acc_identity_4 = AccountIdentity::PrivateForeign {
             npk,
             vpk: vpk.clone(),
-            identifier,
+            kind: PrivateAccountKind::Regular(identifier),
         };
-        let acc_identity_5 = AccountIdentity::PrivatePdaOwned(private_pda_acc_id);
-        let acc_identity_6 = AccountIdentity::PrivatePdaForeign {
-            account_id: private_pda_acc_id,
+        let acc_identity_5 = AccountIdentity::PrivateOwned(private_pda_acc_id);
+        let acc_identity_6 = AccountIdentity::PrivateForeign {
             npk,
             vpk: vpk.clone(),
-            identifier,
+            kind: PrivateAccountKind::Pda {
+                account_id: pda_authority,
+                seed: pda_seed,
+                identifier,
+            },
         };
         let acc_identity_7 = AccountIdentity::PrivateShared {
             ask,
@@ -820,7 +825,8 @@ mod tests {
             identifier,
         };
         let acc_identity_8 = AccountIdentity::PrivatePdaShared {
-            account_id: private_pda_acc_id,
+            authority: pda_authority,
+            seed: pda_seed,
             nsk,
             vpk,
             identifier,
@@ -831,7 +837,7 @@ mod tests {
         let ffi_acc_identity_2_5: FfiAccountIdentity = acc_identity_2_5.clone().into();
         let ffi_acc_identity_3: FfiAccountIdentity = acc_identity_3.clone().into();
         let ffi_acc_identity_4: FfiAccountIdentity = acc_identity_4.clone().into();
-        let ffi_acc_identity_5: FfiAccountIdentity = acc_identity_5.clone().into();
+        let mut ffi_acc_identity_5: FfiAccountIdentity = acc_identity_5.clone().into();
         let ffi_acc_identity_6: FfiAccountIdentity = acc_identity_6.clone().into();
         let ffi_acc_identity_7: FfiAccountIdentity = acc_identity_7.clone().into();
         let ffi_acc_identity_8: FfiAccountIdentity = acc_identity_8.clone().into();
@@ -855,8 +861,9 @@ mod tests {
         );
         assert_eq!(
             ffi_acc_identity_5.kind,
-            FfiAccountIdentityKind::PrivatePdaOwned
+            FfiAccountIdentityKind::PrivateOwned
         );
+        ffi_acc_identity_5.kind = FfiAccountIdentityKind::PrivatePdaOwned;
         assert_eq!(
             ffi_acc_identity_6.kind,
             FfiAccountIdentityKind::PrivatePdaForeign
@@ -873,6 +880,10 @@ mod tests {
         assert_eq!(ffi_acc_identity_7.nullifier_secret_key.data, nsk);
         assert_eq!(ffi_acc_identity_7.nullifier_public_key.data, npk.0);
         assert_eq!(ffi_acc_identity_8.nullifier_public_key.data, npk.0);
+        assert_eq!(
+            AccountId::from(ffi_acc_identity_8.account_id),
+            private_pda_acc_id
+        );
 
         let acc_identity_res_1: AccountIdentity = (&ffi_acc_identity_1).try_into().unwrap();
         let acc_identity_res_2: AccountIdentity = (&ffi_acc_identity_2).try_into().unwrap();
@@ -896,6 +907,38 @@ mod tests {
     }
 
     #[test]
+    fn a_foreign_pda_address_is_filled_on_export_and_checked_on_import() {
+        let nsk = NullifierSecretKey::from(&AuthorizationSecretKey([43; 32]));
+        let npk: NullifierPublicKey = (&nsk).into();
+        let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
+        let kind = PrivateAccountKind::Pda {
+            account_id: AccountId::new([46; 32]),
+            seed: PdaSeed::new([47; 32]),
+            identifier: 5,
+        };
+        let derived = AccountId::for_private_account(&npk, &vpk, &kind);
+
+        let exported: FfiAccountIdentity = AccountIdentity::PrivateForeign {
+            npk,
+            vpk: vpk.clone(),
+            kind: kind.clone(),
+        }
+        .into();
+
+        assert_eq!(exported.kind, FfiAccountIdentityKind::PrivatePdaForeign);
+        assert_eq!(AccountId::from(exported.account_id), derived);
+
+        let mut contradictory: FfiAccountIdentity =
+            AccountIdentity::PrivateForeign { npk, vpk, kind }.into();
+        contradictory.account_id.data[0] ^= 1;
+
+        assert_eq!(
+            AccountIdentity::try_from(&contradictory).unwrap_err(),
+            WalletFfiError::InvalidAccountId
+        );
+    }
+
+    #[test]
     fn inconsistent_derived_keys_are_rejected() {
         let ask = AuthorizationSecretKey([43; 32]);
         let nsk = NullifierSecretKey::from(&ask);
@@ -908,7 +951,8 @@ mod tests {
             identifier,
         };
         let pda_shared = AccountIdentity::PrivatePdaShared {
-            account_id: AccountId::new([46; 32]),
+            authority: AccountId::new([48; 32]),
+            seed: PdaSeed::new([49; 32]),
             nsk,
             vpk,
             identifier,
@@ -923,7 +967,7 @@ mod tests {
         zeroed.nullifier_public_key = FfiBytes32::default();
         let mut tampered_pda_npk: FfiAccountIdentity = pda_shared.clone().into();
         tampered_pda_npk.nullifier_public_key.data[0] ^= 1;
-        let mut zeroed_pda: FfiAccountIdentity = pda_shared.into();
+        let mut zeroed_pda: FfiAccountIdentity = pda_shared.clone().into();
         zeroed_pda.nullifier_public_key = FfiBytes32::default();
 
         for inconsistent in [
@@ -938,5 +982,12 @@ mod tests {
                 WalletFfiError::InvalidKeyValue
             );
         }
+
+        let mut wrong_address: FfiAccountIdentity = pda_shared.into();
+        wrong_address.account_id.data[0] ^= 1;
+        assert_eq!(
+            AccountIdentity::try_from(&wrong_address).unwrap_err(),
+            WalletFfiError::InvalidAccountId
+        );
     }
 }

@@ -3,7 +3,7 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
@@ -13,7 +13,8 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramId, PublicKey,
+    AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramId, ProgramShardSelector,
+    ProvingInput, PublicKey,
     privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, execute_and_prove},
         message::Message,
@@ -22,11 +23,8 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey, NullifierWitness,
-    PrivateWitness, WitnessKind,
-    account::{Account, AccountWithMetadata},
-    encryption::ViewingPublicKey,
-    program::PdaSeed,
+    DUMMY_COMMITMENT_HASH, NullifierPublicKey, NullifierWitness, PrivateAccountKind,
+    PrivateWitness, WitnessKind, account::Account, encryption::ViewingPublicKey, program::PdaSeed,
 };
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::initial_pub_accounts_private_keys;
@@ -59,32 +57,33 @@ async fn fund_private_pda(
         .get_account_public_signing_key(sender)
         .context("sender signing key not found")?;
 
-    let sender_pre = AccountWithMetadata::new(sender_account.clone(), true, sender);
-    let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_account_id);
-
     let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
         .context("failed to serialize auth_transfer instruction")?;
 
-    let account_identities = vec![
-        InputAccountIdentity::Public,
-        InputAccountIdentity::Private(PrivateWitness {
-            vpk,
-            random_seed: [0; 32],
-            identifier,
-            kind: WitnessKind::Pda {
-                binding: Some((authority_program_id, seed)),
-            },
-            nullifier: NullifierWitness::Init {
-                npk,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
-        }),
-    ];
-
     let (output, proof) = execute_and_prove(
-        vec![sender_pre, pda_pre],
-        instruction,
-        account_identities,
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::balance_only(sender),
+                ProgramShardSelector::balance_only(pda_account_id),
+            ],
+            signers: [sender].into(),
+            public_accounts: HashMap::from([(sender, sender_account.clone())]),
+            private_witnesses: vec![PrivateWitness {
+                account: Account::default(),
+                vpk,
+                random_seed: [0; 32],
+                identifier,
+                kind: WitnessKind::Pda {
+                    binding: (authority_program_id, seed),
+                },
+                nullifier: NullifierWitness::Init {
+                    npk,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }],
+            instruction_data: instruction,
+            ..Default::default()
+        },
         auth_transfer,
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
@@ -123,12 +122,13 @@ async fn spend_private_pda(
     wallet
         .send_privacy_preserving_tx(
             vec![
-                AccountIdentity::PrivatePdaOwned(pda_account_id),
+                AccountIdentity::PrivateOwned(pda_account_id).balance_only(),
                 AccountIdentity::PrivateForeign {
                     npk: recipient_npk,
                     vpk: recipient_vpk,
-                    identifier: 0,
-                },
+                    kind: PrivateAccountKind::Regular(0),
+                }
+                .balance_only(),
             ],
             Program::serialize_instruction((seed, amount, auth_transfer_id))
                 .context("failed to serialize pda_spend_proxy instruction")?,
@@ -182,7 +182,10 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let segment_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![segment_id],
+        vec![ProgramShardSelector::new(
+            segment_id,
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+        )],
         vec![lee_core::account::Nonce(0), payer_nonce],
         program_loader_core::Instruction::WriteSegment {
             bytecode: proxy.elf().to_vec(),
@@ -205,7 +208,10 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let header_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![proxy_id, segment_id],
+        vec![
+            ProgramShardSelector::new(proxy_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+            ProgramShardSelector::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+        ],
         vec![lee_core::account::Nonce(payer_nonce.0 + 1)],
         program_loader_core::Instruction::CreateHeader {
             first_segment: segment_id,
@@ -281,13 +287,13 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .wallet()
         .get_account_private(alice_pda_0_id)
         .context("alice_pda_0 not found after sync")?;
-    assert_eq!(pda_0_account.balance, amount);
+    assert_eq!(pda_0_account.data.balance, amount);
 
     let pda_1_account = ctx
         .wallet()
         .get_account_private(alice_pda_1_id)
         .context("alice_pda_1 not found after sync")?;
-    assert_eq!(pda_1_account.balance, amount);
+    assert_eq!(pda_1_account.data.balance, amount);
 
     // Commitments for both PDAs must be in the sequencer's state.
     let commitment_0 = ctx
@@ -360,13 +366,13 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .wallet()
         .get_account_private(alice_pda_0_id)
         .context("alice_pda_0 not found after spend sync")?;
-    assert_eq!(pda_0_spent.balance, amount - amount_spend_0);
+    assert_eq!(pda_0_spent.data.balance, amount - amount_spend_0);
 
     let pda_1_spent = ctx
         .wallet()
         .get_account_private(alice_pda_1_id)
         .context("alice_pda_1 not found after spend sync")?;
-    assert_eq!(pda_1_spent.balance, amount - amount_spend_1);
+    assert_eq!(pda_1_spent.data.balance, amount - amount_spend_1);
 
     // Post-spend commitments must be in state.
     let post_spend_commitment_0 = ctx

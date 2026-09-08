@@ -456,6 +456,35 @@ impl ExecutionState {
             )
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_post_states(
+        public: Vec<(AccountId, bool, AccountData, AccountData)>,
+        private: Vec<(AccountId, AccountData)>,
+    ) -> Self {
+        let mut state = Self {
+            witness_by_account: HashMap::new(),
+            post_states: HashMap::new(),
+            shard_selectors_seen: HashSet::new(),
+            public_order: Vec::new(),
+            public_pre_states: HashMap::new(),
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            pda_family_binding: HashMap::new(),
+        };
+        for (account_id, is_authorized, pre, post_state) in public {
+            state.post_states.insert(account_id, post_state);
+            state.public_order.push(account_id);
+            state
+                .public_pre_states
+                .insert(account_id, (is_authorized, pre));
+        }
+        for (index, (account_id, post_state)) in private.into_iter().enumerate() {
+            state.post_states.insert(account_id, post_state);
+            state.witness_by_account.insert(account_id, index);
+        }
+        state
+    }
+
     /// Returns the validity windows, public actions, and final private account states.
     pub fn into_parts(
         self,
@@ -549,5 +578,77 @@ fn assert_family_binding(
                 e.get()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lee_core::{account::Account, encryption::ViewingPublicKey};
+
+    use super::*;
+
+    const PROGRAM: AccountId = AccountId::new([0; 32]);
+    const OTHER_PROGRAM: AccountId = AccountId::new([1; 32]);
+    const SEED: PdaSeed = PdaSeed::new([2; 32]);
+    const OTHER_SEED: PdaSeed = PdaSeed::new([3; 32]);
+
+    fn witness_with(kind: WitnessKind) -> PrivateWitness {
+        PrivateWitness {
+            account: Account::default(),
+            vpk: ViewingPublicKey::from_seed(&[4; 32], &[5; 32]),
+            random_seed: [6; 32],
+            identifier: 0,
+            kind,
+            nullifier: NullifierWitness::Init {
+                npk: NullifierPublicKey([7; 32]),
+                commitment_root: [8; 32],
+            },
+        }
+    }
+
+    fn pda_witness() -> PrivateWitness {
+        witness_with(WitnessKind::Pda {
+            binding: (PROGRAM, SEED),
+        })
+    }
+
+    fn caller(account_id: AccountId) -> CallerData {
+        CallerData {
+            account_id: Some(account_id),
+            authorized_accounts: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn a_delegated_seed_grants_the_binding_that_names_its_caller() {
+        assert_eq!(
+            private_seed_granted(&caller(PROGRAM), &[OTHER_SEED, SEED], &pda_witness()),
+            Some((PROGRAM, SEED))
+        );
+    }
+
+    #[test]
+    fn a_caller_other_than_the_bound_program_grants_nothing() {
+        assert_eq!(
+            private_seed_granted(&caller(OTHER_PROGRAM), &[SEED], &pda_witness()),
+            None
+        );
+    }
+
+    #[test]
+    fn an_undelegated_seed_grants_nothing() {
+        assert_eq!(
+            private_seed_granted(&caller(PROGRAM), &[OTHER_SEED], &pda_witness()),
+            None
+        );
+    }
+
+    #[test]
+    fn a_regular_witness_has_no_binding_to_grant() {
+        let witness = witness_with(WitnessKind::Regular { ask: None });
+        assert_eq!(
+            private_seed_granted(&caller(PROGRAM), &[SEED], &witness),
+            None
+        );
     }
 }

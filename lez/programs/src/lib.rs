@@ -121,7 +121,10 @@ mod inner {
 
     #[cfg(test)]
     mod tests {
-        use lee::{Account, AccountId, PublicTransaction, V03State, public_transaction};
+        use lee::{
+            Account, AccountId, ProgramShardSelector, PublicTransaction, V03State,
+            public_transaction,
+        };
 
         use super::*;
 
@@ -129,9 +132,14 @@ mod inner {
             let message = public_transaction::Message::try_new(
                 bridge().id().into(),
                 vec![
-                    bridge_core::compute_bridge_account_id(bridge().id().into()),
-                    recipient_id,
-                    bridge_core::deposit_receipt_account_id(bridge().id().into(), op_id),
+                    ProgramShardSelector::balance_only(bridge_core::compute_bridge_account_id(
+                        bridge().id().into(),
+                    )),
+                    ProgramShardSelector::balance_only(recipient_id),
+                    ProgramShardSelector::new(
+                        bridge_core::deposit_receipt_account_id(bridge().id().into(), op_id),
+                        bridge().id().into(),
+                    ),
                 ],
                 vec![],
                 bridge_core::Instruction::Deposit {
@@ -156,11 +164,7 @@ mod inner {
             let mut state = V03State::new()
                 .with_public_accounts([(
                     bridge_core::compute_bridge_account_id(bridge().id().into()),
-                    Account {
-                        program_owner: authenticated_transfer().id().into(),
-                        balance: u128::from(amount),
-                        ..Account::default()
-                    },
+                    Account::funded(u128::from(amount)),
                 )])
                 .with_programs([bridge(), authenticated_transfer()]);
 

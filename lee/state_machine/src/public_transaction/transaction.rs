@@ -61,6 +61,7 @@ impl PublicTransaction {
 
 #[cfg(test)]
 pub mod tests {
+    use lee_core::account::ProgramShardSelector;
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
@@ -92,7 +93,10 @@ pub mod tests {
         let instruction = 1337;
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
-            vec![addr1, addr2],
+            vec![
+                ProgramShardSelector::balance_only(addr1),
+                ProgramShardSelector::balance_only(addr2),
+            ],
             nonces,
             instruction,
         )
@@ -170,7 +174,10 @@ pub mod tests {
         let instruction = 1337;
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
-            vec![addr1, addr1],
+            vec![
+                ProgramShardSelector::balance_only(addr1),
+                ProgramShardSelector::balance_only(addr1),
+            ],
             nonces,
             instruction,
         )
@@ -190,7 +197,10 @@ pub mod tests {
         let instruction = 1337;
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
-            vec![addr1, addr2],
+            vec![
+                ProgramShardSelector::balance_only(addr1),
+                ProgramShardSelector::balance_only(addr2),
+            ],
             nonces,
             instruction,
         )
@@ -210,7 +220,10 @@ pub mod tests {
         let instruction = 1337;
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
-            vec![addr1, addr2],
+            vec![
+                ProgramShardSelector::balance_only(addr1),
+                ProgramShardSelector::balance_only(addr2),
+            ],
             nonces,
             instruction,
         )
@@ -231,7 +244,10 @@ pub mod tests {
         let instruction = 1337;
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
-            vec![addr1, addr2],
+            vec![
+                ProgramShardSelector::balance_only(addr1),
+                ProgramShardSelector::balance_only(addr2),
+            ],
             nonces,
             instruction,
         )
@@ -266,8 +282,16 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let unknown_program_id: AccountId = [0xdead_beef; 8].into();
-        let message =
-            Message::try_new(unknown_program_id, vec![addr1, addr2], nonces, instruction).unwrap();
+        let message = Message::try_new(
+            unknown_program_id,
+            vec![
+                ProgramShardSelector::balance_only(addr1),
+                ProgramShardSelector::balance_only(addr2),
+            ],
+            nonces,
+            instruction,
+        )
+        .unwrap();
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);

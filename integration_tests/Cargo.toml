@@ -11,7 +11,7 @@ workspace = true
 # LEZ and workspace crates.
 borsh.workspace = true
 test_fixtures.workspace = true
-lee_core = { workspace = true, features = ["host"] }
+lee_core = { workspace = true, features = ["test_utils"] }
 lee.workspace = true
 authenticated_transfer_core.workspace = true
 sequencer_core.workspace = true
@@ -38,6 +38,8 @@ system_accounts.workspace = true
 sequencer_stake_core.workspace = true
 programs.workspace = true
 test_programs.workspace = true
+test_methods.workspace = true
+jsonrpsee = { workspace = true, features = ["jsonrpsee-types"] }
 testnet_initial_state.workspace = true
 program_loader_core.workspace = true
 

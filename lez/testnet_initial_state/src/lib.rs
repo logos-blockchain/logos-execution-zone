@@ -380,12 +380,7 @@ mod tests {
                     .key_chain
                     .viewing_public_key
                     .clone(),
-                account: Account {
-                    program_owner: DEFAULT_PROGRAM_OWNER,
-                    balance: PRIV_ACC_A_INITIAL_BALANCE,
-                    data: Data::default(),
-                    nonce: 0.into(),
-                },
+                account: Account::funded(PRIV_ACC_A_INITIAL_BALANCE),
             }
         );
 
@@ -397,18 +392,13 @@ mod tests {
                     .key_chain
                     .viewing_public_key
                     .clone(),
-                account: Account {
-                    program_owner: DEFAULT_PROGRAM_OWNER,
-                    balance: PRIV_ACC_B_INITIAL_BALANCE,
-                    data: Data::default(),
-                    nonce: 0.into(),
-                },
+                account: Account::funded(PRIV_ACC_B_INITIAL_BALANCE),
             }
         );
     }
 
     #[test]
-    fn genesis_fee_accounts_are_registered_and_owned() {
+    fn genesis_fee_accounts_are_registered_with_their_records() {
         let state = initial_state(true);
         let fee_program_id = programs::fee().id();
 
@@ -420,59 +410,47 @@ mod tests {
                 assert_ne!(id, other);
             }
             let account = state.get_account_by_id(*id);
-            assert_eq!(account.program_owner, fee_program_id.into());
-            assert_eq!(account.balance, 0);
+            assert_eq!(account.data.balance, 0);
         }
 
         // The fee-state account carries the genesis market state; escrow and
         // inbox start empty.
         let fee_state = fee_core::state::FeeState::from_bytes(
-            &state
+            state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .into_inner(),
+                .shard(fee_program_id.into()),
         );
         assert_eq!(fee_state, fee_core::state::FeeState::genesis());
         for empty_id in [
             system_accounts::fee_escrow_account_id(),
             system_accounts::fee_inbox_account_id(),
         ] {
-            assert!(
-                state
-                    .get_account_by_id(empty_id)
-                    .data
-                    .into_inner()
-                    .is_empty()
-            );
+            assert!(state.get_account_by_id(empty_id).data.shards.is_empty());
         }
     }
 
     #[test]
     fn genesis_system_accounts_have_expected_contents() {
-        // System-account IDs must be distinct and non-default, and the genesis
-        // faucet/bridge accounts must carry their expected field values.  Catches
-        // mutations that replace `system_faucet_account`/`system_bridge_account`
-        // with `Default::default()`, delete their `balance`/`program_owner`
-        // fields, or replace `system_bridge_account_id` with `Default::default()`.
         let faucet_id = system_accounts::faucet_account_id();
         let bridge_id = system_accounts::bridge_account_id();
         assert_ne!(bridge_id, AccountId::default());
         assert_ne!(faucet_id, bridge_id);
 
         let state = initial_state(true);
-        let default_owner = Account::default().program_owner;
 
         let faucet = state.get_account_by_id(faucet_id);
-        assert_eq!(faucet.balance, u128::MAX, "faucet must hold u128::MAX");
-        assert_ne!(
-            faucet.program_owner, default_owner,
-            "faucet must have a non-default program_owner"
+        assert_eq!(faucet.data.balance, u128::MAX, "faucet must hold u128::MAX");
+        assert!(
+            faucet.data.shards.is_empty(),
+            "the faucet holds balance alone, no program's record"
         );
 
         let bridge = state.get_account_by_id(bridge_id);
-        assert_ne!(
-            bridge.program_owner, default_owner,
-            "bridge must have a non-default program_owner"
+        assert_eq!(
+            bridge,
+            Account::default(),
+            "the bridge escrow starts empty, before any deposit mints through it"
         );
     }
 

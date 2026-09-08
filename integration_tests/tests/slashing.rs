@@ -36,7 +36,7 @@ const GARBAGE: &[u8] = b"this is not a block";
 const OFFENDER_SEED: usize = 1;
 
 async fn balance(ctx: &TestContext, account: AccountId) -> Result<u128> {
-    Ok(get_account(ctx, account).await?.balance)
+    Ok(get_account(ctx, account).await?.data.balance)
 }
 
 /// The sequencer stake config, decoded.
@@ -44,8 +44,13 @@ async fn stake_config(ctx: &TestContext) -> Result<sequencer_stake_core::Sequenc
     let account = get_account(ctx, system_accounts::sequencer_stake_config_account_id())
         .await
         .context("Failed to read the sequencer stake config account")?;
-    sequencer_stake_core::SequencerStakeConfig::from_bytes(account.data.as_ref())
-        .context("Config account should decode as SequencerStakeConfig")
+    sequencer_stake_core::SequencerStakeConfig::from_bytes(
+        account
+            .data
+            .shard(programs::sequencer_stake().id().into())
+            .as_ref(),
+    )
+    .context("Config account should decode as SequencerStakeConfig")
 }
 
 /// Like `wait_until` but with a longer budget, since the offender waits its turn.

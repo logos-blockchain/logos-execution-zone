@@ -28,7 +28,7 @@ fn program_transaction<T: borsh::BorshSerialize>(
 ) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
         program_account_id,
-        vec![account_id],
+        vec![ProgramShardSelector::balance_only(account_id)],
         vec![],
         instruction,
     )
@@ -132,22 +132,7 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
         AccountId::for_public_pda(&AccountId::from(emitter.id()), &PdaSeed::new([1; 32]));
 
     let mut state = V03State::new().with_test_programs();
-    state.force_insert_account(
-        vault_id,
-        Account {
-            program_owner: token.id().into(),
-            balance: 1000,
-            ..Account::default()
-        },
-    );
-    state.force_insert_account(
-        receiver_id,
-        Account {
-            program_owner: token.id().into(),
-            balance: 0,
-            ..Account::default()
-        },
-    );
+    state.force_insert_account(vault_id, Account::funded(1000));
 
     // Zero-amount flash swap: the emitter runs as the callback, the second of the initiator's
     // three sibling chained calls, so the only emitting program is neither the top-level
@@ -270,28 +255,19 @@ fn events_are_filterable_by_selector_and_decodable() {
 fn event_emitting_program_proves_and_validates_on_the_private_path() {
     let keys = test_private_account_keys_1();
     let emitter = crate::test_methods::event_emitter();
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
 
-    let pre = AccountWithMetadata::new(Account::default(), true, (&keys.npk(), &keys.vpk(), 0));
-
-    let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
-        vec![pre],
-        Program::serialize_instruction(EmitterInstruction {
-            events: vec![emitted(0), emitted(1)],
-            chain: vec![],
-        })
-        .unwrap(),
-        vec![InputAccountIdentity::Private(PrivateWitness {
-            vpk: keys.vpk(),
-            random_seed: [0; 32],
-            identifier: 0,
-            kind: WitnessKind::Regular {
-                ask: Some(keys.ask),
-            },
-            nullifier: NullifierWitness::Init {
-                npk: keys.npk(),
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
-        })],
+    let (output, proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![ProgramShardSelector::balance_only(account_id)],
+            private_witnesses: vec![init_witness(&keys, 0, Account::default())],
+            instruction_data: Program::serialize_instruction(EmitterInstruction {
+                events: vec![emitted(0), emitted(1)],
+                chain: vec![],
+            })
+            .unwrap(),
+            ..Default::default()
+        },
         &emitter.clone().into(),
     )
     .expect("emitting guest must prove on the private path");
@@ -303,7 +279,7 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
     let mut state = V03State::new();
-    register_program(&mut state, &emitter);
+    state.insert_program(&emitter);
 
     state
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)

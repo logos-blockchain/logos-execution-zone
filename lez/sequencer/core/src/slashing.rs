@@ -239,9 +239,10 @@ mod tests {
 
     /// State whose config account accredits `key` with a stake to burn.
     fn state_staking(key: SequencerKey, ownership_id: AccountId) -> lee::V03State {
-        let config = Account {
-            program_owner: programs::sequencer_stake().id().into(),
-            data: SequencerStakeConfig {
+        let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
+        let config = Account::default().with_shard(
+            sequencer_stake_program_id,
+            SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {
                     minimum_sequencer_stake: 1,
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
@@ -260,8 +261,7 @@ mod tests {
             .to_bytes()
             .try_into()
             .expect("config fits"),
-            ..Account::default()
-        };
+        );
         lee::V03State::new()
             .with_public_accounts([(system_accounts::sequencer_stake_config_account_id(), config)])
     }

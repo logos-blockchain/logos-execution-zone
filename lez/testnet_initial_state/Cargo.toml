@@ -14,6 +14,7 @@ programs.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+lee = { workspace = true, features = ["test-utils"] }
 fee_core.workspace = true
 
 [lints]

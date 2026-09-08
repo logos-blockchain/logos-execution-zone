@@ -127,7 +127,7 @@ pub mod tests {
     use lee_core::{
         Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Nullifier,
         NullifierPublicKey, PrivateAccountKind, PrivateAction, SharedSecretKey,
-        account::{Account, AccountId, Nonce},
+        account::{Account, AccountData, AccountId, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
@@ -159,7 +159,7 @@ pub mod tests {
         Message {
             public_actions: vec![PublicActionWithID {
                 account_id: AccountId::new([1; 32]),
-                post_state: Account::default(),
+                post: AccountData::default(),
             }],
             nonces,
             private_actions: vec![PrivateAction {
