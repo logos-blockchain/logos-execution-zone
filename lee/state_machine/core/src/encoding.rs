@@ -1,13 +1,10 @@
-// TODO: Consider switching to deriving Borsh
 #[cfg(feature = "host")]
 use std::io::Cursor;
-#[cfg(feature = "host")]
-use std::io::Read as _;
 
 #[cfg(feature = "host")]
 use crate::Nullifier;
 #[cfg(feature = "host")]
-use crate::encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN};
+use crate::encryption::EphemeralPublicKey;
 #[cfg(feature = "host")]
 use crate::error::LeeCoreError;
 use crate::{
@@ -20,45 +17,15 @@ impl Account {
     /// Serializes the account to bytes.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(self.program_owner.as_ref());
-        bytes.extend_from_slice(&self.balance.to_le_bytes());
-        bytes.extend_from_slice(&self.nonce.0.to_le_bytes());
-        let data_length: u32 = u32::try_from(self.data.len()).expect("Invalid u32");
-        bytes.extend_from_slice(&data_length.to_le_bytes());
-        bytes.extend_from_slice(self.data.as_ref());
-        bytes
+        borsh::to_vec(self).expect("borsh serialization is infallible")
     }
 
     /// Deserializes an account from a cursor.
     #[cfg(feature = "host")]
     pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        use crate::account::{Nonce, data::Data};
+        use borsh::BorshDeserialize as _;
 
-        let mut u128_bytes = [0_u8; 16];
-
-        // program owner
-        let mut program_owner_bytes = [0_u8; 32];
-        cursor.read_exact(&mut program_owner_bytes)?;
-        let program_owner = AccountId::new(program_owner_bytes);
-
-        // balance
-        cursor.read_exact(&mut u128_bytes)?;
-        let balance = u128::from_le_bytes(u128_bytes);
-
-        // nonce
-        cursor.read_exact(&mut u128_bytes)?;
-        let nonce = Nonce(u128::from_le_bytes(u128_bytes));
-
-        // data
-        let data = Data::from_cursor(cursor)?;
-
-        Ok(Self {
-            program_owner,
-            balance,
-            data,
-            nonce,
-        })
+        Ok(Self::deserialize_reader(cursor)?)
     }
 }
 
@@ -72,14 +39,6 @@ impl Commitment {
     #[must_use]
     pub const fn from_byte_array(bytes: [u8; 32]) -> Self {
         Self(bytes)
-    }
-
-    /// Deserializes a commitment from a cursor.
-    #[cfg(feature = "host")]
-    pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        let mut bytes = [0_u8; 32];
-        cursor.read_exact(&mut bytes)?;
-        Ok(Self(bytes))
     }
 }
 
@@ -96,13 +55,6 @@ impl Nullifier {
     #[must_use]
     pub const fn from_byte_array(bytes: [u8; 32]) -> Self {
         Self(bytes)
-    }
-
-    /// Deserializes a nullifier from a cursor.
-    pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        let mut bytes = [0_u8; 32];
-        cursor.read_exact(&mut bytes)?;
-        Ok(Self(bytes))
     }
 }
 
@@ -130,21 +82,6 @@ impl Ciphertext {
     pub const fn from_inner(inner: Vec<u8>) -> Self {
         Self(inner)
     }
-
-    #[cfg(feature = "host")]
-    /// Deserializes ciphertext from a cursor.
-    pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        let mut u32_bytes = [0; 4];
-
-        cursor.read_exact(&mut u32_bytes)?;
-        let ciphertext_lenght = u32::from_le_bytes(u32_bytes);
-        let ciphertext_length =
-            usize::try_from(ciphertext_lenght).expect("ciphertext length fits in usize");
-        let mut ciphertext = vec![0; ciphertext_length];
-        cursor.read_exact(&mut ciphertext)?;
-
-        Ok(Self(ciphertext))
-    }
 }
 
 #[cfg(feature = "host")]
@@ -153,14 +90,6 @@ impl EphemeralPublicKey {
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         self.0.clone()
-    }
-
-    /// Deserializes an ML-KEM-768 ciphertext from a cursor.
-    /// Reads exactly 1088 bytes — the fixed ciphertext size for ML-KEM-768.
-    pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        let mut value = vec![0_u8; ML_KEM_768_CIPHERTEXT_LEN];
-        cursor.read_exact(&mut value)?;
-        Ok(Self(value))
     }
 }
 

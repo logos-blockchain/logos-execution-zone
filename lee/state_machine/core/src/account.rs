@@ -1,4 +1,4 @@
-use std::{fmt::Display, str::FromStr};
+use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use thiserror::Error;
 
-use crate::NullifierSecretKey;
+use crate::{NullifierSecretKey, program::AccountStateDiff};
 
 pub mod data;
 
@@ -112,50 +112,199 @@ pub enum BalanceDiffError {
     InsufficientBalance,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct PostStateEffects {
-    pub id: AccountId,
-    pub diff_balance: Option<BalanceDiff>,
-    pub new_data: Option<Data>,
-}
-
-impl PostStateEffects {
-    /// A diff that leaves `id`'s balance and data untouched.
-    #[must_use]
-    pub const fn new_unchanged(id: AccountId) -> Self {
-        Self {
-            id,
-            diff_balance: None,
-            new_data: None,
-        }
-    }
-}
-
 /// Account to be used both in public and private contexts.
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct Account {
-    pub program_owner: AccountId,
-    pub balance: Balance,
-    pub data: Data,
     pub nonce: Nonce,
+    pub data: AccountData,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct AccountWithMetadata {
-    pub account: Account,
-    pub is_authorized: bool,
-    pub account_id: AccountId,
+impl Account {
+    #[must_use]
+    pub fn with_shard(mut self, program: AccountId, data: Data) -> Self {
+        self.data.set_shard(program, data);
+        self
+    }
 }
 
-#[cfg(feature = "host")]
-impl AccountWithMetadata {
-    pub fn new(account: Account, is_authorized: bool, account_id: impl Into<AccountId>) -> Self {
+/// An account's balance and program shards.
+#[derive(
+    Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub struct AccountData {
+    pub balance: Balance,
+    pub shards: BTreeMap<AccountId, Data>,
+}
+
+impl AccountData {
+    #[must_use]
+    pub fn shard(&self, program: AccountId) -> &Data {
+        const EMPTY: &Data = &Data::empty();
+        self.shards.get(&program).unwrap_or(EMPTY)
+    }
+
+    pub fn set_shard(&mut self, program: AccountId, data: Data) {
+        if data.is_empty() {
+            self.shards.remove(&program);
+        } else {
+            self.shards.insert(program, data);
+        }
+    }
+
+    #[must_use]
+    pub fn with_shard(mut self, program: AccountId, data: Data) -> Self {
+        self.set_shard(program, data);
+        self
+    }
+
+    pub fn apply_diff(&mut self, diff: &AccountStateDiff) -> Result<(), BalanceDiffError> {
+        self.balance = apply_balance_diff(diff.pre_state.balance, Some(diff.post_balance_diff))?;
+        if let Some((program, pre_data)) = &diff.pre_state.shard {
+            self.set_shard(
+                *program,
+                diff.post_data.clone().unwrap_or_else(|| pre_data.clone()),
+            );
+        }
+        Ok(())
+    }
+
+    /// Returns the balance and requested shards, with empty data for missing shards.
+    #[must_use]
+    pub fn project(&self, program_account_ids: impl IntoIterator<Item = AccountId>) -> Self {
         Self {
-            account,
+            balance: self.balance,
+            shards: program_account_ids
+                .into_iter()
+                .map(|program| (program, self.shard(program).clone()))
+                .collect(),
+        }
+    }
+
+    /// Updates the balance and supplied shards. Empty data removes a shard.
+    pub fn apply(&mut self, projection: &Self) {
+        self.balance = projection.balance;
+        for (program, data) in &projection.shards {
+            self.set_shard(*program, data.clone());
+        }
+    }
+}
+
+/// Selects an account's balance and optionally one program shard.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+pub struct ProgramShardSelector {
+    pub account_id: AccountId,
+    pub program_account_id: Option<AccountId>,
+}
+
+impl ProgramShardSelector {
+    #[must_use]
+    pub const fn new(account_id: AccountId, program_account_id: AccountId) -> Self {
+        Self {
+            account_id,
+            program_account_id: Some(program_account_id),
+        }
+    }
+
+    #[must_use]
+    pub const fn balance_only(account_id: AccountId) -> Self {
+        Self {
+            account_id,
+            program_account_id: None,
+        }
+    }
+}
+
+/// An account seen as an input to an LEE program.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AccountInput {
+    pub account_id: AccountId,
+    pub is_authorized: bool,
+    pub balance: Balance,
+    pub shard: Option<(AccountId, Data)>,
+}
+
+impl AccountInput {
+    #[must_use]
+    pub const fn with_shard(
+        account_id: AccountId,
+        is_authorized: bool,
+        balance: Balance,
+        program_account_id: AccountId,
+        data: Data,
+    ) -> Self {
+        Self {
+            account_id,
             is_authorized,
-            account_id: account_id.into(),
+            balance,
+            shard: Some((program_account_id, data)),
+        }
+    }
+
+    #[must_use]
+    pub const fn balance_only(
+        account_id: AccountId,
+        is_authorized: bool,
+        balance: Balance,
+    ) -> Self {
+        Self {
+            account_id,
+            is_authorized,
+            balance,
+            shard: None,
+        }
+    }
+
+    #[must_use]
+    pub fn at(
+        shard_selector: ProgramShardSelector,
+        is_authorized: bool,
+        data: &AccountData,
+    ) -> Self {
+        Self {
+            account_id: shard_selector.account_id,
+            is_authorized,
+            balance: data.balance,
+            shard: shard_selector
+                .program_account_id
+                .map(|program| (program, data.shard(program).clone())),
+        }
+    }
+
+    #[must_use]
+    pub fn program_account_id(&self) -> Option<AccountId> {
+        self.shard.as_ref().map(|(program, _)| *program)
+    }
+
+    /// Returns the shard data. Panics unless the input selects `program`'s shard.
+    #[must_use]
+    pub fn shard_of(&self, program: AccountId) -> &Data {
+        let (selected, data) = self.shard.as_ref().expect("AccountInput carries no shard");
+        assert_eq!(
+            *selected, program,
+            "AccountInput carries another program's shard"
+        );
+        data
+    }
+}
+
+impl From<&AccountInput> for ProgramShardSelector {
+    fn from(input: &AccountInput) -> Self {
+        Self {
+            account_id: input.account_id,
+            program_account_id: input.program_account_id(),
         }
     }
 }
@@ -169,10 +318,11 @@ impl AccountWithMetadata {
     PartialEq,
     Eq,
     Hash,
+    PartialOrd,
+    Ord,
     BorshSerialize,
     BorshDeserialize,
 )]
-#[cfg_attr(any(feature = "host", test), derive(PartialOrd, Ord))]
 pub struct AccountId {
     value: [u8; 32],
 }
