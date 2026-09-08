@@ -18,7 +18,11 @@ sequencer_core.workspace = true
 sequencer_service.workspace = true
 sequencer_stake_core.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
-sequencer_storage_actor.workspace = true
+sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
+sequencer_storage_actor = { workspace = true, features = [
+  "mock",
+  "test-utils",
+] }
 wallet.workspace = true
 programs.workspace = true
 
@@ -30,6 +34,7 @@ futures.workspace = true
 hex.workspace = true
 jsonrpsee = { workspace = true, features = ["ws-client"] }
 kameo.workspace = true
+kameo_actors.workspace = true
 log.workspace = true
 num-bigint.workspace = true
 serde.workspace = true

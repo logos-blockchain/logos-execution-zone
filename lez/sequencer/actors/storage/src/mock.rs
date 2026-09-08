@@ -8,12 +8,13 @@ use common::{
     transaction::LeeTransaction,
 };
 use kameo::{
-    Actor, Reply,
+    Actor,
     actor::ActorRef,
     message::{Context, Message},
 };
 use lee::V03State;
 use lee_core::BlockId;
+pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
 
 use crate::{
     Result, StorageActorTrait,
@@ -28,9 +29,8 @@ use crate::{
         GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
         GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
         PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
-        ZoneAnchorRecord,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        SetZoneCheckpointBytes, StoreUpdateOutcome, ZoneAnchorRecord,
     },
 };
 
@@ -57,12 +57,6 @@ mockall::mock! {
         pub fn handle_delete_block(
             &mut self,
             msg: DeleteBlock,
-            ctx: &mut Context<Self, Result<()>>
-        ) -> Result<()>;
-
-        pub fn handle_reset_all_blocks_to_pending(
-            &mut self,
-            msg: ResetAllBlocksToPending,
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
@@ -259,9 +253,6 @@ impl Actor for MockStorageActor {
     }
 }
 
-/// Special message to trigger [`MockStorageActor::checkpoint()`].
-pub struct Checkpoint;
-
 impl Message<Checkpoint> for MockStorageActor {
     type Reply = ();
 
@@ -274,24 +265,12 @@ impl Message<Checkpoint> for MockStorageActor {
     }
 }
 
-/// Special message to [`std::mem::replace()`] the inner state of [`MockStorageActor`] with a new
-/// one, returning old state.
-/// This is useful for testing, to swap in a new mock with different expectations.
-pub struct Replace {
-    pub mock: MockStorageActor,
-}
-
-#[derive(Reply)]
-pub struct ReplaceReply {
-    pub old_mock: MockStorageActor,
-}
-
-impl Message<Replace> for MockStorageActor {
-    type Reply = ReplaceReply;
+impl Message<Replace<Self>> for MockStorageActor {
+    type Reply = ReplaceReply<Self>;
 
     async fn handle(
         &mut self,
-        Replace { mock }: Replace,
+        Replace { mock }: Replace<Self>,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let old_mock = std::mem::replace(self, mock);
@@ -340,18 +319,6 @@ impl Message<DeleteBlock> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_delete_block(msg, ctx)
-    }
-}
-
-impl Message<ResetAllBlocksToPending> for MockStorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        msg: ResetAllBlocksToPending,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_reset_all_blocks_to_pending(msg, ctx)
     }
 }
 
