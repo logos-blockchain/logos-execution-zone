@@ -14,10 +14,9 @@ use common::{
 };
 use kameo::actor::Spawn as _;
 use lee::{
-    Account, AccountId, PrivateKey, ProgramId, PublicKey, PublicTransaction, V03State,
-    program::Program,
+    Account, AccountId, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
 };
-use lee_core::account::Nonce;
+use lee_core::{account::Nonce, program::get_program_via};
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
     mantle::{
@@ -4836,7 +4835,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
         "a configless genesis must carry no cross-zone transaction"
     );
     for id in cross_zone_ids {
-        assert!(state.get_program(ProgramId::from(id)).is_none());
+        assert!(get_program_via(id, |acc| state.get_account_by_id(acc)).is_none());
     }
 
     let temp_dir = tempdir().unwrap();
@@ -4867,7 +4866,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
         "the four InitConfigs then the inbox config, in the fixed order"
     );
     for id in cross_zone_ids {
-        assert!(state.get_program(ProgramId::from(id)).is_some());
+        assert!(get_program_via(id, |acc| state.get_account_by_id(acc)).is_some());
     }
 }
 

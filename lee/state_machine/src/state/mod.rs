@@ -300,20 +300,6 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
-    /// Looks up a program deployed at its bijection address (`AccountId::from(program_id)`),
-    /// reconstructing its bytecode from its header and segment chain.
-    ///
-    /// Only meaningful for programs deployed at their bijection address — genesis-seeded
-    /// builtins, or anything created through the (removed) `ProgramDeploymentTransaction`.
-    /// A program deployed through `program_loader` at an arbitrary address must be resolved
-    /// through [`get_program_via`] with the real address instead.
-    #[must_use]
-    pub fn get_program(&self, program_id: ProgramId) -> Option<(ProgramId, Vec<u8>)> {
-        get_program_via(AccountId::from(program_id), |account_id| {
-            self.get_account_by_id(account_id)
-        })
-    }
-
     /// The real `image_id` of whatever program is deployed at `account_id`, or `None` if there
     /// isn't one — used to anchor a private transaction's [`ProgramImageClaim`]s to real chain
     /// state rather than trusting the prover's own claim.

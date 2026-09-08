@@ -4,6 +4,7 @@
 
 use lee_core::program::{
     MAX_PROGRAM_SEGMENTS, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramSegment,
+    get_program_via,
 };
 use program_loader_core::Instruction;
 
@@ -73,9 +74,9 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         },
     );
 
-    let (found_image_id, reconstructed_binary) = state
-        .get_program(header_account_id.into())
-        .expect("a fully-landed multi-segment program must be found");
+    let (found_image_id, reconstructed_binary) =
+        get_program_via(header_account_id, |id| state.get_account_by_id(id))
+            .expect("a fully-landed multi-segment program must be found");
     assert_eq!(
         found_image_id,
         program.id(),
@@ -175,7 +176,7 @@ fn program_with_more_than_max_segments_is_rejected() {
     );
 
     assert!(
-        state.get_program(header_account_id.into()).is_none(),
+        get_program_via(header_account_id, |id| state.get_account_by_id(id)).is_none(),
         "a chain of {} segments must be rejected by the {MAX_PROGRAM_SEGMENTS}-segment cap",
         MAX_PROGRAM_SEGMENTS + 1
     );
@@ -288,8 +289,7 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         .transition_from_public_transaction(&create_header_tx, 2, 0)
         .expect("CreateHeader should succeed once the segment it names already exists");
 
-    let (image_id, elf) = state
-        .get_program(header_account_id.into())
+    let (image_id, elf) = get_program_via(header_account_id, |id| state.get_account_by_id(id))
         .expect("the newly-deployed program must be resolvable by its header address");
     assert_eq!(image_id, program.id());
     assert_eq!(elf, program.elf().to_vec());

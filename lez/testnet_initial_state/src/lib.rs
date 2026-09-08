@@ -278,6 +278,7 @@ mod tests {
     use std::str::FromStr as _;
 
     use key_protocol::key_management::secret_holders::ViewingSecretKey;
+    use lee_core::program::get_program_via;
 
     use super::*;
 
@@ -500,12 +501,20 @@ mod tests {
         let with = initial_state(true);
         let without = initial_state(false);
         for id in cross_zone_ids {
-            assert!(with.get_program(id).is_some(), "registered when declared");
             assert!(
-                without.get_program(id).is_none(),
+                get_program_via(AccountId::from(id), |acc| with.get_account_by_id(acc)).is_some(),
+                "registered when declared"
+            );
+            assert!(
+                get_program_via(AccountId::from(id), |acc| without.get_account_by_id(acc))
+                    .is_none(),
                 "absent when not declared"
             );
         }
-        assert!(without.get_program(programs::faucet().id()).is_some());
+        assert!(
+            get_program_via(AccountId::from(programs::faucet().id()), |acc| without
+                .get_account_by_id(acc))
+            .is_some()
+        );
     }
 }

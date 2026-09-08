@@ -3218,8 +3218,6 @@ name = "example_program_deployment_programs"
 version = "0.1.0"
 dependencies = [
  "borsh",
- "bytemuck",
- "hex",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -9504,10 +9502,12 @@ dependencies = [
 name = "program_deployment"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "clap",
  "common",
  "lee",
  "lee_core",
+ "program_loader_core",
  "sequencer_service_rpc",
  "tokio",
  "wallet",

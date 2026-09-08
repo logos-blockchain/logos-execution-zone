@@ -18,10 +18,6 @@ pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
 /// TODO: Placeholder `program_owner` for uninitialized `Account`.
 pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
 
-/// TODO: Temporary placeholder for program deployment program id; this serves as
-/// `program_owner` for program `Account`s.
-pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
-
 /// The well-known dispatch address of the program loader: a native (non-guest) pseudo-program
 /// that runs its `Instruction` variants as Rust rather than interpreting a guest ELF.
 pub const PROGRAM_LOADER_ACCOUNT_ID: AccountId = AccountId::new([0xFE; 32]);
@@ -572,27 +568,6 @@ impl ProgramOutput {
         self
     }
 
-    /// Sets the timestamp validity window from a fallible range conversion.
-    /// Returns `Err` if the range is empty.
-    pub fn try_with_timestamp_validity_window<
-        W: TryInto<TimestampValidityWindow, Error = InvalidWindow>,
-    >(
-        mut self,
-        window: W,
-    ) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = window.try_into()?;
-        Ok(self)
-    }
-
-    pub fn valid_from_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (ts, self.timestamp_validity_window.end()).try_into()?;
-        Ok(self)
-    }
-
-    pub fn valid_until_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (self.timestamp_validity_window.start(), ts).try_into()?;
-        Ok(self)
-    }
 }
 
 /// A struct holding an event-output of a program.
