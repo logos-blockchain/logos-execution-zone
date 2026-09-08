@@ -20,6 +20,8 @@ use lee::{AccountId, V03State};
 use lee_core::BlockId;
 use log::debug;
 
+#[cfg(feature = "test-utils")]
+use crate::protocol::ResetAllBlocksToPending;
 use crate::{
     Result, StorageActorTrait,
     actor::tx_index::TransactionIndex,
@@ -745,38 +747,6 @@ impl Message<DeleteBlock> for StorageActor {
     }
 }
 
-impl Message<ResetAllBlocksToPending> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        ResetAllBlocksToPending: ResetAllBlocksToPending,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let mut batch = db::WriteBatch::default();
-
-        let blocks_to_reset = self
-            .db()
-            .iter::<entities::Block>()
-            .map_ok(|block| block.block)
-            .filter_ok(|block| !matches!(block.bedrock_status, BedrockStatus::Pending));
-
-        for block in blocks_to_reset {
-            let mut block = block?;
-            block.bedrock_status = BedrockStatus::Pending;
-            self.db().put_batch(
-                &mut batch,
-                &encoding::BigEndian::new(&block.header.block_id),
-                &entities::Block { block },
-            )?;
-        }
-
-        self.db().write(batch)?;
-
-        Ok(())
-    }
-}
-
 impl Message<GetFirstBlockId> for StorageActor {
     type Reply = Result<Option<BlockId>>;
 
@@ -1494,5 +1464,38 @@ impl Message<GetAccountTransactions> for StorageActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.get_affecting_txs_for_account_id(account_id, offset, limit)
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl Message<ResetAllBlocksToPending> for StorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        ResetAllBlocksToPending: ResetAllBlocksToPending,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let mut batch = db::WriteBatch::default();
+
+        let blocks_to_reset = self
+            .db()
+            .iter::<entities::Block>()
+            .map_ok(|block| block.block)
+            .filter_ok(|block| !matches!(block.bedrock_status, BedrockStatus::Pending));
+
+        for block in blocks_to_reset {
+            let mut block = block?;
+            block.bedrock_status = BedrockStatus::Pending;
+            self.db().put_batch(
+                &mut batch,
+                &encoding::BigEndian::new(&block.header.block_id),
+                &entities::Block { block },
+            )?;
+        }
+
+        self.db().write(batch)?;
+
+        Ok(())
     }
 }

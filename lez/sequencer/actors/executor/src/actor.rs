@@ -7,7 +7,7 @@ use futures::{
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
-    error::ActorStopReason,
+    error::{ActorStopReason, Infallible},
     mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
     reply::DelegatedReply,
@@ -18,23 +18,20 @@ use lee_core::{
 };
 use log::{info, warn};
 use mempool::MemPoolHandle;
+use sequencer_actors_common::EraseMessage as _;
+use sequencer_bedrock_actor::BedrockActorTrait;
 use sequencer_core::{
-    PinBehindTip, SequencerCore, SubmitConfig, TransactionOrigin,
-    block_publisher::{BlockPublisherTrait, MsgId},
-    config::SequencerConfig,
-    gossip::AccreditedKeysReceiver,
-    task_group::TaskGroup,
+    ChannelConfigActor, MsgId, PinBehindTip, SequencerCore, SubmitConfig, TransactionOrigin,
+    config::SequencerConfig, gossip::AccreditedKeysReceiver, task_group::TaskGroup,
 };
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
-use tokio::select;
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
+        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
         GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
         GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
         GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock,
@@ -52,20 +49,18 @@ const BLOCK_RANGE_CONCURRENCY: usize = 16;
 /// Skips behind an unchanging tip past which this is a stuck pin, not catch-up.
 const BLOCKED_ATTEMPTS_BEFORE_WEDGED: u32 = 4;
 
-// TODO: Remove `BP` once this part is moved to a separate actor
-pub struct ExecutorActor<S: StorageActorTrait, BP: BlockPublisherTrait> {
+pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-    sequencer: SequencerCore<S, BP>,
+    sequencer: SequencerCore<S, B>,
     storage_ref: ActorRef<S>,
+    bedrock_ref: ActorRef<B>,
 
-    // --- TODO: Remove these fields below ---
-    /// Cancelled when the publisher's drive task terminates (e.g. a panicked
-    /// persist sink); no channel events are processed past that point.
-    driver_cancellation: CancellationToken,
-    /// The core's background tasks, taken before the core was shared. This
-    /// handle owns no reference to the core itself, so without these there is
-    /// nothing to wait on: aborting the main loop only starts the teardown.
-    background_tasks: Vec<TaskGroup>,
+    /// Is it our turn to produce a blocks.
+    is_our_turn: bool,
+
+    // TODO: Remove this field
+    background_task: TaskGroup,
+
     blocked_attempts: BlockedAttempts,
     /// Consecutive production turns that failed outright. A run of these looks
     /// exactly like an idle node in every other signal, so it gets its own.
@@ -101,31 +96,45 @@ impl BlockedAttempts {
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + 'static> ExecutorActor<S, BP> {
+impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
     pub fn new(
         config: SequencerConfig,
         storage_ref: ActorRef<S>,
-    ) -> impl Future<Output = Self> + Send + 'static {
+        bedrock_ref: ActorRef<B>,
+    ) -> impl Future<Output = Result<Self>> + Send + 'static {
         sequencer_executor_actor_metrics::init();
 
         async move {
             // TODO: Leave storage_ref as a top-level field only in `ExecutorActor`,
             // while moving `SequencerCore` code into this actor.
-            let (sequencer, mempool_handle) =
-                SequencerCore::<S, BP>::start_from_config(config, storage_ref.clone()).await;
+            let (sequencer, mempool_handle) = SequencerCore::<S, B>::start_from_config(
+                config,
+                storage_ref.clone(),
+                bedrock_ref.clone(),
+            )
+            .await
+            .map_err(Error::SequencerStartFailed)?;
 
-            let driver_cancellation = sequencer.block_publisher().driver_cancellation();
-            let background_tasks = sequencer.background_tasks();
+            let is_our_turn = bedrock_ref
+                .ask(sequencer_bedrock_actor::protocol::CheckIsOurTurn)
+                .await
+                .map_err(|err| {
+                    let err = err.map_err(|_: Infallible| unreachable!());
+                    Error::BedrockRequestFailed(err.erase_message())
+                })?;
 
-            Self {
+            let background_task = sequencer.background_task();
+
+            Ok(Self {
                 mempool_handle,
                 sequencer,
                 storage_ref,
-                driver_cancellation,
-                background_tasks,
+                bedrock_ref,
+                is_our_turn,
+                background_task,
                 blocked_attempts: BlockedAttempts::default(),
                 failed_attempts: 0,
-            }
+            })
         }
     }
 
@@ -133,6 +142,12 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + 'static> ExecutorAct
     #[must_use]
     pub fn slasher_ref(&self) -> ActorRef<SlasherActor<S>> {
         self.sequencer.slasher_ref().clone()
+    }
+
+    /// Handle to the channel-config actor, for the service to feed gossip into.
+    #[must_use]
+    pub fn config_manager_ref(&self) -> ActorRef<ChannelConfigActor> {
+        self.sequencer.config_manager_ref().clone()
     }
 
     /// The committee the gossip mesh screens slash approvals against.
@@ -146,68 +161,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + 'static> ExecutorAct
     pub fn staked_keys_watch(&self) -> AccreditedKeysReceiver {
         self.sequencer.staked_keys_watch()
     }
-}
-
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> ExecutorActorTrait
-    for ExecutorActor<S, BP>
-{
-}
-
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Actor
-    for ExecutorActor<S, BP>
-{
-    type Args = Self;
-    type Error = Error;
-
-    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self> {
-        Ok(args)
-    }
-
-    #[expect(
-        clippy::integer_division_remainder_used,
-        reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
-    )]
-    async fn next(
-        &mut self,
-        _actor_ref: WeakActorRef<Self>,
-        mailbox_rx: &mut MailboxReceiver<Self>,
-    ) -> Result<Option<Signal<Self>>> {
-        // TODO: Remove this please
-        for task in &self.background_tasks {
-            if task.any_finished() {
-                return Err(Error::BackgroundTaskFinishedUnexpectedly);
-            }
-        }
-
-        select! {
-            signal = mailbox_rx.recv() => {
-                Ok(signal)
-            }
-            () = self.driver_cancellation.cancelled() => {
-                Err(Error::BlockPublisherFinishedUnexpectedly)
-            }
-        }
-    }
-
-    async fn on_stop(
-        &mut self,
-        _actor_ref: WeakActorRef<Self>,
-        _reason: ActorStopReason,
-    ) -> Result<()> {
-        for tasks in &self.background_tasks {
-            tasks.shutdown().await;
-        }
-
-        Ok(())
-    }
-}
-
-impl<S: StorageActorTrait, BP: BlockPublisherTrait> ExecutorActor<S, BP> {
-    /// Handle to the channel-config actor, for the service to wire gossip to.
-    #[must_use]
-    pub fn config_manager_ref(&self) -> ActorRef<sequencer_core::ChannelConfigActor> {
-        self.sequencer.config_manager_ref().clone()
-    }
 
     /// Ends a blocked run, reporting the drop to zero only if there was one.
     fn clear_blocked_attempts(&mut self) {
@@ -217,23 +170,41 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> ExecutorActor<S, BP> {
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<SubmitConfig>
-    for ExecutorActor<S, BP>
-{
-    type Reply = ();
+impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActorTrait for ExecutorActor<S, B> {}
 
-    async fn handle(
+impl<S: StorageActorTrait, B: BedrockActorTrait> Actor for ExecutorActor<S, B> {
+    type Args = Self;
+    type Error = Error;
+
+    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self> {
+        Ok(args)
+    }
+
+    async fn next(
         &mut self,
-        SubmitConfig(submission): SubmitConfig,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) {
-        self.sequencer.submit_signed_config(*submission).await;
+        _actor_ref: WeakActorRef<Self>,
+        mailbox_rx: &mut MailboxReceiver<Self>,
+    ) -> Result<Option<Signal<Self>>> {
+        // TODO: Remove this please
+        if self.background_task.any_finished() {
+            return Err(Error::BackgroundTaskFinishedUnexpectedly);
+        }
+
+        Ok(mailbox_rx.recv().await)
+    }
+
+    async fn on_stop(
+        &mut self,
+        _actor_ref: WeakActorRef<Self>,
+        _reason: ActorStopReason,
+    ) -> Result<()> {
+        self.background_task.shutdown().await;
+
+        Ok(())
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<ProduceBlock>
-    for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for ExecutorActor<S, B> {
     type Reply = Result<()>;
 
     async fn handle(
@@ -244,7 +215,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
         // Only produce on our turn. Losing the seat ends any blocked run: a node
         // dropped from the committee is not wedged, and would otherwise hold the
         // gauge non-zero forever.
-        if !self.sequencer.is_our_turn() {
+        if !self.is_our_turn {
             info!("Not our turn to produce a block, skipping");
             self.clear_blocked_attempts();
             return Ok(());
@@ -317,9 +288,19 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<Transaction>
-    for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SubmitConfig> for ExecutorActor<S, B> {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        SubmitConfig(submission): SubmitConfig,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) {
+        self.sequencer.submit_signed_config(*submission).await;
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for ExecutorActor<S, B> {
     type Reply = Result<()>;
 
     async fn handle(
@@ -345,9 +326,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetBlock>
-    for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlock> for ExecutorActor<S, B> {
     type Reply = Result<Option<Block>>;
 
     async fn handle(
@@ -362,9 +341,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetBlockRange>
-    for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlockRange> for ExecutorActor<S, B> {
     type Reply = DelegatedReply<Result<Vec<Block>>>;
 
     async fn handle(
@@ -391,9 +368,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetLastBlockId>
-    for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetLastBlockId> for ExecutorActor<S, B> {
     type Reply = Result<BlockId>;
 
     async fn handle(
@@ -405,8 +380,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
-    Message<GetAccountBalance> for ExecutorActor<S, BP>
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountBalance>
+    for ExecutorActor<S, B>
 {
     type Reply = Balance;
 
@@ -425,9 +400,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetFeeQuote>
-    for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetFeeQuote> for ExecutorActor<S, B> {
     type Reply = FeeStateQuote;
 
     async fn handle(
@@ -442,9 +415,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetTransaction>
-    for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransaction> for ExecutorActor<S, B> {
     type Reply = Result<Option<(LeeTransaction, BlockId)>>;
 
     async fn handle(
@@ -459,9 +430,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
-    Message<GetAccountNonces> for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountNonces> for ExecutorActor<S, B> {
     type Reply = Vec<Nonce>;
 
     async fn handle(
@@ -484,9 +453,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
-    Message<GetProofsAndRoot> for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for ExecutorActor<S, B> {
     type Reply = (
         Vec<Option<lee_core::MembershipProof>>,
         lee_core::CommitmentSetDigest,
@@ -509,9 +476,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetAccount>
-    for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccount> for ExecutorActor<S, B> {
     type Reply = GetAccountReply;
 
     async fn handle(
@@ -528,9 +493,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetAccountView>
-    for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for ExecutorActor<S, B> {
     type Reply = GetAccountReply;
 
     async fn handle(
@@ -558,24 +521,29 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetChannelId>
-    for ExecutorActor<S, BP>
-{
-    type Reply = GetChannelIdReply;
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetChannelId> for ExecutorActor<S, B> {
+    type Reply = Result<ChannelId>;
 
     async fn handle(
         &mut self,
         GetChannelId: GetChannelId,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        GetChannelIdReply {
-            channel_id: *self.sequencer.block_publisher().channel_id().as_ref(),
-        }
+        let channel_id = self
+            .bedrock_ref
+            .ask(sequencer_bedrock_actor::protocol::GetChannelId)
+            .await
+            .map_err(|err| {
+                let err = err.map_err(|_: Infallible| unreachable!());
+                Error::BedrockRequestFailed(err.erase_message())
+            })?;
+
+        Ok(*channel_id.channel_id.as_ref())
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
-    Message<GetCrossZoneDeadLetters> for ExecutorActor<S, BP>
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetCrossZoneDeadLetters>
+    for ExecutorActor<S, B>
 {
     type Reply = Result<GetCrossZoneDeadLettersReply>;
 
@@ -596,8 +564,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
-    Message<RequeueCrossZoneDeadLetter> for ExecutorActor<S, BP>
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<RequeueCrossZoneDeadLetter>
+    for ExecutorActor<S, B>
 {
     type Reply = Result<RequeueCrossZoneDeadLetterReply>;
 
@@ -615,9 +583,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetBlockByHash>
-    for ExecutorActor<S, BP>
-{
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlockByHash> for ExecutorActor<S, B> {
     type Reply = Result<Option<u64>>;
 
     async fn handle(
@@ -632,8 +598,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
-    Message<GetAccountTransactions> for ExecutorActor<S, BP>
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountTransactions>
+    for ExecutorActor<S, B>
 {
     type Reply = Result<Option<Vec<LeeTransaction>>>;
 
@@ -646,5 +612,31 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
             .ask::<sequencer_storage_actor::protocol::GetAccountTransactions>(msg.into())
             .await
             .map_err(Into::into)
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait>
+    Message<sequencer_bedrock_actor::protocol::ChannelEvent> for ExecutorActor<S, B>
+{
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: sequencer_bedrock_actor::protocol::ChannelEvent,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        match msg {
+            sequencer_bedrock_actor::protocol::ChannelEvent::Update(channel_update) => {
+                self.sequencer.on_channel_update(channel_update).await;
+            }
+            sequencer_bedrock_actor::protocol::ChannelEvent::Turn { our_turn_to_write } => {
+                self.is_our_turn = our_turn_to_write;
+            }
+            sequencer_bedrock_actor::protocol::ChannelEvent::Config(live_channel_config) => {
+                self.sequencer
+                    .on_channel_config_update(live_channel_config)
+                    .await;
+            }
+        }
     }
 }

@@ -245,8 +245,8 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetChannelId)
             .await
-            .map(|reply| ChannelId(reply.channel_id))
-            .map_err(map_infallible_error)
+            .map(ChannelId)
+            .map_err(map_executor_error)
     }
 
     async fn get_cross_zone_dead_letters(
@@ -339,10 +339,11 @@ fn map_executor_error<M>(
                 None::<()>,
             ),
             handle_err @ (sequencer_executor_actor::error::Error::BackgroundTaskFinishedUnexpectedly
-            | sequencer_executor_actor::error::Error::BlockPublisherFinishedUnexpectedly
             | sequencer_executor_actor::error::Error::StorageRequestFailed(_)
+            | sequencer_executor_actor::error::Error::BedrockRequestFailed(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLettersUnavailable(_)
-            | sequencer_executor_actor::error::Error::CrossZoneDeadLetterRequeueFailed(_)) => {
+            | sequencer_executor_actor::error::Error::CrossZoneDeadLetterRequeueFailed(_)
+            | sequencer_executor_actor::error::Error::SequencerStartFailed(_)) => {
                 internal_error(handle_err)
             }
         },
