@@ -25,10 +25,6 @@ fn main() {
         "Faucet cannot be invoked through chain calls"
     );
 
-    let post_diffs = pre_states
-        .iter()
-        .map(|pre_state| AccountStateDiff::unchanged(pre_state.clone()))
-        .collect();
     let [faucet, recipient] =
         <[_; 2]>::try_from(pre_states).expect("GenesisTransfer requires exactly 2 accounts");
 
@@ -44,6 +40,11 @@ fn main() {
         recipient.account_id,
         amount,
     );
+
+    let post_diffs = vec![
+        AccountStateDiff::unchanged(faucet),
+        AccountStateDiff::unchanged(recipient),
+    ];
 
     ProgramOutput::new(
         self_account_id,

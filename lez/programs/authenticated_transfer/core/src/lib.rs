@@ -3,7 +3,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 #[cfg(feature = "image_id")]
 use lee_core::{
-    account::AccountId,
+    account::{AccountId, ProgramShardSelector},
     program::{ChainedCall, PdaSeed},
 };
 
@@ -33,7 +33,10 @@ pub fn custody_transfer(
 ) -> ChainedCall {
     ChainedCall::new(
         AUTHENTICATED_TRANSFER_IMAGE_ID.into(),
-        vec![from, to],
+        vec![
+            ProgramShardSelector::balance_only(from),
+            ProgramShardSelector::balance_only(to),
+        ],
         &Instruction::Transfer { amount },
     )
     .with_pda_seeds(vec![seed])

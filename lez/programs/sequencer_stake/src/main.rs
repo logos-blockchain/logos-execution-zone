@@ -2,10 +2,10 @@ use std::collections::btree_map::Entry;
 
 use authenticated_transfer_core::custody_transfer;
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, BalanceDiff, Data},
+    account::{AccountId, AccountInput, BalanceDiff, Data, ProgramShardSelector},
     program::{
-        AccountStateDiff, ChainedCall, DEFAULT_PROGRAM_OWNER, InstructionData, ProgramCall,
-        ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
+        AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
     },
 };
 use sequencer_stake_core::{
@@ -118,28 +118,23 @@ fn main() {
 }
 
 fn decode_config(
-    config_account: &AccountWithMetadata,
+    config_account: &AccountInput,
     self_account_id: lee_core::account::AccountId,
 ) -> SequencerStakeConfig {
-    // By id, not just by owner: every ownership account is owned by this
-    // program too, and its data is caller-influenced.
+    // Other accounts also hold this program's shards, so check the config account ID.
     assert_eq!(
         config_account.account_id,
         sequencer_stake_config_account_id(self_account_id),
         "not the sequencer_stake config account"
     );
-    assert_eq!(
-        config_account.account.program_owner, self_account_id,
-        "config account is not owned by sequencer_stake"
-    );
-    SequencerStakeConfig::from_bytes(config_account.account.data.as_ref())
+    SequencerStakeConfig::from_bytes(config_account.shard_of(self_account_id))
         .expect("config account data should decode as SequencerStakeConfig")
 }
 
 fn assert_funds_account(
     self_account_id: lee_core::account::AccountId,
-    ownership: &AccountWithMetadata,
-    funds: &AccountWithMetadata,
+    ownership: &AccountInput,
+    funds: &AccountInput,
 ) {
     assert_eq!(
         funds.account_id,
@@ -150,14 +145,14 @@ fn assert_funds_account(
 
 fn stake(
     self_account_id: lee_core::account::AccountId,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     sequencer_key: SequencerKey,
     amount: u128,
     mover_account_id: lee_core::account::AccountId,
     mover_instruction_data: InstructionData,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let [funding_account, ownership_account, funds_account, config_account] =
-        <[AccountWithMetadata; 4]>::try_from(pre_states).expect(
+        <[AccountInput; 4]>::try_from(pre_states).expect(
             "Stake requires a funding account, an ownership account, the stake funds account, and the config account",
         );
 
@@ -171,21 +166,17 @@ fn stake(
     let mut config = decode_config(&config_account, self_account_id);
     let minimum_sequencer_stake = channel_params(&config).minimum_sequencer_stake;
 
-    let balance_before = funds_account.account.balance;
+    let balance_before = funds_account.balance;
     let expected_balance_after = balance_before
         .checked_add(amount)
         .expect("stake amount overflow");
 
-    // An ownership account stays claimed after a full exit, so what a call is
-    // doing follows from the config entry, not from the account's owner.
-    let is_claimed = ownership_account.account.program_owner != DEFAULT_PROGRAM_OWNER;
-    if is_claimed {
-        assert_eq!(
-            ownership_account.account.program_owner, self_account_id,
-            "not a sequencer_stake ownership account"
-        );
-        let record = StakeRecord::from_bytes(ownership_account.account.data.as_ref())
-            .expect("claimed ownership account should decode as StakeRecord");
+    // The stake shard remains after a full exit.
+    // Use the config entry to distinguish a new stake from a top-up.
+    let has_record = !ownership_account.shard_of(self_account_id).is_empty();
+    if has_record {
+        let record = StakeRecord::from_bytes(ownership_account.shard_of(self_account_id))
+            .expect("ownership record should decode as StakeRecord");
         assert_eq!(
             record.sequencer_key, sequencer_key,
             "ownership account backs a different sequencer key"
@@ -198,9 +189,9 @@ fn stake(
 
     match config.entries.entry(sequencer_key) {
         Entry::Occupied(mut occupied) => {
-            // top up: same already-claimed account only
+            // Top-ups must use the existing ownership account.
             assert!(
-                is_claimed,
+                has_record,
                 "this sequencer key already has an ownership account"
             );
             let entry = occupied.get_mut();
@@ -227,10 +218,12 @@ fn stake(
         }
     }
 
-    // pass-through: propagates authorization into the nested mover call
-    let funding_account_post = AccountStateDiff::unchanged(funding_account.clone());
+    let funding_id = funding_account.account_id;
+    let funds_id = funds_account.account_id;
 
-    // the first stake's write acquires the ownership account; a top-up is an ordinary owned write
+    // pass-through: propagates authorization into the nested mover call
+    let funding_account_post = AccountStateDiff::unchanged(funding_account);
+
     let new_stake_record_data: Data = StakeRecord {
         sequencer_key,
         pending_unstake: None,
@@ -244,7 +237,7 @@ fn stake(
         new_stake_record_data,
     );
 
-    let funds_account_post = AccountStateDiff::unchanged(funds_account.clone());
+    let funds_account_post = AccountStateDiff::unchanged(funds_account);
 
     let config_account_post = AccountStateDiff::new(
         config_account,
@@ -257,14 +250,17 @@ fn stake(
 
     let mover_call = ChainedCall {
         program_account_id: mover_account_id,
-        pre_state_ids: vec![funding_account.account_id, funds_account.account_id],
+        shard_selectors: vec![
+            ProgramShardSelector::balance_only(funding_id),
+            ProgramShardSelector::balance_only(funds_id),
+        ],
         instruction_data: mover_instruction_data,
         pda_seeds: Vec::new(),
     };
 
     let confirm_call = ChainedCall::new(
         self_account_id,
-        vec![funds_account.account_id],
+        vec![ProgramShardSelector::balance_only(funds_id)],
         &Instruction::ConfirmStake {
             expected_balance_after,
         },
@@ -282,14 +278,14 @@ fn stake(
 }
 
 fn confirm_stake(
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     expected_balance_after: u128,
 ) -> Vec<AccountStateDiff> {
-    let [funds_account] = <[AccountWithMetadata; 1]>::try_from(pre_states)
+    let [funds_account] = <[AccountInput; 1]>::try_from(pre_states)
         .expect("ConfirmStake requires exactly the stake funds account");
 
     assert_eq!(
-        funds_account.account.balance, expected_balance_after,
+        funds_account.balance, expected_balance_after,
         "mover call did not deposit the expected amount into the stake funds account"
     );
 
@@ -298,23 +294,19 @@ fn confirm_stake(
 
 fn unstake_request(
     self_account_id: lee_core::account::AccountId,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     amount: u128,
     destination: AccountId,
 ) -> Vec<AccountStateDiff> {
-    let [ownership_account, config_account] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+    let [ownership_account, config_account] = <[AccountInput; 2]>::try_from(pre_states)
         .expect("UnstakeRequest requires the ownership account and the config account");
 
     assert!(
         ownership_account.is_authorized,
         "must sign for the ownership account"
     );
-    assert_eq!(
-        ownership_account.account.program_owner, self_account_id,
-        "not a sequencer_stake ownership account"
-    );
 
-    let mut record = StakeRecord::from_bytes(ownership_account.account.data.as_ref())
+    let mut record = StakeRecord::from_bytes(ownership_account.shard_of(self_account_id))
         .expect("ownership account should decode as StakeRecord");
     assert!(
         record.pending_unstake.is_none(),
@@ -333,7 +325,7 @@ fn unstake_request(
     );
 
     // Sized against the tracked stake, never the account balance: anyone can
-    // credit a program-owned account, so balance can exceed `total_staked`.
+    // credit any account, so balance can exceed `total_staked`.
     // Covers both "not more than is staked" and "zero or at least the minimum".
     assert!(
         entry.allows_unstake_request(amount, minimum_sequencer_stake),
@@ -419,10 +411,10 @@ const fn channel_params(config: &SequencerStakeConfig) -> ChannelParams {
 
 fn init_channel_params(
     self_account_id: AccountId,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     channel_params: ChannelParams,
 ) -> Vec<AccountStateDiff> {
-    let [config_account] = <[AccountWithMetadata; 1]>::try_from(pre_states)
+    let [config_account] = <[AccountInput; 1]>::try_from(pre_states)
         .expect("InitChannelParams requires the config account");
 
     let mut config = decode_config(&config_account, self_account_id);
@@ -463,28 +455,25 @@ fn init_channel_params(
 
 fn slash(
     self_account_id: lee_core::account::AccountId,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     sequencer_key: SequencerKey,
     inscription: [u8; 32],
     approvals: &[SlashApproval],
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let [ownership_account, funds_account, sink_account, config_account] =
-        <[AccountWithMetadata; 4]>::try_from(pre_states).expect(
+        <[AccountInput; 4]>::try_from(pre_states).expect(
             "Slash requires the ownership account, the stake funds account, the slash sink, and the config account",
         );
 
-    assert_eq!(
-        ownership_account.account.program_owner, self_account_id,
-        "not a sequencer_stake ownership account"
-    );
     assert_funds_account(self_account_id, &ownership_account, &funds_account);
     assert_eq!(
         sink_account.account_id,
         slash_sink_account_id(self_account_id),
         "third account must be the slash sink PDA"
     );
+    let ownership_id = ownership_account.account_id;
 
-    let mut record = StakeRecord::from_bytes(ownership_account.account.data.as_ref())
+    let mut record = StakeRecord::from_bytes(ownership_account.shard_of(self_account_id))
         .expect("ownership account should decode as StakeRecord");
     assert_eq!(
         record.sequencer_key, sequencer_key,
@@ -500,14 +489,14 @@ fn slash(
         .remove(&sequencer_key)
         .expect("slashed key must have a config entry");
     assert_eq!(
-        entry.account_id, ownership_account.account_id,
+        entry.account_id, ownership_id,
         "config entry points at a different ownership account"
     );
 
     // The whole tracked stake burns, including any pending unstake.
     record.pending_unstake = None;
     let ownership_post = AccountStateDiff::new(
-        ownership_account.clone(),
+        ownership_account,
         BalanceDiff::Add(0),
         record
             .to_bytes()
@@ -527,7 +516,7 @@ fn slash(
     // The burn happens in a chained authenticated_transfer call.
     let burn_call = custody_transfer(
         funds_account.account_id,
-        stake_funds_seed(&ownership_account.account_id),
+        stake_funds_seed(&ownership_id),
         sink_account.account_id,
         entry.total_staked,
     );
@@ -545,20 +534,17 @@ fn slash(
 
 fn finalize_unstake(
     self_account_id: lee_core::account::AccountId,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let [ownership_account, funds_account, destination_account, config_account] =
-        <[AccountWithMetadata; 4]>::try_from(pre_states).expect(
+        <[AccountInput; 4]>::try_from(pre_states).expect(
             "FinalizeUnstake requires the ownership account, the stake funds account, a destination account, and the config account",
         );
 
-    assert_eq!(
-        ownership_account.account.program_owner, self_account_id,
-        "not a sequencer_stake ownership account"
-    );
     assert_funds_account(self_account_id, &ownership_account, &funds_account);
+    let ownership_id = ownership_account.account_id;
 
-    let mut record = StakeRecord::from_bytes(ownership_account.account.data.as_ref())
+    let mut record = StakeRecord::from_bytes(ownership_account.shard_of(self_account_id))
         .expect("ownership account should decode as StakeRecord");
     let pending = record
         .pending_unstake
@@ -571,7 +557,7 @@ fn finalize_unstake(
 
     // no signature check: already authorized back in UnstakeRequest
     let ownership_post = AccountStateDiff::new(
-        ownership_account.clone(),
+        ownership_account,
         BalanceDiff::Add(0),
         record
             .to_bytes()
@@ -585,7 +571,7 @@ fn finalize_unstake(
         .get_mut(&record.sequencer_key)
         .expect("staked key must already have a config entry");
     assert_eq!(
-        entry.account_id, ownership_account.account_id,
+        entry.account_id, ownership_id,
         "config entry points at a different ownership account"
     );
     entry.total_staked = entry
@@ -612,7 +598,7 @@ fn finalize_unstake(
 
     let release_call = custody_transfer(
         funds_account.account_id,
-        stake_funds_seed(&ownership_account.account_id),
+        stake_funds_seed(&ownership_id),
         destination_account.account_id,
         pending.amount,
     );

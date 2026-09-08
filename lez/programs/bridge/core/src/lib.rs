@@ -15,9 +15,8 @@ pub enum Instruction {
     /// Required accounts (3):
     /// - Bridge PDA account
     /// - Recipient account
-    /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`. Bridge ownership of it
-    ///   records that this op id was already minted; a second application of the same op id finds
-    ///   it owned and transfers nothing.
+    /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`, with this program's shard.
+    ///   A nonempty shard marks the deposit as already processed; repeats transfer nothing.
     Deposit {
         /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
         /// Deposit Event on L1.
@@ -67,7 +66,7 @@ fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
     PdaSeed::new(seed)
 }
 
-/// The deposit-receipt PDA whose bridge ownership marks `l1_deposit_op_id` as minted.
+/// The deposit-receipt PDA whose bridge shard marks `l1_deposit_op_id` as minted.
 #[must_use]
 pub fn deposit_receipt_account_id(
     bridge_program_account_id: AccountId,

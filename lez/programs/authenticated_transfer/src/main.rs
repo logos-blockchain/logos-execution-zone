@@ -1,6 +1,6 @@
 use authenticated_transfer_core::Instruction;
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff},
+    account::{AccountInput, BalanceDiff},
     program::{
         AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
@@ -9,27 +9,18 @@ use lee_core::{
 
 /// Transfers `balance_to_move` native balance from `sender` to `recipient`.
 fn transfer(
-    sender: AccountWithMetadata,
-    recipient: AccountWithMetadata,
+    sender: AccountInput,
+    recipient: AccountInput,
     balance_to_move: u128,
 ) -> Vec<AccountStateDiff> {
     // Continue only if the sender has authorized this operation.
     assert!(sender.is_authorized, "Sender must be authorized");
 
-    let sender_diff_output = AccountStateDiff::new(
-        sender.clone(),
-        BalanceDiff::Sub(balance_to_move),
-        sender.account.data.clone(),
-    );
+    let sender_diff_output =
+        AccountStateDiff::balance_only(sender, BalanceDiff::Sub(balance_to_move));
 
-    // TODO(squatting): the credit leaves the recipient unowned, and unowned is takeable — the first
-    // program to write data there owns it, on a plain key account as much as on a derivable PDA.
-    // Accepted: no reclaim path today.
-    let recipient_diff_output = AccountStateDiff::new(
-        recipient.clone(),
-        BalanceDiff::Add(balance_to_move),
-        recipient.account.data.clone(),
-    );
+    let recipient_diff_output =
+        AccountStateDiff::balance_only(recipient, BalanceDiff::Add(balance_to_move));
 
     vec![sender_diff_output, recipient_diff_output]
 }
