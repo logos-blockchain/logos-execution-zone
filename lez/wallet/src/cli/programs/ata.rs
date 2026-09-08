@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
-use lee::{Account, AccountId};
+use lee::{AccountId, ProgramShardSelector};
 use token_core::TokenHolding;
 
 use crate::{
@@ -75,9 +75,14 @@ impl AtaSubcommand {
         _wallet_core: &WalletCore,
     ) -> SubcommandReturnValue {
         let ata_program_id: AccountId = programs::ata().id().into();
+        let token_program_id: AccountId = programs::token().id().into();
         let ata_id = associated_token_account_core::get_associated_token_account_id(
             &ata_program_id,
-            &associated_token_account_core::compute_ata_seed(owner, token_definition),
+            &associated_token_account_core::compute_ata_seed(
+                owner,
+                token_definition,
+                token_program_id,
+            ),
         );
         println!("{ata_id}");
         SubcommandReturnValue::Empty
@@ -189,18 +194,22 @@ impl AtaSubcommand {
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let ata_program_id: AccountId = programs::ata().id().into();
+        let token_program_id: AccountId = programs::token().id().into();
 
         for def in &token_definition {
             let ata_id = associated_token_account_core::get_associated_token_account_id(
                 &ata_program_id,
-                &associated_token_account_core::compute_ata_seed(owner, *def),
+                &associated_token_account_core::compute_ata_seed(owner, *def, token_program_id),
             );
-            let account = wallet_core.get_account_public(ata_id).await?;
+            let account = wallet_core
+                .get_account_view(ProgramShardSelector::new(ata_id, token_program_id))
+                .await?;
+            let holding = account.data.shard(token_program_id);
 
-            if account == Account::default() {
+            if holding.is_empty() {
                 println!("No ATA for definition {def}");
             } else {
-                let holding = TokenHolding::try_from(&account.data)?;
+                let holding = TokenHolding::try_from(holding)?;
                 match holding {
                     TokenHolding::Fungible { balance, .. } => {
                         println!("ATA {ata_id} (definition {def}): balance {balance}");

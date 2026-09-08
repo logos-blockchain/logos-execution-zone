@@ -13,7 +13,7 @@ use crate::{
     error::{print_error, WalletFfiError},
     map_execution_error,
     wallet::get_wallet,
-    FfiAccountIdentity, FfiBytes32, FfiProgramId, WalletHandle,
+    FfiAccountMention, FfiBytes32, FfiProgramId, WalletHandle,
 };
 
 #[repr(C)]
@@ -134,7 +134,7 @@ impl Default for FfiTransactionResult {
 ///
 /// # Parameters
 /// - `handle`: Valid pointer to wallet handle
-/// - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
+/// - `account_mentions`: Valid pointer to list of `FfiAccountMention`
 /// - `instruction_data`: Valid pointer to instruction data bytes
 /// - `out_result`: Valid pointer to `FfiTransactionResult`
 ///
@@ -144,14 +144,14 @@ impl Default for FfiTransactionResult {
 ///
 /// # Safety
 /// - `handle` must be a valid pointer
-/// - `account_identities` must be a valid pointer
+/// - `account_mentions` must be a valid pointer
 /// - `instruction_data` must be a valid pointer
 /// - `out_result` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     handle: *mut WalletHandle,
-    account_identities: *const FfiAccountIdentity,
-    account_identities_size: usize,
+    account_mentions: *const FfiAccountMention,
+    account_mentions_size: usize,
     instruction_data: *const u8,
     instruction_data_size: usize,
     program_id: FfiProgramId,
@@ -162,8 +162,8 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         Err(e) => return e,
     };
 
-    if account_identities.is_null() {
-        print_error("Null input pointer for account identities list");
+    if account_mentions.is_null() {
+        print_error("Null input pointer for account mentions list");
         return WalletFfiError::NullPointer;
     }
 
@@ -185,16 +185,16 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         }
     };
 
-    let accounts_ffi = std::slice::from_raw_parts(account_identities, account_identities_size);
+    let accounts_ffi = std::slice::from_raw_parts(account_mentions, account_mentions_size);
     let instruction_data = std::slice::from_raw_parts(instruction_data, instruction_data_size);
 
-    let mut accounts = Vec::with_capacity(account_identities_size);
+    let mut accounts = Vec::with_capacity(account_mentions_size);
 
     for ffi_acc in accounts_ffi {
         match ffi_acc.try_into() {
             Ok(v) => accounts.push(v),
             Err(err) => {
-                print_error("Failed to convert FfiAccountIdentity into AccountIdentity");
+                print_error("Failed to convert FfiAccountMention into AccountMention");
                 return err;
             }
         }
@@ -230,7 +230,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
 ///
 /// # Parameters
 /// - `handle`: Valid pointer to wallet handle
-/// - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
+/// - `account_mentions`: Valid pointer to list of `FfiAccountMention`
 /// - `instruction_data`: Valid pointer to instruction data bytes
 /// - `out_result`: Valid pointer to `FfiTransactionResult`
 ///
@@ -240,14 +240,14 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
 ///
 /// # Safety
 /// - `handle` must be a valid pointer
-/// - `account_identities` must be a valid pointer
+/// - `account_mentions` must be a valid pointer
 /// - `instruction_data` must be a valid pointer
 /// - `out_result` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
     handle: *mut WalletHandle,
-    account_identities: *const FfiAccountIdentity,
-    account_identities_size: usize,
+    account_mentions: *const FfiAccountMention,
+    account_mentions_size: usize,
     instruction_data: *const u8,
     instruction_data_size: usize,
     program_with_dependencies: *const FfiProgramWithDependencies,
@@ -258,8 +258,8 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
         Err(e) => return e,
     };
 
-    if account_identities.is_null() {
-        print_error("Null input pointer for account identities list");
+    if account_mentions.is_null() {
+        print_error("Null input pointer for account mentions list");
         return WalletFfiError::NullPointer;
     }
 
@@ -281,16 +281,16 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
         }
     };
 
-    let accounts_ffi = std::slice::from_raw_parts(account_identities, account_identities_size);
+    let accounts_ffi = std::slice::from_raw_parts(account_mentions, account_mentions_size);
     let instruction_data = std::slice::from_raw_parts(instruction_data, instruction_data_size);
 
-    let mut accounts = Vec::with_capacity(account_identities_size);
+    let mut accounts = Vec::with_capacity(account_mentions_size);
 
     for ffi_acc in accounts_ffi {
         match ffi_acc.try_into() {
             Ok(v) => accounts.push(v),
             Err(err) => {
-                print_error("Failed to convert FfiAccountIdentity into AccountIdentity");
+                print_error("Failed to convert FfiAccountMention into AccountMention");
                 return err;
             }
         }

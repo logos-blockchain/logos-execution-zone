@@ -385,9 +385,7 @@ impl AccountSubcommand {
             return Ok(SubcommandReturnValue::Empty);
         }
 
-        let (description, json_view) = format_account_details(&account);
-        println!("{description}");
-        println!("{json_view}");
+        print_account_details(&account, "");
 
         if keys {
             display_keys(wallet_core)?;
@@ -454,9 +452,7 @@ impl AccountSubcommand {
             );
             match wallet_core.get_account_public(id).await {
                 Ok(account) if account != Account::default() => {
-                    let (description, json_view) = format_account_details(&account);
-                    println!("  {description}");
-                    println!("  {json_view}");
+                    print_account_details(&account, "  ");
                 }
                 Ok(_) => println!("  Uninitialized"),
                 Err(e) => println!("  Error fetching account: {e}"),
@@ -475,9 +471,7 @@ impl AccountSubcommand {
             );
             match wallet_core.get_account_private(id) {
                 Some(account) if account != Account::default() => {
-                    let (description, json_view) = format_account_details(&account);
-                    println!("  {description}");
-                    println!("  {json_view}");
+                    print_account_details(&account, "  ");
                 }
                 Some(_) => println!("  Uninitialized"),
                 None => println!("  Not found in local storage"),
@@ -641,47 +635,40 @@ impl WalletSubcommand for ImportSubcommand {
     }
 }
 
-/// Formats account details for display, returning (description, `json_view`).
-fn format_account_details(account: &Account) -> (String, String) {
-    let auth_tr_prog_id: AccountId = programs::authenticated_transfer().id().into();
+/// Prints an account's balance, nonce, and program shards.
+fn print_account_details(account: &Account, indent: &str) {
+    println!(
+        "{indent}Balance {}, nonce {}",
+        account.data.balance, account.nonce.0
+    );
     let token_prog_id: AccountId = programs::token().id().into();
-
-    match &account.program_owner {
-        o if *o == auth_tr_prog_id => {
-            let account_hr: HumanReadableAccount = account.clone().into();
-            (
-                "Account owned by authenticated transfer program".to_owned(),
-                serde_json::to_string(&account_hr).unwrap(),
-            )
-        }
-        o if *o == token_prog_id => TokenDefinition::try_from(&account.data)
-            .map(|token_def| {
-                (
-                    "Definition account owned by token program".to_owned(),
-                    serde_json::to_string(&token_def).unwrap(),
-                )
-            })
-            .or_else(|_| {
-                TokenHolding::try_from(&account.data).map(|token_hold| {
+    for (program, data) in &account.data.shards {
+        let (description, json_view) = if *program == token_prog_id {
+            TokenDefinition::try_from(data)
+                .map(|token_def| {
                     (
-                        "Holding account owned by token program".to_owned(),
-                        serde_json::to_string(&token_hold).unwrap(),
+                        "Token program definition record".to_owned(),
+                        serde_json::to_string(&token_def).unwrap(),
                     )
                 })
-            })
-            .unwrap_or_else(|_| {
-                let account_hr: HumanReadableAccount = account.clone().into();
-                (
-                    "Unknown token program account".to_owned(),
-                    serde_json::to_string(&account_hr).unwrap(),
-                )
-            }),
-        _ => {
-            let account_hr: HumanReadableAccount = account.clone().into();
-            (
-                "Account".to_owned(),
-                serde_json::to_string(&account_hr).unwrap(),
-            )
-        }
+                .or_else(|_err| {
+                    TokenHolding::try_from(data).map(|token_hold| {
+                        (
+                            "Token program holding record".to_owned(),
+                            serde_json::to_string(&token_hold).unwrap(),
+                        )
+                    })
+                })
+                .unwrap_or_else(|_err| {
+                    (
+                        "Unrecognized token program record".to_owned(),
+                        hex::encode(data),
+                    )
+                })
+        } else {
+            (format!("Record of program {program}"), hex::encode(data))
+        };
+        println!("{indent}{description}");
+        println!("{indent}{json_view}");
     }
 }

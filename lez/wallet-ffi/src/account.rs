@@ -11,7 +11,7 @@ use crate::{
     error::{print_error, WalletFfiError},
     types::{
         FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, FfiPrivateAccountKeys,
-        WalletHandle,
+        FfiShard, WalletHandle,
     },
     wallet::get_wallet,
     FfiU128,
@@ -341,7 +341,7 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
             }
         }
     } else if let Some(account) = wallet.get_account_private(account_id) {
-        account.balance
+        account.data.balance
     } else {
         print_error("Private account not found");
         return WalletFfiError::AccountNotFound;
@@ -481,10 +481,17 @@ pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) 
 
     unsafe {
         let account = &*account;
-        if !account.data.is_null() && account.data_len > 0 {
-            let slice = std::slice::from_raw_parts_mut(account.data.cast_mut(), account.data_len);
-            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
+        if account.shards.is_null() || account.shards_len == 0 {
+            return;
         }
+        let shards = std::slice::from_raw_parts_mut(account.shards.cast_mut(), account.shards_len);
+        for shard in shards.iter() {
+            if !shard.data.is_null() && shard.data_len > 0 {
+                let slice = std::slice::from_raw_parts_mut(shard.data.cast_mut(), shard.data_len);
+                drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
+            }
+        }
+        drop(Box::from_raw(std::ptr::from_mut::<[FfiShard]>(shards)));
     }
 }
 
