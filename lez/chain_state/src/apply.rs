@@ -278,10 +278,10 @@ fn collect_tx_events(
 #[must_use]
 pub fn opening_fee_state(state: &V03State) -> FeeState {
     FeeState::from_bytes(
-        &state
+        state
             .get_account_by_id(system_accounts::fee_state_account_id())
             .data
-            .into_inner(),
+            .shard(system_accounts::fee_program_id()),
     )
 }
 
@@ -429,7 +429,7 @@ fn settle_charged_transaction(
     let payer_authorized = HashSet::from([payer]);
     let reserve_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
         reserve_msg.program_account_id,
-        &reserve_msg.account_ids,
+        &reserve_msg.shard_selectors,
         &reserve_msg.instruction_data,
         &payer_authorized,
         state,
@@ -496,7 +496,7 @@ fn settle_charged_transaction(
         let refund_msg = fee_refund_invocation(payer, refund);
         let refund_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
             refund_msg.program_account_id,
-            &refund_msg.account_ids,
+            &refund_msg.shard_selectors,
             &refund_msg.instruction_data,
             &HashSet::new(),
             state,

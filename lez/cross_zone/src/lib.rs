@@ -20,7 +20,7 @@ use cross_zone_inbox_core::{
     inbox_seen_shard_account_id,
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
-use lee_core::account::{AccountId, Balance};
+use lee_core::account::{AccountId, Balance, ProgramShardSelector};
 
 pub mod acceptance;
 #[cfg(any(test, feature = "test-utils"))]
@@ -31,7 +31,7 @@ pub mod test_utils;
 pub struct Emission {
     pub target_zone: ZoneId,
     pub target_account_id: AccountId,
-    pub target_accounts: Vec<[u8; 32]>,
+    pub target_accounts: Vec<ProgramShardSelector>,
     pub payload: Vec<u8>,
 }
 
@@ -113,28 +113,29 @@ pub fn extract_emission(account_id: AccountId, instruction_data: &[u8]) -> Optio
 fn build_inbox_dispatch_tx(
     inbox_id: AccountId,
     msg: &CrossZoneMessage,
-    target_account_ids: Vec<AccountId>,
+    target_shard_selectors: Vec<ProgramShardSelector>,
 ) -> lee::PublicTransaction {
-    let mut account_ids = Vec::with_capacity(target_account_ids.len().saturating_add(3));
-    account_ids.push(inbox_config_account_id(inbox_id));
-    account_ids.push(inbox_seen_shard_account_id(
+    // Select the inbox's config and seen shards, and the source marker's account ID.
+    let mut shard_selectors = Vec::with_capacity(target_shard_selectors.len().saturating_add(3));
+    shard_selectors.push(ProgramShardSelector::new(
+        inbox_config_account_id(inbox_id),
         inbox_id,
-        &msg.src_zone,
-        msg.src_block_id,
+    ));
+    shard_selectors.push(ProgramShardSelector::new(
+        inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
+        inbox_id,
     ));
     // Declared here rather than derived by the guest, since a guest cannot
     // conjure an account. Both the watcher and the verifier build it through this
     // one function, so they cannot disagree about the source a target will see.
-    account_ids.push(inbox_source_marker_account_id(
-        inbox_id,
-        &msg.src_zone,
-        msg.src_account_id,
+    shard_selectors.push(ProgramShardSelector::balance_only(
+        inbox_source_marker_account_id(inbox_id, &msg.src_zone, msg.src_account_id),
     ));
-    account_ids.extend(target_account_ids);
+    shard_selectors.extend(target_shard_selectors);
 
     let message = lee::public_transaction::Message::try_new(
         inbox_id,
-        account_ids,
+        shard_selectors,
         vec![],
         Instruction::Dispatch(msg.clone()),
     )
@@ -155,7 +156,7 @@ fn build_inbox_dispatch_tx(
 pub fn build_dispatch_from_emission(
     source: &EmissionSource,
     target_account_id: AccountId,
-    target_accounts: &[[u8; 32]],
+    target_accounts: &[ProgramShardSelector],
     payload: Vec<u8>,
 ) -> lee::PublicTransaction {
     let msg = CrossZoneMessage {
@@ -168,12 +169,11 @@ pub fn build_dispatch_from_emission(
         payload,
         l1_inclusion_witness: None,
     };
-    let target_ids = target_accounts
-        .iter()
-        .copied()
-        .map(AccountId::new)
-        .collect();
-    build_inbox_dispatch_tx(programs::cross_zone_inbox().id().into(), &msg, target_ids)
+    build_inbox_dispatch_tx(
+        programs::cross_zone_inbox().id().into(),
+        &msg,
+        target_accounts.to_vec(),
+    )
 }
 
 /// The genesis transaction that initializes this zone's inbox config PDA.
@@ -356,8 +356,12 @@ fn genesis_public_tx<I: borsh::BorshSerialize>(
     account_ids: Vec<AccountId>,
     instruction: I,
 ) -> lee::PublicTransaction {
+    let shard_selectors = account_ids
+        .into_iter()
+        .map(|id| ProgramShardSelector::new(id, account_id))
+        .collect();
     let message =
-        lee::public_transaction::Message::try_new(account_id, account_ids, vec![], instruction)
+        lee::public_transaction::Message::try_new(account_id, shard_selectors, vec![], instruction)
             .expect("genesis instruction must serialize");
     lee::PublicTransaction::new(
         message,
