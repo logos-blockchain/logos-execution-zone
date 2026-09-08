@@ -28,14 +28,12 @@ use futures::{Stream, StreamExt as _};
 use lee::{GENESIS_BLOCK_ID, PublicKey};
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_zone_sdk::{
-    CommonHttpClient, Slot, ZoneMessage,
-    adapter::{Node as _, NodeHttpClient},
-};
+use logos_blockchain_zone_sdk::{Slot, ZoneMessage, adapter::Node as _};
 use tokio::{sync::RwLock, time::Instant};
 
 use crate::{
     config::IndexerConfig,
+    node_client::{NodeClient, node_client},
     status::{PeerHealth, PeerStatus},
 };
 
@@ -669,7 +667,7 @@ pub struct CrossZoneVerifier {
     peers: PeerBlocks,
     /// One channel client per peer, used only for the one-shot refetch of an
     /// evicted body. Built exactly like the reader's own client.
-    refetch_clients: HashMap<ZoneId, Arc<ZoneIndexer<NodeHttpClient>>>,
+    refetch_clients: HashMap<ZoneId, Arc<ZoneIndexer<NodeClient>>>,
     /// One-shot refetches attempted, successful or not. The retry cadence
     /// line in [`Self::wait_for_peer_block`] reports the running total.
     refetch_attempts: Arc<AtomicU64>,
@@ -689,10 +687,7 @@ impl CrossZoneVerifier {
         let mut refetch_clients = HashMap::new();
 
         for peer in &cross_zone.peers {
-            let node = NodeHttpClient::new(
-                CommonHttpClient::new(config.bedrock_config.auth.clone().map(Into::into)),
-                config.bedrock_config.addr.clone(),
-            );
+            let node = node_client(&config.bedrock_config);
             // The reader moves `node` into its `ZoneIndexer`; this clone is its
             // own handle for the channel-tip reads behind the evidence run.
             let tip_node = node.clone();
@@ -1086,7 +1081,7 @@ fn absence_verdict(zone: ZoneId, block_id: u64, evidence: &AbsenceEvidence) -> S
 /// failure, an absent channel, or a cursor behind the tip, all of which break
 /// the caught-up evidence run rather than count toward it.
 async fn channel_tip_reached(
-    node: &NodeHttpClient,
+    node: &NodeClient,
     peer_zone: ZoneId,
     cursor: Option<Slot>,
 ) -> Option<u64> {
@@ -1105,7 +1100,7 @@ async fn channel_tip_reached(
 /// widening of it: that read runs after a drained pass, and its freshness is
 /// what makes [`PeerWatch::confirmed_absence`] sound, so the pre-pass floor
 /// read must not stand in for it.
-async fn peer_committee(node: &NodeHttpClient, peer_zone: ZoneId) -> Option<(usize, u64)> {
+async fn peer_committee(node: &NodeClient, peer_zone: ZoneId) -> Option<(usize, u64)> {
     let state = node
         .channel_state(ChannelId::from(peer_zone))
         .await
@@ -1126,7 +1121,7 @@ fn describe_committee(last_read: Option<(usize, u64)>) -> String {
 /// The endpoint's LIB slot, or `None` on a read failure. Read on at-tip
 /// passes as freshness evidence for the escalation guard in
 /// [`PeerWatch::confirmed_absence`].
-async fn observed_lib_slot(node: &NodeHttpClient) -> Option<u64> {
+async fn observed_lib_slot(node: &NodeClient) -> Option<u64> {
     let info = node.consensus_info().await.ok()?;
     Some(info.cryptarchia_info.lib_slot.into_inner())
 }
@@ -1178,8 +1173,8 @@ fn accept_peer_block(block: &Block, peer_zone: ZoneId, expected_pubkeys: &[Publi
     reason = "one spawn site; a config struct would only rename the arguments"
 )]
 async fn read_peer(
-    zone_indexer: ZoneIndexer<NodeHttpClient>,
-    tip_node: NodeHttpClient,
+    zone_indexer: ZoneIndexer<NodeClient>,
+    tip_node: NodeClient,
     peer_zone: ZoneId,
     expected_pubkeys: Vec<PublicKey>,
     min_committee_size: u32,
