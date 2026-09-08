@@ -1,6 +1,6 @@
 use std::io;
 
-use lee_core::account::{Account, AccountId, BalanceDiffError, Cycles};
+use lee_core::account::{AccountId, AccountInput, BalanceDiffError, Cycles};
 use thiserror::Error;
 
 #[macro_export]
@@ -65,6 +65,9 @@ pub enum LeeError {
     #[error("Circuit proving error")]
     CircuitProvingError(String),
 
+    #[error("Failed to resolve an account's shard: {0}")]
+    AccountResolution(String),
+
     #[error("Invalid program bytecode")]
     InvalidProgramBytecode(#[source] anyhow::Error),
 
@@ -115,8 +118,8 @@ pub enum InvalidProgramBehaviorError {
     InconsistentAccountPreState {
         account_id: AccountId,
         // Boxed to reduce the size of the error type
-        expected: Box<Account>,
-        actual: Box<Account>,
+        expected: Box<AccountInput>,
+        actual: Box<AccountInput>,
     },
 
     #[error("Unauthorized account marked as authorized")]
@@ -142,9 +145,6 @@ pub enum InvalidProgramBehaviorError {
 
     #[error(transparent)]
     ExecutionValidationFailed(#[from] lee_core::program::ExecutionValidationError),
-
-    #[error("Unowned account {account_id} carries data in its final state")]
-    DataBearingUnownedAccount { account_id: AccountId },
 
     #[error("Called program {program_account_id} which is not listed in dependencies")]
     UndeclaredProgramDependency { program_account_id: AccountId },

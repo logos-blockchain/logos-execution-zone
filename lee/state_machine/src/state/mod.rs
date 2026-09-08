@@ -12,6 +12,7 @@ use lee_core::{
 };
 
 use crate::{
+    AccountData,
     error::LeeError,
     merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
@@ -154,7 +155,10 @@ impl V03State {
             (
                 account_id,
                 Account {
-                    balance,
+                    data: AccountData {
+                        balance,
+                        ..AccountData::default()
+                    },
                     ..Account::default()
                 },
             )
@@ -195,19 +199,14 @@ impl V03State {
         self
     }
 
-    /// Seeds a builtin as a loader-owned header pointing at one segment holding its whole ELF —
-    /// the same shape a live `program_loader` deploy produces, just written directly rather than
-    /// through a transaction. The header keeps living at the bijection address
-    /// (`AccountId::from(program.id())`) so existing call sites addressing builtins by `ProgramId`
-    /// keep working; the segment's address is this function's own internal convention, never
-    /// independently recomputed elsewhere.
+    /// Inserts a program at `AccountId::from(program.id())` with one bytecode segment.
     pub(crate) fn insert_program(&mut self, program: &Program) {
         let header_account_id = AccountId::from(program.id());
         let segment_account_id = genesis_segment_account_id(header_account_id);
 
-        let segment = Account {
-            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(
+        let segment = Account::default().with_shard(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            Data::try_from(
                 ProgramSegment {
                     bytecode: program.elf().to_vec(),
                     next_segment: None,
@@ -215,11 +214,10 @@ impl V03State {
                 .to_bytes(),
             )
             .expect("elf must fit under DATA_MAX_LENGTH"),
-            ..Account::default()
-        };
-        let header = Account {
-            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(
+        );
+        let header = Account::default().with_shard(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            Data::try_from(
                 ProgramHeader {
                     image_id: program.id(),
                     program_first_segment: segment_account_id,
@@ -228,8 +226,7 @@ impl V03State {
                 .to_bytes(),
             )
             .expect("program header fits under DATA_MAX_LENGTH"),
-            ..Account::default()
-        };
+        );
         self.public_state.insert(segment_account_id, segment);
         self.public_state.insert(header_account_id, header);
     }
@@ -310,7 +307,7 @@ impl V03State {
     #[must_use]
     pub fn get_program(&self, program_id: ProgramId) -> Option<(ProgramId, Vec<u8>)> {
         get_program_via(AccountId::from(program_id), |account_id| {
-            self.get_account_by_id(account_id)
+            self.get_account_by_id_ref(account_id)
         })
     }
 
@@ -321,7 +318,8 @@ impl V03State {
     /// [`ProgramImageClaim`]: lee_core::ProgramImageClaim
     #[must_use]
     pub fn get_program_image_id(&self, account_id: AccountId) -> Option<ProgramId> {
-        get_program_via(account_id, |id| self.get_account_by_id(id)).map(|(image_id, _)| image_id)
+        get_program_via(account_id, |id| self.get_account_by_id_ref(id))
+            .map(|(image_id, _)| image_id)
     }
 
     #[must_use]

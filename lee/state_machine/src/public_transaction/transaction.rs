@@ -45,7 +45,7 @@ impl PublicTransaction {
             .signer_account_ids()
             .into_iter()
             .collect::<HashSet<_>>();
-        acc_set.extend(&self.message.account_ids);
+        acc_set.extend(self.message.shard_selectors.iter().map(|p| p.account_id));
 
         acc_set.into_iter().collect()
     }

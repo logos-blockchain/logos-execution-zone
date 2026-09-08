@@ -1,5 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{account::Nonce, program::InstructionData};
+use lee_core::{
+    account::{Nonce, ProgramShardSelector},
+    program::InstructionData,
+};
 use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::LeeError, fees::FeeDeclaration, program::Program};
@@ -9,7 +12,7 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x0
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub program_account_id: AccountId,
-    pub account_ids: Vec<AccountId>,
+    pub shard_selectors: Vec<ProgramShardSelector>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
@@ -20,14 +23,14 @@ impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             program_account_id,
-            account_ids,
+            shard_selectors,
             nonces,
             instruction_data,
             fee,
         } = self;
         f.debug_struct("Message")
             .field("program_account_id", program_account_id)
-            .field("account_ids", account_ids)
+            .field("shard_selectors", shard_selectors)
             .field("nonces", nonces)
             .field("instruction_data", instruction_data)
             .field("fee", fee)
@@ -41,7 +44,7 @@ impl Message {
     /// [`Self::try_new_with_fees`].
     pub fn try_new<T: BorshSerialize>(
         program_account_id: AccountId,
-        account_ids: Vec<AccountId>,
+        shard_selectors: Vec<ProgramShardSelector>,
         nonces: Vec<Nonce>,
         instruction: T,
     ) -> Result<Self, LeeError> {
@@ -49,7 +52,7 @@ impl Message {
 
         Ok(Self::new_preserialized(
             program_account_id,
-            account_ids,
+            shard_selectors,
             nonces,
             instruction_data,
             None,
@@ -58,7 +61,7 @@ impl Message {
 
     pub fn try_new_with_fees<T: BorshSerialize>(
         program_account_id: AccountId,
-        account_ids: Vec<AccountId>,
+        shard_selectors: Vec<ProgramShardSelector>,
         nonces: Vec<Nonce>,
         instruction: T,
         fee: FeeDeclaration,
@@ -67,7 +70,7 @@ impl Message {
 
         Ok(Self::new_preserialized(
             program_account_id,
-            account_ids,
+            shard_selectors,
             nonces,
             instruction_data,
             Some(fee),
@@ -77,14 +80,14 @@ impl Message {
     #[must_use]
     pub const fn new_preserialized(
         program_account_id: AccountId,
-        account_ids: Vec<AccountId>,
+        shard_selectors: Vec<ProgramShardSelector>,
         nonces: Vec<Nonce>,
         instruction_data: InstructionData,
         fee: Option<FeeDeclaration>,
     ) -> Self {
         Self {
             program_account_id,
-            account_ids,
+            shard_selectors,
             nonces,
             instruction_data,
             fee,
