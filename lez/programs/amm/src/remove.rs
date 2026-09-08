@@ -2,29 +2,31 @@ use std::num::NonZeroU128;
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, BalanceDiff, Data},
+    account::{AccountId, AccountInput, BalanceDiff, Data, ProgramShardSelector},
     program::{AccountStateDiff, ChainedCall},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn remove_liquidity(
-    pool: &AccountWithMetadata,
-    vault_a: &AccountWithMetadata,
-    vault_b: &AccountWithMetadata,
-    pool_definition_lp: &AccountWithMetadata,
-    user_holding_a: &AccountWithMetadata,
-    user_holding_b: &AccountWithMetadata,
-    user_holding_lp: &AccountWithMetadata,
+    pool: &AccountInput,
+    vault_a: &AccountInput,
+    vault_b: &AccountInput,
+    pool_definition_lp: &AccountInput,
+    user_holding_a: &AccountInput,
+    user_holding_b: &AccountInput,
+    user_holding_lp: &AccountInput,
     remove_liquidity_amount: NonZeroU128,
     min_amount_to_remove_token_a: u128,
     min_amount_to_remove_token_b: u128,
+    self_account_id: AccountId,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let remove_liquidity_amount: u128 = remove_liquidity_amount.into();
 
     // 1. Fetch Pool state
-    let pool_def_data = PoolDefinition::try_from(&pool.account.data)
+    let pool_def_data = PoolDefinition::try_from(pool.shard_of(self_account_id))
         .expect("Remove liquidity: AMM Program expects a valid Pool Definition Account");
+    let token_program_id = pool_def_data.token_program_id;
 
     assert!(pool_def_data.active, "Pool is inactive");
     assert_eq!(
@@ -50,8 +52,10 @@ pub fn remove_liquidity(
     );
 
     // 2. Compute withdrawal amounts
-    let user_holding_lp_data = token_core::TokenHolding::try_from(&user_holding_lp.account.data)
-        .expect("Remove liquidity: AMM Program expects a valid Token Account for liquidity token");
+    let user_holding_lp_data = token_core::TokenHolding::try_from(
+        user_holding_lp.shard_of(token_program_id),
+    )
+    .expect("Remove liquidity: AMM Program expects a valid Token Account for liquidity token");
     let token_core::TokenHolding::Fungible {
         definition_id: _,
         balance: user_lp_balance,
@@ -102,12 +106,13 @@ pub fn remove_liquidity(
         ..pool_def_data
     };
 
-    let token_program_id: AccountId = user_holding_a.account.program_owner;
-
     // Chaincall for Token A withdraw
     let call_token_a = ChainedCall::new(
         token_program_id,
-        vec![vault_a.account_id, user_holding_a.account_id],
+        vec![
+            ProgramShardSelector::from(vault_a),
+            ProgramShardSelector::from(user_holding_a),
+        ],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_a,
         },
@@ -119,7 +124,10 @@ pub fn remove_liquidity(
     // Chaincall for Token B withdraw
     let call_token_b = ChainedCall::new(
         token_program_id,
-        vec![vault_b.account_id, user_holding_b.account_id],
+        vec![
+            ProgramShardSelector::from(vault_b),
+            ProgramShardSelector::from(user_holding_b),
+        ],
         &token_core::Instruction::Transfer {
             amount_to_transfer: withdraw_amount_b,
         },
@@ -131,7 +139,10 @@ pub fn remove_liquidity(
     // Chaincall for LP adjustment
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_definition_lp.account_id, user_holding_lp.account_id],
+        vec![
+            ProgramShardSelector::from(pool_definition_lp),
+            ProgramShardSelector::from(user_holding_lp),
+        ],
         &token_core::Instruction::Burn {
             amount_to_burn: delta_lp,
         },

@@ -1,13 +1,14 @@
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff, Data},
+    account::{AccountId, AccountInput, BalanceDiff, Data},
     program::AccountStateDiff,
 };
 use token_core::TokenHolding;
 
 #[must_use]
 pub fn print_nft(
-    master_account: &AccountWithMetadata,
-    printed_account: &AccountWithMetadata,
+    master_account: &AccountInput,
+    printed_account: &AccountInput,
+    self_account_id: AccountId,
 ) -> Vec<AccountStateDiff> {
     assert!(
         master_account.is_authorized,
@@ -15,12 +16,12 @@ pub fn print_nft(
     );
 
     assert!(
-        printed_account.account.data.is_empty(),
+        printed_account.shard_of(self_account_id).is_empty(),
         "Printed Account must not already hold data"
     );
 
-    let mut master_account_data =
-        TokenHolding::try_from(&master_account.account.data).expect("Invalid Token Holding data");
+    let mut master_account_data = TokenHolding::try_from(master_account.shard_of(self_account_id))
+        .expect("Invalid Token Holding data");
 
     let TokenHolding::NftMaster {
         definition_id,

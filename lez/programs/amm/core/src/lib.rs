@@ -7,6 +7,9 @@ use lee_core::{
 };
 
 /// AMM Program Instruction.
+///
+/// The pool uses this program's shard. Vaults, holdings, and the liquidity token definition
+/// use the token program's shards.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Initializes a new Pool (or re-initializes an inactive Pool).
@@ -22,7 +25,7 @@ pub enum Instruction {
     NewDefinition {
         token_a_amount: u128,
         token_b_amount: u128,
-        amm_program_id: AccountId,
+        token_program_id: AccountId,
     },
 
     /// Adds liquidity to the Pool.
@@ -92,6 +95,8 @@ pub enum Instruction {
 
 #[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 pub struct PoolDefinition {
+    /// The token program selected when the pool is initialized.
+    pub token_program_id: AccountId,
     pub definition_token_a_id: AccountId,
     pub definition_token_b_id: AccountId,
     pub vault_a_id: AccountId,
@@ -133,17 +138,24 @@ pub fn compute_pool_pda(
     amm_program_id: AccountId,
     definition_token_a_id: AccountId,
     definition_token_b_id: AccountId,
+    token_program_id: AccountId,
 ) -> AccountId {
     AccountId::for_public_pda(
         &amm_program_id,
-        &compute_pool_pda_seed(definition_token_a_id, definition_token_b_id),
+        &compute_pool_pda_seed(
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id,
+        ),
     )
 }
 
+// Include the token program so different token programs derive different pools.
 #[must_use]
 fn compute_pool_pda_seed(
     definition_token_a_id: AccountId,
     definition_token_b_id: AccountId,
+    token_program_id: AccountId,
 ) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
@@ -156,9 +168,10 @@ fn compute_pool_pda_seed(
         std::cmp::Ordering::Equal => panic!("Definitions match"),
     };
 
-    let mut bytes = [0; 64];
+    let mut bytes = [0; 96];
     bytes[0..32].copy_from_slice(&token_1.to_bytes());
-    bytes[32..].copy_from_slice(&token_2.to_bytes());
+    bytes[32..64].copy_from_slice(&token_2.to_bytes());
+    bytes[64..96].copy_from_slice(&token_program_id.to_bytes());
 
     PdaSeed::new(
         Impl::hash_bytes(&bytes)

@@ -5,74 +5,72 @@ use amm_core::{
     compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
 };
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, BalanceDiff, Data},
+    account::{AccountId, AccountInput, BalanceDiff, Data, ProgramShardSelector},
     program::{AccountStateDiff, ChainedCall},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
 pub fn new_definition(
-    pool: &AccountWithMetadata,
-    vault_a: &AccountWithMetadata,
-    vault_b: &AccountWithMetadata,
-    pool_definition_lp: &AccountWithMetadata,
-    user_holding_a: &AccountWithMetadata,
-    user_holding_b: &AccountWithMetadata,
-    user_holding_lp: &AccountWithMetadata,
+    pool: &AccountInput,
+    vault_a: &AccountInput,
+    vault_b: &AccountInput,
+    pool_definition_lp: &AccountInput,
+    user_holding_a: &AccountInput,
+    user_holding_b: &AccountInput,
+    user_holding_lp: &AccountInput,
     token_a_amount: NonZeroU128,
     token_b_amount: NonZeroU128,
-    amm_program_id: AccountId,
+    self_account_id: AccountId,
+    token_program_id: AccountId,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     // Verify token_a and token_b are different
-    let definition_token_a_id = token_core::TokenHolding::try_from(&user_holding_a.account.data)
-        .expect("New definition: AMM Program expects valid Token Holding account for Token A")
-        .definition_id();
-    let definition_token_b_id = token_core::TokenHolding::try_from(&user_holding_b.account.data)
-        .expect("New definition: AMM Program expects valid Token Holding account for Token B")
-        .definition_id();
+    let definition_token_a_id =
+        token_core::TokenHolding::try_from(user_holding_a.shard_of(token_program_id))
+            .expect("New definition: AMM Program expects valid Token Holding account for Token A")
+            .definition_id();
+    let definition_token_b_id =
+        token_core::TokenHolding::try_from(user_holding_b.shard_of(token_program_id))
+            .expect("New definition: AMM Program expects valid Token Holding account for Token B")
+            .definition_id();
 
-    // both instances of the same token program
-    let token_program = user_holding_a.account.program_owner;
-
-    assert_eq!(
-        user_holding_b.account.program_owner, token_program,
-        "User Token holdings must use the same Token Program"
-    );
     assert!(
         definition_token_a_id != definition_token_b_id,
         "Cannot set up a swap for a token with itself"
     );
-    // TODO(squatting): the pool address is derivable from the token pair, so a
-    // program can own it before the first definition and brick that pair.
-    // Accepted: there is no reclaim path today.
     assert_eq!(
         pool.account_id,
-        compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id),
+        compute_pool_pda(
+            self_account_id,
+            definition_token_a_id,
+            definition_token_b_id,
+            token_program_id
+        ),
         "Pool Definition Account ID does not match PDA"
     );
     assert_eq!(
         vault_a.account_id,
-        compute_vault_pda(amm_program_id, pool.account_id, definition_token_a_id),
+        compute_vault_pda(self_account_id, pool.account_id, definition_token_a_id),
         "Vault ID does not match PDA"
     );
     assert_eq!(
         vault_b.account_id,
-        compute_vault_pda(amm_program_id, pool.account_id, definition_token_b_id),
+        compute_vault_pda(self_account_id, pool.account_id, definition_token_b_id),
         "Vault ID does not match PDA"
     );
     assert_eq!(
         pool_definition_lp.account_id,
-        compute_liquidity_token_pda(amm_program_id, pool.account_id),
+        compute_liquidity_token_pda(self_account_id, pool.account_id),
         "Liquidity pool Token Definition Account ID does not match PDA"
     );
 
     // TODO: return here
     // Verify that Pool Account is not active
-    let pool_account_data = if pool.account.data.is_empty() {
+    let pool_shard = pool.shard_of(self_account_id);
+    let pool_account_data = if pool_shard.is_empty() {
         PoolDefinition::default()
     } else {
-        PoolDefinition::try_from(&pool.account.data)
-            .expect("AMM program expects a valid Pool account")
+        PoolDefinition::try_from(pool_shard).expect("AMM program expects a valid Pool account")
     };
 
     assert!(
@@ -84,7 +82,7 @@ pub fn new_definition(
     let initial_lp = (token_a_amount.get() * token_b_amount.get()).isqrt();
 
     // Chain call for liquidity token (TokenLP definition -> User LP Holding)
-    let instruction = if pool.account.data.is_empty() {
+    let instruction = if pool_shard.is_empty() {
         token_core::Instruction::NewFungibleDefinition {
             name: String::from("LP Token"),
             total_supply: initial_lp,
@@ -97,6 +95,7 @@ pub fn new_definition(
 
     // Update pool account
     let pool_post_definition = PoolDefinition {
+        token_program_id,
         definition_token_a_id,
         definition_token_b_id,
         vault_a_id: vault_a.account_id,
@@ -115,13 +114,14 @@ pub fn new_definition(
         Data::from(&pool_post_definition),
     );
 
-    let token_program_id: AccountId = user_holding_a.account.program_owner;
-
     // Chain call for Token A (user_holding_a -> Vault_A)
     let vault_a_seed = compute_vault_pda_seed(pool.account_id, definition_token_a_id);
     let call_token_a = ChainedCall::new(
         token_program_id,
-        vec![user_holding_a.account_id, vault_a.account_id],
+        vec![
+            ProgramShardSelector::from(user_holding_a),
+            ProgramShardSelector::from(vault_a),
+        ],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_a_amount.into(),
         },
@@ -132,7 +132,10 @@ pub fn new_definition(
     let vault_b_seed = compute_vault_pda_seed(pool.account_id, definition_token_b_id);
     let call_token_b = ChainedCall::new(
         token_program_id,
-        vec![user_holding_b.account_id, vault_b.account_id],
+        vec![
+            ProgramShardSelector::from(user_holding_b),
+            ProgramShardSelector::from(vault_b),
+        ],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_b_amount.into(),
         },
@@ -142,7 +145,10 @@ pub fn new_definition(
     let pool_lp_pda_seed = compute_liquidity_token_pda_seed(pool.account_id);
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_definition_lp.account_id, user_holding_lp.account_id],
+        vec![
+            ProgramShardSelector::from(pool_definition_lp),
+            ProgramShardSelector::from(user_holding_lp),
+        ],
         &instruction,
     )
     .with_pda_seeds(vec![pool_lp_pda_seed]);

@@ -5,28 +5,30 @@ use lee_core::account::{AccountId, Data};
 use serde::{Deserialize, Serialize};
 
 /// Token Program Instruction.
+///
+/// All inputs select this program's shard. "Empty" and "initialized" refer to that shard.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Transfer tokens from sender to recipient.
     ///
     /// Required accounts:
     /// - Sender's Token Holding account (initialized, authorized),
-    /// - Recipient's Token Holding account (initialized or authorized and uninitialized).
+    /// - Recipient's Token Holding account (initialized or empty).
     Transfer { amount_to_transfer: u128 },
 
     /// Create a new fungible token definition without metadata.
     ///
     /// Required accounts:
-    /// - Token Definition account (uninitialized, authorized),
-    /// - Token Holding account (uninitialized, authorized).
+    /// - Token Definition account (empty),
+    /// - Token Holding account (empty).
     NewFungibleDefinition { name: String, total_supply: u128 },
 
     /// Create a new fungible or non-fungible token definition with metadata.
     ///
     /// Required accounts:
-    /// - Token Definition account (uninitialized, authorized),
-    /// - Token Holding account (uninitialized, authorized),
-    /// - Token Metadata account (uninitialized, authorized).
+    /// - Token Definition account (empty),
+    /// - Token Holding account (empty),
+    /// - Token Metadata account (empty).
     NewDefinitionWithMetadata {
         new_definition: NewTokenDefinition,
         /// Boxed to avoid large enum variant size.
@@ -36,14 +38,14 @@ pub enum Instruction {
     /// Initialize a token holding account for a given token definition.
     ///
     /// Required accounts:
-    /// - Token Definition account (initialized, any authorization),
-    /// - Token Holding account (uninitialized, authorized),
+    /// - Token Definition account (initialized),
+    /// - Token Holding account (empty),
     InitializeAccount,
 
     /// Burn tokens from the holder's account.
     ///
     /// Required accounts:
-    /// - Token Definition account (initialized, any authorization),
+    /// - Token Definition account (initialized),
     /// - Token Holding account (initialized, authorized).
     Burn { amount_to_burn: u128 },
 
@@ -51,14 +53,14 @@ pub enum Instruction {
     ///
     /// Required accounts:
     /// - Token Definition account (initialized, authorized),
-    /// - Token Holding account (uninitialized or authorized and initialized).
+    /// - Token Holding account (initialized or empty).
     Mint { amount_to_mint: u128 },
 
     /// Print a new NFT from the master copy.
     ///
     /// Required accounts:
-    /// - NFT Master Token Holding account (authorized),
-    /// - NFT Printed Copy Token Holding account (uninitialized, authorized).
+    /// - NFT Master Token Holding account (initialized, authorized),
+    /// - NFT Printed Copy Token Holding account (empty).
     PrintNft,
 }
 
