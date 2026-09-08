@@ -1,10 +1,9 @@
 //! Submits `Stake`/`UnstakeRequest` transactions for the self-join flow,
 //! signed with keys already held by a wallet at the given path.
 //!
-//! For `stake`, the funding account must already be owned by
-//! `authenticated_transfer` and hold at least `amount`. The ownership account
-//! should be fresh (or already backing the same sequencer key). Both must
-//! already exist in the wallet (e.g. via `wallet account new public`).
+//! For `stake`, the funding account must be able to sign and hold at least `amount`.
+//! The ownership account must have an empty stake shard or already back the same sequencer key.
+//! Both accounts must exist in the wallet (e.g. via `wallet account new public`).
 
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
@@ -26,7 +25,7 @@ struct Args {
 enum Command {
     /// Locks `amount` into a stake ownership account for `sequencer_key`.
     Stake {
-        /// Account funding the stake; must already be authenticated_transfer-owned.
+        /// Account funding the stake; must be able to sign for itself and hold at least `amount`.
         #[clap(long)]
         funding_account: AccountId,
         /// Stake ownership account for `sequencer_key`.
@@ -95,18 +94,22 @@ async fn main() -> Result<()> {
                 })
                 .context("Failed to serialize Stake instruction")?;
 
+            let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
             wallet
                 .send_pub_tx(
                     vec![
-                        AccountIdentity::Public(funding_account),
-                        AccountIdentity::Public(ownership_account),
+                        AccountIdentity::Public(funding_account).balance_only(),
+                        AccountIdentity::Public(ownership_account)
+                            .select_program_shard(sequencer_stake_program_id),
                         AccountIdentity::PublicNoSign(system_accounts::stake_funds_account_id(
                             &ownership_account,
-                        )),
-                        AccountIdentity::PublicNoSign(config_id),
+                        ))
+                        .balance_only(),
+                        AccountIdentity::PublicNoSign(config_id)
+                            .select_program_shard(sequencer_stake_program_id),
                     ],
                     instruction_data,
-                    programs::sequencer_stake().id().into(),
+                    sequencer_stake_program_id,
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit Stake transaction: {err:?}"))?
@@ -123,14 +126,17 @@ async fn main() -> Result<()> {
                 })
                 .context("Failed to serialize UnstakeRequest instruction")?;
 
+            let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
             wallet
                 .send_pub_tx(
                     vec![
-                        AccountIdentity::Public(ownership_account),
-                        AccountIdentity::PublicNoSign(config_id),
+                        AccountIdentity::Public(ownership_account)
+                            .select_program_shard(sequencer_stake_program_id),
+                        AccountIdentity::PublicNoSign(config_id)
+                            .select_program_shard(sequencer_stake_program_id),
                     ],
                     instruction_data,
-                    programs::sequencer_stake().id().into(),
+                    sequencer_stake_program_id,
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?

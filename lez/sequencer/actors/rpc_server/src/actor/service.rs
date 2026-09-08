@@ -16,7 +16,7 @@ use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,
-    HashType, MembershipProof, Nonce, ProgramId,
+    HashType, MembershipProof, Nonce, ProgramId, ProgramShardSelector,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
@@ -193,6 +193,17 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccountNonces { account_ids })
             .await
+            .map_err(map_infallible_error)
+    }
+
+    async fn get_account_view(
+        &self,
+        shard_selector: ProgramShardSelector,
+    ) -> Result<Account, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetAccountView { shard_selector })
+            .await
+            .map(|reply| reply.account)
             .map_err(map_infallible_error)
     }
 

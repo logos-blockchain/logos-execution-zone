@@ -112,7 +112,9 @@ pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig>
         warn!("sequencer_stake config account is absent");
         return None;
     };
-    let config = SequencerStakeConfig::from_bytes(account.data.as_ref());
+    let sequencer_stake_program_id: lee::AccountId = programs::sequencer_stake().id().into();
+    let config =
+        SequencerStakeConfig::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref());
     if config.is_none() {
         warn!("sequencer_stake config account did not decode as SequencerStakeConfig");
     }
@@ -129,7 +131,8 @@ pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::Cha
 /// whatever release is pending against it.
 fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<StakeRecord> {
     let account = state.get_account_by_id_ref(ownership_id)?;
-    StakeRecord::from_bytes(account.data.as_ref())
+    let sequencer_stake_program_id: lee::AccountId = programs::sequencer_stake().id().into();
+    StakeRecord::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref())
 }
 
 #[must_use]
