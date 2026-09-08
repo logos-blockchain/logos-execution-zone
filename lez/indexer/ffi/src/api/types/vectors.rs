@@ -1,11 +1,14 @@
 use crate::api::types::{
-    FfiAccountId, FfiNonce, FfiVec,
-    transaction::{FfiPrivateAction, FfiPublicAction, FfiSignaturePubKeyEntry, FfiTransaction},
+    FfiNonce, FfiVec,
+    transaction::{
+        FfiPrivateAction, FfiProgramShardSelector, FfiPublicAction, FfiSignaturePubKeyEntry,
+        FfiTransaction,
+    },
 };
 
 pub type FfiVecU8 = FfiVec<u8>;
 
-pub type FfiAccountIdList = FfiVec<FfiAccountId>;
+pub type FfiProgramShardSelectorList = FfiVec<FfiProgramShardSelector>;
 
 pub type FfiBlockBody = FfiVec<FfiTransaction>;
 

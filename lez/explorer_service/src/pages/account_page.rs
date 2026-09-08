@@ -1,6 +1,6 @@
 use std::str::FromStr as _;
 
-use indexer_service_protocol::{Account, AccountId};
+use indexer_service_protocol::{Account, AccountData, AccountId};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
@@ -87,18 +87,14 @@ pub fn AccountPage() -> impl IntoView {
                         .map(|result| match result {
                             Ok(acc) => {
                                 let Account {
-                                    program_owner,
-                                    balance,
-                                    data,
-                                    nonce,
-                                } = acc;
+                        nonce,
+                        data: AccountData { balance, shards },
+                    } = acc;
 
                                 let acc_id = account_id().expect("Account ID should be set");
                                 let account_id_str = acc_id.to_string();
-                                let program_id = program_owner.to_string();
                                 let balance_str = balance.to_string();
                                 let nonce_str = nonce.to_string();
-                                let data_len = data.0.len();
                                 view! {
                                     <div class="account-detail">
                                         <div class="page-header">
@@ -117,18 +113,41 @@ pub fn AccountPage() -> impl IntoView {
                                                     <span class="info-value">{balance_str}</span>
                                                 </div>
                                                 <div class="info-row">
-                                                    <span class="info-label">"Program Owner:"</span>
-                                                    <span class="info-value hash">{program_id}</span>
-                                                </div>
-                                                <div class="info-row">
                                                     <span class="info-label">"Nonce:"</span>
                                                     <span class="info-value">{nonce_str}</span>
                                                 </div>
-                                                <div class="info-row">
-                                                    <span class="info-label">"Data:"</span>
-                                                    <span class="info-value">{format!("{data_len} bytes")}</span>
-                                                </div>
                                             </div>
+                                        </div>
+
+                                        <div class="account-shards">
+                                            <h2>"Shards"</h2>
+                                            {if shards.is_empty() {
+                                                view! { <div class="no-shards">"No shards"</div> }
+                                                    .into_any()
+                                            } else {
+                                                view! {
+                                                    <div class="info-grid">
+                                                        {shards
+                                                            .into_iter()
+                                                            .map(|(program, data)| {
+                                                                let program_str = program.to_string();
+                                                                let data_len = data.0.len();
+                                                                view! {
+                                                                    <div class="info-row">
+                                                                        <span class="info-label hash">
+                                                                            {program_str}
+                                                                        </span>
+                                                                        <span class="info-value">
+                                                                            {format!("{data_len} bytes")}
+                                                                        </span>
+                                                                    </div>
+                                                                }
+                                                            })
+                                                            .collect::<Vec<_>>()}
+                                                    </div>
+                                                }
+                                                    .into_any()
+                                            }}
                                         </div>
 
                                         <div class="account-transactions">

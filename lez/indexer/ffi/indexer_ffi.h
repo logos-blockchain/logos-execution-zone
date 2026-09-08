@@ -142,13 +142,24 @@ typedef struct FfiProgramId {
 
 typedef struct FfiBytes32 FfiAccountId;
 
-typedef struct FfiVec_FfiAccountId {
-  FfiAccountId *entries;
+/**
+ * Selects an account's balance and optionally one program shard.
+ *
+ * `program_account_id` is used only when `has_program_account_id` is true.
+ */
+typedef struct FfiProgramShardSelector {
+  FfiAccountId account_id;
+  bool has_program_account_id;
+  FfiAccountId program_account_id;
+} FfiProgramShardSelector;
+
+typedef struct FfiVec_FfiProgramShardSelector {
+  struct FfiProgramShardSelector *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiAccountId;
+} FfiVec_FfiProgramShardSelector;
 
-typedef struct FfiVec_FfiAccountId FfiAccountIdList;
+typedef struct FfiVec_FfiProgramShardSelector FfiProgramShardSelectorList;
 
 /**
  * U128 - 16 bytes little endian.
@@ -189,7 +200,7 @@ typedef struct FfiFeeDeclaration {
 
 typedef struct FfiPublicMessage {
   struct FfiProgramId program_id;
-  FfiAccountIdList account_ids;
+  FfiProgramShardSelectorList shard_selectors;
   FfiNonceList nonces;
   FfiInstructionDataList instruction_data;
   bool has_fee;
@@ -216,38 +227,45 @@ typedef struct FfiPublicTransactionBody {
 } FfiPublicTransactionBody;
 
 /**
- * Account data structure - C-compatible version of lee Account.
- *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
- * byte arrays since C doesn't have native u128 support.
+ * One program's shard on an account.
  */
-typedef struct FfiAccount {
-  struct FfiBytes32 program_owner;
+typedef struct FfiShard {
+  struct FfiBytes32 program;
+  /**
+   * Pointer to shard data bytes.
+   */
+  uint8_t *data;
+  /**
+   * Length of shard data.
+   */
+  uintptr_t data_len;
+  /**
+   * Capacity of shard data.
+   */
+  uintptr_t data_cap;
+} FfiShard;
+
+/**
+ * An account's balance and program shards.
+ */
+typedef struct FfiAccountData {
   /**
    * Balance as little-endian [u8; 16].
    */
   struct FfiU128 balance;
   /**
-   * Pointer to account data bytes.
+   * Pointer to the account's shards.
    */
-  uint8_t *data;
+  struct FfiShard *shards;
   /**
-   * Length of account data.
+   * Number of shards.
    */
-  uintptr_t data_len;
-  /**
-   * Capacity of account data.
-   */
-  uintptr_t data_cap;
-  /**
-   * Nonce as little-endian [u8; 16].
-   */
-  struct FfiU128 nonce;
-} FfiAccount;
+  uintptr_t shards_len;
+} FfiAccountData;
 
 typedef struct FfiPublicAction {
   FfiAccountId account_id;
-  struct FfiAccount post_state;
+  struct FfiAccountData post;
 } FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction {
@@ -339,6 +357,31 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
   FfiBlockOpt *value;
   enum OperationStatus error;
 } PointerResult_FfiBlockOpt__OperationStatus;
+
+/**
+ * Account data structure - C-compatible version of lee Account.
+ *
+ * Note: `balance` and `nonce` are u128 values represented as little-endian
+ * byte arrays since C doesn't have native u128 support.
+ */
+typedef struct FfiAccount {
+  /**
+   * Balance as little-endian [u8; 16].
+   */
+  struct FfiU128 balance;
+  /**
+   * Nonce as little-endian [u8; 16].
+   */
+  struct FfiU128 nonce;
+  /**
+   * Pointer to the account's shards.
+   */
+  struct FfiShard *shards;
+  /**
+   * Number of shards.
+   */
+  uintptr_t shards_len;
+} FfiAccount;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -723,25 +766,12 @@ struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus query_events(cons
                                                                             const FfiSelector *selector);
 
 /**
- * Frees the resources associated with the given ffi account.
- *
- * Takes ownership of the whole allocation produced by a `query_*` call: the
- * outer `Box<FfiAccount>` (the `PointerResult.value` pointer) *and* its inner
- * data buffer. Passing the struct by value previously freed only the inner
- * buffer and leaked the outer box.
- *
- * # Arguments
- *
- * - `val`: The `*mut FfiAccount` returned in `PointerResult.value`.
- *
- * # Returns
- *
- * void.
+ * Frees an account, its shard array, and each shard's data buffer.
  *
  * # Safety
  *
- * The caller must ensure that:
- * - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
+ * `val` must be null or an unfreed `PointerResult.value` from an account query.
+ * Its shard array and data buffers must remain valid and owned by the account.
  */
 void free_ffi_account(struct FfiAccount *val);
 

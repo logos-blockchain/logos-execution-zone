@@ -6,14 +6,19 @@
     clippy::integer_division_remainder_used,
     reason = "Mock service uses intentional casts and format patterns for test data generation"
 )]
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+    time::Duration,
+};
 
 use indexer_service_protocol::{
-    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
-    CommitmentSetDigest, Data, EncryptedAccountData, EventRecord, EventSubscriptionFilter,
-    GetEventsFilter, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramId, PublicActionWithID, PublicKey,
-    PublicMessage, PublicTransaction, Selector, Signature, Transaction, ValidityWindow, WitnessSet,
+    Account, AccountData, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
+    Commitment, CommitmentSetDigest, Data, EncryptedAccountData, EventRecord,
+    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, IndexerSyncState,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramId,
+    ProgramShardSelector, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction,
+    Selector, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -109,12 +114,16 @@ impl MockIndexerService {
             accounts.insert(
                 *account_id,
                 Account {
-                    program_owner: AccountId {
-                        value: [i as u8; 32],
-                    },
-                    balance: 1000 * (i as u128 + 1),
-                    data: Data(vec![0xaa, 0xbb, 0xcc]),
                     nonce: i as u128,
+                    data: AccountData {
+                        balance: 1000 * (i as u128 + 1),
+                        shards: BTreeMap::from([(
+                            AccountId {
+                                value: [i as u8; 32],
+                            },
+                            Data(vec![0xaa, 0xbb, 0xcc]),
+                        )]),
+                    },
                 },
             );
         }
@@ -333,7 +342,11 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                 .transactions
                 .values()
                 .filter(|(tx, _)| match tx {
-                    Transaction::Public(pub_tx) => pub_tx.message.account_ids.contains(&account_id),
+                    Transaction::Public(pub_tx) => pub_tx
+                        .message
+                        .shard_selectors
+                        .iter()
+                        .any(|shard_selector| shard_selector.account_id == account_id),
                     Transaction::PrivacyPreserving(priv_tx) => priv_tx
                         .message
                         .public_actions
@@ -439,9 +452,15 @@ fn mock_public_tx(
         hash: tx_hash,
         message: PublicMessage {
             program_id: ProgramId([1_u32; 8]),
-            account_ids: vec![
-                account_ids[tx_idx as usize % account_ids.len()],
-                account_ids[(tx_idx as usize + 1) % account_ids.len()],
+            shard_selectors: vec![
+                ProgramShardSelector {
+                    account_id: account_ids[tx_idx as usize % account_ids.len()],
+                    program_account_id: None,
+                },
+                ProgramShardSelector {
+                    account_id: account_ids[(tx_idx as usize + 1) % account_ids.len()],
+                    program_account_id: None,
+                },
             ],
             nonces: vec![block_id as u128, (block_id + 1) as u128],
             instruction_data: vec![1, 2, 3, 4],
@@ -465,11 +484,12 @@ fn mock_privacy_preserving_tx(
         message: PrivacyPreservingMessage {
             public_actions: vec![PublicActionWithID {
                 account_id: account_ids[tx_idx as usize % account_ids.len()],
-                post_state: Account {
-                    program_owner: AccountId { value: [1_u8; 32] },
+                post: AccountData {
                     balance: 500,
-                    data: Data(vec![0xdd, 0xee]),
-                    nonce: block_id as u128,
+                    shards: BTreeMap::from([(
+                        AccountId { value: [1_u8; 32] },
+                        Data(vec![0xdd, 0xee]),
+                    )]),
                 },
             }],
             nonces: vec![block_id as u128],

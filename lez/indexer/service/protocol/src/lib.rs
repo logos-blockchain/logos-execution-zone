@@ -3,7 +3,7 @@
 //! Currently it mostly mimics types from `lee_core`, but it's important to have a separate crate
 //! to define a stable interface for the indexer service RPCs which evolves in its own way.
 
-use std::{fmt::Display, str::FromStr};
+use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
 use anyhow::anyhow;
 use base58::{FromBase58 as _, ToBase58 as _};
@@ -104,7 +104,17 @@ impl FromStr for ProgramId {
 }
 
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema,
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    SerializeDisplay,
+    DeserializeFromStr,
+    JsonSchema,
 )]
 #[schemars(with = "String", description = "base58-encoded account id")]
 pub struct AccountId {
@@ -138,10 +148,22 @@ impl FromStr for AccountId {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Account {
-    pub program_owner: AccountId,
-    pub balance: u128,
-    pub data: Data,
     pub nonce: Nonce,
+    pub data: AccountData,
+}
+
+/// An account's balance and program shards.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct AccountData {
+    pub balance: u128,
+    pub shards: BTreeMap<AccountId, Data>,
+}
+
+/// Selects an account's balance and optionally one program shard.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ProgramShardSelector {
+    pub account_id: AccountId,
+    pub program_account_id: Option<AccountId>,
 }
 
 pub type BlockId = u64;
@@ -225,7 +247,7 @@ pub struct PrivacyPreservingTransaction {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
     pub program_id: ProgramId,
-    pub account_ids: Vec<AccountId>,
+    pub shard_selectors: Vec<ProgramShardSelector>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
@@ -245,7 +267,7 @@ pub type InstructionData = Vec<u8>;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicActionWithID {
     pub account_id: AccountId,
-    pub post_state: Account,
+    pub post: AccountData,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
