@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use clock_core::ClockAccountData;
-use lee_core::account::{Account, AccountId};
+use lee_core::account::{Account, AccountData, AccountId};
 
 // TODO: Replace with a real minimum value for testnet
 /// Minimum summed stake for a Bedrock sequencer key to be a committee candidate.
@@ -30,8 +30,10 @@ pub fn faucet_account_id() -> AccountId {
 #[must_use]
 pub fn faucet_account() -> Account {
     Account {
-        program_owner: programs::authenticated_transfer().id().into(),
-        balance: u128::MAX,
+        data: AccountData {
+            balance: u128::MAX,
+            ..AccountData::default()
+        },
         ..Account::default()
     }
 }
@@ -42,11 +44,8 @@ pub fn bridge_account_id() -> AccountId {
 }
 
 #[must_use]
-pub fn bridge_account() -> Account {
-    Account {
-        program_owner: programs::authenticated_transfer().id().into(),
-        ..Account::default()
-    }
+pub fn fee_program_id() -> AccountId {
+    programs::fee().id().into()
 }
 
 #[must_use]
@@ -74,26 +73,16 @@ pub fn fee_account_ids() -> [AccountId; 3] {
     ]
 }
 
-#[must_use]
-pub fn fee_account() -> Account {
-    Account {
-        program_owner: programs::fee().id().into(),
-        ..Account::default()
-    }
-}
-
-/// The fee-state account at genesis: owned by the fee program, carrying the
-/// genesis market state in its data.
+/// The fee-state account initialized with the genesis market state.
 #[must_use]
 pub fn fee_state_account() -> Account {
-    Account {
-        program_owner: programs::fee().id().into(),
-        data: fee_core::state::FeeState::genesis()
+    Account::default().with_shard(
+        programs::fee().id().into(),
+        fee_core::state::FeeState::genesis()
             .to_bytes()
             .try_into()
             .expect("FeeState data should fit"),
-        ..Account::default()
-    }
+    )
 }
 
 #[must_use]
@@ -125,30 +114,28 @@ pub fn stake_funds_account_id(ownership_id: &AccountId) -> AccountId {
 pub fn sequencer_stake_config_account(
     channel_params: Option<sequencer_stake_core::ChannelParams>,
 ) -> Account {
-    Account {
-        program_owner: programs::sequencer_stake().id().into(),
-        data: sequencer_stake_core::SequencerStakeConfig {
+    Account::default().with_shard(
+        programs::sequencer_stake().id().into(),
+        sequencer_stake_core::SequencerStakeConfig {
             channel_params,
             entries: BTreeMap::new(),
         }
         .to_bytes()
         .try_into()
         .expect("sequencer stake config data should fit"),
-        ..Account::default()
-    }
+    )
 }
 
 #[must_use]
 pub fn clock_account() -> Account {
-    Account {
-        program_owner: programs::clock().id().into(),
-        data: ClockAccountData {
+    Account::default().with_shard(
+        programs::clock().id().into(),
+        ClockAccountData {
             block_id: 0,
             timestamp: 0,
         }
         .to_bytes()
         .try_into()
         .expect("Clock account data should fit"),
-        ..Account::default()
-    }
+    )
 }
