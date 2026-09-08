@@ -48,7 +48,7 @@ export EXAMPLE_PROGRAMS_BUILD_DIR=$(pwd)/target/riscv32im-risc0-zkvm-elf/docker
 
 # 3. Hello world example
 
-The Hello world program reads an arbitrary sequence of bytes from its instruction and appends them to the data field of the input account.
+The Hello world program appends its instruction bytes to its own shard on the input account.
 
 ## Navigate to the example directory
 All remaining commands must be run from:
@@ -109,127 +109,66 @@ Monitor the sequencer terminal to confirm execution.
 ## Inspect the updated account
 After the transaction is processed, check the new state:
 ```bash
-wallet account get --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
+wallet account get --raw --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
 ```
 Example output:
 ```json
 {
   "balance": 0,
-  "program_owner_b64": "o6C6/bbjDmN9VUC51McBpPrta8lxrx2X0iHExhX0yNU=",
-  "data_b64": "SG9sYSBtdW5kbyE=",
+  "shards": {
+    "<hello_world program account ID>": "486f6c61206d756e646f21"
+  },
   "nonce": 0
 }
 ```
-The `data_b64` field contains de data in Base64.
-Decode it:
+The `shards` map contains hex-encoded data, keyed by program account ID. Decode the Hello World shard:
 ```bash
-echo -n SG9sYSBtdW5kbyE= | base64 -d
+echo 486f6c61206d756e646f21 | xxd -r -p
 ```
 You should see `Hola mundo!`.
 
-# 5. Understanding the code in `hello_world.rs`.
-The Hello world example demonstrates the minimal structure of a LEE program.
-Its purpose is very simple: append the instruction bytes to the data field of a single account.
+Without `--raw`, the wallet prints each shard separately and decodes recognized token data as JSON.
 
-### What this program does in a nutshell
-1. Reads the program inputs
-  - The list of pre-state accounts (`pre_states`)
-  - The instruction bytes (`instruction`)
-  - The raw instruction data (used again when writing outputs)
-2. Checks that there is exactly one input account: this example operates on a single account, so it expects `pre_states` to contain exactly one entry.
-3. Builds the post-state: It clones the input account and appends the instruction bytes to its data field.
-4. Outputs the proposed state transition: `write_lee_outputs` emits:
-  - The original instruction data
-  - The original pre-states
-  - The new post-states
+# 5. Understanding `hello_world.rs`
 
-## Code walkthrough
-1. Reading inputs:
+[hello_world.rs](methods/guest/src/bin/hello_world.rs) handles an execution call with one input account. It appends the greeting to its own shard and leaves the balance unchanged:
+
 ```rust
-let (ProgramInput { pre_states, instruction: greeting }, instruction_data)
-    = read_lee_inputs::<Instruction>();
-```
-2. Extracting the single account:
-```rust
-let [pre_state] = pre_states
-    .try_into()
-    .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
-```
-3. Constructing the updated account post state
-```rust
-let mut this = pre_state.account.clone();
-let mut bytes = this.data.into_inner();
+let mut bytes = pre_state.shard_of(self_account_id).clone().into_inner();
 bytes.extend_from_slice(&greeting);
-this.data = bytes.try_into().expect("Data should fit within the allowed limits");
-```
-4. Emmiting the output
-```rust
-write_lee_outputs(instruction_data, vec![pre_state], vec![post_state]);
+let new_data = bytes.try_into().expect("Data should fit within the allowed limits");
+let post_state = AccountStateDiff::new(pre_state, BalanceDiff::Add(0), new_data);
 ```
 
-# 6. Understanding the runner script `run_hello_world.rs`
-The `run_hello_world.rs` example demonstrates how to construct and submit a public transaction that executes the `hello_world` program. Below is a breakdown of what the file does and how the pieces fit together.
+It returns the proposed change with:
 
-### 1. Wallet initialization
 ```rust
-let wallet_config = fetch_config().await.unwrap();
-let wallet_core = WalletCore::start_from_config_update_chain(wallet_config)
-    .await
-    .unwrap();
+ProgramOutput::new(
+    self_account_id,
+    caller_account_id,
+    instruction_data,
+    vec![post_state],
+)
+.write();
 ```
-The example loads the wallet configuration and initializes `WalletCore`.
-This gives access to:
-- the sequencer client,
-- the wallet’s account storage.
 
-### 2. Parsing inputs
-```rust
-let program_path = std::env::args_os().nth(1).unwrap().into_string().unwrap();
-let account_id: AccountId = std::env::args_os().nth(2).unwrap().into_string().unwrap().parse().unwrap();
-```
-The program expects two arguments:
-- Path to the guest binary
-- AccountId of the public account to operate on
+# 6. Understanding `run_hello_world.rs`
 
-This is the account the program will write data into.
-
-### 3. Loading the program bytecode
-```rust
-let bytecode: Vec<u8> = std::fs::read(program_path).unwrap();
-let program = Program::new(bytecode.into()).unwrap();
-```
-The Risc0 ELF is read from disk and wrapped in a Program object, which can be used to compute the program ID. The ID is used by the node to identify which program is invoked by the transaction.
-
-
-### 4. Preparing the instruction data
-```rust
-let greeting: Vec<u8> = vec![72,111,108,97,32,109,117,110,100,111,33];
-```
-The example hardcodes the ASCII bytes for `Hola mundo!`. These bytes are passed to the program as its “instruction,” which the Hello World program simply appends to the account’s data field.
-
-### 5. Creating the public transaction
+The [public runner](src/bin/run_hello_world.rs) loads the wallet and guest binary, selects the program's shard on the supplied account, and submits a public transaction:
 
 ```rust
-let nonces = vec![];
-let signing_keys = [];
-let message = Message::try_new(program.id(), vec![account_id], nonces, greeting).unwrap();
-let witness_set = WitnessSet::for_message(&message, &signing_keys);
+let message = Message::try_new(
+    program.id().into(),
+    vec![ProgramShardSelector::new(account_id, program.id().into())],
+    vec![],
+    greeting,
+)
+.unwrap();
+let witness_set = WitnessSet::for_message(&message, &[]);
 let tx = PublicTransaction::new(message, witness_set);
 ```
 
-A public transaction consists of:
-- a `Message`
-- a corresponding `WitnessSet`
-
-For this simple example, no signing or nonces are required. The transaction includes only the program ID, the target account, and the instruction bytes. The Hello World program allows this because it does not explicitly require authorization. In the next example, we’ll see how authorization requirements are enforced and how to construct a transaction that includes signatures and nonces.
-
-### 6. Submitting the transaction
-```rust
-let response = wallet_core.sequencer_client.send_tx_public(tx).await.unwrap();
-```
-The transaction is sent to the sequencer, which processes it and updates the public state accordingly.
-
-Once executed, you’ll be able to query the updated account to see the newly written "Hola mundo!" data.
+The runner supplies no signatures or nonces. Hello World writes its own shard without checking account authorization.
 
 # 7. Private execution of the Hello world example
 
@@ -270,7 +209,7 @@ cargo run --bin run_hello_world_private \
 > - This command may take a few minutes to complete. A ZK proof of the Hello world program execution and the privacy preserving circuit are being generated. Depending on the machine this can take from 30 seconds to 4 minutes.
 > - We are passing the same `hello_world.bin` binary as in the previous case with public executions. This is because the program is the same, it is the privacy context of the input account that's different.
 > - Because this program executes privately, the local machine runs the program and generate the proof of execution.
-> - The program will write data into the private account, which makes it the owner.
+> - The program writes to its own shard on the private account.
 
 ### Syncing the new private account values
 The `run_hello_world` script submitted a transaction and it was (hopefully) accepted by the node. On chain there is now a commitment to the new private account values, and the account data is stored encrypted. However, the local client hasn’t updated its private state yet. That’s why, if you try to get the private account values now, it still reads the old values from local storage instead.
@@ -290,67 +229,52 @@ wallet account sync-private
 
 After this completes, running
 ```bash
-wallet account get --account-id Private/7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
+wallet account get --raw --account-id Private/7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
 ```
 should show something similar to
 ```json
 {
-  "balance":0,
-  "program_owner_b64":"dWgtNRixwjC0C8aA0NL0Iuss3Q26Dw6ECk7bzExW4bI=",
-  "data_b64":"SG9sYSBtdW5kbyE=",
-  "nonce":236788677072686551559312843688143377080
+  "balance": 0,
+  "shards": {
+    "<hello_world program account ID>": "486f6c61206d756e646f21"
+  },
+  "nonce": 236788677072686551559312843688143377080
 }
 ```
 
 ## The `run_hello_world_private.rs` runner
-This example extends the public `run_hello_world.rs` flow by constructing a privacy-preserving transaction instead of a public one.
-Both runners load a guest program, prepare a transaction, and submit it. But the private version handles encrypted account data, nullifiers, ephemeral keys, and zk proofs.
 
-Unlike the public version, `run_hello_world_private.rs` must:
-- prepare the private account pre-state (nullifier keys, membership proof, encrypted values)
-- derive a shared secret to encrypt the post-state
-- compute the correct visibility mask (initialized vs. uninitialized private account)
-- execute the guest program inside the zkVM and produce a proof
-- build a PrivacyPreservingTransaction composed of:
-- a Message encoding commitments + encrypted post-state
-- a WitnessSet embedding the zk proof
+The [private runner](src/bin/run_hello_world_private.rs) selects the same program shard. The wallet prepares the private account witnesses, executes the program, generates proofs, and submits the transaction:
 
-Luckily all that complexity is hidden behind the `wallet_core.send_privacy_preserving_tx` function:
 ```rust
-    let accounts = vec![AccountIdentity::PrivateOwned(account_id)];
+let accounts = vec![
+    AccountIdentity::PrivateOwned(account_id).select_program_shard(program.id().into()),
+];
 
-    // Construct and submit the privacy-preserving transaction
-    wallet_core
-        .send_privacy_preserving_tx(
-            accounts,
-            &Program::serialize_instruction(greeting).unwrap(),
-            &program.into(),
-        )
-        .await
-        .unwrap();
+wallet_core
+    .send_privacy_preserving_tx(
+        accounts,
+        Program::serialize_instruction(greeting).unwrap(),
+        &program.into(),
+    )
+    .await
+    .unwrap();
 ```
-Check the `run_hello_world_private.rs` file to see how it is used.
 
 # 8. Account authorization mechanism
-The Hello world example does not enforce any authorization on the input account. This means any user can execute it on any account, regardless of ownership.
-LEE provides a mechanism for programs to enforce proper authorization before an execution can succeed. For both private and public accounts, the authorization is checked against knowledge of a secret key, yet the check is different:
-- Public accounts: the transaction is signed with the account’s signing key.
-- Private accounts: the circuit verifies knowledge of the account’s authorization secret key (`ask`), the key from which the account’s nullifier secret key is derived.
+The Hello World program does not check `is_authorized` before writing its shard.
+For regular accounts, authorization comes from:
 
-From the program development perspective it is very simple: input accounts come with a flag indicating whether they has been properly authorized. And so, the only difference between the program `hello_world.rs` and `hello_world_with_authorization.rs` is in the lines
+- a transaction signature for a public account;
+- knowledge of the authorization secret key (`ask`) for a private account.
+
+Programs receive the result in `AccountInput::is_authorized`. The authorized Hello World example checks it before writing:
 
 ```rust
-    // #### Difference with `hello_world` example here:
-    // Fail if the input account is not authorized
-    // The `is_authorized` field will be correctly populated or verified by the system if
-    // authorization is provided.
-    if !pre_state.is_authorized {
-        panic!("Missing required authorization");
-    }
-    // ####
+if !pre_state.is_authorized {
+    panic!("Missing required authorization");
+}
 ```
-
-Which just checks the `is_authorized` flag and fails if it is set to false.
 
 # 9. Public execution of the Hello world with authorization example
 The workflow to execute it publicly is very similar:
@@ -361,7 +285,7 @@ wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_authorization
 ```
 
 ### Create a new public account
-Our previous public account is already owned by the simple Hello world program. So we need a new one to work with this other version of the hello program
+Create a new account for this example. You can also reuse the previous account: each program writes its own shard.
 ```bash
 wallet account new public
 ```
@@ -380,34 +304,12 @@ cargo run --bin run_hello_world_with_authorization \
 ```
 
 # 10. Understanding `run_hello_world_with_authorization.rs`
-From the runner script perspective, the only difference is that the signing keys are passed to the `WitnessSet` constructor for it to sign it. You  can see this in the following parts of the code:
 
-1. Loading the sigining keys from the wallet storage
-```rust
-    // Load signing keys to provide authorization
-    let signing_key = wallet_core
-        .storage
-        .user_data
-        .get_pub_account_signing_key(&account_id)
-        .expect("Input account should be a self owned public account");
-```
-2. Fetching the current public nonce.
-```rust
-    // Construct the public transaction
-    // Query the current nonce from the node
-    let nonces = wallet_core
-        .get_accounts_nonces(vec![account_id])
-        .await
-        .expect("Node should be reachable to query account data");
-```
-2. Instantiate the witness set using the signing keys
-```rust
-    let signing_keys = [signing_key];
-    let message = Message::try_new(program.id(), vec![account_id], nonces, greeting).unwrap();
-    // Pass the signing key to sign the message. This will be used by the node
-    // to flag the pre_state as `is_authorized` when executing the program
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
-```
+The [authorized runner](src/bin/run_hello_world_with_authorization.rs) selects the program's shard as before. It also:
+
+- loads the account's signing key;
+- includes the account's current nonce in the message;
+- passes the key to `WitnessSet::for_message` to sign the transaction.
 
 ## Seeing the mechanism in action
 If everything went well you won't notice any difference with the first Hello world, because the runner takes care of signing the transaction to provide authorization and the program just succeeds.
@@ -428,9 +330,9 @@ You should see something like the following **on the node logs**.
 # 11. Public and private account interaction example
 Previous examples only operated on public or private accounts independently. Those minimal programs were useful to introduce basic concepts, but they couldn't demonstrate how different types of accounts interact within a single program invocation.
 The "Hello world with move function" introduces two operations that require one or two input accounts:
-- `write`: appends arbitrary bytes to a single account. This is what we already had.
-- `move_data`: reads all bytes from one account, clears it, and appends those bytes to another account.
-Because these operations may involve multiple accounts, we'll see how public and private accounts can participate together in one execution. It highlights how ownership checks work, when writing data takes an account over, and how multiple post-states are emitted when several accounts are modified.
+- `write`: appends bytes to the program's shard on one account.
+- `move_data`: moves all bytes from the program's shard on one account to its shard on another.
+This example moves data between the program's shards on public and private accounts.
 
 > [!NOTE]
 > The program logic is completely agnostic to whether input accounts are public or private. It always executes the same way.
@@ -490,9 +392,9 @@ wallet account sync-private
 wallet account get --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
 ```
 
-and check the (base64 encoded) data values are `mundo!` and `Hola` respectively.
+and check that the shard data decodes to `mundo!` and `Hola` respectively.
 
-Now we can execute the move function to clear the data on the public account and move it to the private account.
+Now move the program's shard data from the public account to the private account.
 
 ```bash
 cargo run --bin run_hello_world_with_move_function \
@@ -500,7 +402,7 @@ cargo run --bin run_hello_world_with_move_function \
     move-data-public-to-private 95iNQMbmxMRY6jULiHYkCzCkYKPEuysvBh5kEHayDxLs 8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
 ```
 
-After succeeding, re run the get and sync commands and check that the public account has empty data and the private account data is `Holamundo!`.
+After succeeding, repeat the get and sync commands. The program's shard should be empty on the public account and contain `Holamundo!` on the private account.
 
 # 12. Program composition: tail calls
 Programs can chain calls to other programs when they return. This is the tail call or chained call mechanism. It is used by programs that depend on other programs.
@@ -516,7 +418,7 @@ As before, let's start by deploying the program
 wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/simple_tail_call.bin
 ```
 
-We'll use the first public account of this tutorial. The one with account id `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`. This account is already owned by the Hello world program and its data reads `Hola mundo!`.
+We'll reuse public account `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9`; its Hello World shard contains `Hola mundo!`.
 
 Let's run the tail call program
 
@@ -529,23 +431,24 @@ cargo run --bin run_hello_world_through_tail_call \
 Once the transaction is processed, query the account values with:
 
 ```bash
-wallet account get --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
+wallet account get --raw --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
 ```
 
 You should se an output similar to
 
 ```json
 {
-  "balance":0,
-  "program_owner_b64":"fpnW4tFY9N6llZcBHaXRwu7xe+7WZnZX9RWzhwNbk1o=",
-  "data_b64":"SG9sYSBtdW5kbyFIZWxsbyBmcm9tIHRhaWwgY2FsbA==",
-  "nonce":0
+  "balance": 0,
+  "shards": {
+    "<hello_world program account ID>": "486f6c61206d756e646f2148656c6c6f2066726f6d207461696c2063616c6c"
+  },
+  "nonce": 0
 }
 ```
 
-Decoding the (base64 encoded) data
+Decoding the data
 ```bash
-echo -n SG9sYSBtdW5kbyFIZWxsbyBmcm9tIHRhaWwgY2FsbA== | base64 -d
+echo 486f6c61206d756e646f2148656c6c6f2066726f6d207461696c2063616c6c | xxd -r -p
 ```
 
 Output:
@@ -556,7 +459,7 @@ Hola mundo!Hello from tail call
 There's support for tail calls in privacy preserving executions too. The `run_hello_world_through_tail_call_private.rs` runner walks you through the process of invoking such an execution.
 The only difference is that, since the execution is local, the runner will need both programs: the `simple_tail_call` and it's dependency `hello_world`.
 
-Let's use our existing private account with id `8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU`. This one is already owned by the `hello_world` program.
+Use the private account `8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU` created in the previous example. This call writes its `hello_world` shard.
 
 You can test the privacy tail calls with
 ```bash
@@ -577,35 +480,20 @@ wallet account get --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEV
 
 # 13. Program derived accounts: authorizing accounts through tail calls
 
-## Digression: account authority vs account program ownership
+## Program shards and account authorization
 
-In LEE there are two distinct concepts that control who can modify an account:
-**Program Ownership:** Each account has a field: `program_owner: ProgramId`.
-This indicates which program is allowed to update the account’s state during execution.
-- If a program is the program_owner of an account, it can freely mutate its fields.
-- If the account is unowned (`program_owner = DEFAULT_PROGRAM_ID`), a program that writes data to it becomes its owner.
-- If a program is not the owner and the account is already owned, any attempt to modify its data will cause the transition to fail.
-Program ownership is about mutation rights during program execution.
+Each account has a balance, a nonce, and program shards. A program can modify its own shard on any account. It can read another program's shard when that shard is selected as an input.
 
-**Account authority**: Independent from program ownership, each account also has an authority. The entity that is allowed to set: `is_authorized = true`. This flag indicates that the account has been authorized for use in a transaction.
-Who can act as authority?
-- User-defined accounts: The user is the authority. They can mark an account as authorized by:
-  - Signing the transaction (public accounts)
-  - Providing a valid nullifiers secret key ownership proof (private accounts)
-- Program derived accounts: Programs are automatically the authority of a dedicated namespace of public accounts.
+A `ProgramShardSelector` identifies an account and optionally a program shard. Omitting the program selects the balance without shard data.
 
-Each program owns a non-overlapping space of 2^256 **public** account IDs. They do not overlap with:
-- User accounts (public or private)
-- Other program’s PDAs
+Account authorization allows a program to debit the balance. Programs may also require authorization before changing their own shard.
 
-> [!NOTE]
-> Currently PDAs are restricted to the public state.
+Regular public accounts are authorized by a signature; regular private accounts by knowledge of `ask`.
 
-A program can be the authority of an account owned by another program, which is the most common case.
-During a chained call, a program can mark its PDA accounts as `is_authorized=true` without requiring any user signatures or nullifier secret keys. This enables programs to safely authorize accounts during program composition. Importantly, these flags can only be set to true for PDA accounts through an execution of the program that is their authority. No user and no other program can execute any transition that requires authorization of PDA accounts belonging to a different program.
+Public and private PDAs are bound to an authority account and a seed. During a chained call, the authority program supplies the seed to authorize its PDAs for that call and its descendants.
 
 ## Running the example
-This tutorial includes an example of PDA usage in `methods/guest/src/bin/tail_call_with_pda.rs.`. That program’s sole purpose is to forward one of its own PDA accounts, an account for which it is the authority, to the "Hello World with authorization" program via a chained call. The Hello World program will then write to the account and become its program owner, but the `tail_call_with_pda` program remains the authority. This means it is still the only entity capable of marking that account as `is_authorized=true`.
+[tail_call_with_pda.rs](methods/guest/src/bin/tail_call_with_pda.rs) calls Hello World with Authorization on its PDA, passing the seed to authorize the account. The callee writes its own shard; `tail_call_with_pda` remains the PDA's authority.
 
 Deploy the program:
 ```bash
@@ -628,16 +516,17 @@ The program derived account ID is: 3tfTPPuxj3eSE1cLVuNBEk8eSHzpnYS1oqEdeH3Nfsks
 Then check the status of that account
 
 ```bash
-wallet account get --account-id Public/3tfTPPuxj3eSE1cLVuNBEk8eSHzpnYS1oqEdeH3Nfsks
+wallet account get --raw --account-id Public/3tfTPPuxj3eSE1cLVuNBEk8eSHzpnYS1oqEdeH3Nfsks
 ```
 
 Output:
-```bash
+```json
 {
-  "balance":0,
-  "program_owner_b64":"HZXHYRaKf6YusVo8x00/B15uyY5sGsJb1bzH4KlCY5g=",
-  "data_b64": "SGVsbG8gZnJvbSB0YWlsIGNhbGwgd2l0aCBQcm9ncmFtIERlcml2ZWQgQWNjb3VudCBJRA==",
-  "nonce":0"
+  "balance": 0,
+  "shards": {
+    "<hello_world_with_authorization program account ID>": "48656c6c6f2066726f6d207461696c2063616c6c20776974682050726f6772616d2044657269766564204163636f756e74204944"
+  },
+  "nonce": 0
 }
 ```
 
