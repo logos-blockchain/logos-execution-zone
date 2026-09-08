@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
-use sequencer_core::block_publisher::ED25519_SECRET_KEY_SIZE;
+use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_service::{GenesisAction, SequencerHandle};
 use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
 use sequencer_storage_actor::{StorageActor, protocol::DbDump};
@@ -33,7 +33,7 @@ pub struct SequencerSetup {
     channel_id: ChannelId,
     genesis_transactions: Option<Vec<GenesisAction>>,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
-    bedrock_signing_key: Option<[u8; ED25519_SECRET_KEY_SIZE]>,
+    bedrock_signing_key: Option<UnsecuredEd25519Key>,
     gossip: Option<sequencer_core::config::GossipConfig>,
 }
 
@@ -87,7 +87,7 @@ impl SequencerSetup {
     /// before boot, so tests know the sequencer's public key in advance (e.g.
     /// to accredit a committee member that has not started yet).
     #[must_use]
-    pub const fn with_bedrock_signing_key(mut self, key: [u8; ED25519_SECRET_KEY_SIZE]) -> Self {
+    pub fn with_bedrock_signing_key(mut self, key: UnsecuredEd25519Key) -> Self {
         self.bedrock_signing_key = Some(key);
         self
     }
@@ -134,13 +134,15 @@ impl SequencerSetup {
 
         debug!("Using sequencer home at {}", home.display());
 
-        let bedrock_signing_key = bedrock_signing_key.or_else(|| {
+        let bedrock_signing_key = bedrock_signing_key.clone().or_else(|| {
             genesis_transactions
                 .is_none()
-                .then_some(config::SEQUENCER_BEDROCK_SIGNING_KEY)
+                .then_some(UnsecuredEd25519Key::from_bytes(
+                    &config::SEQUENCER_BEDROCK_SIGNING_KEY,
+                ))
         });
-        if let Some(key_bytes) = bedrock_signing_key {
-            std::fs::write(home.join("bedrock_signing_key"), key_bytes)
+        if let Some(key) = &bedrock_signing_key {
+            std::fs::write(home.join("bedrock_signing_key"), key.as_bytes())
                 .context("Failed to write pre-generated bedrock signing key")?;
         }
         // Pinned like the bedrock key: the prebuilt dump stakes this account.

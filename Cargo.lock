@@ -2540,7 +2540,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -2755,7 +2755,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3161,7 +3161,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3792,9 +3792,9 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "glob"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "globset"
@@ -4404,7 +4404,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "tokio",
  "tower-service",
  "tracing",
@@ -4847,17 +4847,17 @@ dependencies = [
  "indexer_service",
  "indexer_service_protocol",
  "indexer_service_rpc",
+ "kameo",
  "key_protocol",
  "lee",
  "lee_core",
  "log",
- "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
- "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
  "ping_core",
  "program_loader_core",
  "programs",
+ "sequencer_bedrock_actor",
  "sequencer_core",
  "sequencer_service",
  "sequencer_service_rpc",
@@ -8405,7 +8405,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9739,7 +9739,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -9777,7 +9777,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "tracing",
  "windows-sys 0.59.0",
 ]
@@ -10804,7 +10804,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11103,6 +11103,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "sequencer_actors_common"
+version = "0.1.0"
+dependencies = [
+ "kameo",
+]
+
+[[package]]
+name = "sequencer_bedrock_actor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "common",
+ "futures",
+ "kameo",
+ "kameo_actors",
+ "log",
+ "logos-blockchain-common-http-client",
+ "logos-blockchain-core",
+ "logos-blockchain-key-management-system-service",
+ "logos-blockchain-zone-sdk",
+ "mockall",
+ "sequencer_actors_common",
+ "sequencer_stake_core",
+ "sequencer_storage_actor",
+ "system_accounts",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "sequencer_core"
 version = "0.1.0"
 dependencies = [
@@ -11128,7 +11160,6 @@ dependencies = [
  "libp2p",
  "log",
  "logos-blockchain-core",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
  "mempool",
@@ -11137,6 +11168,7 @@ dependencies = [
  "program_loader_core",
  "programs",
  "rand 0.8.6",
+ "sequencer_bedrock_actor",
  "sequencer_core_metrics",
  "sequencer_stake_core",
  "sequencer_storage_actor",
@@ -11151,7 +11183,6 @@ dependencies = [
  "tokio",
  "tokio-retry",
  "tokio-util",
- "trait-variant",
  "url",
 ]
 
@@ -11170,30 +11201,41 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "borsh",
+ "bridge_core",
  "bytesize",
+ "chain_state",
  "common",
+ "cross_zone",
+ "cross_zone_inbox_core",
  "env_logger",
+ "faucet_core",
+ "fee_core",
  "futures",
  "kameo",
  "lee",
  "lee_core",
  "log",
+ "logos-blockchain-core",
+ "logos-blockchain-zone-sdk",
  "mempool",
  "mockall",
  "num-bigint 0.4.6",
  "num-traits",
+ "ping_core",
  "programs",
+ "sequencer_actors_common",
+ "sequencer_bedrock_actor",
  "sequencer_core",
  "sequencer_executor_actor_metrics",
  "sequencer_stake_core",
  "sequencer_storage_actor",
+ "serde_json",
  "system_accounts",
  "tempfile",
  "test_programs",
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -11240,6 +11282,7 @@ dependencies = [
  "clap",
  "env_logger",
  "futures",
+ "glob",
  "hex",
  "kameo",
  "kameo_actors",
@@ -11247,6 +11290,7 @@ dependencies = [
  "log",
  "metrics-exporter-prometheus",
  "programs",
+ "sequencer_bedrock_actor",
  "sequencer_core",
  "sequencer_executor_actor",
  "sequencer_rpc_server_actor",
@@ -11314,6 +11358,7 @@ dependencies = [
  "mockall",
  "num-traits",
  "rocksdb",
+ "sequencer_actors_common",
  "strum 0.28.0",
  "tempfile",
  "thiserror 2.0.18",
@@ -12232,10 +12277,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12323,6 +12368,7 @@ dependencies = [
  "indexer_service",
  "jsonrpsee",
  "kameo",
+ "kameo_actors",
  "key_protocol",
  "lee",
  "lee_core",
@@ -12330,6 +12376,7 @@ dependencies = [
  "logos-blockchain-key-management-system-service",
  "num-bigint 0.4.6",
  "programs",
+ "sequencer_bedrock_actor",
  "sequencer_core",
  "sequencer_service",
  "sequencer_service_rpc",
@@ -13238,17 +13285,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "trait-variant"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b19a4867a870f6edc4c283f2b455804b1879c0baf0e642f26b03ed8ee262d9d3"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "triomphe"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13973,7 +14009,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

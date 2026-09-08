@@ -140,6 +140,7 @@ pub fn config_is_readable(state: &lee::V03State) -> bool {
 #[cfg(test)]
 mod tests {
     use lee_core::account::Account;
+    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
     use sequencer_stake_core::SequencerEntry;
 
     use super::*;
@@ -243,9 +244,7 @@ mod tests {
 
     /// A distinct valid key per `tag`.
     fn test_key(tag: u8) -> SequencerKey {
-        let bytes = crate::block_publisher::Ed25519Key::from_bytes(&[tag; 32])
-            .public_key()
-            .to_bytes();
+        let bytes = Ed25519Key::from_bytes(&[tag; 32]).public_key().to_bytes();
         SequencerKey::new(bytes).expect("a derived public key is a curve point")
     }
 

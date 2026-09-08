@@ -20,12 +20,14 @@ actor = [
   "dep:zstd",
 ]
 # Adds mock actor implementation.
-mock = ["dep:mockall"]
+mock = ["sequencer_actors_common/mock", "dep:mockall"]
+test-utils = []
 
 [dependencies]
 lee_core.workspace = true
 lee.workspace = true
 common.workspace = true
+sequencer_actors_common.workspace = true
 
 kameo.workspace = true
 thiserror.workspace = true

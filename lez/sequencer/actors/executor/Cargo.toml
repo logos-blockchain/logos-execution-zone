@@ -16,17 +16,18 @@ actor = [
   "dep:mempool",
 
   "dep:tokio",
-  "dep:tokio-util",
   "dep:futures",
   "dep:log",
 ]
 # Adds mock actor implementation.
-mock = ["dep:mockall"]
+mock = ["sequencer_actors_common/mock", "dep:mockall"]
 
 [dependencies]
 common.workspace = true
 lee_core.workspace = true
+sequencer_actors_common.workspace = true
 sequencer_storage_actor.workspace = true
+sequencer_bedrock_actor.workspace = true
 sequencer_executor_actor_metrics = { workspace = true, features = [
   "record",
 ], optional = true }
@@ -39,15 +40,24 @@ anyhow.workspace = true
 thiserror.workspace = true
 num-traits.workspace = true
 tokio = { workspace = true, optional = true }
-tokio-util = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }
-sequencer_core = { workspace = true, features = ["mock"] }
 sequencer_storage_actor = { workspace = true, features = ["mock"] }
+sequencer_bedrock_actor = { workspace = true, features = ["mock"] }
+bridge_core.workspace = true
+chain_state.workspace = true
+cross_zone = { workspace = true, features = ["test-utils"] }
+faucet_core.workspace = true
+cross_zone_inbox_core.workspace = true
+fee_core.workspace = true
+ping_core.workspace = true
+logos-blockchain-core.workspace = true
+logos-blockchain-zone-sdk.workspace = true
+serde_json.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
 programs.workspace = true

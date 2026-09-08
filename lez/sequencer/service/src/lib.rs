@@ -2,8 +2,13 @@ use std::{future::Future, net::SocketAddr};
 
 use anyhow::{Context as _, Result};
 use futures::never::Never;
-use kameo::actor::Spawn as _;
-use kameo_actors::scheduler::{Scheduler, SetInterval};
+use glob::Pattern;
+use kameo::actor::{ActorRef, Spawn as _};
+use kameo_actors::{
+    DeliveryStrategy,
+    broker::Broker,
+    scheduler::{Scheduler, SetInterval},
+};
 use log::info;
 pub use sequencer_core::config::*;
 use sequencer_core::load_or_create_signing_key;
@@ -17,10 +22,10 @@ use crate::actor_handle::ActorHandle;
 mod actor_handle;
 
 #[cfg(not(feature = "standalone"))]
-type BlockPublisher = sequencer_core::block_publisher::ZoneSdkPublisher;
+type BedrockActor = sequencer_bedrock_actor::BedrockActor;
 
 #[cfg(feature = "standalone")]
-type BlockPublisher = sequencer_core::mock::MockBlockPublisher;
+type BedrockActor = sequencer_bedrock_actor::mock::MockBedrockActor;
 
 /// Handle to manage the sequencer and its tasks.
 ///
@@ -28,8 +33,10 @@ type BlockPublisher = sequencer_core::mock::MockBlockPublisher;
 pub struct SequencerHandle {
     // NOTE: Order of fields matters as it affects drop order.
     scheduler: ActorHandle<Scheduler>,
+    bedrock_broker: ActorHandle<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
     rpc_server: ActorHandle<RpcServerActor>,
-    executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
+    executor: ActorHandle<ExecutorActor<StorageActor, BedrockActor>>,
+    bedrock: ActorHandle<BedrockActor>,
     storage: ActorHandle<StorageActor>,
     addr: SocketAddr,
     /// Held for its lifetime: dropping it stops the gossip drive task.
@@ -38,31 +45,15 @@ pub struct SequencerHandle {
 }
 
 impl SequencerHandle {
-    const fn new(
-        scheduler: ActorHandle<Scheduler>,
-        rpc_server: ActorHandle<RpcServerActor>,
-        executor: ActorHandle<ExecutorActor<StorageActor, BlockPublisher>>,
-        storage: ActorHandle<StorageActor>,
-        addr: SocketAddr,
-        gossip: Option<sequencer_core::gossip::GossipNetwork>,
-    ) -> Self {
-        Self {
-            scheduler,
-            rpc_server,
-            executor,
-            storage,
-            addr,
-            gossip,
-        }
-    }
-
     /// Stops the sequencer and waits for every part of it to be gone.
     /// executor itself.
     pub async fn shutdown(self) {
         let Self {
             scheduler,
+            bedrock_broker,
             rpc_server,
             executor,
+            bedrock,
             storage,
             addr: _,
             gossip: _,
@@ -70,8 +61,10 @@ impl SequencerHandle {
 
         // NOTE: Order of shutdown matters. Make sure it follows the order of fields in the struct.
         scheduler.shutdown().await;
+        bedrock_broker.shutdown().await;
         rpc_server.shutdown().await;
         executor.shutdown().await;
+        bedrock.shutdown().await;
         storage.shutdown().await;
     }
 
@@ -82,22 +75,30 @@ impl SequencerHandle {
     )]
     pub async fn failed(&self) -> Result<Never> {
         let Self {
-            executor,
-            rpc_server,
             scheduler,
+            bedrock_broker,
+            rpc_server,
+            executor,
+            bedrock,
             storage,
             addr: _,
             gossip: _,
         } = self;
 
         select! {
-            Err(err) = executor.failed() => {
+            Err(err) = scheduler.failed() => {
+                Err(err)
+            }
+            Err(err) = bedrock_broker.failed() => {
                 Err(err)
             }
             Err(err) = rpc_server.failed() => {
                 Err(err)
             }
-            Err(err) = scheduler.failed() => {
+            Err(err) = executor.failed() => {
+                Err(err)
+            }
+            Err(err) = bedrock.failed() => {
                 Err(err)
             }
             Err(err) = storage.failed() => {
@@ -113,17 +114,21 @@ impl SequencerHandle {
     #[must_use]
     pub fn is_healthy(&self) -> bool {
         let Self {
-            executor,
-            rpc_server,
             scheduler,
+            bedrock_broker,
+            rpc_server,
+            executor,
+            bedrock,
             storage,
             addr: _,
             gossip: _,
         } = self;
 
-        executor.is_healthy()
+        scheduler.is_healthy()
+            && bedrock_broker.is_healthy()
             && rpc_server.is_healthy()
-            && scheduler.is_healthy()
+            && executor.is_healthy()
+            && bedrock.is_healthy()
             && storage.is_healthy()
     }
 
@@ -159,12 +164,32 @@ pub fn run(
         let sequencer_home = config.home.clone();
 
         let storage =
-            StorageActor::new(&config.db_path()).context("Failed to initialize Storage Actor")?;
+            StorageActor::new(&config.db_path()).context("Failed to set up Storage Actor")?;
         let storage_ref = StorageActor::spawn(storage);
         info!("Storage Actor spawned");
 
-        let executor = ExecutorActor::new(config, storage_ref.clone()).await;
+        let bedrock_broker = Broker::new(DeliveryStrategy::Guaranteed);
+        let bedrock_broker_ref = Broker::spawn(bedrock_broker);
+        info!("Bedrock Broker Actor spawned");
+
+        let bedrock = setup_bedrock_actor(&config, storage_ref.clone(), bedrock_broker_ref.clone())
+            .await
+            .context("Failed to set up Bedrock Actor")?;
+        let bedrock_ref = BedrockActor::spawn(bedrock);
+        info!("Bedrock Actor spawned");
+
+        let topic = Pattern::new(&format!("channel/{}/*", config.bedrock_config.channel_id))
+            .expect("Valid pattern");
+        let executor = ExecutorActor::new(config, storage_ref.clone(), bedrock_ref.clone())
+            .await
+            .context("Failed to set up Executor Actor")?;
         let executor_ref = ExecutorActor::spawn(executor);
+        bedrock_broker_ref
+            .tell(kameo_actors::broker::Subscribe {
+                topic,
+                recipient: executor_ref.clone().recipient(),
+            })
+            .await?;
         info!("Executor Actor spawned");
 
         // TODO: Should be a separate actor
@@ -237,13 +262,96 @@ pub fn run(
             .await?;
         info!("Block production scheduler started");
 
-        Ok(SequencerHandle::new(
-            ActorHandle::new(scheduler_ref),
-            ActorHandle::new(rpc_server_ref),
-            ActorHandle::new(executor_ref),
-            ActorHandle::new(storage_ref),
+        Ok(SequencerHandle {
+            scheduler: ActorHandle::new(scheduler_ref),
+            bedrock_broker: ActorHandle::new(bedrock_broker_ref),
+            rpc_server: ActorHandle::new(rpc_server_ref),
+            executor: ActorHandle::new(executor_ref),
+            bedrock: ActorHandle::new(bedrock_ref),
+            storage: ActorHandle::new(storage_ref),
             addr,
-            gossip_network,
-        ))
+            gossip: gossip_network,
+        })
     }
+}
+
+#[cfg(not(feature = "standalone"))]
+async fn setup_bedrock_actor(
+    config: &SequencerConfig,
+    storage_ref: ActorRef<StorageActor>,
+    bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
+) -> sequencer_bedrock_actor::Result<BedrockActor> {
+    let bedrock_signing_key = load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
+        .expect("Failed to load or create bedrock signing key");
+    log::info!(
+        "Bedrock signing public key: {}",
+        hex::encode(bedrock_signing_key.public_key().to_bytes())
+    );
+
+    let bedrock_actor_config = sequencer_bedrock_actor::config::Config {
+        node_url: config.bedrock_config.node_url.clone(),
+        basic_auth: config.bedrock_config.auth.clone().map(Into::into),
+        channel_id: config.bedrock_config.channel_id,
+        bedrock_signing_key,
+        funding_pk: config.bedrock_config.funding_key,
+        priority_fee_percent: config.bedrock_config.priority_fee_percent,
+        resubmit_interval: config.retry_pending_blocks_timeout,
+    };
+
+    BedrockActor::new(bedrock_actor_config, storage_ref, bedrock_broker_ref).await
+}
+
+#[cfg(feature = "standalone")]
+#[expect(
+    clippy::unused_async,
+    reason = "Must be async to match the signature of the non-standalone version"
+)]
+async fn setup_bedrock_actor(
+    _config: &SequencerConfig,
+    _storage_ref: ActorRef<StorageActor>,
+    _bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
+) -> sequencer_bedrock_actor::Result<BedrockActor> {
+    use sequencer_bedrock_actor::protocol::{
+        AccreditedKeys, Checkpoint, HeaderId, MsgId, PublishOutcome, Slot,
+    };
+
+    let mut mock = BedrockActor::default();
+
+    mock.expect_handle_check_channel_exists()
+        .returning(|_msg, _ctx| Ok(false));
+
+    mock.expect_handle_get_channel_tip_slot()
+        .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
+
+    mock.expect_handle_read_channel()
+        .returning(|_msg, _ctx| Ok(Box::pin(futures::stream::empty())));
+
+    mock.expect_handle_check_is_our_turn().return_const(true);
+
+    mock.expect_handle_get_accredited_keys()
+        .returning(|_msg, _ctx| {
+            Ok(Some(AccreditedKeys {
+                keys: Vec::new(),
+                config_tip: MsgId::root(),
+                tip_sequencer: 0,
+            }))
+        });
+
+    mock.expect_handle_publish_block().returning(|msg, _ctx| {
+        let msg_id = MsgId::from(msg.block.header.hash.0);
+        Ok(PublishOutcome {
+            this_msg: msg_id,
+            checkpoint: Checkpoint {
+                last_msg_id: msg_id,
+                pending_txs: Vec::new(),
+                lib: HeaderId::from([0; 32]),
+                lib_slot: Slot::from(0),
+                channel_notes: Vec::new(),
+                finalized_config: MsgId::root(),
+            },
+            released_notes: Vec::new(),
+        })
+    });
+
+    Ok(mock)
 }

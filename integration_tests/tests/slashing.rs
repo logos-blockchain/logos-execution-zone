@@ -14,15 +14,12 @@ use anyhow::{Context as _, Result, ensure};
 use integration_tests::{assert_same_chain, committee, get_account, init_logger, wait_until};
 use lee::AccountId;
 use log::info;
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use sequencer_core::{
-    block_publisher::{BlockPublisherTrait as _, ZoneSdkPublisher},
-    config::BedrockConfig,
-};
+use sequencer_bedrock_actor::protocol::{CheckIsOurTurn, PublishRawInscription};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
     config::{self, MultiNodeTestContextConfig, SequencerPartialConfig},
+    spawn_channel_observer, spawn_standalone_bedrock_actor,
 };
 use tokio::test;
 
@@ -95,9 +92,9 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         .await
         .context("Failed to build the two-sequencer test context")?;
 
-    let offender_key = Ed25519Key::from_bytes(&config::sequencer_signing_key_from_seed(
+    let offender_key = config::sequencer_signing_key_from_seed(
         u32::try_from(OFFENDER_SEED).context("The offender seed does not fit in a u32")?,
-    ));
+    );
     let offender_stake_key =
         sequencer_stake_core::SequencerKey::new(offender_key.public_key().to_bytes())
             .context("The offender's Bedrock key is not a valid Ed25519 point")?;
@@ -106,18 +103,11 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
     let offender_funds = system_accounts::stake_funds_account_id(&offender_account);
     let sink = sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake().id().into());
 
-    let bedrock_config = BedrockConfig {
-        channel_id: channel,
-        node_url: config::addr_to_url(config::UrlProtocol::Http, ctx.bedrock_addr())?,
-        funding_key: config::bedrock_funding_key(),
-        auth: None,
-        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
-        channel_params: sequencer_core::config::default_channel_params(),
-    };
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
 
     // An unaccredited key writes nothing that L1 accepts.
     wait_until("the offender's key to be accredited", || async {
-        Ok(committee(&bedrock_config)
+        Ok(committee(&observer)
             .await?
             .0
             .contains(&offender_stake_key.to_bytes()))
@@ -149,13 +139,15 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         .sequencer_client_by_node_ids(channel, OFFENDER_SEED)
         .context("The follower has no sequencer client")?;
     // The offender's node never publishes, so this is the only writer with its key.
-    let offender = ZoneSdkPublisher::new(
-        &bedrock_config,
-        offender_key,
-        Duration::from_secs(5),
-        None,
-        Box::new(|_update| Box::pin(async {})),
-    )
+    let offender = spawn_standalone_bedrock_actor(sequencer_bedrock_actor::config::Config {
+        node_url: config::addr_to_url(config::UrlProtocol::Http, ctx.bedrock_addr())?,
+        basic_auth: None,
+        channel_id: channel,
+        bedrock_signing_key: offender_key.into(),
+        funding_pk: config::bedrock_funding_key(),
+        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+        resubmit_interval: Duration::from_secs(5),
+    })
     .await
     .context("Failed to open a publisher for the offender")?;
 
@@ -165,9 +157,11 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
             return Ok(true);
         }
         // L1 rejects a write out of turn, so only offer on our turn.
-        if offender.is_our_turn() {
+        if offender.ask(CheckIsOurTurn).await? {
             let outcome = offender
-                .publish_raw_inscription(GARBAGE.to_vec())
+                .ask(PublishRawInscription {
+                    data: GARBAGE.to_vec(),
+                })
                 .await
                 .context("Failed to inscribe a non-block payload")?;
             info!("Offered a non-block payload as {}", outcome.this_msg);
@@ -212,7 +206,7 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
     );
 
     wait_until("the offender to leave the accredited committee", || async {
-        Ok(!committee(&bedrock_config)
+        Ok(!committee(&observer)
             .await?
             .0
             .contains(&offender_stake_key.to_bytes()))

@@ -12,7 +12,8 @@ workspace = true
 sequencer_core.workspace = true
 sequencer_rpc_server_actor.workspace = true
 sequencer_executor_actor = { workspace = true, features = ["actor"] }
-sequencer_storage_actor = { workspace = true, features = ["actor"] }
+sequencer_storage_actor = { workspace = true, features = ["actor", "mock"] }
+sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
 lee = { workspace = true, optional = true }
 programs = { workspace = true, optional = true }
 system_accounts = { workspace = true, optional = true }
@@ -31,6 +32,7 @@ metrics-exporter-prometheus.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
+glob.workspace = true
 
 [[bin]]
 name = "inscribe_garbage"
@@ -44,12 +46,12 @@ required-features = ["submit_stake"]
 
 [features]
 default = []
-# Runs the sequencer in standalone mode without depending on Bedrock and Indexer services.
-standalone = ["sequencer_core/mock"]
+# Runs the sequencer in standalone mode without depending on Bedrock.
+standalone = ["sequencer_bedrock_actor/mock"]
 # Enable mDNS-based local peer discovery for gossip.
 mdns = ["sequencer_core/mdns"]
 # Needed only by the inscribe_garbage bin. Never in a release build.
-inscribe_garbage = ["sequencer_core/test-utils"]
+inscribe_garbage = ["sequencer_bedrock_actor/test-utils"]
 # Needed only by the submit_stake bin.
 submit_stake = [
   "dep:lee",

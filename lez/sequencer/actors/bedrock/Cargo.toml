@@ -1,0 +1,47 @@
+[package]
+name = "sequencer_bedrock_actor"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Adds actor implementation using kameo_actors.
+actor = [
+  "dep:system_accounts",
+
+  "dep:logos-blockchain-key-management-system-service",
+  "dep:logos-blockchain-common-http-client",
+  "dep:kameo_actors",
+  "dep:tokio",
+  "dep:borsh",
+  "dep:url",
+  "dep:log",
+]
+# Adds mock actor implementation.
+mock = ["sequencer_actors_common/mock", "dep:mockall"]
+test-utils = []
+
+[dependencies]
+common.workspace = true
+sequencer_stake_core.workspace = true
+sequencer_actors_common.workspace = true
+sequencer_storage_actor.workspace = true
+system_accounts = { workspace = true, optional = true }
+
+logos-blockchain-zone-sdk.workspace = true
+logos-blockchain-core.workspace = true
+kameo.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+logos-blockchain-key-management-system-service = { workspace = true, optional = true }
+logos-blockchain-common-http-client = { workspace = true, optional = true }
+kameo_actors = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+borsh = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+log = { workspace = true, optional = true }
+mockall = { workspace = true, optional = true }

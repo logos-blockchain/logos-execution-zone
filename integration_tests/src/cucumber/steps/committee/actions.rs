@@ -2,10 +2,8 @@ use std::time::Duration;
 
 use cucumber::{gherkin::Step, given, when};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use sequencer_core::{
-    block_publisher::{Ed25519PublicKey, read_channel_state},
-    config::BedrockConfig,
-};
+use sequencer_bedrock_actor::protocol::GetAccreditedKeys;
+use sequencer_core::Ed25519PublicKey;
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
@@ -17,11 +15,12 @@ use super::{
     parse_committee_config, parse_sequencer_registrations, require_sequencer,
 };
 use crate::{
-    config::{self, UrlProtocol},
+    config,
     cucumber::{
         error::{StepError, StepResult},
         world::{CucumberWorld, TransferArtifact, TransferKind},
     },
+    spawn_channel_observer,
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -233,24 +232,22 @@ async fn committee_is_active(
             Ok(Ed25519Key::from_bytes(&signing_key).public_key().to_bytes())
         })
         .collect::<Result<Vec<_>, StepError>>()?;
-    let bedrock_config = BedrockConfig {
-        channel_id: config::bedrock_channel_id(),
-        node_url: config::addr_to_url(UrlProtocol::Http, context.bedrock().primary_api_addr())
-            .map_err(|source| StepError::QueryFailedSource { source })?,
-        funding_key: config::bedrock_funding_key(),
-        auth: None,
-        priority_fee_percent: 12,
-        channel_params: sequencer_core::config::default_channel_params(),
-    };
+    let observer = spawn_channel_observer(
+        context.bedrock().primary_api_addr(),
+        config::bedrock_channel_id(),
+    )
+    .await
+    .map_err(|source| StepError::QueryFailedSource { source })?;
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {
         loop {
-            let state = read_channel_state(&bedrock_config)
+            let accredited = observer
+                .ask(GetAccreditedKeys)
                 .await
-                .map_err(|source| StepError::QueryFailedSource { source })?;
-            let active = state.is_some_and(|state| {
-                let mut actual_keys = state
-                    .accredited_keys
+                .map_err(|err| StepError::QueryFailedSource { source: err.into() })?;
+            let active = accredited.is_some_and(|accredited| {
+                let mut actual_keys = accredited
+                    .keys
                     .iter()
                     .map(Ed25519PublicKey::to_bytes)
                     .collect::<Vec<_>>();
@@ -296,27 +293,20 @@ async fn sequencer_becomes_posting_turn(
                 message: format!("sequencer '{alias}' is not registered"),
             })?;
     let expected_key: Ed25519PublicKey = Ed25519Key::from_bytes(&signing_key).public_key();
-    let bedrock_config = BedrockConfig {
-        channel_id: config::bedrock_channel_id(),
-        node_url: config::addr_to_url(UrlProtocol::Http, context.bedrock().primary_api_addr())
-            .map_err(|source| StepError::QueryFailedSource { source })?,
-        funding_key: config::bedrock_funding_key(),
-        auth: None,
-        priority_fee_percent: 12,
-        channel_params: sequencer_core::config::default_channel_params(),
-    };
+    let observer = spawn_channel_observer(
+        context.bedrock().primary_api_addr(),
+        config::bedrock_channel_id(),
+    )
+    .await
+    .map_err(|source| StepError::QueryFailedSource { source })?;
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {
         loop {
-            let is_turn = read_channel_state(&bedrock_config)
+            let is_turn = observer
+                .ask(GetAccreditedKeys)
                 .await
-                .map_err(|source| StepError::QueryFailedSource { source })?
-                .and_then(|state| {
-                    state
-                        .accredited_keys
-                        .get(usize::from(state.tip_sequencer))
-                        .copied()
-                })
+                .map_err(|err| StepError::QueryFailedSource { source: err.into() })?
+                .and_then(|accredited| accredited.whose_turn())
                 == Some(expected_key);
             if is_turn {
                 return Ok::<(), StepError>(());

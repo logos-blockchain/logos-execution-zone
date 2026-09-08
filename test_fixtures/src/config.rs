@@ -6,7 +6,7 @@ use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig}
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
-use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
+use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, ZkPublicKey};
 use num_bigint::BigUint;
 use sequencer_core::{
     config::{
@@ -148,7 +148,7 @@ pub fn sequencer_config(
     funding_key: ZkPublicKey,
     genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
-    signing_key: Option<[u8; 32]>,
+    signing_key: Option<UnsecuredEd25519Key>,
     gossip: Option<GossipConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
@@ -168,7 +168,7 @@ pub fn sequencer_config(
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: genesis_transactions,
-        signing_key: Some(signing_key.unwrap_or(SEQUENCER_SIGNING_KEY)),
+        signing_key: Some(signing_key.map_or(SEQUENCER_SIGNING_KEY, |key| *key.to_bytes())),
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
@@ -364,11 +364,14 @@ pub fn bedrock_channel_id_b() -> ChannelId {
 
 /// Generate sequencer signing key from `u32` number via repeating le bytes 8 times.
 #[must_use]
-pub fn sequencer_signing_key_from_seed(seed: u32) -> [u8; 32] {
-    seed.to_le_bytes()
-        .repeat(8)
-        .try_into()
-        .unwrap_or_else(|_| unreachable!())
+pub fn sequencer_signing_key_from_seed(seed: u32) -> UnsecuredEd25519Key {
+    UnsecuredEd25519Key::from_bytes(
+        &seed
+            .to_le_bytes()
+            .repeat(8)
+            .try_into()
+            .unwrap_or_else(|_| unreachable!()),
+    )
 }
 
 /// Seed of the account owning sequencer `index`'s founding stake.
@@ -393,7 +396,7 @@ pub fn founding_stake_owner_key(index: usize) -> Result<PrivateKey> {
 /// `channel_params` must be the ones the channel is created with, or these
 /// founding stakes land below the minimum and accredit nobody.
 pub fn genesis_sequencer_stakes(
-    sequencer_signing_keys: &[[u8; 32]],
+    sequencer_signing_keys: &[UnsecuredEd25519Key],
     channel_params: ChannelParams,
 ) -> Result<Vec<GenesisAction>> {
     let minimum_stake = channel_params.minimum_sequencer_stake;
@@ -401,7 +404,7 @@ pub fn genesis_sequencer_stakes(
         .iter()
         .enumerate()
         .map(|(index, signing_key)| {
-            let public_key = Ed25519Key::from_bytes(signing_key).public_key();
+            let public_key = signing_key.public_key();
             let sequencer_key = SequencerKey::new(public_key.to_bytes())
                 .context("Sequencer signing key is not a valid Ed25519 point")?;
             let owner = founding_stake_owner_key(index)?;

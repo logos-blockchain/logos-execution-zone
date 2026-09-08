@@ -15,6 +15,7 @@ lee_core = { workspace = true, features = ["host"] }
 lee.workspace = true
 authenticated_transfer_core.workspace = true
 sequencer_core.workspace = true
+sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
 wallet.workspace = true
 common.workspace = true
 key_protocol.workspace = true
@@ -41,16 +42,15 @@ test_programs.workspace = true
 testnet_initial_state.workspace = true
 program_loader_core.workspace = true
 
-logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-testing-framework.workspace = true
-logos-blockchain-zone-sdk.workspace = true
 testing-framework-app.workspace = true
 testing-framework-core.workspace = true
 
 # External dependencies.
 anyhow.workspace = true
 async-trait.workspace = true
+kameo.workspace = true
 bytesize.workspace = true
 cucumber = { features = [
   "macros",
@@ -66,7 +66,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-sequencer_core = { workspace = true, features = ["test-utils"] }
+sequencer_bedrock_actor = { workspace = true, features = [
+  "actor",
+  "test-utils",
+] }
 
 [features]
 cucumber = ["dep:cucumber"]

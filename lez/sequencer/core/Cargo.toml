@@ -8,13 +8,13 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-trait-variant.workspace = true
 lee.workspace = true
 lee_core.workspace = true
 chain_state.workspace = true
 common.workspace = true
 sequencer_core_metrics = { workspace = true, features = ["record"] }
 sequencer_storage_actor.workspace = true
+sequencer_bedrock_actor.workspace = true
 mempool.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 testnet_initial_state.workspace = true
@@ -30,7 +30,6 @@ sequencer_stake_core.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-core.workspace = true
-logos-blockchain-http-api-common.workspace = true
 kameo.workspace = true
 anyhow.workspace = true
 serde.workspace = true
@@ -54,16 +53,13 @@ thiserror.workspace = true
 
 [features]
 default = []
-# Generate mock external clients implementations for testing
-mock = []
 # Enable mDNS-based local peer discovery for gossip.
 mdns = []
-# Expose hooks integration tests need to provoke misbehaviour. Never in a release build.
-test-utils = []
 
 [dev-dependencies]
 cross_zone = { workspace = true, features = ["test-utils"] }
 sequencer_storage_actor = { workspace = true, features = ["actor", "mock"] }
+sequencer_bedrock_actor = { workspace = true, features = ["mock"] }
 futures.workspace = true
 test_programs.workspace = true
 program_loader_core.workspace = true

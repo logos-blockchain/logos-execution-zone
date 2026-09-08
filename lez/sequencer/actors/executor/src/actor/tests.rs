@@ -14,10 +14,10 @@ use lee::{
 };
 use mockall::predicate::{always, eq, function};
 use num_bigint::BigUint;
+use sequencer_bedrock_actor::{mock::MockBedrockActor, protocol::Slot};
 use sequencer_core::{
-    block_publisher::MsgId,
+    MsgId,
     config::{BedrockConfig, SequencerConfig},
-    mock::MockBlockPublisher,
 };
 use sequencer_storage_actor::mock::MockStorageActor;
 use tempfile::TempDir;
@@ -28,6 +28,8 @@ use crate::{
     actor::BlockedAttempts,
     protocol::{self, TransactionOrigin},
 };
+
+mod reconstruction;
 
 fn sequencer_config() -> (SequencerConfig, TempDir) {
     let home = TempDir::new().expect("Failed to create temporary home directory");
@@ -80,6 +82,24 @@ fn test_transaction() -> LeeTransaction {
 
     let witness_set = WitnessSet::for_message(&message, &[&payer_key, &key2]);
     PublicTransaction::new(message, witness_set).into()
+}
+
+/// A Bedrock whose channel exists but holds nothing yet, with this node on turn.
+fn prepare_mock_bedrock_with_empty_channel() -> MockBedrockActor {
+    let mut mock_bedrock = MockBedrockActor::default();
+    mock_bedrock
+        .expect_handle_check_channel_exists()
+        .returning(|_msg, _ctx| Ok(true));
+    mock_bedrock
+        .expect_handle_get_channel_tip_slot()
+        .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
+    mock_bedrock
+        .expect_handle_read_channel()
+        .returning(|_msg, _ctx| Ok(Box::pin(futures::stream::empty())));
+    mock_bedrock
+        .expect_handle_check_is_our_turn()
+        .returning(|_msg, _ctx| true);
+    mock_bedrock
 }
 
 fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
@@ -245,28 +265,50 @@ async fn clearing_a_blocked_run_reports_only_a_real_change() {
 }
 
 /// The scheduler's interval task gives up for good the first time it finds
-/// this actor stopped, so a turn that cannot publish must not surface as an
-/// error — that would end block production permanently.
+/// this actor stopped, so a failed turn must not surface as an error — that
+/// would end block production permanently.
 #[test]
 async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
     let _res = env_logger::try_init();
 
     let (config, _home) = sequencer_config();
-    let mock_storage = prepare_mock_storage_with_empty_genesis();
+    let mut mock_storage = prepare_mock_storage_with_empty_genesis();
+    // Startup published genesis, so the turn is not a rewind.
+    mock_storage
+        .expect_handle_get_published_high_water()
+        .returning(|_msg, _ctx| Ok(Some(1)));
+    mock_storage
+        .expect_handle_get_pending_cross_zone_dispatches()
+        .returning(|_msg, _ctx| Ok(Vec::new()));
+    mock_storage
+        .expect_handle_get_pending_deposit_events()
+        .returning(|_msg, _ctx| Ok(Vec::new()));
     let storage_ref = MockStorageActor::spawn(mock_storage);
+    let mut mock_bedrock = prepare_mock_bedrock_with_empty_channel();
+    mock_bedrock
+        .expect_handle_get_accredited_keys()
+        .returning(|_msg, _ctx| Ok(None));
 
     let executor = ExecutorActor::spawn(
-        ExecutorActor::<_, MockBlockPublisher>::new(config, storage_ref.clone()).await,
+        ExecutorActor::new(
+            config,
+            storage_ref.clone(),
+            MockBedrockActor::spawn(mock_bedrock),
+        )
+        .await?,
     );
-    storage_ref
-        .tell(sequencer_storage_actor::mock::Checkpoint)
-        .await?;
 
+    // Our key holds no stake entry, so production aborts.
     executor
         .ask(protocol::ProduceBlock)
         .await
-        .expect("a turn that cannot publish must still reply Ok");
+        .expect("a failed turn must still reply Ok");
     assert!(executor.is_alive(), "the actor must survive a failed turn");
+
+    // The store served the whole turn, so the failure was production's own.
+    storage_ref
+        .ask(sequencer_storage_actor::mock::Checkpoint)
+        .await?;
 
     Ok(())
 }
@@ -282,7 +324,12 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let executor = ExecutorActor::spawn(
-        ExecutorActor::<_, MockBlockPublisher>::new(config, storage_ref.clone()).await,
+        ExecutorActor::new(
+            config,
+            storage_ref.clone(),
+            MockBedrockActor::spawn(prepare_mock_bedrock_with_empty_channel()),
+        )
+        .await?,
     );
 
     storage_ref
@@ -352,7 +399,12 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
 
     let storage_ref = MockStorageActor::spawn(mock_storage);
     let executor = ExecutorActor::spawn(
-        ExecutorActor::<_, MockBlockPublisher>::new(config, storage_ref.clone()).await,
+        ExecutorActor::new(
+            config,
+            storage_ref.clone(),
+            MockBedrockActor::spawn(prepare_mock_bedrock_with_empty_channel()),
+        )
+        .await?,
     );
 
     let range = (STALLED_FIRST..=STALLED_LAST)
@@ -396,7 +448,12 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let mock_storage = prepare_mock_storage_with_empty_genesis();
     let storage_ref = MockStorageActor::spawn(mock_storage);
     let executor = ExecutorActor::spawn(
-        ExecutorActor::<_, MockBlockPublisher>::new(config, storage_ref.clone()).await,
+        ExecutorActor::new(
+            config,
+            storage_ref.clone(),
+            MockBedrockActor::spawn(prepare_mock_bedrock_with_empty_channel()),
+        )
+        .await?,
     );
     storage_ref
         .tell(sequencer_storage_actor::mock::Checkpoint)

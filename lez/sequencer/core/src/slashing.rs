@@ -12,13 +12,13 @@ use common::transaction::LeeTransaction;
 use kameo::actor::ActorRef;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use log::{error, warn};
+use logos_blockchain_core::mantle::ops::channel::{Ed25519PublicKey, MsgId};
+use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_stake_core::{SequencerKey, SlashApproval};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{GetSlashRecordBytes, PutSlashRecordBytes},
 };
-
-use crate::block_publisher::{Ed25519Key, Ed25519PublicKey, MsgId};
 
 /// Offending inscriptions and the key that wrote each.
 #[derive(Clone, Default)]
@@ -186,7 +186,6 @@ pub(crate) fn build_slash_tx(
 }
 
 #[cfg(test)]
-#[cfg(feature = "mock")]
 mod tests {
     use kameo::actor::Spawn as _;
     use lee_core::account::Account;

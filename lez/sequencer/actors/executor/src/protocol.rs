@@ -11,6 +11,8 @@ pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterReque
 /// The widest range a [`GetBlockRange`] may span.
 pub const MAX_BLOCK_RANGE_LEN: usize = 1024;
 
+pub type ChannelId = [u8; 32];
+
 #[derive(Copy, Clone)]
 pub struct ProduceBlock;
 
@@ -120,11 +122,6 @@ pub struct GetAccountReply {
 }
 
 pub struct GetChannelId;
-
-#[derive(Reply)]
-pub struct GetChannelIdReply {
-    pub channel_id: [u8; 32],
-}
 
 pub struct GetCrossZoneDeadLetters;
 

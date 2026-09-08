@@ -11,21 +11,15 @@ use anyhow::{Context as _, Result};
 use integration_tests::{account_balance, get_account, new_account};
 use lee::{AccountId, PrivateKey, PublicKey, program::Program};
 use log::info;
-use logos_blockchain_core::mantle::ops::channel::Ed25519PublicKey;
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use logos_blockchain_zone_sdk::{
-    CommonHttpClient,
-    adapter::{Node as _, NodeHttpClient},
-};
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
+use sequencer_bedrock_actor::protocol::GetAccreditedKeys;
 use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
-    config::{
-        MultiNodeTestContextConfig, SequencerPartialConfig, UrlProtocol, addr_to_url,
-        bedrock_channel_id,
-    },
+    config::{MultiNodeTestContextConfig, SequencerPartialConfig, bedrock_channel_id},
     setup::{SequencerSetup, sequencer_client},
+    spawn_channel_observer,
 };
 use tokio::test;
 use wallet::AccountIdentity;
@@ -147,41 +141,35 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         hex::encode(record.sequencer_key)
     );
 
-    let bedrock_url = addr_to_url(UrlProtocol::Http, ctx.bedrock_addr())
-        .context("Failed to build the Bedrock node URL")?;
-    let node = NodeHttpClient::new(CommonHttpClient::new(None), bedrock_url);
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), bedrock_channel_id()).await?;
 
     // The committee-config update is a separate tx from the block's own
     // publish, so it may land a moment later — poll a few times before failing.
-    let mut channel_state = None;
+    let mut committee = None;
     for _ in 0..10 {
-        let state = node
-            .channel_state(bedrock_channel_id())
+        let accredited = observer
+            .ask(GetAccreditedKeys)
             .await
-            .context("Failed to read Bedrock channel state")?
+            .context("Failed to read the channel's accredited keys")?
             .context("Bedrock channel does not exist")?;
-        if state
-            .accredited_keys
-            .iter()
-            .any(|key: &Ed25519PublicKey| *key == demo_sequencer_key)
-        {
-            channel_state = Some(state);
+        if accredited.keys.contains(&demo_sequencer_key) {
+            committee = Some(accredited);
             break;
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
-    let channel_state = channel_state.context(
+    let committee = committee.context(
         "demo sequencer key should have been discovered and accredited after the Stake transaction",
     )?;
     info!(
         "Bedrock channel now accredits {} key(s), including the demo sequencer key — self-join complete",
-        channel_state.accredited_keys.len()
+        committee.keys.len()
     );
 
     // Only now start a node behind the key, against a channel that already has a chain.
     let (joiner, _joiner_home) = SequencerSetup::new(fast_blocks(), ctx.bedrock_addr())
         .with_channel_id(bedrock_channel_id())
-        .with_bedrock_signing_key(JOINER_SIGNING_KEY)
+        .with_bedrock_signing_key(UnsecuredEd25519Key::from_bytes(&JOINER_SIGNING_KEY))
         .joining_existing_channel()
         .setup()
         .await
@@ -198,17 +186,13 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     // A tip past `joined_at` under the demo key is a block this node built.
     poll_until("the joining sequencer to build a block on its turn", 180, {
-        let node = &node;
+        let observer = &observer;
         let ctx = &ctx;
         move || async move {
-            let Some(state) = node.channel_state(bedrock_channel_id()).await? else {
+            let Some(accredited) = observer.ask(GetAccreditedKeys).await? else {
                 return Ok(false);
             };
-            let turn = state
-                .accredited_keys
-                .get(usize::from(state.tip_sequencer))
-                .copied();
-            Ok(turn == Some(demo_sequencer_key)
+            Ok(accredited.whose_turn() == Some(demo_sequencer_key)
                 && ctx.sequencer_client().get_last_block_id().await? > joined_at)
         }
     })
@@ -270,16 +254,12 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // normal Bedrock confirmation latency.
     let mut removed = false;
     for _ in 0..30 {
-        let state = node
-            .channel_state(bedrock_channel_id())
+        let accredited = observer
+            .ask(GetAccreditedKeys)
             .await
-            .context("Failed to read Bedrock channel state")?
+            .context("Failed to read the channel's accredited keys")?
             .context("Bedrock channel does not exist")?;
-        if !state
-            .accredited_keys
-            .iter()
-            .any(|key: &Ed25519PublicKey| *key == demo_sequencer_key)
-        {
+        if !accredited.keys.contains(&demo_sequencer_key) {
             removed = true;
             break;
         }

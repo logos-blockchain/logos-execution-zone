@@ -7,6 +7,7 @@ use std::{collections::HashSet, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use kameo::actor::Spawn as _;
+use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_storage_actor::{
     StorageActor,
     protocol::{
@@ -59,7 +60,9 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let (sequencer_handle, temp_sequencer_dir) =
         SequencerSetup::new(config::SequencerPartialConfig::default(), bedrock_addr)
             .with_genesis(genesis)
-            .with_bedrock_signing_key(config::SEQUENCER_BEDROCK_SIGNING_KEY)
+            .with_bedrock_signing_key(UnsecuredEd25519Key::from_bytes(
+                &config::SEQUENCER_BEDROCK_SIGNING_KEY,
+            ))
             .setup()
             .await
             .context("Failed to setup Sequencer for fixture generation")?;

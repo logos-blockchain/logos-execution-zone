@@ -7,7 +7,9 @@ use std::{
 
 use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
-use logos_blockchain_key_management_system_service::keys::ED25519_SECRET_KEY_SIZE;
+use logos_blockchain_key_management_system_service::keys::{
+    ED25519_SECRET_KEY_SIZE, UnsecuredEd25519Key,
+};
 use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::SequencerClientBuilder;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
@@ -165,7 +167,7 @@ impl LezSequencerRegistryClient {
             .map(|alias| {
                 registered
                     .get(alias)
-                    .map(|registration| registration.signing_key)
+                    .map(|registration| UnsecuredEd25519Key::from_bytes(&registration.signing_key))
                     .ok_or_else(|| anyhow!("initial committee alias '{alias}' is not registered"))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -331,7 +333,7 @@ async fn deploy_registered_sequencer(
 ) -> Result<LezSequencerClient, DynError> {
     let setup = SequencerSetup::new(config, bedrock_addr)
         .with_genesis(genesis)
-        .with_bedrock_signing_key(signing_key);
+        .with_bedrock_signing_key(UnsecuredEd25519Key::from_bytes(&signing_key));
     let (service, owned_state_dir) = if let Some(state_dir) = state_dir {
         std::fs::create_dir_all(&state_dir)
             .context("failed to create registered sequencer state directory")?;

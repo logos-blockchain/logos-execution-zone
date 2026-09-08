@@ -1,13 +1,12 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
+use kameo::actor::ActorRef;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee_core::account::AccountId;
 use log::info;
-use sequencer_core::{
-    block_publisher::{Ed25519PublicKey, read_channel_state},
-    config::BedrockConfig,
-};
+use sequencer_bedrock_actor::{BedrockActor, protocol::GetAccreditedKeys};
+use sequencer_core::Ed25519PublicKey;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, verify_commitment_is_in_state};
 use wallet::{
@@ -46,17 +45,18 @@ where
 
 /// The channel's accredited keys, sorted, plus whose turn the tip was written on.
 pub async fn committee(
-    config: &BedrockConfig,
+    observer: &ActorRef<BedrockActor>,
 ) -> Result<(Vec<[u8; 32]>, Option<Ed25519PublicKey>)> {
-    let Some(state) = read_channel_state(config).await? else {
+    let Some(accredited) = observer
+        .ask(GetAccreditedKeys)
+        .await
+        .context("Failed to read the channel's accredited keys")?
+    else {
         return Ok((Vec::new(), None));
     };
-    let turn = state
-        .accredited_keys
-        .get(usize::from(state.tip_sequencer))
-        .copied();
-    let mut keys: Vec<_> = state
-        .accredited_keys
+    let turn = accredited.whose_turn();
+    let mut keys: Vec<_> = accredited
+        .keys
         .iter()
         .map(Ed25519PublicKey::to_bytes)
         .collect();
