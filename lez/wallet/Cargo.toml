@@ -23,6 +23,8 @@ programs.workspace = true
 system_accounts.workspace = true
 associated_token_account_core.workspace = true
 program_loader_core.workspace = true
+risc0-binfmt = "3.0.2"
+risc0-zkos-v1compat = "2.2.0"
 
 bip39.workspace = true
 rpassword = "7"

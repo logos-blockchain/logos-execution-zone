@@ -18,11 +18,15 @@ use super::*;
 fn manually_segmented_program_reconstructs_and_executes_identically() {
     let program = crate::test_methods::noop();
     let full_binary = program.elf();
+    // Segments only ever hold `user_elf`.
+    let user_elf = risc0_binfmt::ProgramBinary::decode(full_binary)
+        .unwrap()
+        .user_elf;
 
     // However many chunks, as long as it's more than one — this is testing reconstruction
     // across several accounts, not any particular chunk size.
-    let chunk_size = full_binary.len().div_ceil(4).max(1);
-    let chunks: Vec<&[u8]> = full_binary.chunks(chunk_size).collect();
+    let chunk_size = user_elf.len().div_ceil(4).max(1);
+    let chunks: Vec<&[u8]> = user_elf.chunks(chunk_size).collect();
     assert!(
         chunks.len() > 1,
         "test needs a real multi-chunk split, got {} chunk(s)",
@@ -252,12 +256,16 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
 
     let segment_key = PrivateKey::try_new([1_u8; 32]).unwrap();
     let segment_account_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
+    let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
+        .unwrap()
+        .user_elf
+        .to_vec();
     let write_segment_message = public_transaction::Message::try_new(
         PROGRAM_LOADER_ACCOUNT_ID,
         vec![segment_account_id],
         vec![Nonce(0)],
         Instruction::WriteSegment {
-            bytecode: program.elf().to_vec(),
+            bytecode: user_elf,
             next_segment: None,
         },
     )

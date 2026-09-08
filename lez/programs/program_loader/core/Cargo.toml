@@ -11,3 +11,4 @@ workspace = true
 lee_core.workspace = true
 borsh.workspace = true
 risc0-binfmt = "3.0.2"
+risc0-zkos-v1compat = "2.2.0"

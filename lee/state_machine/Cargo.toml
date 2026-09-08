@@ -21,6 +21,7 @@ borsh.workspace = true
 hex.workspace = true
 k256.workspace = true
 risc0-binfmt = "3.0.2"
+risc0-zkos-v1compat = "2.2.0"
 semver = { version = "1", optional = true }
 log.workspace = true
 

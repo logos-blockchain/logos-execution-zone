@@ -204,3 +204,9 @@ pub(crate) fn check_exit_code(
         }
     }
 }
+
+/// Re-attaches the protocol's fixed kernel ELF to `user_elf`, producing a full `ProgramBinary`
+/// blob ready to decode and execute.
+pub(crate) fn attach_kernel(user_elf: &[u8]) -> Vec<u8> {
+    risc0_binfmt::ProgramBinary::new(user_elf, risc0_zkos_v1compat::V1COMPAT_ELF).encode()
+}

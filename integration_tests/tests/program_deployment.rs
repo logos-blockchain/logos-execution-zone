@@ -28,8 +28,9 @@ async fn deploy_and_execute_program() -> Result<()> {
     // account covers the fees instead (see `ProgramLoader::send`).
     let payer_id = ctx.existing_public_accounts()[0];
 
-    // Deploy through `program_loader`: one segment per ELF chunk, then a header claims the chain.
-    // Every account is freshly claimed, a permissionless write.
+    // Deploy through `program_loader`: one segment holds the (small, test-sized) program's
+    // `user_elf`, then a header claims it. Both accounts are freshly claimed, permissionless
+    // writes.
     let header_id = new_account(&mut ctx, false, None).await?;
     let mut segment_ids = Vec::new();
     for _ in deployed
@@ -99,10 +100,9 @@ async fn deploy_and_execute_program() -> Result<()> {
 
 #[test]
 async fn deploy_invalid_program_fails() -> Result<()> {
-    // Invalid program bytecode is rejected when `program_loader`'s `CreateHeader` tries to
-    // recompute the real `image_id` from the segment chain, so the deploy never lands. Shrink the
-    // wallet's polling window so the command gives up quickly instead of waiting for the full
-    // default timeout.
+    // Invalid program bytecode is rejected when the wallet decodes it as a `ProgramBinary`
+    // before uploading, so the deploy never lands. Shrink the wallet's polling window so the
+    // command gives up quickly instead of waiting for the full default timeout.
 
     let mut ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
