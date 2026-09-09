@@ -65,7 +65,11 @@ fn main() {
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![ShardStateDiff::unchanged(pda.clone())],
+        pre_states
+            .iter()
+            .cloned()
+            .map(AccountStateDiff::unchanged)
+            .collect(),
     )
     .with_chained_calls(chained_calls)
     .write();

@@ -1,15 +1,12 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
+    account::{AccountId, ProgramShardSelector},
     program::{
         AccountInput, ChainedCall, InstructionData, ProgramCall, ProgramInput, ProgramOutput,
         ShardStateDiff, read_lee_call, respond_unsupported_call,
     },
 };
 
-type Instruction = (
-    Option<(AccountId, Vec<u8>)>,
-    Vec<(AccountId, ProgramShardSelector, InstructionData)>,
-);
+type Instruction = Vec<(AccountId, ProgramShardSelector, InstructionData)>;
 
 fn main() {
     let call = read_lee_call::<Instruction>();
@@ -18,7 +15,7 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (own_write, callees),
+            instruction: callees,
         },
         instruction_data,
     ) = call
@@ -30,14 +27,7 @@ fn main() {
         return;
     };
 
-    let mut state_diffs = vec![ShardStateDiff::unchanged(own)];
-    if let Some((target, data)) = own_write {
-        state_diffs.push(ShardStateDiff::new(
-            AccountInput::with_shard(target, false, self_account_id, ShardData::empty()),
-            data.try_into()
-                .expect("provided data should fit into data limit"),
-        ));
-    }
+    let state_diffs = vec![AccountStateDiff::unchanged(own)];
 
     let chained_calls = callees
         .into_iter()

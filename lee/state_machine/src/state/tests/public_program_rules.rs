@@ -30,10 +30,10 @@ fn program_should_fail_if_it_drops_a_declared_account() {
         matches!(
             result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput { account_id }
-            )) if account_id == AccountId::new([2; 32])
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id: err_program_id }
+            )) if err_program_id == program_id
         ),
-        "expected DeclaredAccountMissingFromOutput for the dropped account, got {result:?}"
+        "expected InputRowsMismatch for the dropped account, got {result:?}"
     );
 }
 
@@ -205,7 +205,6 @@ fn program_should_fail_if_it_references_an_undeclared_account() {
     );
 }
 
-/// Rejects a program output that includes an account absent from its inputs.
 #[test]
 fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
     let account_id = AccountId::new([1; 32]);
@@ -232,13 +231,10 @@ fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
         matches!(
             result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::UndeclaredAccountInProgramOutput {
-                    account_id: err_account_id,
-                    ..
-                }
-            )) if err_account_id == fabricated_account_id
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id: err_program_id }
+            )) if err_program_id == program_id
         ),
-        "expected UndeclaredAccountInProgramOutput for the fabricated account, got {result:?}"
+        "expected InputRowsMismatch for the fabricated account, got {result:?}"
     );
 }
 
@@ -273,10 +269,10 @@ fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
         matches!(
             result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::ChainedCallAccountsMismatch { program_account_id }
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
             )) if program_account_id == AccountId::from(owner)
         ),
-        "expected ChainedCallAccountsMismatch for the callee, got {result:?}"
+        "expected InputRowsMismatch for the callee, got {result:?}"
     );
 }
 
@@ -322,17 +318,19 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
     assert_eq!(state.get_account_by_id(to), recipient_pre);
 }
 
-/// Order no longer carries meaning: each `ShardStateDiff` embeds its own pre-state, so a
-/// program listing its diffs in a different order than it received the corresponding pre-states
-/// still validates and applies correctly.
 #[test]
-fn reordered_state_diffs_still_succeed() {
-    let program = crate::test_methods::reordering_writer();
-    let program_id: AccountId = program.id().into();
-    let written = vec![7_u8; 4];
-    let first = AccountId::new([23; 32]);
-    let second = AccountId::new([24; 32]);
-    let mut state = V03State::new().with_test_programs();
+fn reordered_state_diffs_are_rejected() {
+    let program = crate::test_methods::reordering_transfer();
+    let from_key = PrivateKey::try_new([23; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let initial_balance = 10;
+    let mut state = V03State::new()
+        .with_public_account_balances([(from, initial_balance)])
+        .with_test_programs();
+
+    let to_key = PrivateKey::try_new([24; 32]).unwrap();
+    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let amount: u128 = 4;
 
     let message = public_transaction::Message::try_new(
         program_id,
@@ -347,21 +345,17 @@ fn reordered_state_diffs_still_succeed() {
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
-    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-    assert_eq!(
-        state
-            .get_account_by_id(first)
-            .data
-            .shard(program_id)
-            .as_ref(),
-        written
-    );
     assert!(
-        state
-            .get_account_by_id(second)
-            .data
-            .shard(program_id)
-            .is_empty()
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
+            )) if program_account_id == AccountId::from(program.id())
+        ),
+        "expected InputRowsMismatch for the reordered rows, got {result:?}"
     );
+    assert_eq!(state.get_account_by_id(from).data.balance, initial_balance);
+    assert_eq!(state.get_account_by_id(to).data.balance, 0);
 }

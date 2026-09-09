@@ -12,9 +12,7 @@ use lee_core::{
     PrivateWitness, Timestamp, WitnessKind,
     account::{Account, AccountId, Balance, Nonce, ProgramShardSelector, data::ShardData},
     encryption::ViewingPublicKey,
-    native_token::{
-        Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, TransferError, encode_balance,
-    },
+    execution_state::ExecutionError,
     program::{
         AccountInput, BlockValidityWindow, ExecutionValidationError, InstructionData,
         MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramHeader,
@@ -137,6 +135,15 @@ enum FlashSwapInstruction {
 struct EmitterInstruction {
     events: Vec<ProgramEvent>,
     chain: Vec<(AccountId, InstructionData)>,
+}
+
+pub fn execution_error<T: std::fmt::Debug>(result: Result<T, LeeError>) -> ExecutionError {
+    match result {
+        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(error))) => {
+            error
+        }
+        other => panic!("expected an execution-state rejection, got {other:?}"),
+    }
 }
 
 fn transfer_transaction(

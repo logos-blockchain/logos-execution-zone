@@ -1,9 +1,13 @@
 use super::*;
 
-fn assert_circuit_proving_failure<T>(result: &Result<T, LeeError>, expected: &str) {
+fn assert_execution_failure<T>(result: &Result<T, LeeError>, expected: &str) {
     assert!(
-        matches!(result, Err(LeeError::CircuitProvingError(msg)) if msg.contains(expected)),
-        "expected CircuitProvingError containing {expected:?}, got: {:?}",
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(error)))
+                if error.to_string().contains(expected)
+        ),
+        "expected an execution rejection containing {expected:?}, got: {:?}",
         result.as_ref().err()
     );
 }
@@ -243,7 +247,44 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
 }
 
 #[test]
-fn a_data_write_on_a_foreign_shard_is_rejected_in_the_circuit() {
+fn burner_program_is_refused_when_proving() {
+    let program = crate::test_methods::burner();
+    let account_id = AccountId::new([0; 32]);
+
+    let result = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![ProgramShardSelector::balance_only(account_id)],
+            signers: [account_id].into(),
+            public_accounts: [(account_id, Account::funded(100))].into(),
+            instruction_data: Program::serialize_instruction(10_u128).unwrap(),
+            ..Default::default()
+        },
+        &program.into(),
+    );
+
+    assert_execution_failure(&result, "Total balance across accounts is not preserved");
+}
+
+#[test]
+fn minter_program_is_refused_when_proving() {
+    let program = crate::test_methods::minter();
+    let account_id = AccountId::new([0; 32]);
+
+    let result = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![ProgramShardSelector::balance_only(account_id)],
+            signers: [account_id].into(),
+            instruction_data: Program::serialize_instruction(()).unwrap(),
+            ..Default::default()
+        },
+        &program.into(),
+    );
+
+    assert_execution_failure(&result, "Total balance across accounts is not preserved");
+}
+
+#[test]
+fn a_data_write_on_a_foreign_shard_is_refused_when_proving() {
     let program = crate::test_methods::foreign_shard_writer();
     let target_id = AccountId::new([0; 32]);
     let other_id = AccountId::new([1; 32]);
@@ -261,7 +302,7 @@ fn a_data_write_on_a_foreign_shard_is_rejected_in_the_circuit() {
         &program.into(),
     );
 
-    assert_circuit_proving_failure(&result, "wrote data on a shard selector of");
+    assert_execution_failure(&result, "wrote data on a shard selector of");
 }
 
 #[test]
@@ -313,7 +354,8 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
 }
 
 #[test]
-fn unauthorized_debit_should_fail_in_privacy_preserving_circuit() {
+fn unauthorized_debit_is_refused_when_proving() {
+    let program = crate::test_methods::simple_balance_transfer();
     let sender_id = AccountId::new([0; 32]);
     let recipient_id = AccountId::new([1; 32]);
 
@@ -334,16 +376,5 @@ fn unauthorized_debit_should_fail_in_privacy_preserving_circuit() {
         &ProgramWithDependencies::native(),
     );
 
-    assert!(
-        matches!(
-            result,
-            Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::NativeTransferFailed(
-                    TransferError::UnauthorizedSender { .. }
-                )
-            ))
-        ),
-        "refused for the wrong reason: {:?}",
-        result.err()
-    );
+    assert_execution_failure(&result, "decrease balance of unauthorized account");
 }

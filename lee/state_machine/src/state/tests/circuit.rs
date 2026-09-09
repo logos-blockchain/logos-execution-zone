@@ -23,15 +23,12 @@ fn an_unused_private_witness_is_rejected() {
         &program.into(),
     );
 
-    assert!(
-        matches!(
-            &result,
-            Err(LeeError::CircuitProvingError(msg))
-                if msg.contains("must be touched by the execution")
-        ),
-        "refused for the wrong reason: {:?}",
-        result.err()
-    );
+    let unused_id =
+        AccountId::for_regular_private_account(&unused_keys.npk(), &unused_keys.vpk(), 0);
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::WitnessNotInRoot { account_id } if account_id == unused_id
+    ));
 }
 
 #[test]
@@ -207,7 +204,10 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
         &ProgramWithDependencies::native(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::InvalidAuthorizationKey { account_id } if account_id == sender_id
+    ));
 }
 
 #[test]
@@ -384,7 +384,10 @@ fn private_pda_npk_mismatch_fails() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::WitnessNotInRoot { .. }
+    ));
 }
 
 /// Happy path for the caller-seeds authorization of a private PDA. The delegator echoes the
@@ -470,7 +473,7 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
 }
 
 #[test]
-fn a_private_pda_first_seen_in_a_callee_is_bound_by_its_witness_and_granted_by_the_caller() {
+fn a_private_pda_echoed_unauthorized_at_the_root_is_granted_to_the_callee_by_its_seed() {
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let callee = crate::test_methods::auth_asserting_noop();
     let keys = test_private_account_keys_1();
@@ -495,7 +498,7 @@ fn a_private_pda_first_seen_in_a_callee_is_bound_by_its_witness_and_granted_by_t
             instruction_data: Program::serialize_instruction((
                 callee_id,
                 Program::serialize_instruction(()).unwrap(),
-                false,
+                true,
                 vec![seed],
             ))
             .unwrap(),
@@ -503,12 +506,11 @@ fn a_private_pda_first_seen_in_a_callee_is_bound_by_its_witness_and_granted_by_t
         },
         &program_with_deps,
     )
-    .expect("a caller's pda_seeds must authorize a private PDA it delegates at first sight");
+    .expect("a caller's pda_seeds must authorize a private PDA it delegates");
 }
 
-/// Checks authorization and the public journal for a PDA first seen in a callee.
 #[test]
-fn delegated_public_pda_first_seen_in_callee_is_authorized() {
+fn a_delegated_public_pda_is_authorized_in_the_callee_but_exported_unauthorized() {
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let callee = crate::test_methods::auth_asserting_noop();
     let seed = PdaSeed::new([77; 32]);
@@ -526,7 +528,7 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
             instruction_data: Program::serialize_instruction((
                 callee_id,
                 Program::serialize_instruction(()).unwrap(),
-                false,
+                true,
                 vec![seed],
             ))
             .unwrap(),
@@ -534,7 +536,7 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
         },
         &program_with_deps,
     )
-    .expect("a caller's pda_seeds must authorize a public PDA it delegates at first sight");
+    .expect("a caller's pda_seeds must authorize a public PDA it delegates");
 
     // The callee ran with the PDA authorized (auth_asserting_noop did not panic), while the
     // journal exports the credential view: a seed grant is not a signer-backed claim.
@@ -543,11 +545,8 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
     assert!(!output.public_actions[0].is_authorized);
 }
 
-/// A delegated seed that doesn't match the account's real derivation can't be distinguished
-/// in-circuit from an ordinary non-PDA account — it falls back to the same first-sight,
-/// credential-backed path.
 #[test]
-fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
+fn a_wrong_seed_leaves_a_signer_public_pda_on_its_credential() {
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let callee = crate::test_methods::auth_asserting_noop();
     let seed = PdaSeed::new([77; 32]);
@@ -567,7 +566,7 @@ fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
             instruction_data: Program::serialize_instruction((
                 callee_id,
                 Program::serialize_instruction(()).unwrap(),
-                false,
+                true,
                 vec![wrong_seed],
             ))
             .unwrap(),
@@ -575,10 +574,8 @@ fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
         },
         &program_with_deps,
     )
-    .expect("an unmatched seed must fall back to the credential-claim path");
+    .expect("an unmatched seed must leave the credential in force");
 
-    // In-circuit this is indistinguishable from a signer's claim; the exported `true` is
-    // what the verifier audits (and rejects, since the id is not actually a signer's).
     assert!(output.public_actions[0].is_authorized);
 }
 
@@ -868,12 +865,8 @@ fn inherited_scope_passes_through_nested_intermediate_calls() {
     .expect("an account authorized in an ancestor's output stays authorized two calls below it");
 }
 
-/// The circuit tracks accounts by `AccountId` across the whole call tree, not per-step: a
-/// *private* account handed to an intermediate call but never declared in that step's own
-/// `state_diffs` is still correctly resolved — including its private-witness
-/// (npk/vpk/nullifier) binding — when a later chained call references it by id.
 #[test]
-fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
+fn a_root_omitting_its_input_rows_is_rejected() {
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let callee = crate::test_methods::noop();
     let callee_id: AccountId = callee.id().into();
@@ -885,14 +878,13 @@ fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
     let program_with_deps =
         ProgramWithDependencies::new(forwarder, forwarder_id, [(callee_id, callee)].into());
 
-    let (output, proof) = execute_and_prove(
+    let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![ProgramShardSelector::balance(account_id)],
             private_witnesses: vec![init_witness(&keys, 0, Account::default())],
             instruction_data: Program::serialize_instruction((
                 callee_id,
                 Program::serialize_instruction(()).unwrap(),
-                // declare_pre_states: forwarder's own output never mentions this account.
                 false,
                 Vec::<PdaSeed>::new(),
             ))
@@ -900,17 +892,18 @@ fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
             ..Default::default()
         },
         &program_with_deps,
-    )
-    .expect(
-        "a private account never declared in an intermediate step's own pre/post states is \
-         still resolved, witness binding included, when a later chained call references it by \
-         id",
     );
 
-    assert!(proof.is_valid_for(&output));
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::RowCountMismatch {
+            program_account_id,
+            expected: 1,
+            actual: 0
+        } if program_account_id == forwarder_id
+    ));
 }
 
-/// Delegated PDA authorization survives reordered inputs and witnesses.
 #[test]
 fn top_level_reordering_through_a_passthrough_is_still_provable() {
     let forwarder = crate::test_methods::reorders_and_forwards();
@@ -954,8 +947,7 @@ fn top_level_reordering_through_a_passthrough_is_still_provable() {
     );
 
     result.expect(
-        "a private PDA delegated through a reordering, non-reporting top-level program must \
-         still be provable",
+        "a private PDA delegated through a reordering top-level program must still be provable",
     );
 }
 
@@ -995,7 +987,11 @@ fn two_private_pdas_bound_under_same_seed_are_rejected() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::FamilyBindingConflict { existing, account_id }
+            if existing == account_a && account_id == account_b
+    ));
 }
 
 #[test]
@@ -1070,7 +1066,10 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
         &program.into(),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::DuplicateWitness { account_id } if account_id == sender_id
+    ));
 }
 
 #[test]
@@ -1415,7 +1414,8 @@ fn two_private_pda_family_members_receive_and_spend() {
 
 /// Unauthorized balance decrease is refused.
 #[test]
-fn a_private_balance_decrease_without_the_credential_is_refused_in_the_circuit() {
+fn a_private_balance_decrease_without_the_credential_is_refused_when_proving() {
+    let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
     let sender_account = Account::funded(100);
@@ -1468,23 +1468,17 @@ fn a_private_balance_decrease_without_the_credential_is_refused_in_the_circuit()
         &ProgramWithDependencies::native(),
     );
 
-    let Err(err) = result else {
-        panic!("the debit went through without the credential");
-    };
-    assert!(
-        matches!(
-            &err,
-            LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::NativeTransferFailed(
-                TransferError::UnauthorizedSender { .. }
-            ))
-        ),
-        "refused for the wrong reason: {err:?}"
-    );
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::ExecutionValidation {
+            source: ExecutionValidationError::UnauthorizedBalanceDecrease { account_id },
+            ..
+        } if account_id == sender_id
+    ));
 }
 
-/// Rejects a proof when an initial shard selector is missing from all program outputs.
 #[test]
-fn dropped_public_account_through_the_privacy_circuit_is_caught() {
+fn dropped_public_account_is_caught_before_proving() {
     let program = crate::test_methods::dropped_account();
 
     let result = execute_and_prove(
@@ -1499,8 +1493,12 @@ fn dropped_public_account_through_the_privacy_circuit_is_caught() {
         &program.into(),
     );
 
-    assert!(
-        matches!(result, Err(LeeError::CircuitProvingError(_))),
-        "dropping account2 should prevent a valid proof, got {result:?}"
-    );
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::RowCountMismatch {
+            expected: 2,
+            actual: 1,
+            ..
+        }
+    ));
 }
